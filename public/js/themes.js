@@ -51,6 +51,20 @@ export const BOARDS = {
     stars: true,
     nebula: true,
   },
+  board_sakura: {
+    bg: ['#5c3a52', '#241322'],
+    cell: 'rgba(255,190,220,0.10)',
+    cellLine: 'rgba(255,190,220,0.12)',
+    accent: '#ff9ecb',
+    petals: true,
+  },
+  board_volcano: {
+    bg: ['#4a1e08', '#160702'],
+    cell: 'rgba(255,150,90,0.10)',
+    cellLine: 'rgba(255,150,90,0.12)',
+    accent: '#ff8a5c',
+    embers: true,
+  },
   // Special stage themes (not purchasable — used by difficulties / bosses)
   board_oni: {
     bg: ['#4a0d12', '#120306'],
@@ -201,6 +215,49 @@ function drawGold(ctx, x, y, s, ci, alpha = 1) {
   ctx.globalAlpha = 1;
 }
 
+function drawShadow(ctx, x, y, s, ci, alpha = 1) {
+  const [light] = PALETTE[ci];
+  const pad = s * 0.08, r = s * 0.2;
+  ctx.globalAlpha = alpha;
+  ctx.save();
+  ctx.fillStyle = '#0c0e18';
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  ctx.shadowColor = light;
+  ctx.shadowBlur = s * 0.3;
+  ctx.lineWidth = Math.max(1.5, s * 0.055);
+  ctx.strokeStyle = light;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.stroke();
+  // inner spark
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = light;
+  ctx.globalAlpha = alpha * 0.6;
+  ctx.beginPath();
+  ctx.arc(x + s * 0.5, y + s * 0.5, s * 0.07, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function drawPastel(ctx, x, y, s, ci, alpha = 1) {
+  const [light] = PALETTE[ci];
+  const pad = s * 0.06, r = s * 0.3;
+  ctx.globalAlpha = alpha;
+  // soften the base color toward white
+  ctx.fillStyle = light;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  ctx.fillStyle = light;
+  ctx.globalAlpha = alpha * 0.85;
+  roundRect(ctx, x + pad + s * 0.1, y + pad + s * 0.1, s - pad * 2 - s * 0.2, s - pad * 2 - s * 0.2, r * 0.7);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
 export const SKINS = {
   skin_default: drawClassic,
   skin_neon: drawNeon,
@@ -208,6 +265,8 @@ export const SKINS = {
   skin_pixel: drawPixel,
   skin_crystal: drawCrystal,
   skin_gold: drawGold,
+  skin_shadow: drawShadow,
+  skin_pastel: drawPastel,
 };
 
 // fx ids map to particle presets handled in particles.js

@@ -5,7 +5,13 @@ export class ParticleSystem {
   constructor() {
     this.particles = [];
     this.bolts = [];      // lightning bolts (fx_thunder)
+    this.rings = [];      // expanding shockwave rings
     this.intensity = 1;   // particle amount multiplier (settings)
+  }
+
+  // Expanding shockwave ring (line clears, big events).
+  ring(x, y, maxR, color = '#ffffff') {
+    this.rings.push({ x, y, r: maxR * 0.15, maxR, life: 1, color });
   }
 
   n(base) { return Math.max(1, Math.round(base * this.intensity)); }
@@ -19,7 +25,38 @@ export class ParticleSystem {
       case 'fx_fireworks': this.fireworks(x, y, size, light); break;
       case 'fx_thunder': this.thunder(x, y, size, light); break;
       case 'fx_sakura': this.sakura(x, y, size); break;
+      case 'fx_bubble': this.bubbles(x, y, size); break;
+      case 'fx_star': this.stars(x, y, size); break;
       default: this.spark(x, y, size, light, dark);
+    }
+  }
+
+  bubbles(x, y, size) {
+    const hues = ['rgba(160,220,255,0.9)', 'rgba(200,240,255,0.9)', 'rgba(140,200,255,0.9)'];
+    for (let i = 0; i < this.n(6); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.3 + Math.random() * 0.6) * size * 2.5;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - size * 2.5,
+        g: -size * 2, drift: size * (1 + Math.random()), life: 1, decay: 0.9 + Math.random() * 0.7,
+        size: size * (0.08 + Math.random() * 0.14),
+        color: hues[(Math.random() * hues.length) | 0],
+        kind: 'bubble', phase: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+
+  stars(x, y, size) {
+    for (let i = 0; i < this.n(7); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.5 + Math.random() * 1.2) * size * 4;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        g: size * 4, life: 1, decay: 1.2 + Math.random() * 0.8,
+        size: size * (0.09 + Math.random() * 0.12),
+        color: Math.random() < 0.5 ? '#ffe9a8' : '#fff6d8',
+        kind: 'sparkle', rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 6,
+      });
     }
   }
 
@@ -131,6 +168,13 @@ export class ParticleSystem {
       bs[i].life -= bs[i].decay * dt;
       if (bs[i].life <= 0) bs.splice(i, 1);
     }
+    const rs = this.rings;
+    for (let i = rs.length - 1; i >= 0; i--) {
+      const r = rs[i];
+      r.life -= 2.4 * dt;
+      r.r += (r.maxR - r.r) * dt * 9;
+      if (r.life <= 0) rs.splice(i, 1);
+    }
   }
 
   draw(ctx) {
@@ -145,6 +189,37 @@ export class ParticleSystem {
           ctx.fillStyle = p.color;
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+          break;
+        }
+        case 'bubble': {
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          ctx.beginPath();
+          ctx.arc(p.x - p.size * 0.3, p.y - p.size * 0.3, p.size * 0.22, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+        }
+        case 'sparkle': {
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.rot || 0);
+          ctx.shadowColor = p.color;
+          ctx.shadowBlur = p.size * 2;
+          ctx.fillStyle = p.color;
+          // 4-point star
+          const s4 = p.size;
+          ctx.beginPath();
+          ctx.moveTo(0, -s4 * 1.6);
+          ctx.quadraticCurveTo(s4 * 0.22, -s4 * 0.22, s4 * 1.6, 0);
+          ctx.quadraticCurveTo(s4 * 0.22, s4 * 0.22, 0, s4 * 1.6);
+          ctx.quadraticCurveTo(-s4 * 0.22, s4 * 0.22, -s4 * 1.6, 0);
+          ctx.quadraticCurveTo(-s4 * 0.22, -s4 * 0.22, 0, -s4 * 1.6);
           ctx.fill();
           ctx.restore();
           break;
@@ -169,6 +244,14 @@ export class ParticleSystem {
           ctx.restore();
         }
       }
+    }
+    for (const r of this.rings) {
+      ctx.globalAlpha = Math.max(0, r.life) * 0.7;
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = 3 * Math.max(0.2, r.life);
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+      ctx.stroke();
     }
     for (const b of this.bolts) {
       ctx.globalAlpha = Math.max(0, b.life);

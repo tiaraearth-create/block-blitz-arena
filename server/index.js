@@ -136,6 +136,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bo
     user.badges.push('kami');
     badge = 'kami';
   }
+  if (mode === 'ai_souzou' && won && !user.badges.includes('souzou')) {
+    user.badges.push('souzou');
+    badge = 'souzou';
+  }
   // Boss battles: sequential progression + first-clear gem bonus.
   if (mode === 'boss') {
     const idx = BOSSES.findIndex(b => b.id === extraBossId);

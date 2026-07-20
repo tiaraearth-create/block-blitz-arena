@@ -190,6 +190,17 @@ export class GameView {
       for (const r of result.fullRows) this.flashes.push({ kind: 'row', index: r, t: now });
       for (const c of result.fullCols) this.flashes.push({ kind: 'col', index: c, t: now });
 
+      // shockwave rings along each cleared line
+      for (const r of result.fullRows) {
+        this.particles.ring(this.boardX + this.boardSize / 2, this.boardY + (r + 0.5) * this.cell, this.boardSize * 0.55, '#ffffff');
+      }
+      for (const c of result.fullCols) {
+        this.particles.ring(this.boardX + (c + 0.5) * this.cell, this.boardY + this.boardSize / 2, this.boardSize * 0.55, '#ffffff');
+      }
+      // full-screen flash on multi-line clears / hot streaks
+      if (result.lineCount >= 2) this.screenFlash = Math.min(0.45, 0.18 + result.lineCount * 0.09);
+      else if (result.streak >= 3) this.screenFlash = 0.15;
+
       if (getSettings().shake) this.shake = Math.min(14, 4 + result.lineCount * 3 + result.streak);
       audio.clearLines(result.lineCount, result.streak);
 
@@ -249,6 +260,7 @@ export class GameView {
     this.particles.intensity = particleFactor();
     this.particles.update(dt);
     this.shake = Math.max(0, this.shake - dt * 40);
+    this.screenFlash = Math.max(0, (this.screenFlash || 0) - dt * 1.6);
     const now = this.time;
     this.dying = this.dying.filter(d => now - d.t < 0.35);
     this.flashes = this.flashes.filter(f => now - f.t < 0.4);
@@ -275,6 +287,12 @@ export class GameView {
     }
     this.particles.draw(ctx);
     this.drawFloatTexts();
+    if (this.screenFlash > 0) {
+      ctx.globalAlpha = this.screenFlash;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(-20, -20, this.W + 40, this.H + 40);
+      ctx.globalAlpha = 1;
+    }
   }
 
   drawBackground() {
@@ -303,6 +321,13 @@ export class GameView {
         x += Math.sin(this.time * 2 + d.tw) * 10;
         color = Math.sin(this.time * 6 + d.tw) > 0 ? '#ff8a5c' : '#ff5d5d';
         alpha = 0.35 + 0.35 * Math.sin(this.time * 5 + d.tw);
+      } else if (theme.petals) {
+        // falling sakura petals with sway
+        y = ((d.y + this.time * 0.025 * d.sp) % 1) * this.H;
+        x += Math.sin(this.time * 1.6 + d.tw) * 16;
+        color = Math.sin(d.tw) > 0 ? '#ffc0dc' : '#ff9ecb';
+        alpha = 0.45 + 0.25 * Math.sin(this.time * 2 + d.tw);
+        r = d.r * 1.4;
       } else if (theme.holy) {
         // slow golden sparkles that swell and fade
         color = '#ffe9a8';

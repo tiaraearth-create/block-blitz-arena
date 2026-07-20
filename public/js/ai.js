@@ -8,6 +8,8 @@ export const AI_LEVELS = {
   oni:    { name: '鬼',     moveMs: 700,  noise: 0,    lookahead: true,  deep: true, avatar: '👹' },
   // Hidden difficulty: only revealed by the secret command (↑↑↓↓←→←→BA / title x10).
   kami:   { name: '神',     moveMs: 520,  noise: 0,    exhaustive: true, avatar: '🔱', secret: true },
+  // TRUE hidden difficulty: ultra-secret command only (↑↑↓↓←→←→BABA↓↑↓↑).
+  souzou: { name: '創造神', moveMs: 380,  noise: 0,    exhaustive: true, beam: 14, avatar: '🌌', secret: true },
 };
 
 // Evaluate the grid after a hypothetical placement.
@@ -135,8 +137,8 @@ function openness(grid) {
   return score;
 }
 
-function beamSearch(engine) {
-  const BEAM = 10;
+function beamSearch(engine, beamWidth = 10) {
+  const BEAM = beamWidth;
   const handIdx = [];
   for (let i = 0; i < engine.hand.length; i++) if (engine.hand[i]) handIdx.push(i);
   if (!handIdx.length) return null;
@@ -184,7 +186,7 @@ function beamSearch(engine) {
 export function chooseMove(engine, level) {
   const cfg = AI_LEVELS[level] || AI_LEVELS.normal;
   if (cfg.exhaustive) {
-    const mv = beamSearch(engine);
+    const mv = beamSearch(engine, cfg.beam || 10);
     if (mv) return mv;
   }
   const candidates = [];

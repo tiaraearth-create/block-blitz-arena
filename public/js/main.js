@@ -2,7 +2,7 @@
 import { session, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette } from './modes.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
@@ -14,11 +14,16 @@ $('#btnSolo').onclick = () => { audio.click(); startSolo(); };
 $('#btnVsAi').onclick = () => {
   audio.click();
   const kamiUnlocked = localStorage.getItem('bba_kami') === '1';
-  const unlocked = key => key === 'kami' ? kamiUnlocked : true;   // 鬼までは最初から選べる
-  const btnClass = { easy: 'btn-primary', normal: 'btn-ai', hard: 'btn-gold', oni: 'btn-oni', kami: 'btn-kami' };
+  const souzouUnlocked = localStorage.getItem('bba_souzou') === '1';
+  const unlocked = key => key === 'kami' ? kamiUnlocked : key === 'souzou' ? souzouUnlocked : true;
+  const btnClass = { easy: 'btn-primary', normal: 'btn-ai', hard: 'btn-gold', oni: 'btn-oni', kami: 'btn-kami', souzou: 'btn-souzou' };
   const m = showModal(`
     <h2 id="aiModalTitle">🤖 AI対戦</h2>
-    <p class="muted center" style="margin-bottom:12px">2分間のスコアバトル！同じピースが配られます</p>
+    <p class="muted center" style="margin-bottom:10px">2分間のスコアバトル！同じピースが配られます</p>
+    <div class="tabs" style="justify-content:center;margin-bottom:12px">
+      <button class="tab active" data-aimode="solo">1v1</button>
+      <button class="tab" data-aimode="team">2v2チーム</button>
+    </div>
     <div class="form-col" id="aiLevelList">
       ${Object.entries(AI_LEVELS)
         .filter(([key]) => unlocked(key))
@@ -27,8 +32,17 @@ $('#btnVsAi').onclick = () => {
           ${cfg.avatar} ${cfg.name}
         </button>`).join('')}
     </div>`);
+  let aiTeam = false;
+  m.querySelectorAll('[data-aimode]').forEach(t => {
+    t.onclick = () => {
+      m.querySelectorAll('[data-aimode]').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      aiTeam = t.dataset.aimode === 'team';
+      audio.click();
+    };
+  });
   const wire = () => m.querySelectorAll('[data-ai]').forEach(btn => {
-    btn.onclick = () => { closeModal(); startVsAi(btn.dataset.ai); };
+    btn.onclick = () => { closeModal(); startVsAi(btn.dataset.ai, aiTeam); };
   });
   wire();
 
@@ -56,8 +70,21 @@ function unlockKami() {
   toast('🔱 天から声が聞こえる……隠し難易度「神」が解放された', 'announce', 5000);
 }
 
+function unlockSouzou() {
+  if (localStorage.getItem('bba_souzou') === '1') return;
+  localStorage.setItem('bba_souzou', '1');
+  localStorage.setItem('bba_kami', '1');
+  audio.kamiDescend();
+  audio.bossAttack();
+  confettiBurst(80);
+  toast('🌌 宇宙の彼方から視線を感じる……真の隠し難易度「創造神」が姿を現した', 'announce', 6000);
+}
+
 const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
+// 超絶コマンド: コナミコマンドの後に BABA↓↑↓↑ を続ける
+const SOUZOU = [...KONAMI, 'b', 'a', 'b', 'a', 'ArrowDown', 'ArrowUp', 'ArrowDown', 'ArrowUp'];
 let konamiPos = 0;
+let souzouPos = 0;
 window.addEventListener('keydown', e => {
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (k === KONAMI[konamiPos]) {
@@ -65,6 +92,12 @@ window.addEventListener('keydown', e => {
     if (konamiPos === KONAMI.length) { konamiPos = 0; unlockKami(); }
   } else {
     konamiPos = k === KONAMI[0] ? 1 : 0;
+  }
+  if (k === SOUZOU[souzouPos]) {
+    souzouPos++;
+    if (souzouPos === SOUZOU.length) { souzouPos = 0; unlockSouzou(); }
+  } else {
+    souzouPos = k === SOUZOU[0] ? 1 : 0;
   }
 });
 
@@ -116,6 +149,7 @@ $('#btnOnline').onclick = () => {
     <div class="form-col">
       <button class="btn btn-primary btn-big" data-online="duel">⚔️ 1v1 ランクマッチ</button>
       <button class="btn btn-online btn-big" data-online="team">👥 2v2 チーム戦</button>
+      <button class="btn btn-boss btn-big" data-online="raid">🐲 レイドボス戦（協力）</button>
       <button class="btn btn-gold btn-big" data-online="custom">🔧 カスタムルーム</button>
       <p class="muted center" style="font-size:12px">人数が足りないときはボットが自動参加します</p>
     </div>`);
@@ -145,7 +179,7 @@ $$('[data-back]').forEach(b => { b.onclick = () => { audio.click(); showScreen('
 $('#btnQuit').onclick = () => {
   const m = showModal(`
     <h2>ゲームを終了しますか？</h2>
-    <p class="muted center">途中終了は引き分け扱いです（オンラインは相手の不戦勝）。<br>あなたに敗北は付きません</p>
+    <p class="muted center">オンライン対戦の離脱は<b style="color:var(--red)">敗北</b>になります。<br>それ以外のモードは引き分け扱いです</p>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="qNo">続ける</button>
       <button class="btn btn-ai" id="qYes">終了する</button>
@@ -161,8 +195,9 @@ applySettings();
 // reroll power-up
 $('#btnReroll').onclick = () => rerollCurrent();
 
-// autopilot (admin only)
+// autopilot + command palette (admin only)
 $('#btnAuto').onclick = () => toggleAutopilot();
+$('#btnAdminCmd').onclick = () => showAdminPalette();
 
 // unlock audio context on first interaction and start menu music
 window.addEventListener('pointerdown', () => {

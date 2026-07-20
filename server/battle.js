@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { WebSocketServer } from 'ws';
 import { Engine } from '../public/js/engine.js';
 import { chooseMove } from '../public/js/ai.js';
+import { BOSSES } from './catalog.js';
 
 const COUNTDOWN = 3;
 const DUEL_BOT_WAIT = 10000;   // ms alone in 1v1 queue before a bot joins
@@ -17,7 +18,7 @@ export function initBattle(server, deps) {
   const clients = new Set();
   const matches = new Map();               // matchId -> match
   const rooms = new Map();                 // code -> room
-  const queues = { duel: [], team: [] };   // entries: { ws, since }
+  const queues = { duel: [], team: [], raid: [] };   // entries: { ws, since }
 
   function send(sock, msg) {
     if (sock.isBot) return;
@@ -97,6 +98,12 @@ export function initBattle(server, deps) {
         score: 0, lines: 0, maxCombo: 0, finished: false, forfeited: false,
       })),
     };
+    // Raid: everyone fights one shared boss whose HP scales with party size.
+    if (mode === 'raid') {
+      const def = BOSSES[crypto.randomInt(BOSSES.length)];
+      match.boss = { ...def, hp: def.hp * match.players.length };
+      match.bossDead = false;
+    }
     matches.set(id, match);
     for (const p of match.players) {
       if (p.sock.isBot) continue;
@@ -105,6 +112,7 @@ export function initBattle(server, deps) {
       send(p.sock, {
         type: 'match_found',
         matchId: id, mode, seed, duration: match.duration, countdown: COUNTDOWN,
+        boss: match.boss || null,
         you: { slot: p.slot, team: p.team },
         players: match.players.map(q => ({
           slot: q.slot, team: q.team, name: sockName(q.sock),
@@ -114,8 +122,35 @@ export function initBattle(server, deps) {
       });
     }
     for (const p of match.players) if (p.sock.isBot) p.sock.startPlay(match, p.slot);
+    if (mode === 'raid') {
+      // Server-driven boss attacks + HP sync.
+      match.raidAtk = setInterval(() => {
+        if (match.ended || match.bossDead) return;
+        if (Date.now() - match.startedAt < COUNTDOWN * 1000) return;
+        for (const p of match.players) {
+          if (!p.sock.isBot && !p.forfeited) {
+            send(p.sock, { type: 'raid_attack', cells: match.boss.atkCells });
+          }
+        }
+      }, match.boss.atkSec * 1000);
+      match.raidSync = setInterval(() => {
+        if (match.ended) return;
+        const hp = Math.max(0, match.boss.hp - totalDamage(match));
+        for (const p of match.players) {
+          if (!p.sock.isBot) send(p.sock, { type: 'raid_state', hp });
+        }
+        if (hp <= 0 && !match.bossDead) {
+          match.bossDead = true;
+          endMatch(match, 'boss_down');
+        }
+      }, 1000);
+    }
     match.timer = setTimeout(() => endMatch(match, 'timeout'), (COUNTDOWN + match.duration + 12) * 1000);
     return match;
+  }
+
+  function totalDamage(match) {
+    return match.players.reduce((a, p) => a + p.score, 0);
   }
 
   function broadcastState(match, fromSlot, state) {
@@ -151,6 +186,8 @@ export function initBattle(server, deps) {
     if (match.ended) return;
     match.ended = true;
     clearTimeout(match.timer);
+    clearInterval(match.raidAtk);
+    clearInterval(match.raidSync);
     matches.delete(match.id);
     for (const p of match.players) if (p.sock.isBot) p.sock.stop();
 
@@ -160,6 +197,8 @@ export function initBattle(server, deps) {
       const alive = match.players.find(p => !p.forfeited && !p.sock.isBot);
       if (alive) winTeam = alive.team;
     }
+    // Raid is co-op: everyone wins if the boss fell, loses otherwise.
+    if (match.mode === 'raid') winTeam = match.bossDead ? 0 : -2;
 
     const playersInfo = match.players.map(p => ({
       slot: p.slot, team: p.team, name: sockName(p.sock),
@@ -172,9 +211,13 @@ export function initBattle(server, deps) {
       && humanUsers[0] && humanUsers[1] && humanUsers[0].id !== humanUsers[1].id;
 
     for (const p of match.players) {
-      if (p.sock.isBot || p.forfeited) continue;
+      if (p.sock.isBot) continue;
       const me = humanUsers[p.slot];
-      const outcome = winTeam === -1 ? 0.5 : p.team === winTeam ? 1 : 0;
+      // Disconnecting/quitting a PvP match is ALWAYS a loss for the quitter.
+      const outcome = p.forfeited && match.mode !== 'raid' ? 0
+        : winTeam === -2 ? 0
+        : winTeam === -1 ? 0.5
+        : p.team === winTeam ? 1 : 0;
       let ratingDelta = 0;
       let rewards = null;
       if (me) {
@@ -183,21 +226,26 @@ export function initBattle(server, deps) {
           ratingDelta = eloUpdate(me.stats.rating, opp.stats.rating, outcome);
           me.stats.rating = Math.max(0, me.stats.rating + ratingDelta);
         }
-        if (match.rated) {
+        if (match.rated && match.mode !== 'raid') {
           if (outcome === 1) me.stats.pvpWins += 1;
           else if (outcome === 0) me.stats.pvpLosses += 1;
         }
-        rewards = applyGameResult(me, {
-          mode: match.mode === 'team' ? 'team' : 'pvp',
-          score: p.score, lines: p.lines, maxCombo: p.maxCombo,
-          duration: match.duration, won: outcome === 1,
-        });
+        if (!p.forfeited) {
+          rewards = applyGameResult(me, {
+            mode: match.mode === 'team' ? 'team' : match.mode === 'raid' ? 'raid' : 'pvp',
+            score: p.score, lines: p.lines, maxCombo: p.maxCombo,
+            duration: match.duration, won: outcome === 1,
+          });
+        }
       }
+      if (p.forfeited) continue;   // quitter is gone — stats recorded, nothing to send
       send(p.sock, {
         type: 'result',
         outcome: outcome === 1 ? 'win' : outcome === 0 ? 'lose' : 'draw',
         reason, mode: match.mode,
         teamScores: ts,
+        boss: match.boss || null,
+        bossDead: !!match.bossDead,
         you: { slot: p.slot, team: p.team },
         players: playersInfo,
         ratingDelta, rewards,
@@ -250,6 +298,17 @@ export function initBattle(server, deps) {
       const entries = humans.map((e, i) => ({ sock: e.ws, team: i % 2 }));
       while (entries.length < 4) entries.push({ sock: new Bot('normal'), team: entries.length % 2 });
       createMatch({ mode: 'team', entries });
+    }
+    // raid: co-op party of 4 (all on team 0), bots fill after the wait
+    while (queues.raid.length >= 4) {
+      const four = queues.raid.splice(0, 4);
+      createMatch({ mode: 'raid', entries: four.map(e => ({ sock: e.ws, team: 0 })), rated: false });
+    }
+    if (queues.raid.length > 0 && Date.now() - queues.raid[0].since > TEAM_BOT_WAIT) {
+      const humans = queues.raid.splice(0, queues.raid.length);
+      const entries = humans.map(e => ({ sock: e.ws, team: 0 }));
+      while (entries.length < 4) entries.push({ sock: new Bot('normal'), team: 0 });
+      createMatch({ mode: 'raid', entries, rated: false });
     }
   }
   setInterval(sweepQueues, 2000);
@@ -360,7 +419,7 @@ export function initBattle(server, deps) {
           break;
         }
         case 'queue': {
-          const mode = msg.mode === 'team' ? 'team' : 'duel';
+          const mode = ['team', 'raid'].includes(msg.mode) ? msg.mode : 'duel';
           joinQueue(ws, mode);
           break;
         }

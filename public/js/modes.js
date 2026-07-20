@@ -4,7 +4,7 @@ import { Engine } from './engine.js';
 import { GameView, MiniBoard } from './game.js';
 import { chooseMove, AI_LEVELS } from './ai.js';
 import { audio } from './audio.js';
-import { session, api, BattleClient } from './net.js';
+import { session, api, refreshMe, BattleClient } from './net.js';
 import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst } from './dom.js';
 
 const MATCH_SECONDS = 120;
@@ -109,6 +109,92 @@ function updateAutoBtn() {
   btn.classList.toggle('hidden', !isAdmin());
   $('#autoState').textContent = autopilot.on ? `x${autopilot.speed}` : 'OFF';
   btn.classList.toggle('auto-on', autopilot.on);
+  $('#btnAdminCmd').classList.toggle('hidden', !isAdmin());
+}
+
+// ---------------------------------------------------------------------------
+// In-game admin command palette
+// ---------------------------------------------------------------------------
+
+export function showAdminPalette() {
+  if (!isAdmin()) return;
+  const m = showModal(`
+    <h2>🛡️ 管理者コマンド</h2>
+    <div class="form-col admin-cmds">
+      <button class="btn btn-ghost btn-sm" data-cmd="score">✨ スコア +1,000</button>
+      <button class="btn btn-ghost btn-sm" data-cmd="clear">🧹 ボード全消し</button>
+      <button class="btn btn-ghost btn-sm" data-cmd="reroll">🔄 リロール +5回</button>
+      <button class="btn btn-ghost btn-sm" data-cmd="time">⏱ 残り時間 +60秒</button>
+      <button class="btn btn-ghost btn-sm" data-cmd="bosshalf">👹 ボスHP 半減</button>
+      <button class="btn btn-ghost btn-sm" data-cmd="coins">💰 コイン +10,000（自分）</button>
+      <button class="btn btn-ghost btn-sm" data-cmd="gems">💎 ジェム +1,000（自分）</button>
+      <button class="btn btn-ghost btn-sm" data-cmd="unlock">🔓 隠し難易度を全解放</button>
+    </div>
+    <div class="modal-buttons"><button class="btn btn-primary" id="acClose">閉じる</button></div>`);
+  m.querySelector('#acClose').onclick = closeModal;
+  m.querySelectorAll('[data-cmd]').forEach(b => {
+    b.onclick = () => { adminCmd(b.dataset.cmd); };
+  });
+}
+
+async function adminCmd(cmd) {
+  const mode = currentMode;
+  const eng = mode && mode.engine;
+  audio.click();
+  switch (cmd) {
+    case 'score':
+      if (!eng) return toast('ゲーム中のみ使えます', 'err');
+      eng.score += 1000;
+      if (mode.updateHud) mode.updateHud();
+      else if (mode.updateMyHud) mode.updateMyHud(eng);
+      if (view) view.addFloatText(view.boardX + view.boardSize / 2, view.boardY + view.boardSize / 2, '+1000 (admin)', '#43d9e8', 1.3);
+      break;
+    case 'clear':
+      if (!eng) return toast('ゲーム中のみ使えます', 'err');
+      eng.grid.fill(0);
+      if (view) view.reviveFlash();
+      toast('🧹 ボードを全消ししました', 'ok', 1400);
+      break;
+    case 'reroll':
+      if (!eng) return toast('ゲーム中のみ使えます', 'err');
+      eng.rerolls += 5;
+      updateRerollHud(eng);
+      toast('🔄 リロール+5', 'ok', 1400);
+      break;
+    case 'time':
+      if (!mode || mode.endAt === undefined) return toast('タイマーのあるモードのみ', 'err');
+      mode.endAt += 60000;
+      mode.timeLeft += 60;
+      toast('⏱ +60秒', 'ok', 1400);
+      break;
+    case 'bosshalf':
+      if (!mode || mode.mode !== 'boss') return toast('ボス戦のみ使えます', 'err');
+      mode.hp = Math.ceil(mode.hp / 2);
+      mode.updateHpBar();
+      toast('👹 ボスHPを半減しました', 'ok', 1400);
+      if (mode.hp <= 0) mode.finish(true);
+      break;
+    case 'coins':
+    case 'gems': {
+      try {
+        await api(`/api/admin/users/${session.user.id}`, {
+          method: 'POST',
+          body: cmd === 'coins' ? { grantCoins: 10000 } : { grantGems: 1000 },
+        });
+        await refreshMe();
+        updateTopbar();
+        audio.coin();
+        toast(cmd === 'coins' ? '💰 +10,000コイン' : '💎 +1,000ジェム', 'ok', 1600);
+      } catch (err) { toast(err.message, 'err'); }
+      break;
+    }
+    case 'unlock':
+      localStorage.setItem('bba_kami', '1');
+      localStorage.setItem('bba_souzou', '1');
+      audio.kamiDescend();
+      toast('🔓 「神」「創造神」を解放しました', 'announce', 3000);
+      break;
+  }
 }
 
 export function toggleAutopilot() {
@@ -329,6 +415,7 @@ const DIFF_THEME = {
   hard:   { board: 'board_sunset',  track: 'hard' },
   oni:    { board: 'board_oni',     track: 'oni' },
   kami:   { board: 'board_kami',    track: 'kami' },
+  souzou: { board: 'board_galaxy',  track: 'kami' },
 };
 
 class AiMode extends VersusBase {
@@ -369,7 +456,23 @@ class AiMode extends VersusBase {
 
     if (this.level === 'oni') this.oniIntro(begin);
     else if (this.level === 'kami') this.kamiIntro(begin);
+    else if (this.level === 'souzou') this.souzouIntro(begin);
     else begin();
+  }
+
+  // Cosmic entrance for the TRUE hidden difficulty.
+  souzouIntro(next) {
+    const el = document.createElement('div');
+    el.className = 'kami-intro souzou';
+    el.innerHTML = `
+      <div class="kami-rays"></div>
+      <div class="kami-face">🌌</div>
+      <div class="kami-text">創造神が 目覚めた————</div>`;
+    document.body.appendChild(el);
+    audio.kamiDescend();
+    audio.bossAttack();
+    if (view) view.shake = 16;
+    setTimeout(() => { el.remove(); next(); }, 2600);
   }
 
   // Dramatic entrance for the hidden difficulty.
@@ -442,7 +545,7 @@ class AiMode extends VersusBase {
       if (outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
     }
 
-    const modeName = this.level === 'oni' ? 'ai_oni' : this.level === 'kami' ? 'ai_kami' : 'ai';
+    const modeName = { oni: 'ai_oni', kami: 'ai_kami', souzou: 'ai_souzou' }[this.level] || 'ai';
     const rewards = await submitResult({
       mode: modeName, score: me, lines: this.engine.linesCleared,
       maxCombo: this.engine.maxCombo, duration: MATCH_SECONDS, won: outcome === 'win',
@@ -452,6 +555,9 @@ class AiMode extends VersusBase {
     }
     if (rewards && rewards.badge === 'kami') {
       setTimeout(() => toast('🔱 バッジ「神殺し」を獲得！！', 'announce', 5000), 1200);
+    }
+    if (rewards && rewards.badge === 'souzou') {
+      setTimeout(() => { toast('🌌 バッジ「創造を超えし者」を獲得！！！', 'announce', 6000); confettiBurst(80); }, 1200);
     }
 
     const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: this.aborted ? '🤝 引き分け（中断）' : 'DRAW' };
@@ -484,6 +590,129 @@ class AiMode extends VersusBase {
 }
 
 // ---------------------------------------------------------------------------
+// VS AI 2v2: you + an AI ally against two AI enemies. Same difficulty for all.
+// ---------------------------------------------------------------------------
+
+class AiTeamMode extends VersusBase {
+  constructor(level) {
+    super();
+    this.mode = 'ai_team';
+    this.level = level;
+    this.cfg = AI_LEVELS[level];
+  }
+
+  start() {
+    const seed = (Math.random() * 2 ** 31) | 0;
+    this.setupHud(MATCH_SECONDS);
+    this.buildPanels([
+      { slot: 1, name: `${this.cfg.avatar} 味方AI`, isAlly: true },
+      { slot: 2, name: `${this.cfg.avatar} 敵AI-1`, isAlly: false },
+      { slot: 3, name: `${this.cfg.avatar} 敵AI-2`, isAlly: false },
+    ]);
+    $('#teamTotals').classList.remove('hidden');
+    this.startedAt = Date.now();
+    const v = getView();
+    const stage = DIFF_THEME[this.level] || DIFF_THEME.normal;
+    v.setTheme({ ...equippedTheme(), boardId: stage.board });
+    this.engine = new Engine(seed);
+    this.ais = [1, 2, 3].map(() => new Engine(seed));
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = () => this.onMyPlace();
+    v.onGameOver = () => this.onTopOut();
+    this.updateMyHud(this.engine);
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack(stage.track);
+
+    countdownOverlay(3, () => {
+      v.inputLocked = false;
+      this.startTimer(() => this.finish());
+      this.timers = this.ais.map((eng, i) => this.aiLoop(eng, i + 1));
+    }, audio);
+  }
+
+  aiLoop(eng, slot) {
+    const tick = () => {
+      if (this.ended) return;
+      if (eng.over) eng.reviveBoard();
+      const mv = chooseMove(eng, this.level);
+      let combo = 0;
+      if (mv) {
+        const r = eng.place(mv.index, mv.row, mv.col);
+        if (r && r.lineCount > 0) combo = r.streak;
+      }
+      this.updateOpp(slot, { score: eng.score, combo, grid: eng.snapshot() });
+      this.refreshTeams();
+      this.timers[slot - 1] = setTimeout(tick, this.cfg.moveMs * (0.75 + Math.random() * 0.5));
+    };
+    return setTimeout(tick, this.cfg.moveMs);
+  }
+
+  myTeamScore() { return this.engine.score + this.ais[0].score; }
+  enemyScore() { return this.ais[1].score + this.ais[2].score; }
+
+  refreshTeams() {
+    const mine = this.myTeamScore(), theirs = this.enemyScore();
+    this.updateBars(mine, theirs);
+    $('#teamTotals').innerHTML =
+      `<b class="tt-a">${fmt(mine)}</b><span class="muted"> vs </span><b class="tt-b">${fmt(theirs)}</b>`;
+  }
+
+  onMyPlace() {
+    this.updateMyHud(this.engine);
+    this.refreshTeams();
+  }
+
+  onTopOut() {
+    if (this.ended) return;
+    toast('ボードリセット！スコアは維持されます', '', 1800);
+    this.engine.reviveBoard();
+    getView().reviveFlash();
+  }
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    this.stopTimer();
+    (this.timers || []).forEach(t => clearTimeout(t));
+    getView().inputLocked = true;
+    const mine = this.myTeamScore(), theirs = this.enemyScore();
+    const outcome = this.aborted ? 'draw' : mine > theirs ? 'win' : mine < theirs ? 'lose' : 'draw';
+    if (!this.aborted) {
+      if (outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
+    }
+    const rewards = await submitResult({
+      mode: 'ai', score: this.engine.score, lines: this.engine.linesCleared,
+      maxCombo: this.engine.maxCombo, duration: MATCH_SECONDS, won: outcome === 'win',
+    });
+    const banners = { win: '🏆 TEAM WIN!', lose: 'TEAM LOSE…', draw: this.aborted ? '🤝 引き分け（中断）' : 'DRAW' };
+    const m = showModal(`
+      <div class="result-banner ${outcome}">${banners[outcome]}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>あなたのチーム<br><small class="muted">⭐あなた ${fmt(this.engine.score)} / ${this.cfg.avatar}味方AI ${fmt(this.ais[0].score)}</small></span><b>${fmt(mine)}</b></div>
+        <div class="rs-row"><span>敵AIチーム</span><b>${fmt(theirs)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">メニュー</button>
+        <button class="btn btn-primary" id="rAgain">再戦</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startVsAi(this.level, true); };
+  }
+
+  quit() { this.aborted = true; this.finish(); }
+
+  destroy() {
+    this.ended = true;
+    this.stopTimer();
+    (this.timers || []).forEach(t => clearTimeout(t));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Boss battles (PvE): deal damage with points, survive the boss's attacks.
 // ---------------------------------------------------------------------------
 
@@ -493,6 +722,9 @@ const BOSS_STAGE = {
   dragon: { board: 'board_sunset', track: 'boss' },
   maou:   { board: 'board_oni',    track: 'oni' },
 };
+
+// Each boss deals a FIXED piece chart (譜面) — learn the pattern to win.
+const BOSS_SEEDS = { slime: 11295, golem: 33807, dragon: 55123, maou: 77991 };
 
 class BossMode {
   constructor(boss, bossIndex, bossCount) {
@@ -507,6 +739,7 @@ class BossMode {
     $('#oppPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
     $('#bossPanel').classList.remove('hidden');
+    document.querySelector('.boss-atkbar').classList.remove('hidden');
     $('#bossEmoji').textContent = this.boss.emoji;
     $('#bossEmoji').className = 'boss-emoji';
     $('#bossName').textContent = this.boss.name;
@@ -517,7 +750,7 @@ class BossMode {
     const v = getView();
     const stage = BOSS_STAGE[this.boss.id] || {};
     v.setTheme({ ...equippedTheme(), boardId: stage.board || 'board_default' });
-    this.engine = new Engine();
+    this.engine = new Engine(BOSS_SEEDS[this.boss.id] || 12345);
     v.setEngine(this.engine);
     v.inputLocked = true;
     v.onPlace = r => this.onPlace(r);
@@ -707,6 +940,8 @@ class OnlineMode extends VersusBase {
       .on('announce', msg => toast(`📢 ${msg.message}`, 'announce', 5000))
       .on('room_update', msg => this.onRoomUpdate(msg))
       .on('room_error', msg => { audio.error(); toast(msg.error, 'err'); })
+      .on('raid_state', msg => this.onRaidState(msg))
+      .on('raid_attack', msg => this.onRaidAttack(msg))
       .on('close', () => {
         if (this.ended) return;
         if (this.inMatch || this.kind === 'custom') {
@@ -720,6 +955,8 @@ class OnlineMode extends VersusBase {
     if (this.kind !== 'custom') {
       $('#mmStatus').textContent = this.kind === 'team'
         ? 'チームメンバーを探しています…'
+        : this.kind === 'raid'
+        ? 'レイドパーティを募集しています…'
         : '対戦相手を探しています…';
       $('#mmSub').innerHTML = this.kind === 'team'
         ? 'オンライン: <span id="mmOnline">-</span>人 ・ 人数が足りない分はボットが参加します'
@@ -806,17 +1043,28 @@ class OnlineMode extends VersusBase {
     this.matchInfo = msg;
     this.you = msg.you;
     this.isTeam = msg.mode === 'team';
+    this.isRaid = msg.mode === 'raid';
 
     const others = msg.players.filter(p => !p.isYou).map(p => ({
       slot: p.slot,
       name: `${p.name}${p.rating != null ? ` (R${p.rating})` : ''}`,
-      isAlly: this.isTeam && p.team === msg.you.team,
+      isAlly: (this.isTeam && p.team === msg.you.team) || this.isRaid,
     }));
     this.setupHud(msg.duration || MATCH_SECONDS);
     this.buildPanels(others);
     if (this.isTeam) {
       $('#teamTotals').classList.remove('hidden');
       this.refreshTeamHud();
+    }
+    if (this.isRaid && msg.boss) {
+      this.raidBoss = msg.boss;
+      this.raidHp = msg.boss.hp;
+      $('#bossPanel').classList.remove('hidden');
+      $('#bossEmoji').textContent = msg.boss.emoji;
+      $('#bossEmoji').className = 'boss-emoji';
+      $('#bossName').textContent = `${msg.boss.name}（レイド）`;
+      document.querySelector('.boss-atkbar').classList.add('hidden');
+      this.updateRaidHp();
     }
 
     const v = getView();
@@ -829,8 +1077,9 @@ class OnlineMode extends VersusBase {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('battle');
-    toast(this.isTeam ? '👥 チーム戦スタート！' : '⚔️ マッチしました！', 'ok');
+    audio.playTrack(this.isRaid ? 'boss' : 'battle');
+    toast(this.isRaid ? `🐲 レイド開始！${this.raidBoss ? this.raidBoss.name : ''}を倒せ！`
+      : this.isTeam ? '👥 チーム戦スタート！' : '⚔️ マッチしました！', 'ok');
 
     countdownOverlay(msg.countdown || 3, () => {
       v.inputLocked = false;
@@ -873,7 +1122,40 @@ class OnlineMode extends VersusBase {
 
   onOppState(msg) {
     this.updateOpp(msg.slot, msg);
-    this.refreshTeamHud();
+    if (!this.isRaid) this.refreshTeamHud();
+  }
+
+  updateRaidHp() {
+    if (!this.raidBoss) return;
+    const pct = Math.max(0, (this.raidHp / this.raidBoss.hp) * 100);
+    $('#bossHp').style.width = `${pct}%`;
+    $('#bossHpText').textContent = `${fmt(Math.max(0, this.raidHp))} / ${fmt(this.raidBoss.hp)}`;
+  }
+
+  onRaidState(msg) {
+    if (!this.isRaid) return;
+    const prev = this.raidHp;
+    this.raidHp = msg.hp;
+    this.updateRaidHp();
+    if (msg.hp < prev) {
+      const em = $('#bossEmoji');
+      em.classList.remove('boss-hit'); void em.offsetWidth; em.classList.add('boss-hit');
+    }
+  }
+
+  onRaidAttack(msg) {
+    if (!this.isRaid || this.ended || !this.engine || !view || view.inputLocked) return;
+    const cells = this.engine.addGarbage(msg.cells || 3);
+    audio.bossAttack();
+    const em = $('#bossEmoji');
+    em.classList.remove('boss-atk'); void em.offsetWidth; em.classList.add('boss-atk');
+    for (const [r, c] of cells) {
+      view.spawnAnim.set(r * 8 + c, view.time);
+      view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
+    }
+    view.shake = 12;
+    toast(`${this.raidBoss.emoji} ${this.raidBoss.name}の攻撃！`, 'err', 1300);
+    if (this.engine.over) this.onTopOut();
   }
 
   onTopOut() {
@@ -912,13 +1194,21 @@ class OnlineMode extends VersusBase {
     if (msg.user) { session.user = msg.user; updateTopbar(); }
     if (msg.outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
 
-    const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
+    const banners = msg.mode === 'raid'
+      ? { win: `${msg.boss ? msg.boss.emoji : '🐲'} レイドボス討伐！`, lose: '討伐失敗…', draw: 'DRAW' }
+      : { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
     const reasonNote =
       msg.reason === 'forfeit' ? '<p class="muted center">相手が切断しました</p>' :
       msg.reason === 'abandoned' ? '<p class="muted center">対戦が中断されました</p>' : '';
 
     let scoreRows;
-    if (msg.mode === 'team') {
+    if (msg.mode === 'raid') {
+      const total = msg.players.reduce((a, p) => a + p.score, 0);
+      scoreRows = `
+        <div class="rs-row"><span>${msg.boss ? escapeHtml(msg.boss.name) : 'ボス'} HP</span><b>${fmt(msg.boss ? msg.boss.hp : 0)}</b></div>
+        <div class="rs-row"><span>パーティ総ダメージ</span><b>${fmt(total)}</b></div>
+        ${msg.players.map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? '⭐あなた' : (p.isBot ? '' : '👤') + escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`).join('')}`;
+    } else if (msg.mode === 'team') {
       const teamRow = t => {
         const members = msg.players.filter(p => p.team === t);
         const names = members.map(p => `${p.slot === msg.you.slot ? '⭐' : p.isBot ? '' : '👤'}${escapeHtml(p.name)} ${fmt(p.score)}`).join('<br>');
@@ -957,7 +1247,7 @@ class OnlineMode extends VersusBase {
     if (this.inMatch && !this.ended) {
       this.ended = true;
       this.destroy();
-      toast('🤝 対戦を中断しました（相手の不戦勝・あなたに敗北は付きません）', '', 2600);
+      toast('🏳️ 対戦から離脱しました（敗北扱い・相手の不戦勝）', 'err', 2600);
       endToMenu();
     } else {
       this.client.cancelQueue();
@@ -971,6 +1261,7 @@ class OnlineMode extends VersusBase {
     this.stopTimer();
     clearInterval(this.stateInt);
     clearTimeout(this.resultTimeout);
+    $('#bossPanel').classList.add('hidden');
     this.client.close();
   }
 }
@@ -990,18 +1281,21 @@ function endToMenu() {
 export function startSolo() {
   if (currentMode) currentMode.destroy();
   currentMode = new SoloMode();
+  window.__bbaMode = currentMode;
   currentMode.start();
 }
 
-export function startVsAi(level) {
+export function startVsAi(level, team = false) {
   if (currentMode) currentMode.destroy();
-  currentMode = new AiMode(level);
+  currentMode = team ? new AiTeamMode(level) : new AiMode(level);
+  window.__bbaMode = currentMode;
   currentMode.start();
 }
 
 export function startOnline(kind = 'duel') {
   if (currentMode) currentMode.destroy();
   currentMode = new OnlineMode(kind);
+  window.__bbaMode = currentMode;
   currentMode.start();
 }
 
