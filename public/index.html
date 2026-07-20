@@ -20,8 +20,7 @@
     <div class="currency">
       <span class="chip coin-chip">🪙 <b id="coinsLabel">0</b></span>
       <span class="chip gem-chip">💎 <b id="gemsLabel">0</b></span>
-      <button id="btnSound" class="chip icon-btn" title="効果音">🔊</button>
-      <button id="btnMusic" class="chip icon-btn" title="BGM">🎵</button>
+      <button id="btnSettings" class="chip icon-btn" title="設定">⚙️</button>
     </div>
   </header>
 
@@ -57,7 +56,10 @@
     <!-- ===================== Game ===================== -->
     <section id="screen-game" class="screen hidden">
       <div class="game-hud">
-        <button id="btnQuit" class="chip icon-btn">✕</button>
+        <div class="hud-left">
+          <button id="btnQuit" class="chip icon-btn">✕</button>
+          <button id="btnReroll" class="chip icon-btn" title="ピースを引き直す（1ゲーム1回）">🔄<b id="rerollLeft">1</b></button>
+        </div>
         <div class="hud-center">
           <div id="hudScore" class="hud-score">0</div>
           <div id="hudSub" class="hud-sub">BEST 0</div>

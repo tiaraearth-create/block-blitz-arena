@@ -379,6 +379,67 @@ body {
 }
 @keyframes cdPop { 0% { transform: scale(2.4); opacity: 0; } 30% { transform: scale(1); opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
 
+/* ============ Settings ============ */
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; padding: 11px 14px; font-weight: 700; font-size: 14px;
+}
+.settings-row label { flex: 1; }
+.settings-row input[type="checkbox"] {
+  width: 22px; height: 22px; accent-color: var(--blue); cursor: pointer;
+}
+.settings-row input[type="range"] {
+  width: 130px; accent-color: var(--cyan); cursor: pointer;
+}
+.seg { display: flex; gap: 4px; }
+.seg button {
+  background: rgba(0,0,0,0.25); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 800;
+  cursor: pointer; font-family: inherit;
+}
+.seg button.active { background: linear-gradient(135deg, var(--blue), #3f63e0); color: #fff; border-color: transparent; }
+
+/* ============ HUD extras ============ */
+.hud-left { display: flex; gap: 6px; align-items: center; }
+#btnReroll b { color: var(--cyan); font-size: 12px; }
+#btnReroll.off { opacity: 0.35; pointer-events: auto; }
+
+/* ============ Oni (hidden difficulty) ============ */
+.btn-oni {
+  background: linear-gradient(135deg, #5a0f14, #b3242e);
+  box-shadow: 0 6px 0 #3d090d, 0 10px 26px rgba(179,36,46,0.55);
+  animation: oniPulse 1.6s ease-in-out infinite;
+}
+@keyframes oniPulse {
+  0%,100% { filter: brightness(1); }
+  50% { filter: brightness(1.35); box-shadow: 0 6px 0 #3d090d, 0 0 34px rgba(255,60,60,0.8); }
+}
+.btn-oni.reveal { animation: oniReveal .8s cubic-bezier(.2,1.4,.4,1), oniPulse 1.6s ease-in-out .8s infinite; }
+@keyframes oniReveal {
+  0% { transform: scale(0) rotate(-14deg); opacity: 0; }
+  60% { transform: scale(1.15) rotate(4deg); }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+.oni-intro {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: radial-gradient(circle at 50% 45%, rgba(120,10,16,0.85), rgba(10,2,4,0.95));
+  animation: fadeIn .3s ease;
+}
+.oni-face { font-size: 110px; animation: oniFace 1.9s cubic-bezier(.2,1.4,.4,1); filter: drop-shadow(0 0 40px rgba(255,60,60,0.9)); }
+@keyframes oniFace {
+  0% { transform: scale(6); opacity: 0; }
+  25% { transform: scale(1); opacity: 1; }
+  30% { transform: scale(1.2) rotate(-6deg); }
+  40% { transform: scale(1) rotate(0); }
+}
+.oni-text {
+  font-size: 26px; font-weight: 900; color: #ffb3b3; letter-spacing: 0.2em;
+  text-shadow: 0 0 20px rgba(255,60,60,0.8);
+  animation: fadeIn .6s ease .5s backwards;
+}
+
 @media (max-width: 520px) {
   .opp-panel { width: 96px; top: 58px; }
   #oppCanvas { width: 76px; height: 76px; }

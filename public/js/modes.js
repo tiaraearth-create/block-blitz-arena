@@ -59,6 +59,32 @@ export function quitCurrent() {
   if (currentMode) currentMode.quit();
 }
 
+// ---- reroll power-up (1 per game) ----
+
+function updateRerollHud(engine) {
+  const btn = $('#btnReroll');
+  btn.classList.remove('hidden');
+  $('#rerollLeft').textContent = engine.rerolls;
+  btn.classList.toggle('off', engine.rerolls <= 0);
+}
+
+export function rerollCurrent() {
+  if (!currentMode || !currentMode.engine || !view || view.inputLocked) return;
+  const e = currentMode.engine;
+  if (!e.reroll()) {
+    audio.error();
+    toast('リロールは使い切りました', 'err', 1400);
+    return;
+  }
+  audio.coin();
+  toast('🔄 ピースを引き直しました！', 'ok', 1400);
+  updateRerollHud(e);
+  if (e.over) {
+    if (currentMode.onTopOut) currentMode.onTopOut();
+    else currentMode.finish();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Solo (endless)
 // ---------------------------------------------------------------------------
@@ -78,6 +104,7 @@ class SoloMode {
     v.onPlace = r => this.onPlace(r);
     v.onGameOver = () => this.finish();
     this.updateHud();
+    updateRerollHud(this.engine);
     v.start();
     audio.startMusic();
   }
@@ -203,14 +230,29 @@ class AiMode extends VersusBase {
     v.onPlace = r => this.onPlace(r);
     v.onGameOver = () => this.onTopOut();
     this.updateMyHud(this.engine);
+    updateRerollHud(this.engine);
     v.start();
     audio.startMusic();
 
-    countdownOverlay(3, () => {
+    const begin = () => countdownOverlay(3, () => {
       v.inputLocked = false;
       this.startTimer(() => this.finish());
       this.aiLoop();
     }, audio);
+
+    if (this.level === 'oni') this.oniIntro(begin);
+    else begin();
+  }
+
+  // Dramatic entrance for the hidden difficulty.
+  oniIntro(next) {
+    const el = document.createElement('div');
+    el.className = 'oni-intro';
+    el.innerHTML = `<div class="oni-face">👹</div><div class="oni-text">おにが あらわれた！</div>`;
+    document.body.appendChild(el);
+    audio.gameOver();
+    if (view) view.shake = 14;
+    setTimeout(() => { el.remove(); next(); }, 1900);
   }
 
   aiLoop() {
@@ -255,10 +297,19 @@ class AiMode extends VersusBase {
     const outcome = me > opp ? 'win' : me < opp ? 'lose' : 'draw';
     if (outcome === 'win') audio.victory(); else audio.gameOver();
 
+    // Beating "hard" unlocks the hidden difficulty.
+    if (outcome === 'win' && this.level === 'hard' && localStorage.getItem('bba_oni') !== '1') {
+      localStorage.setItem('bba_oni', '1');
+      setTimeout(() => toast('👹 隠し難易度「おに」が解放された…！', 'announce', 4000), 1200);
+    }
+
     const rewards = await submitResult({
-      mode: 'ai', score: me, lines: this.engine.linesCleared,
+      mode: this.level === 'oni' ? 'ai_oni' : 'ai', score: me, lines: this.engine.linesCleared,
       maxCombo: this.engine.maxCombo, duration: MATCH_SECONDS, won: outcome === 'win',
     });
+    if (rewards && rewards.badge === 'oni') {
+      setTimeout(() => toast('👹 バッジ「おに退治」を獲得！', 'announce', 4000), 1200);
+    }
 
     const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
     const m = showModal(`
@@ -348,6 +399,7 @@ class OnlineMode extends VersusBase {
     v.onPlace = r => this.onPlace(r);
     v.onGameOver = () => this.onTopOut();
     this.updateMyHud(this.engine);
+    updateRerollHud(this.engine);
     v.start();
     audio.startMusic();
     toast(`⚔️ ${msg.opponent.name} とマッチしました！`, 'ok');

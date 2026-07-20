@@ -5,6 +5,8 @@ export const AI_LEVELS = {
   easy:   { name: 'かんたん', moveMs: 2600, noise: 0.5,  lookahead: false, avatar: '🤖' },
   normal: { name: 'ふつう',   moveMs: 1700, noise: 0.15, lookahead: false, avatar: '🦾' },
   hard:   { name: 'つよい',   moveMs: 1100, noise: 0.02, lookahead: true,  avatar: '👑' },
+  // Hidden difficulty: unlocked by beating "hard" or tapping the AI modal title 5 times.
+  oni:    { name: 'おに',     moveMs: 700,  noise: 0,    lookahead: true,  deep: true, avatar: '👹', secret: true },
 };
 
 // Evaluate the grid after a hypothetical placement.
@@ -64,6 +66,26 @@ function simulate(grid, piece, row, col) {
   return { grid: g, lines: fullRows.length + fullCols.length };
 }
 
+// Best achievable single-placement value for a piece on a given grid.
+function bestPlacementValue(grid, piece) {
+  let rows = 0, cols = 0;
+  for (const [r, c] of piece.cells) { rows = Math.max(rows, r + 1); cols = Math.max(cols, c + 1); }
+  let best = -500; // no placement possible -> heavy penalty
+  for (let r = 0; r <= SIZE - rows; r++) {
+    for (let c = 0; c <= SIZE - cols; c++) {
+      let ok = true;
+      for (const [dr, dc] of piece.cells) {
+        if (grid[(r + dr) * SIZE + (c + dc)] !== 0) { ok = false; break; }
+      }
+      if (!ok) continue;
+      const sim = simulate(grid, piece, r, c);
+      const v = sim.lines * 900 + evaluateGrid(sim.grid);
+      if (v > best) best = v;
+    }
+  }
+  return best;
+}
+
 function countPlacements(grid, piece) {
   let n = 0;
   let rows = 0, cols = 0;
@@ -109,6 +131,24 @@ export function chooseMove(engine, level) {
 
   if (candidates.length === 0) return null;
   candidates.sort((a, b) => b.value - a.value);
+
+  // Oni: 2-step chain search — re-rank the top candidates by the best follow-up
+  // placement value of each remaining hand piece.
+  if (cfg.deep) {
+    const top = candidates.slice(0, 8);
+    for (const cand of top) {
+      const piece = engine.hand[cand.index];
+      const sim = simulate(engine.grid, piece, cand.row, cand.col);
+      let chain = 0;
+      for (let j = 0; j < engine.hand.length; j++) {
+        if (j === cand.index || !engine.hand[j]) continue;
+        chain += bestPlacementValue(sim.grid, engine.hand[j]);
+      }
+      cand.value += chain * 0.45;
+    }
+    top.sort((a, b) => b.value - a.value);
+    return top[0];
+  }
 
   // Noise: occasionally pick a weaker move.
   if (Math.random() < cfg.noise) {

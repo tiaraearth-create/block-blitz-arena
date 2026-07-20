@@ -2,26 +2,48 @@
 import { session, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, cancelMatchmaking, quitCurrent } from './modes.js';
-import { showAuthModal, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions } from './screens.js';
+import { startSolo, startVsAi, startOnline, cancelMatchmaking, quitCurrent, rerollCurrent } from './modes.js';
+import { showAuthModal, showSettingsModal, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions } from './screens.js';
 import { AI_LEVELS } from './ai.js';
+import { applySettings } from './settings.js';
 
 // ---- menu buttons ----
 $('#btnSolo').onclick = () => { audio.click(); startSolo(); };
 
 $('#btnVsAi').onclick = () => {
   audio.click();
+  const oniUnlocked = localStorage.getItem('bba_oni') === '1';
+  const btnClass = { easy: 'btn-primary', normal: 'btn-ai', hard: 'btn-gold', oni: 'btn-oni' };
   const m = showModal(`
-    <h2>🤖 AI対戦</h2>
+    <h2 id="aiModalTitle">🤖 AI対戦</h2>
     <p class="muted center" style="margin-bottom:12px">2分間のスコアバトル！同じピースが配られます</p>
-    <div class="form-col">
-      ${Object.entries(AI_LEVELS).map(([key, cfg]) => `
-        <button class="btn ${key === 'easy' ? 'btn-primary' : key === 'normal' ? 'btn-ai' : 'btn-gold'}" data-ai="${key}">
+    <div class="form-col" id="aiLevelList">
+      ${Object.entries(AI_LEVELS)
+        .filter(([, cfg]) => !cfg.secret || oniUnlocked)
+        .map(([key, cfg]) => `
+        <button class="btn ${btnClass[key]}" data-ai="${key}">
           ${cfg.avatar} ${cfg.name}
         </button>`).join('')}
     </div>`);
-  m.querySelectorAll('[data-ai]').forEach(btn => {
+  const wire = () => m.querySelectorAll('[data-ai]').forEach(btn => {
     btn.onclick = () => { closeModal(); startVsAi(btn.dataset.ai); };
+  });
+  wire();
+
+  // Secret unlock: tap the title 5 times to summon the hidden difficulty.
+  let taps = 0;
+  m.querySelector('#aiModalTitle').addEventListener('click', () => {
+    if (m.querySelector('[data-ai="oni"]')) return;
+    if (++taps < 5) return;
+    localStorage.setItem('bba_oni', '1');
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-oni reveal';
+    btn.dataset.ai = 'oni';
+    btn.textContent = `${AI_LEVELS.oni.avatar} ${AI_LEVELS.oni.name}`;
+    m.querySelector('#aiLevelList').appendChild(btn);
+    audio.combo(10);
+    toast('👹 なにかが めをさました…', 'announce', 3000);
+    wire();
   });
 };
 
@@ -54,23 +76,12 @@ $('#btnQuit').onclick = () => {
   m.querySelector('#qYes').onclick = () => { closeModal(); quitCurrent(); };
 };
 
-// sound toggles
-const soundBtn = $('#btnSound');
-const musicBtn = $('#btnMusic');
-soundBtn.onclick = () => {
-  audio.setSfx(!audio.sfxOn);
-  soundBtn.classList.toggle('off', !audio.sfxOn);
-  soundBtn.textContent = audio.sfxOn ? '🔊' : '🔇';
-  localStorage.setItem('bba_sfx', audio.sfxOn ? '1' : '0');
-  audio.click();
-};
-musicBtn.onclick = () => {
-  audio.setMusic(!audio.musicOn);
-  musicBtn.classList.toggle('off', !audio.musicOn);
-  localStorage.setItem('bba_music', audio.musicOn ? '1' : '0');
-};
-if (localStorage.getItem('bba_sfx') === '0') { audio.sfxOn = false; soundBtn.classList.add('off'); soundBtn.textContent = '🔇'; }
-if (localStorage.getItem('bba_music') === '0') { audio.musicOn = false; musicBtn.classList.add('off'); }
+// settings
+$('#btnSettings').onclick = () => { audio.click(); showSettingsModal(); };
+applySettings();
+
+// reroll power-up
+$('#btnReroll').onclick = () => rerollCurrent();
 
 // unlock audio context on first interaction
 window.addEventListener('pointerdown', () => audio.ensure(), { once: true });
@@ -82,8 +93,12 @@ bindAdminActions();
   updateTopbar();
   if (session.token) {
     try {
-      await refreshMe();
+      const data = await refreshMe();
       updateTopbar();
+      if (data.dailyBonus) {
+        toast(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`, 'ok', 3500);
+        audio.coin();
+      }
     } catch (err) {
       if (String(err.message).includes('凍結')) toast(err.message, 'err');
       setToken(null);

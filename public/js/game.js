@@ -3,6 +3,7 @@ import { SIZE, shapeSize } from './engine.js';
 import { PALETTE, getSkin, getBoard } from './themes.js';
 import { ParticleSystem } from './particles.js';
 import { audio } from './audio.js';
+import { getSettings, particleFactor } from './settings.js';
 
 export class GameView {
   constructor(canvas, opts = {}) {
@@ -175,6 +176,7 @@ export class GameView {
 
   applyResult(result) {
     const now = this.time;
+    this.particles.intensity = particleFactor();   // rAF may be throttled; set at emit time too
     for (const [r, c] of result.placedCells) this.spawnAnim.set(r * SIZE + c, now);
     audio.place();
 
@@ -188,7 +190,7 @@ export class GameView {
       for (const r of result.fullRows) this.flashes.push({ kind: 'row', index: r, t: now });
       for (const c of result.fullCols) this.flashes.push({ kind: 'col', index: c, t: now });
 
-      this.shake = Math.min(14, 4 + result.lineCount * 3 + result.streak);
+      if (getSettings().shake) this.shake = Math.min(14, 4 + result.lineCount * 3 + result.streak);
       audio.clearLines(result.lineCount, result.streak);
 
       const centerX = this.boardX + this.boardSize / 2;
@@ -244,6 +246,7 @@ export class GameView {
   stop() { this.running = false; }
 
   update(dt) {
+    this.particles.intensity = particleFactor();
     this.particles.update(dt);
     this.shake = Math.max(0, this.shake - dt * 40);
     const now = this.time;
@@ -505,7 +508,7 @@ export class GameView {
   // Board revive animation (versus mode top-out)
   reviveFlash() {
     this.particles.confetti(this.boardX + this.boardSize / 2, this.boardY + this.boardSize / 2, this.cell, 24);
-    this.shake = 10;
+    if (getSettings().shake) this.shake = 10;
   }
 }
 

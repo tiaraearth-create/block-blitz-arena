@@ -35,7 +35,7 @@ export async function refreshMe() {
   const data = await api('/api/me');
   session.user = data.user;
   session.season = data.season;
-  return data.user;
+  return data;   // { user, season, dailyBonus }
 }
 
 // ---------------------------------------------------------------------------

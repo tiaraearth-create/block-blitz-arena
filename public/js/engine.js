@@ -75,8 +75,18 @@ export class Engine {
     this.linesCleared = 0;
     this.maxCombo = 0;
     this.piecesPlaced = 0;
+    this.rerolls = 1;         // hand rerolls left this game
     this.over = false;
     this.refillHand();
+  }
+
+  // Replace the whole hand with fresh pieces (once per game power-up).
+  reroll() {
+    if (this.over || this.rerolls <= 0) return false;
+    this.rerolls--;
+    for (let i = 0; i < 3; i++) this.hand[i] = this.drawPiece();
+    if (!this.hasAnyMove()) this.over = true;
+    return true;
   }
 
   drawPiece() {

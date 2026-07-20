@@ -5,7 +5,10 @@ export class ParticleSystem {
   constructor() {
     this.particles = [];
     this.bolts = [];      // lightning bolts (fx_thunder)
+    this.intensity = 1;   // particle amount multiplier (settings)
   }
+
+  n(base) { return Math.max(1, Math.round(base * this.intensity)); }
 
   clear() { this.particles.length = 0; this.bolts.length = 0; }
 
@@ -21,7 +24,7 @@ export class ParticleSystem {
   }
 
   spark(x, y, size, light, dark) {
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < this.n(8); i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = (0.5 + Math.random()) * size * 5;
       this.particles.push({
@@ -36,7 +39,7 @@ export class ParticleSystem {
 
   fireworks(x, y, size, color) {
     const hues = [color, '#ffd75e', '#ffffff', '#ff6bd4'];
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < this.n(14); i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = (0.8 + Math.random() * 1.4) * size * 6;
       this.particles.push({
@@ -51,7 +54,7 @@ export class ParticleSystem {
 
   thunder(x, y, size, color) {
     // few bright sparks + a lightning bolt
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < this.n(6); i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = (0.5 + Math.random()) * size * 4;
       this.particles.push({
@@ -77,7 +80,7 @@ export class ParticleSystem {
 
   sakura(x, y, size) {
     const pinks = ['#ffc0dc', '#ff9ecb', '#ffd7e8', '#ff8ab8'];
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < this.n(7); i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = (0.3 + Math.random() * 0.7) * size * 3;
       this.particles.push({
@@ -95,7 +98,7 @@ export class ParticleSystem {
   // Celebration burst (combo, victory).
   confetti(x, y, size, count = 40) {
     const colors = ['#ff5d5d', '#ffa93d', '#ffe14d', '#5ee86e', '#43d9e8', '#5b8bff', '#b06bff', '#ff6bd4'];
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < this.n(count); i++) {
       const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.6;
       const sp = (0.8 + Math.random() * 1.6) * size * 8;
       this.particles.push({

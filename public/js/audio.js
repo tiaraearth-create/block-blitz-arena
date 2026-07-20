@@ -8,6 +8,9 @@ class AudioEngine {
     this.sfxGain = null;
     this.musicOn = true;
     this.sfxOn = true;
+    this.sfxVol = 0.9;
+    this.musicVol = 0.6;
+    this.wantMusic = false;   // a game wants BGM right now
     this.musicTimer = null;
     this.step = 0;
   }
@@ -23,19 +26,34 @@ class AudioEngine {
       this.master.gain.value = 0.8;
       this.master.connect(this.ctx.destination);
       this.sfxGain = this.ctx.createGain();
-      this.sfxGain.gain.value = 0.9;
+      this.sfxGain.gain.value = this.sfxVol;
       this.sfxGain.connect(this.master);
       this.musicGain = this.ctx.createGain();
-      this.musicGain.gain.value = 0.22;
+      this.musicGain.gain.value = 0.45 * this.musicVol;
       this.musicGain.connect(this.master);
       return true;
     } catch { return false; }
   }
 
   setSfx(on) { this.sfxOn = on; }
-  setMusic(on) {
+
+  setVolumes(sfxVol, musicVol) {
+    this.sfxVol = sfxVol;
+    this.musicVol = musicVol;
+    if (this.ctx) {
+      this.sfxGain.gain.value = sfxVol;
+      this.musicGain.gain.value = 0.45 * musicVol;
+    }
+  }
+
+  // Enable/disable BGM without losing whether a game currently wants it.
+  setMusicEnabled(on) {
     this.musicOn = on;
-    if (on) this.startMusic(); else this.stopMusic();
+    if (!on) {
+      if (this.musicTimer) { clearInterval(this.musicTimer); this.musicTimer = null; }
+    } else if (this.wantMusic) {
+      this.startMusic();
+    }
   }
 
   tone({ freq = 440, dur = 0.15, type = 'sine', vol = 0.3, attack = 0.005, sweep = 0, delay = 0 }) {
@@ -124,6 +142,7 @@ class AudioEngine {
 
   // ---- BGM: generative loop ----
   startMusic() {
+    this.wantMusic = true;
     if (!this.musicOn || !this.ensure() || this.musicTimer) return;
     const bpm = 96;
     const stepDur = 60 / bpm / 2; // 8th notes
@@ -187,6 +206,7 @@ class AudioEngine {
   }
 
   stopMusic() {
+    this.wantMusic = false;
     if (this.musicTimer) { clearInterval(this.musicTimer); this.musicTimer = null; }
   }
 }

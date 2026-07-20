@@ -25,7 +25,10 @@ const db = loadDb();
 const app = express();
 app.use(express.json({ limit: '64kb' }));
 app.use(authMiddleware);
-app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  // Always revalidate (ETag 304) so client updates ship immediately.
+  setHeaders: res => res.setHeader('Cache-Control', 'no-cache'),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,6 +46,7 @@ function newUser(username, password, role = 'user') {
     equipped: { ...DEFAULT_EQUIPPED },
     battlePass: { season: currentSeason().id, xp: 0, premium: false, claimed: [] },
     badges: [],
+    lastDaily: new Date().toISOString().slice(0, 10),
   };
   db.users[id] = user;
   saveDb();
@@ -111,9 +115,28 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won }) 
   s.totalLines += lines;
   if (score > s.bestScore) s.bestScore = score;
   if (maxCombo > s.maxCombo) s.maxCombo = maxCombo;
-  if (mode === 'ai' && won) s.aiWins += 1;
+  let badge = null;
+  if ((mode === 'ai' || mode === 'ai_oni') && won) s.aiWins += 1;
+  if (mode === 'ai_oni' && won && !user.badges.includes('oni')) {
+    user.badges.push('oni');
+    badge = 'oni';
+  }
   saveDb();
-  return { coins, bpXp, accXp, score };
+  return { coins, bpXp, accXp, score, badge };
+}
+
+const DAILY_COINS = 100;
+const DAILY_GEMS = 5;
+
+// Grant the once-per-day login bonus. Returns the bonus or null.
+function grantDaily(user) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (user.lastDaily === today) return null;
+  user.lastDaily = today;
+  user.coins += DAILY_COINS;
+  user.gems += DAILY_GEMS;
+  saveDb();
+  return { coins: DAILY_COINS, gems: DAILY_GEMS };
 }
 
 function sanitizeName(name) {
@@ -150,7 +173,8 @@ app.post('/api/login', (req, res) => {
   }
   if (user.banned) return res.status(403).json({ error: 'このアカウントは凍結されています' });
   const token = issueToken(user.id);
-  res.json({ token, user: publicUser(user) });
+  const dailyBonus = grantDaily(user);
+  res.json({ token, user: publicUser(user), dailyBonus });
 });
 
 app.post('/api/logout', requireAuth, (req, res) => {
@@ -159,7 +183,8 @@ app.post('/api/logout', requireAuth, (req, res) => {
 });
 
 app.get('/api/me', (req, res) => {
-  res.json({ user: publicUser(req.user), season: currentSeason() });
+  const dailyBonus = req.user && !req.user.banned ? grantDaily(req.user) : null;
+  res.json({ user: publicUser(req.user), season: currentSeason(), dailyBonus });
 });
 
 // ---------------------------------------------------------------------------

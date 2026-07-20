@@ -3,6 +3,7 @@ import { session, api, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar } from './dom.js';
 import { getSkin, BOARDS } from './themes.js';
 import { audio } from './audio.js';
+import { getSettings, updateSettings } from './settings.js';
 
 // ---------------------------------------------------------------------------
 // Auth modal
@@ -47,6 +48,9 @@ export function showAuthModal() {
       closeModal();
       audio.coin();
       toast(mode === 'login' ? `おかえりなさい、${data.user.username}さん！` : `ようこそ、${data.user.username}さん！`, 'ok');
+      if (data.dailyBonus) {
+        setTimeout(() => toast(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`, 'ok', 3500), 900);
+      }
     } catch (err) {
       errEl.textContent = err.message;
       audio.error();
@@ -58,7 +62,7 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : '😀'} ${u.username}</h2>
     <div class="result-stats">
@@ -86,6 +90,58 @@ function showProfileModal() {
 }
 
 // ---------------------------------------------------------------------------
+// Settings modal
+// ---------------------------------------------------------------------------
+
+export function showSettingsModal() {
+  const s = getSettings();
+  const m = showModal(`
+    <h2>⚙️ 設定</h2>
+    <div class="form-col">
+      <div class="settings-row">
+        <label>🔊 効果音</label>
+        <input type="range" id="setSfxVol" min="0" max="100" value="${Math.round(s.sfxVol * 100)}">
+        <input type="checkbox" id="setSfxOn" ${s.sfxOn ? 'checked' : ''}>
+      </div>
+      <div class="settings-row">
+        <label>🎵 BGM</label>
+        <input type="range" id="setMusicVol" min="0" max="100" value="${Math.round(s.musicVol * 100)}">
+        <input type="checkbox" id="setMusicOn" ${s.musicOn ? 'checked' : ''}>
+      </div>
+      <div class="settings-row">
+        <label>📳 画面シェイク</label>
+        <input type="checkbox" id="setShake" ${s.shake ? 'checked' : ''}>
+      </div>
+      <div class="settings-row">
+        <label>✨ パーティクル量</label>
+        <div class="seg" id="setParticles">
+          <button data-p="low" ${s.particles === 'low' ? 'class="active"' : ''}>少なめ</button>
+          <button data-p="normal" ${s.particles === 'normal' ? 'class="active"' : ''}>標準</button>
+          <button data-p="high" ${s.particles === 'high' ? 'class="active"' : ''}>多め</button>
+        </div>
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-primary" id="setClose">閉じる</button>
+      </div>
+    </div>`);
+
+  m.querySelector('#setSfxOn').onchange = e => { updateSettings({ sfxOn: e.target.checked }); audio.click(); };
+  m.querySelector('#setMusicOn').onchange = e => updateSettings({ musicOn: e.target.checked });
+  m.querySelector('#setShake').onchange = e => updateSettings({ shake: e.target.checked });
+  m.querySelector('#setSfxVol').oninput = e => { updateSettings({ sfxVol: e.target.value / 100 }); audio.click(); };
+  m.querySelector('#setMusicVol').oninput = e => updateSettings({ musicVol: e.target.value / 100 });
+  m.querySelectorAll('#setParticles button').forEach(b => {
+    b.onclick = () => {
+      m.querySelectorAll('#setParticles button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      updateSettings({ particles: b.dataset.p });
+      audio.click();
+    };
+  });
+  m.querySelector('#setClose').onclick = closeModal;
+}
+
+// ---------------------------------------------------------------------------
 // Leaderboard
 // ---------------------------------------------------------------------------
 
@@ -101,7 +157,7 @@ export async function openLeaderboard(board = 'score') {
       return;
     }
     const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹' };
     list.innerHTML = data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
@@ -239,7 +295,7 @@ function rewardLabel(r) {
   if (!r) return { icon: '—', label: '' };
   if (r.type === 'coins') return { icon: '🪙', label: fmt(r.amount) };
   if (r.type === 'gems') return { icon: '💎', label: fmt(r.amount) };
-  if (r.type === 'badge') return { icon: { bronze: '🥉', silver: '🥈', gold: '🥇' }[r.id] || '🎖️', label: 'バッジ' };
+  if (r.type === 'badge') return { icon: { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹' }[r.id] || '🎖️', label: 'バッジ' };
   const names = { skin_neon: 'ネオン', skin_candy: 'キャンディ', skin_gold: 'ゴールド', board_ocean: 'オーシャン', board_sunset: 'サンセット', fx_fireworks: '花火' };
   return { icon: '🎁', label: names[r.id] || 'アイテム' };
 }
