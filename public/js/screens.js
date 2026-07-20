@@ -110,12 +110,18 @@ function titleName(id) {
 // ---------------------------------------------------------------------------
 
 let gemPacks = null;
+let gemMode = 'demo';
 
 export async function showGemShop() {
   if (!session.user) { showAuthModal(); return; }
   try {
-    if (!gemPacks) gemPacks = (await api('/api/gempacks')).packs;
+    if (!gemPacks) {
+      const data = await api('/api/gempacks');
+      gemPacks = data.packs;
+      gemMode = data.mode || 'demo';
+    }
   } catch (err) { toast(err.message, 'err'); return; }
+  const isStripe = gemMode === 'stripe';
   const m = showModal(`
     <h2>💎 ジェムショップ</h2>
     <p class="muted center" style="margin-bottom:12px">所持ジェム: <b style="color:var(--cyan)">${fmt(session.user.gems)}</b></p>
@@ -125,11 +131,22 @@ export async function showGemShop() {
           <span class="gp-gems">💎 ${fmt(p.gems)}${p.bonus ? `<small> +${fmt(p.bonus)}ボーナス</small>` : ''}</span>
           <span class="gp-price">¥${fmt(p.priceJpy)}</span>
         </button>`).join('')}
-      <p class="muted center" style="font-size:11px">⚠️ 現在は<b>デモ決済</b>です。実際の請求は発生しません。<br>本番公開時はStripe等の決済サービス接続が必要です（README参照）</p>
+      ${isStripe
+        ? '<p class="muted center" style="font-size:11px">🔒 決済はStripeの安全なページで行われます</p>'
+        : '<p class="muted center" style="font-size:11px">⚠️ 現在は<b>デモ決済</b>です。実際の請求は発生しません。<br>本番課金はStripeキーを設定すると有効になります（README参照）</p>'}
     </div>`);
   m.querySelectorAll('[data-pack]').forEach(btn => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       const pack = gemPacks.find(p => p.id === btn.dataset.pack);
+      if (isStripe) {
+        // Real payment: hand off to Stripe's hosted checkout page.
+        try {
+          const res = await api('/api/purchase', { method: 'POST', body: { packId: pack.id } });
+          if (res.checkoutUrl) { location.href = res.checkoutUrl; return; }
+          toast('決済ページを開けませんでした', 'err');
+        } catch (err) { audio.error(); toast(err.message, 'err'); }
+        return;
+      }
       const c = showModal(`
         <h2>💳 購入確認（デモ）</h2>
         <div class="result-stats">

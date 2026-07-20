@@ -25,7 +25,11 @@ const PORT = process.env.PORT || 3000;
 const db = loadDb();
 const app = express();
 app.set('trust proxy', 1);
-app.use(express.json({ limit: '64kb' }));
+app.use(express.json({
+  limit: '64kb',
+  // Keep the raw body for Stripe webhook signature verification.
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 app.use(authMiddleware);
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -357,32 +361,113 @@ app.get('/api/bosses', (req, res) => {
 // Gem purchases (DEMO payment — no real money is charged)
 // ---------------------------------------------------------------------------
 
+const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || '';
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+const stripeEnabled = () => STRIPE_KEY.length > 0;
+
 app.get('/api/gempacks', (_req, res) => {
-  res.json({ packs: GEM_PACKS });
+  res.json({ packs: GEM_PACKS, mode: stripeEnabled() ? 'stripe' : 'demo' });
 });
 
-app.post('/api/purchase', requireAuth, maintenanceGuard, (req, res) => {
+function grantPack(user, pack, status, extId = null) {
+  const total = pack.gems + pack.bonus;
+  user.gems += total;
+  db.transactions.push({
+    id: crypto.randomUUID(),
+    userId: user.id,
+    username: user.username,
+    packId: pack.id,
+    gems: total,
+    jpy: pack.priceJpy,
+    status,
+    extId,
+    at: Date.now(),
+  });
+  saveDb();
+  return total;
+}
+
+app.post('/api/purchase', requireAuth, maintenanceGuard, async (req, res) => {
   if (!rateLimit(`buy:${req.user.id}`, 30, 5 * 60 * 1000)) {
     return res.status(429).json({ error: '購入リクエストが多すぎます' });
   }
   const pack = GEM_PACKS.find(p => p.id === req.body.packId);
   if (!pack) return res.status(404).json({ error: 'パックが見つかりません' });
-  // DEMO gateway: in production, verify a real PSP session (e.g. Stripe
-  // Checkout webhook) BEFORE granting gems. Never trust the client alone.
-  const total = pack.gems + pack.bonus;
-  req.user.gems += total;
-  db.transactions.push({
-    id: crypto.randomUUID(),
-    userId: req.user.id,
-    username: req.user.username,
-    packId: pack.id,
-    gems: total,
-    jpy: pack.priceJpy,
-    status: 'demo_completed',
-    at: Date.now(),
-  });
-  saveDb();
+
+  // Real payments: create a Stripe Checkout session. Card details are entered
+  // on Stripe's hosted page; gems are granted ONLY by the verified webhook.
+  if (stripeEnabled()) {
+    try {
+      const base = `${req.protocol}://${req.get('host')}`;
+      const params = new URLSearchParams({
+        mode: 'payment',
+        success_url: `${base}/?purchase=success`,
+        cancel_url: `${base}/?purchase=cancel`,
+        'line_items[0][price_data][currency]': 'jpy',
+        'line_items[0][price_data][product_data][name]': `Block Blitz Arena ジェム ${pack.gems + pack.bonus}個`,
+        'line_items[0][price_data][unit_amount]': String(pack.priceJpy),
+        'line_items[0][quantity]': '1',
+        'metadata[userId]': req.user.id,
+        'metadata[packId]': pack.id,
+      });
+      const resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${STRIPE_KEY}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: params.toString(),
+      });
+      const session = await resp.json();
+      if (!resp.ok || !session.url) {
+        console.error('[stripe] session create failed:', session.error && session.error.message);
+        return res.status(502).json({ error: '決済セッションの作成に失敗しました' });
+      }
+      return res.json({ checkoutUrl: session.url });
+    } catch (err) {
+      console.error('[stripe] error:', err.message);
+      return res.status(502).json({ error: '決済サービスに接続できません' });
+    }
+  }
+
+  // Demo gateway (no PSP configured): grant instantly, no real charge.
+  const total = grantPack(req.user, pack, 'demo_completed');
   res.json({ user: publicUser(req.user), granted: total, demo: true });
+});
+
+// Stripe webhook: the ONLY place real purchases grant gems.
+app.post('/api/stripe/webhook', (req, res) => {
+  if (!stripeEnabled() || !STRIPE_WEBHOOK_SECRET) return res.status(404).end();
+  try {
+    const sigHeader = String(req.headers['stripe-signature'] || '');
+    const parts = Object.fromEntries(sigHeader.split(',').map(kv => kv.split('=')));
+    const payload = `${parts.t}.${req.rawBody.toString('utf8')}`;
+    const expected = crypto.createHmac('sha256', STRIPE_WEBHOOK_SECRET).update(payload).digest('hex');
+    const given = Buffer.from(parts.v1 || '', 'hex');
+    if (given.length !== 32 || !crypto.timingSafeEqual(Buffer.from(expected, 'hex'), given)) {
+      return res.status(400).json({ error: 'bad signature' });
+    }
+    if (Math.abs(Date.now() / 1000 - Number(parts.t)) > 300) {
+      return res.status(400).json({ error: 'stale timestamp' });
+    }
+    const event = req.body;
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      if (session.payment_status === 'paid' && session.metadata) {
+        const user = db.users[session.metadata.userId];
+        const pack = GEM_PACKS.find(p => p.id === session.metadata.packId);
+        const already = db.transactions.some(t => t.extId === session.id);
+        if (user && pack && !already) {
+          grantPack(user, pack, 'stripe_completed', session.id);
+          console.log(`[stripe] granted ${pack.id} to ${user.username}`);
+        }
+      }
+    }
+    res.json({ received: true });
+  } catch (err) {
+    console.error('[stripe] webhook error:', err.message);
+    res.status(400).json({ error: 'webhook error' });
+  }
 });
 
 app.get('/api/admin/transactions', requireAuth, requireAdmin, (_req, res) => {

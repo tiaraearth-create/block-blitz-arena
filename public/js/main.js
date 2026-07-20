@@ -196,11 +196,35 @@ $('#btnReroll').onclick = () => rerollCurrent();
 $('#btnAuto').onclick = () => toggleAutopilot();
 $('#btnAdminCmd').onclick = () => showAdminPalette();
 
-// unlock audio context on first interaction and start menu music
-window.addEventListener('pointerdown', () => {
+// ---- audio boot: autoplay if allowed, otherwise tap-to-start splash ----
+function startAudioNow() {
   audio.ensure();
   if (!audio.playing) audio.playTrack(audio.trackName || 'menu');
-}, { once: true });
+}
+
+function dismissSplash() {
+  const splash = $('#tapStart');
+  if (!splash.classList.contains('hidden')) {
+    splash.classList.add('ts-out');
+    setTimeout(() => splash.classList.add('hidden'), 450);
+  }
+  startAudioNow();
+}
+
+(async () => {
+  // Try silent autoplay first — succeeds on repeat visits where the browser
+  // has granted audio permission; otherwise show the tap-to-start splash.
+  audio.ensure();
+  await new Promise(r => setTimeout(r, 250));
+  if (audio.ctx && audio.ctx.state === 'running') {
+    startAudioNow();
+  } else {
+    $('#tapStart').classList.remove('hidden');
+  }
+})();
+
+window.addEventListener('pointerdown', dismissSplash, { once: true });
+window.addEventListener('keydown', dismissSplash, { once: true });
 
 // live online counter on the menu
 async function pollStatus() {
@@ -216,6 +240,19 @@ setInterval(pollStatus, 30000);
 
 bindAdminActions();
 loadTitles();
+
+// ---- Stripe checkout return ----
+if (location.search.includes('purchase=success')) {
+  history.replaceState(null, '', '/');
+  setTimeout(async () => {
+    try { await refreshMe(); updateTopbar(); } catch { /* ignore */ }
+    audio.coin();
+    toast('💎 購入ありがとうございます！ジェムを付与しました', 'ok', 4000);
+  }, 1500);
+} else if (location.search.includes('purchase=cancel')) {
+  history.replaceState(null, '', '/');
+  toast('購入をキャンセルしました', '', 2500);
+}
 
 // ---- session restore ----
 (async () => {

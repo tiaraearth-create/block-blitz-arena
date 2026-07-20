@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Block Blitz Arena</title>
+<meta name="theme-color" content="#141a33">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="stylesheet" href="css/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='8' width='38' height='38' rx='8' fill='%235b8bff'/><rect x='54' y='8' width='38' height='38' rx='8' fill='%23ff5d5d'/><rect x='8' y='54' width='38' height='38' rx='8' fill='%23ffe14d'/><rect x='54' y='54' width='38' height='38' rx='8' fill='%235ee86e'/></svg>">
 </head>
@@ -195,6 +200,15 @@
 <!-- ===================== Modals / toasts ===================== -->
 <div id="modal-root"></div>
 <div id="toast-root"></div>
+
+<!-- Tap-to-start splash: guarantees music from the very first moment -->
+<div id="tapStart" class="tap-start hidden">
+  <div class="ts-blocks">
+    <span style="background:#ff5d5d"></span><span style="background:#5b8bff"></span><span style="background:#ffe14d"></span><span style="background:#5ee86e"></span>
+  </div>
+  <div class="ts-title">BLOCK BLITZ ARENA</div>
+  <div class="ts-tap">▶ タップしてスタート</div>
+</div>
 
 <script type="module" src="js/main.js"></script>
 </body>
