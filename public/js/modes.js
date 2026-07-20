@@ -432,11 +432,15 @@ class AiMode extends VersusBase {
   async finish() {
     if (this.ended) return;
     this.ended = true;
+    this.stopTimer();
     clearTimeout(this.aiTimer);
     getView().inputLocked = true;
     const me = this.engine.score, opp = this.aiEngine.score;
-    const outcome = me > opp ? 'win' : me < opp ? 'lose' : 'draw';
-    if (outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
+    // Quitting early is ALWAYS a draw — never counted as a defeat.
+    const outcome = this.aborted ? 'draw' : me > opp ? 'win' : me < opp ? 'lose' : 'draw';
+    if (!this.aborted) {
+      if (outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
+    }
 
     const modeName = this.level === 'oni' ? 'ai_oni' : this.level === 'kami' ? 'ai_kami' : 'ai';
     const rewards = await submitResult({
@@ -450,9 +454,10 @@ class AiMode extends VersusBase {
       setTimeout(() => toast('🔱 バッジ「神殺し」を獲得！！', 'announce', 5000), 1200);
     }
 
-    const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
+    const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: this.aborted ? '🤝 引き分け（中断）' : 'DRAW' };
     const m = showModal(`
       <div class="result-banner ${outcome}">${banners[outcome]}</div>
+      ${this.aborted ? '<p class="muted center">途中終了は引き分け扱いです。敗北にはなりません</p>' : ''}
       <div class="result-stats">
         <div class="rs-row"><span>あなた</span><b>${fmt(me)}</b></div>
         <div class="rs-row"><span>${this.aiLabel()}</span><b>${fmt(opp)}</b></div>
@@ -467,8 +472,7 @@ class AiMode extends VersusBase {
   }
 
   quit() {
-    this.timeLeft = 0;
-    this.updateTimerHud();
+    this.aborted = true;
     this.finish();
   }
 
@@ -603,7 +607,7 @@ class BossMode {
       audio.bossDefeated();
       confettiBurst(60);
       $('#bossEmoji').classList.add('boss-dead');
-    } else {
+    } else if (!this.aborted) {
       audio.gameOver();
     }
 
@@ -621,8 +625,10 @@ class BossMode {
     }
 
     const hasNext = won && this.bossIndex + 1 < this.bossCount;
+    const banner = won ? `${this.boss.emoji} 討伐成功！` : this.aborted ? '🤝 中断（引き分け）' : 'やられた…';
     const m = showModal(`
-      <div class="result-banner ${won ? 'win' : 'lose'}">${won ? `${this.boss.emoji} 討伐成功！` : 'やられた…'}</div>
+      <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
+      ${this.aborted ? '<p class="muted center">途中終了は引き分け扱いです。敗北にはなりません</p>' : ''}
       <div class="result-stats">
         <div class="rs-row"><span>与えたダメージ</span><b>${fmt(this.engine.score)}</b></div>
         ${won ? '' : `<div class="rs-row"><span>${this.boss.name}の残りHP</span><b>${fmt(Math.max(0, this.hp))}</b></div>`}
@@ -632,7 +638,7 @@ class BossMode {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${hasNext ? '次のボスへ' : won ? 'もう一度' : 'リベンジ'}</button>
+        <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${hasNext ? '次のボスへ' : won ? 'もう一度' : this.aborted ? 'もう一度' : 'リベンジ'}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => {
@@ -643,7 +649,10 @@ class BossMode {
     };
   }
 
-  quit() { this.finish(false); }
+  quit() {
+    this.aborted = true;
+    this.finish(false);
+  }
 
   destroy() {
     this.ended = true;
@@ -948,7 +957,7 @@ class OnlineMode extends VersusBase {
     if (this.inMatch && !this.ended) {
       this.ended = true;
       this.destroy();
-      toast('対戦を離脱しました', '', 1800);
+      toast('🤝 対戦を中断しました（相手の不戦勝・あなたに敗北は付きません）', '', 2600);
       endToMenu();
     } else {
       this.client.cancelQueue();

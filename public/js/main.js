@@ -127,6 +127,7 @@ $('#btnCancelQueue').onclick = () => { audio.click(); cancelMatchmaking(); };
 
 $('#btnLeaderboard').onclick = () => { audio.click(); openLeaderboard(); };
 $('#btnShop').onclick = () => { audio.click(); openShop(); };
+$('#btnGemShop').onclick = () => { audio.click(); showGemShop(); };
 $('#btnBattlePass').onclick = () => { audio.click(); openBattlePass(); };
 $('#btnAdmin').onclick = () => { audio.click(); openAdmin(); };
 $('#userChip').onclick = () => { audio.click(); showAuthModal(); };
@@ -144,7 +145,7 @@ $$('[data-back]').forEach(b => { b.onclick = () => { audio.click(); showScreen('
 $('#btnQuit').onclick = () => {
   const m = showModal(`
     <h2>ゲームを終了しますか？</h2>
-    <p class="muted center">対戦中の場合は敗北扱いになることがあります</p>
+    <p class="muted center">途中終了は引き分け扱いです（オンラインは相手の不戦勝）。<br>あなたに敗北は付きません</p>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="qNo">続ける</button>
       <button class="btn btn-ai" id="qYes">終了する</button>
