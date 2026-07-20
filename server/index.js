@@ -140,6 +140,13 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bo
     user.badges.push('souzou');
     badge = 'souzou';
   }
+  // Boss rush: clear all bosses back-to-back for a badge + one-time gems.
+  if (mode === 'boss_rush' && won && !user.badges.includes('rush')) {
+    user.badges.push('rush');
+    badge = 'rush';
+    gems = 300;
+    user.gems += 300;
+  }
   // Boss battles: sequential progression + first-clear gem bonus.
   if (mode === 'boss') {
     const idx = BOSSES.findIndex(b => b.id === extraBossId);

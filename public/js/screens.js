@@ -1,5 +1,5 @@
 // Sub-screens: auth modal, leaderboard, shop, battle pass, admin panel.
-import { session, api, setToken } from './net.js';
+import { session, api, setToken, refreshMe } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar } from './dom.js';
 import { getSkin, BOARDS } from './themes.js';
 import { audio } from './audio.js';
@@ -698,6 +698,31 @@ export function bindAdminActions() {
       URL.revokeObjectURL(a.href);
       toast('💾 バックアップをダウンロードしました', 'ok');
     } catch (err) { toast(err.message, 'err'); }
+  };
+
+  const selfGrant = async (kind) => {
+    const amount = promptAmount(kind === 'coins' ? '自分に付与するコイン数' : '自分に付与するジェム数');
+    if (amount === null) return;
+    try {
+      await api(`/api/admin/users/${session.user.id}`, {
+        method: 'POST',
+        body: kind === 'coins' ? { grantCoins: amount } : { grantGems: amount },
+      });
+      await refreshMe();
+      updateTopbar();
+      audio.coin();
+      toast(`${kind === 'coins' ? '💰' : '💎'} ${fmt(amount)} を付与しました`, 'ok');
+      openAdmin();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  $('#btnSelfCoins').onclick = () => selfGrant('coins');
+  $('#btnSelfGems').onclick = () => selfGrant('gems');
+
+  $('#btnUnlockHidden').onclick = () => {
+    localStorage.setItem('bba_kami', '1');
+    localStorage.setItem('bba_souzou', '1');
+    audio.kamiDescend();
+    toast('🔓 「神」「創造神」を解放しました（この端末のみ）', 'announce', 3500);
   };
 
   $('#btnLbReset').onclick = async () => {

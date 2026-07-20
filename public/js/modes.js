@@ -126,10 +126,8 @@ export function showAdminPalette() {
       <button class="btn btn-ghost btn-sm" data-cmd="reroll">🔄 リロール +5回</button>
       <button class="btn btn-ghost btn-sm" data-cmd="time">⏱ 残り時間 +60秒</button>
       <button class="btn btn-ghost btn-sm" data-cmd="bosshalf">👹 ボスHP 半減</button>
-      <button class="btn btn-ghost btn-sm" data-cmd="coins">💰 コイン +10,000（自分）</button>
-      <button class="btn btn-ghost btn-sm" data-cmd="gems">💎 ジェム +1,000（自分）</button>
-      <button class="btn btn-ghost btn-sm" data-cmd="unlock">🔓 隠し難易度を全解放</button>
     </div>
+    <p class="muted center" style="font-size:11px;margin-top:8px">通貨付与や隠し解放はホームの「🛡️管理」から</p>
     <div class="modal-buttons"><button class="btn btn-primary" id="acClose">閉じる</button></div>`);
   m.querySelector('#acClose').onclick = closeModal;
   m.querySelectorAll('[data-cmd]').forEach(b => {
@@ -173,26 +171,6 @@ async function adminCmd(cmd) {
       mode.updateHpBar();
       toast('👹 ボスHPを半減しました', 'ok', 1400);
       if (mode.hp <= 0) mode.finish(true);
-      break;
-    case 'coins':
-    case 'gems': {
-      try {
-        await api(`/api/admin/users/${session.user.id}`, {
-          method: 'POST',
-          body: cmd === 'coins' ? { grantCoins: 10000 } : { grantGems: 1000 },
-        });
-        await refreshMe();
-        updateTopbar();
-        audio.coin();
-        toast(cmd === 'coins' ? '💰 +10,000コイン' : '💎 +1,000ジェム', 'ok', 1600);
-      } catch (err) { toast(err.message, 'err'); }
-      break;
-    }
-    case 'unlock':
-      localStorage.setItem('bba_kami', '1');
-      localStorage.setItem('bba_souzou', '1');
-      audio.kamiDescend();
-      toast('🔓 「神」「創造神」を解放しました', 'announce', 3000);
       break;
   }
 }
@@ -590,129 +568,6 @@ class AiMode extends VersusBase {
 }
 
 // ---------------------------------------------------------------------------
-// VS AI 2v2: you + an AI ally against two AI enemies. Same difficulty for all.
-// ---------------------------------------------------------------------------
-
-class AiTeamMode extends VersusBase {
-  constructor(level) {
-    super();
-    this.mode = 'ai_team';
-    this.level = level;
-    this.cfg = AI_LEVELS[level];
-  }
-
-  start() {
-    const seed = (Math.random() * 2 ** 31) | 0;
-    this.setupHud(MATCH_SECONDS);
-    this.buildPanels([
-      { slot: 1, name: `${this.cfg.avatar} 味方AI`, isAlly: true },
-      { slot: 2, name: `${this.cfg.avatar} 敵AI-1`, isAlly: false },
-      { slot: 3, name: `${this.cfg.avatar} 敵AI-2`, isAlly: false },
-    ]);
-    $('#teamTotals').classList.remove('hidden');
-    this.startedAt = Date.now();
-    const v = getView();
-    const stage = DIFF_THEME[this.level] || DIFF_THEME.normal;
-    v.setTheme({ ...equippedTheme(), boardId: stage.board });
-    this.engine = new Engine(seed);
-    this.ais = [1, 2, 3].map(() => new Engine(seed));
-    v.setEngine(this.engine);
-    v.inputLocked = true;
-    v.onPlace = () => this.onMyPlace();
-    v.onGameOver = () => this.onTopOut();
-    this.updateMyHud(this.engine);
-    updateRerollHud(this.engine);
-    updateAutoBtn();
-    v.start();
-    audio.playTrack(stage.track);
-
-    countdownOverlay(3, () => {
-      v.inputLocked = false;
-      this.startTimer(() => this.finish());
-      this.timers = this.ais.map((eng, i) => this.aiLoop(eng, i + 1));
-    }, audio);
-  }
-
-  aiLoop(eng, slot) {
-    const tick = () => {
-      if (this.ended) return;
-      if (eng.over) eng.reviveBoard();
-      const mv = chooseMove(eng, this.level);
-      let combo = 0;
-      if (mv) {
-        const r = eng.place(mv.index, mv.row, mv.col);
-        if (r && r.lineCount > 0) combo = r.streak;
-      }
-      this.updateOpp(slot, { score: eng.score, combo, grid: eng.snapshot() });
-      this.refreshTeams();
-      this.timers[slot - 1] = setTimeout(tick, this.cfg.moveMs * (0.75 + Math.random() * 0.5));
-    };
-    return setTimeout(tick, this.cfg.moveMs);
-  }
-
-  myTeamScore() { return this.engine.score + this.ais[0].score; }
-  enemyScore() { return this.ais[1].score + this.ais[2].score; }
-
-  refreshTeams() {
-    const mine = this.myTeamScore(), theirs = this.enemyScore();
-    this.updateBars(mine, theirs);
-    $('#teamTotals').innerHTML =
-      `<b class="tt-a">${fmt(mine)}</b><span class="muted"> vs </span><b class="tt-b">${fmt(theirs)}</b>`;
-  }
-
-  onMyPlace() {
-    this.updateMyHud(this.engine);
-    this.refreshTeams();
-  }
-
-  onTopOut() {
-    if (this.ended) return;
-    toast('ボードリセット！スコアは維持されます', '', 1800);
-    this.engine.reviveBoard();
-    getView().reviveFlash();
-  }
-
-  async finish() {
-    if (this.ended) return;
-    this.ended = true;
-    this.stopTimer();
-    (this.timers || []).forEach(t => clearTimeout(t));
-    getView().inputLocked = true;
-    const mine = this.myTeamScore(), theirs = this.enemyScore();
-    const outcome = this.aborted ? 'draw' : mine > theirs ? 'win' : mine < theirs ? 'lose' : 'draw';
-    if (!this.aborted) {
-      if (outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
-    }
-    const rewards = await submitResult({
-      mode: 'ai', score: this.engine.score, lines: this.engine.linesCleared,
-      maxCombo: this.engine.maxCombo, duration: MATCH_SECONDS, won: outcome === 'win',
-    });
-    const banners = { win: '🏆 TEAM WIN!', lose: 'TEAM LOSE…', draw: this.aborted ? '🤝 引き分け（中断）' : 'DRAW' };
-    const m = showModal(`
-      <div class="result-banner ${outcome}">${banners[outcome]}</div>
-      <div class="result-stats">
-        <div class="rs-row"><span>あなたのチーム<br><small class="muted">⭐あなた ${fmt(this.engine.score)} / ${this.cfg.avatar}味方AI ${fmt(this.ais[0].score)}</small></span><b>${fmt(mine)}</b></div>
-        <div class="rs-row"><span>敵AIチーム</span><b>${fmt(theirs)}</b></div>
-        ${rewardsRows(rewards)}
-      </div>
-      <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn btn-primary" id="rAgain">再戦</button>
-      </div>`, { dismissable: false });
-    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
-    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startVsAi(this.level, true); };
-  }
-
-  quit() { this.aborted = true; this.finish(); }
-
-  destroy() {
-    this.ended = true;
-    this.stopTimer();
-    (this.timers || []).forEach(t => clearTimeout(t));
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Boss battles (PvE): deal damage with points, survive the boss's attacks.
 // ---------------------------------------------------------------------------
 
@@ -722,9 +577,6 @@ const BOSS_STAGE = {
   dragon: { board: 'board_sunset', track: 'boss' },
   maou:   { board: 'board_oni',    track: 'oni' },
 };
-
-// Each boss deals a FIXED piece chart (譜面) — learn the pattern to win.
-const BOSS_SEEDS = { slime: 11295, golem: 33807, dragon: 55123, maou: 77991 };
 
 class BossMode {
   constructor(boss, bossIndex, bossCount) {
@@ -750,7 +602,7 @@ class BossMode {
     const v = getView();
     const stage = BOSS_STAGE[this.boss.id] || {};
     v.setTheme({ ...equippedTheme(), boardId: stage.board || 'board_default' });
-    this.engine = new Engine(BOSS_SEEDS[this.boss.id] || 12345);
+    this.engine = new Engine();
     v.setEngine(this.engine);
     v.inputLocked = true;
     v.onPlace = r => this.onPlace(r);
@@ -898,6 +750,175 @@ export function startBoss(boss, bossIndex, bossCount) {
   if (currentMode) currentMode.destroy();
   currentMode = new BossMode(boss, bossIndex, bossCount);
   window.__bbaMode = currentMode;   // debug/testing hook
+  currentMode.start();
+}
+
+// ---------------------------------------------------------------------------
+// Boss rush: all bosses back-to-back on one board. Unlocked after clearing
+// every boss. One life — top out once and the run is over.
+// ---------------------------------------------------------------------------
+
+class BossRushMode {
+  constructor(bosses) {
+    this.mode = 'boss';        // shares boss-panel admin command (HP halve)
+    this.bosses = bosses;
+    this.stage = 0;
+    this.boss = bosses[0];
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#hudTimer').classList.add('hidden');
+    $('#bossPanel').classList.remove('hidden');
+    document.querySelector('.boss-atkbar').classList.remove('hidden');
+    this.applyBossPanel();
+    this.startedAt = Date.now();
+
+    const v = getView();
+    v.setTheme({ ...equippedTheme(), boardId: 'board_oni' });
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = r => this.onPlace(r);
+    v.onGameOver = () => this.finish(false);
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('boss');
+    toast('⚔️ ボスラッシュ開始！全ボスを連続で討伐せよ！', 'announce', 2600);
+
+    countdownOverlay(3, () => {
+      v.inputLocked = false;
+      this.nextAtk = Date.now() + this.boss.atkSec * 1000;
+      this.atkInt = setInterval(() => this.tickAttack(), 100);
+    }, audio);
+  }
+
+  applyBossPanel() {
+    this.hp = this.boss.hp;
+    $('#bossEmoji').textContent = this.boss.emoji;
+    $('#bossEmoji').className = 'boss-emoji';
+    $('#bossName').textContent = `${this.boss.name}（${this.stage + 1}/${this.bosses.length}）`;
+    this.updateHpBar();
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = `⚔️ ボスラッシュ ${this.stage + 1}/${this.bosses.length}`;
+  }
+
+  updateHpBar() {
+    const pct = Math.max(0, (this.hp / this.boss.hp) * 100);
+    $('#bossHp').style.width = `${pct}%`;
+    $('#bossHpText').textContent = `${fmt(Math.max(0, this.hp))} / ${fmt(this.boss.hp)}`;
+  }
+
+  onPlace(result) {
+    this.updateHud();
+    this.hp -= result.gained;
+    this.updateHpBar();
+    if (result.lineCount > 0) {
+      const em = $('#bossEmoji');
+      em.classList.remove('boss-hit'); void em.offsetWidth; em.classList.add('boss-hit');
+    }
+    if (this.hp <= 0 && !this.ended) {
+      if (this.stage + 1 >= this.bosses.length) this.finish(true);
+      else this.nextBoss();
+    }
+  }
+
+  nextBoss() {
+    this.stage++;
+    this.boss = this.bosses[this.stage];
+    audio.bossDefeated();
+    confettiBurst(30);
+    if (view) view.shake = 12;
+    toast(`${this.bosses[this.stage - 1].emoji} 撃破！つぎは ${this.boss.emoji} ${this.boss.name}！`, 'announce', 2400);
+    this.applyBossPanel();
+    this.updateHud();
+    this.nextAtk = Date.now() + this.boss.atkSec * 1000;
+  }
+
+  tickAttack() {
+    if (this.ended) return;
+    const total = this.boss.atkSec * 1000;
+    const remain = Math.max(0, this.nextAtk - Date.now());
+    $('#bossAtkBar').style.width = `${(1 - remain / total) * 100}%`;
+    if (remain <= 0) {
+      this.nextAtk = Date.now() + total;
+      this.attack();
+    }
+  }
+
+  attack() {
+    if (this.ended || !this.engine || view.inputLocked) return;
+    const cells = this.engine.addGarbage(this.boss.atkCells);
+    audio.bossAttack();
+    const em = $('#bossEmoji');
+    em.classList.remove('boss-atk'); void em.offsetWidth; em.classList.add('boss-atk');
+    for (const [r, c] of cells) {
+      view.spawnAnim.set(r * 8 + c, view.time);
+      view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
+    }
+    view.shake = 12;
+    toast(`${this.boss.emoji} ${this.boss.name}の攻撃！`, 'err', 1300);
+    if (this.engine.over) this.finish(false);
+  }
+
+  async finish(won) {
+    if (this.ended) return;
+    this.ended = true;
+    clearInterval(this.atkInt);
+    view.inputLocked = true;
+    if (won) {
+      audio.bossDefeated();
+      confettiBurst(80);
+      $('#bossEmoji').classList.add('boss-dead');
+    } else if (!this.aborted) {
+      audio.gameOver();
+    }
+    const rewards = await submitResult({
+      mode: 'boss_rush', score: this.engine.score,
+      lines: this.engine.linesCleared, maxCombo: this.engine.maxCombo,
+      duration: (Date.now() - this.startedAt) / 1000, won,
+    });
+    if (rewards && rewards.badge === 'rush') {
+      setTimeout(() => toast('⚔️ バッジ「ボスラッシュ制覇」を獲得！+300💎', 'announce', 5000), 1200);
+    }
+    const banner = won ? '⚔️ ボスラッシュ制覇！！' : this.aborted ? '🤝 中断（引き分け）' : `${this.boss.emoji} に敗北…`;
+    const m = showModal(`
+      <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>到達</span><b>${won ? '完全制覇' : `${this.stage + 1}体目 (${this.boss.name})`}</b></div>
+        <div class="rs-row"><span>総ダメージ</span><b>${fmt(this.engine.score)}</b></div>
+        <div class="rs-row"><span>最大コンボ</span><b>${fmt(this.engine.maxCombo)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">メニュー</button>
+        <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${won ? 'もう一周' : 'リベンジ'}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startBossRush(this.bosses); };
+  }
+
+  quit() { this.aborted = true; this.finish(false); }
+
+  destroy() {
+    this.ended = true;
+    clearInterval(this.atkInt);
+    $('#bossPanel').classList.add('hidden');
+  }
+}
+
+export function startBossRush(bosses) {
+  if (currentMode) currentMode.destroy();
+  currentMode = new BossRushMode(bosses);
+  window.__bbaMode = currentMode;
   currentMode.start();
 }
 
@@ -1285,9 +1306,9 @@ export function startSolo() {
   currentMode.start();
 }
 
-export function startVsAi(level, team = false) {
+export function startVsAi(level) {
   if (currentMode) currentMode.destroy();
-  currentMode = team ? new AiTeamMode(level) : new AiMode(level);
+  currentMode = new AiMode(level);
   window.__bbaMode = currentMode;
   currentMode.start();
 }

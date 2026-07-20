@@ -2,7 +2,7 @@
 import { session, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette } from './modes.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
@@ -19,11 +19,7 @@ $('#btnVsAi').onclick = () => {
   const btnClass = { easy: 'btn-primary', normal: 'btn-ai', hard: 'btn-gold', oni: 'btn-oni', kami: 'btn-kami', souzou: 'btn-souzou' };
   const m = showModal(`
     <h2 id="aiModalTitle">🤖 AI対戦</h2>
-    <p class="muted center" style="margin-bottom:10px">2分間のスコアバトル！同じピースが配られます</p>
-    <div class="tabs" style="justify-content:center;margin-bottom:12px">
-      <button class="tab active" data-aimode="solo">1v1</button>
-      <button class="tab" data-aimode="team">2v2チーム</button>
-    </div>
+    <p class="muted center" style="margin-bottom:12px">2分間のスコアバトル！同じピースが配られます</p>
     <div class="form-col" id="aiLevelList">
       ${Object.entries(AI_LEVELS)
         .filter(([key]) => unlocked(key))
@@ -32,17 +28,8 @@ $('#btnVsAi').onclick = () => {
           ${cfg.avatar} ${cfg.name}
         </button>`).join('')}
     </div>`);
-  let aiTeam = false;
-  m.querySelectorAll('[data-aimode]').forEach(t => {
-    t.onclick = () => {
-      m.querySelectorAll('[data-aimode]').forEach(x => x.classList.remove('active'));
-      t.classList.add('active');
-      aiTeam = t.dataset.aimode === 'team';
-      audio.click();
-    };
-  });
   const wire = () => m.querySelectorAll('[data-ai]').forEach(btn => {
-    btn.onclick = () => { closeModal(); startVsAi(btn.dataset.ai, aiTeam); };
+    btn.onclick = () => { closeModal(); startVsAi(btn.dataset.ai); };
   });
   wire();
 
@@ -123,7 +110,17 @@ async function openBossSelect(preferIndex = null) {
             <small>${locked ? '前のボスを倒すと解放' : `HP ${Number(b.hp).toLocaleString()}${cleared ? ' ・ ✓討伐済' : ''}`}</small>
           </button>`;
         }).join('')}
+        ${(() => {
+          const rushOpen = bossMax >= data.bosses.length;
+          return `
+          <button class="btn boss-select ${rushOpen ? 'btn-oni' : 'btn-ghost'}" data-rush ${rushOpen ? '' : 'disabled'}>
+            <span>${rushOpen ? '⚔️' : '🔒'} ボスラッシュ</span>
+            <small>${rushOpen ? '全4体を連戦！休憩なし・1ミスで終了' : '全ボスを討伐すると解放'}</small>
+          </button>`;
+        })()}
       </div>`);
+    const rushBtn = m.querySelector('[data-rush]:not([disabled])');
+    if (rushBtn) rushBtn.onclick = () => { closeModal(); startBossRush(data.bosses); };
     m.querySelectorAll('[data-boss]:not([disabled])').forEach(btn => {
       btn.onclick = () => {
         const i = Number(btn.dataset.boss);

@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { WebSocketServer } from 'ws';
 import { Engine } from '../public/js/engine.js';
 import { chooseMove } from '../public/js/ai.js';
-import { BOSSES } from './catalog.js';
+import { RAID_BOSSES } from './catalog.js';
 
 const COUNTDOWN = 3;
 const DUEL_BOT_WAIT = 10000;   // ms alone in 1v1 queue before a bot joins
@@ -100,7 +100,7 @@ export function initBattle(server, deps) {
     };
     // Raid: everyone fights one shared boss whose HP scales with party size.
     if (mode === 'raid') {
-      const def = BOSSES[crypto.randomInt(BOSSES.length)];
+      const def = RAID_BOSSES[crypto.randomInt(RAID_BOSSES.length)];
       match.boss = { ...def, hp: def.hp * match.players.length };
       match.bossDead = false;
     }

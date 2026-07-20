@@ -38,6 +38,15 @@ export const BOSSES = [
   { id: 'maou',   name: 'まおう',           emoji: '😈', hp: 25000, atkSec: 8,  atkCells: 6, gemsFirst: 200 },
 ];
 
+// Raid-exclusive bosses: never appear in the solo boss mode.
+// Tougher than anything there — more HP (further scaled by party size)
+// and harder-hitting, faster attacks.
+export const RAID_BOSSES = [
+  { id: 'kraken',  name: '深海のクラーケン', emoji: '🐙', hp: 35000, atkSec: 7, atkCells: 7 },
+  { id: 'tiamat',  name: '魔竜ティアマト',   emoji: '🐲', hp: 45000, atkSec: 7, atkCells: 8 },
+  { id: 'hades',   name: '冥王ハデス',       emoji: '💀', hp: 60000, atkSec: 6, atkCells: 8 },
+];
+
 // ---- Titles (称号) — earned from stats, one equippable ----
 export const TITLES = [
   { id: 'rookie',   name: 'かけだしブロッカー', color: '#9aa3c7', desc: '1回プレイする' },
@@ -50,6 +59,7 @@ export const TITLES = [
   { id: 'rich',     name: '大富豪',             color: '#ffd75e', desc: 'コインを10,000枚所持' },
   { id: 'bosshunt', name: 'ボスハンター',       color: '#ff5d5d', desc: 'ボスを2体討伐' },
   { id: 'maoslayer',name: '魔王を討ちし者',     color: '#ff5d5d', desc: 'まおうを討伐' },
+  { id: 'rushhero', name: 'ボスラッシュ制覇',   color: '#ffa93d', desc: 'ボスラッシュをクリア' },
   { id: 'onislayer',name: '鬼退治',             color: '#c22f3d', desc: '難易度「鬼」に勝利' },
   { id: 'kamislayer', name: '神殺し',           color: '#fff3b0', desc: '難易度「神」に勝利' },
   { id: 'souzouslayer', name: '創造を超えし者', color: '#b06bff', desc: '難易度「創造神」に勝利' },
@@ -69,6 +79,7 @@ export function earnedTitles(user) {
   if (user.coins >= 10000) out.push('rich');
   if ((s.bossMax || 0) >= 2) out.push('bosshunt');
   if (has('maou')) out.push('maoslayer');
+  if (has('rush')) out.push('rushhero');
   if (has('oni')) out.push('onislayer');
   if (has('kami')) out.push('kamislayer');
   if (has('souzou')) out.push('souzouslayer');
