@@ -195,6 +195,23 @@ export class Engine {
     };
   }
 
+  // Fill n random empty cells with garbage (boss attacks). Returns the cells.
+  addGarbage(n) {
+    const empties = [];
+    for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {
+      if (this.grid[r * SIZE + c] === 0) empties.push([r, c]);
+    }
+    const added = [];
+    for (let i = 0; i < n && empties.length > 0; i++) {
+      const k = Math.floor(this.rng.next() * empties.length);
+      const [r, c] = empties.splice(k, 1)[0];
+      this.grid[r * SIZE + c] = 9;
+      added.push([r, c]);
+    }
+    if (!this.hasAnyMove()) this.over = true;
+    return added;
+  }
+
   // Reset the board but keep score — used in timed battles when a player tops out.
   reviveBoard() {
     this.grid.fill(0);

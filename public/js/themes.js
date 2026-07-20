@@ -11,6 +11,7 @@ export const PALETTE = [
   ['#5b8bff', '#2f4fd0'], // blue
   ['#b06bff', '#7434d0'], // purple
   ['#ff6bd4', '#c72b96'], // pink
+  ['#8d97ad', '#4a5265'], // 9: garbage (boss attacks)
 ];
 
 export const BOARDS = {
@@ -49,6 +50,21 @@ export const BOARDS = {
     accent: '#b06bff',
     stars: true,
     nebula: true,
+  },
+  // Special stage themes (not purchasable — used by difficulties / bosses)
+  board_oni: {
+    bg: ['#4a0d12', '#120306'],
+    cell: 'rgba(255,110,110,0.10)',
+    cellLine: 'rgba(255,110,110,0.13)',
+    accent: '#ff5d5d',
+    embers: true,
+  },
+  board_kami: {
+    bg: ['#5a4a15', '#171004'],
+    cell: 'rgba(255,230,150,0.10)',
+    cellLine: 'rgba(255,230,150,0.14)',
+    accent: '#ffd75e',
+    holy: true,
   },
 };
 

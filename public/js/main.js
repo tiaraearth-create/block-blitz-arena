@@ -2,8 +2,9 @@
 import { session, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot } from './modes.js';
-import { showAuthModal, showSettingsModal, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions } from './screens.js';
+import { startSolo, startVsAi, startOnline, startBoss, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot } from './modes.js';
+import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions } from './screens.js';
+import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
 
@@ -12,9 +13,8 @@ $('#btnSolo').onclick = () => { audio.click(); startSolo(); };
 
 $('#btnVsAi').onclick = () => {
   audio.click();
-  const oniUnlocked = localStorage.getItem('bba_oni') === '1';
   const kamiUnlocked = localStorage.getItem('bba_kami') === '1';
-  const unlocked = key => key === 'oni' ? oniUnlocked : key === 'kami' ? kamiUnlocked : true;
+  const unlocked = key => key === 'kami' ? kamiUnlocked : true;   // 鬼までは最初から選べる
   const btnClass = { easy: 'btn-primary', normal: 'btn-ai', hard: 'btn-gold', oni: 'btn-oni', kami: 'btn-kami' };
   const m = showModal(`
     <h2 id="aiModalTitle">🤖 AI対戦</h2>
@@ -32,22 +32,82 @@ $('#btnVsAi').onclick = () => {
   });
   wire();
 
-  // Secret unlock: tap the title 5 times to summon the hidden difficulty.
+  // Touch fallback for the secret command: tap the title 10 times.
   let taps = 0;
   m.querySelector('#aiModalTitle').addEventListener('click', () => {
-    if (m.querySelector('[data-ai="oni"]')) return;
-    if (++taps < 5) return;
-    localStorage.setItem('bba_oni', '1');
+    if (m.querySelector('[data-ai="kami"]')) return;
+    if (++taps < 10) return;
+    unlockKami();
     const btn = document.createElement('button');
-    btn.className = 'btn btn-oni reveal';
-    btn.dataset.ai = 'oni';
-    btn.textContent = `${AI_LEVELS.oni.avatar} ${AI_LEVELS.oni.name}`;
+    btn.className = 'btn btn-kami reveal';
+    btn.dataset.ai = 'kami';
+    btn.textContent = `${AI_LEVELS.kami.avatar} ${AI_LEVELS.kami.name}`;
     m.querySelector('#aiLevelList').appendChild(btn);
-    audio.combo(10);
-    toast('👹 なにかが めをさました…', 'announce', 3000);
     wire();
   });
 };
+
+// ---- secret command (Konami code) unlocks 神 ----
+function unlockKami() {
+  if (localStorage.getItem('bba_kami') === '1') return;
+  localStorage.setItem('bba_kami', '1');
+  audio.kamiDescend();
+  confettiBurst(50);
+  toast('🔱 天から声が聞こえる……隠し難易度「神」が解放された', 'announce', 5000);
+}
+
+const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
+let konamiPos = 0;
+window.addEventListener('keydown', e => {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (k === KONAMI[konamiPos]) {
+    konamiPos++;
+    if (konamiPos === KONAMI.length) { konamiPos = 0; unlockKami(); }
+  } else {
+    konamiPos = k === KONAMI[0] ? 1 : 0;
+  }
+});
+
+// ---- boss battles ----
+async function openBossSelect(preferIndex = null) {
+  audio.click();
+  try {
+    const headers = {};
+    const token = localStorage.getItem('bba_token');
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const data = await fetch('/api/bosses', { headers }).then(r => r.json());
+    const bossMax = Math.max(data.bossMax || 0, Number(localStorage.getItem('bba_boss_max') || 0));
+    const m = showModal(`
+      <h2>🐲 ボス戦</h2>
+      <p class="muted center" style="margin-bottom:12px">ラインを消してダメージを与えろ！<br>ボスはお邪魔ブロックで反撃してくる。盤面が埋まったら敗北！</p>
+      <div class="form-col">
+        ${data.bosses.map((b, i) => {
+          const locked = i > bossMax;
+          const cleared = i < bossMax;
+          return `
+          <button class="btn boss-select ${locked ? 'btn-ghost' : 'btn-boss'}" data-boss="${i}" ${locked ? 'disabled' : ''}>
+            <span>${locked ? '🔒' : b.emoji} ${b.name}</span>
+            <small>${locked ? '前のボスを倒すと解放' : `HP ${Number(b.hp).toLocaleString()}${cleared ? ' ・ ✓討伐済' : ''}`}</small>
+          </button>`;
+        }).join('')}
+      </div>`);
+    m.querySelectorAll('[data-boss]:not([disabled])').forEach(btn => {
+      btn.onclick = () => {
+        const i = Number(btn.dataset.boss);
+        closeModal();
+        startBoss(data.bosses[i], i, data.bosses.length);
+      };
+    });
+    if (preferIndex !== null) {
+      const btn = m.querySelector(`[data-boss="${preferIndex}"]:not([disabled])`);
+      if (btn) btn.classList.add('reveal');
+    }
+  } catch {
+    toast('ボス情報を取得できません', 'err');
+  }
+}
+window.__bbaOpenBossSelect = openBossSelect;
+$('#btnBoss').onclick = () => openBossSelect();
 
 $('#btnOnline').onclick = () => {
   audio.click();
@@ -70,6 +130,8 @@ $('#btnShop').onclick = () => { audio.click(); openShop(); };
 $('#btnBattlePass').onclick = () => { audio.click(); openBattlePass(); };
 $('#btnAdmin').onclick = () => { audio.click(); openAdmin(); };
 $('#userChip').onclick = () => { audio.click(); showAuthModal(); };
+document.querySelector('.gem-chip').style.cursor = 'pointer';
+document.querySelector('.gem-chip').onclick = () => { audio.click(); showGemShop(); };
 
 // tabs
 $$('[data-lb]').forEach(t => { t.onclick = () => openLeaderboard(t.dataset.lb); });
@@ -120,6 +182,7 @@ pollStatus();
 setInterval(pollStatus, 30000);
 
 bindAdminActions();
+loadTitles();
 
 // ---- session restore ----
 (async () => {
@@ -134,8 +197,11 @@ bindAdminActions();
       }
     } catch (err) {
       if (String(err.message).includes('凍結')) toast(err.message, 'err');
-      setToken(null);
-      session.user = null;
+      // Only drop the session on real auth errors — keep it through outages.
+      if (err.status === 401 || err.status === 403) {
+        setToken(null);
+        session.user = null;
+      }
       updateTopbar();
     }
   }

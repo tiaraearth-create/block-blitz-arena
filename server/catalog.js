@@ -24,6 +24,57 @@ export const SHOP_ITEMS = [
 export const DEFAULT_OWNED = SHOP_ITEMS.filter(i => i.default).map(i => i.id);
 export const DEFAULT_EQUIPPED = { skin: 'skin_default', board: 'board_default', fx: 'fx_default' };
 
+// ---- Boss battles ----
+export const BOSSES = [
+  { id: 'slime',  name: 'スライムキング',   emoji: '🟢', hp: 3000,  atkSec: 12, atkCells: 3, gemsFirst: 50 },
+  { id: 'golem',  name: 'アイアンゴーレム', emoji: '🗿', hp: 8000,  atkSec: 10, atkCells: 4, gemsFirst: 80 },
+  { id: 'dragon', name: 'ドラゴン',         emoji: '🐉', hp: 15000, atkSec: 9,  atkCells: 5, gemsFirst: 120 },
+  { id: 'maou',   name: 'まおう',           emoji: '😈', hp: 25000, atkSec: 8,  atkCells: 6, gemsFirst: 200 },
+];
+
+// ---- Titles (称号) — earned from stats, one equippable ----
+export const TITLES = [
+  { id: 'rookie',   name: 'かけだしブロッカー', color: '#9aa3c7', desc: '1回プレイする' },
+  { id: 'addict',   name: 'ブロック中毒',       color: '#43d9e8', desc: '50回プレイする' },
+  { id: 'combo5',   name: 'コンボの申し子',     color: '#5ee86e', desc: '5コンボを達成' },
+  { id: 'combo10',  name: 'コンボマスター',     color: '#ffe14d', desc: '10コンボを達成' },
+  { id: 'score100k',name: '十万点の壁の向こう', color: '#ffa93d', desc: 'スコア100,000を達成' },
+  { id: 'pvp10',    name: '常勝将軍',           color: '#ff6bd4', desc: 'オンライン対戦で10勝' },
+  { id: 'rate1200', name: 'レジェンド',         color: '#b06bff', desc: 'レート1200に到達' },
+  { id: 'rich',     name: '大富豪',             color: '#ffd75e', desc: 'コインを10,000枚所持' },
+  { id: 'bosshunt', name: 'ボスハンター',       color: '#ff5d5d', desc: 'ボスを2体討伐' },
+  { id: 'maoslayer',name: '魔王を討ちし者',     color: '#ff5d5d', desc: 'まおうを討伐' },
+  { id: 'onislayer',name: '鬼退治',             color: '#c22f3d', desc: '難易度「鬼」に勝利' },
+  { id: 'kamislayer', name: '神殺し',           color: '#fff3b0', desc: '難易度「神」に勝利' },
+];
+
+export function earnedTitles(user) {
+  const s = user.stats;
+  const out = [];
+  const has = id => user.badges.includes(id);
+  if (s.gamesPlayed >= 1) out.push('rookie');
+  if (s.gamesPlayed >= 50) out.push('addict');
+  if (s.maxCombo >= 5) out.push('combo5');
+  if (s.maxCombo >= 10) out.push('combo10');
+  if (s.bestScore >= 100000) out.push('score100k');
+  if (s.pvpWins >= 10) out.push('pvp10');
+  if (s.rating >= 1200) out.push('rate1200');
+  if (user.coins >= 10000) out.push('rich');
+  if ((s.bossMax || 0) >= 2) out.push('bosshunt');
+  if (has('maou')) out.push('maoslayer');
+  if (has('oni')) out.push('onislayer');
+  if (has('kami')) out.push('kamislayer');
+  return out;
+}
+
+// ---- Gem packs (demo payments — swap in a real PSP for production) ----
+export const GEM_PACKS = [
+  { id: 'gems_s',  gems: 120,  bonus: 0,   priceJpy: 160 },
+  { id: 'gems_m',  gems: 550,  bonus: 50,  priceJpy: 650 },
+  { id: 'gems_l',  gems: 1200, bonus: 180, priceJpy: 1400 },
+  { id: 'gems_xl', gems: 2600, bonus: 520, priceJpy: 2900 },
+];
+
 // ---- Battle pass ----
 export const BP_XP_PER_TIER = 500;
 export const BP_PREMIUM_PRICE_GEMS = 500;

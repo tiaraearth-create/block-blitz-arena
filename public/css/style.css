@@ -445,6 +445,72 @@ body {
 #btnAuto.auto-on { border-color: var(--cyan); box-shadow: 0 0 12px rgba(67,217,232,0.5); }
 #btnAuto.auto-on b { color: var(--cyan); }
 
+/* ============ Boss battles ============ */
+.btn-boss {
+  background: linear-gradient(135deg, #8a4dcf, #55258f);
+  box-shadow: 0 6px 0 #38175f, 0 10px 26px rgba(122,60,190,0.45);
+}
+.boss-panel {
+  position: absolute; top: 64px; right: 10px; left: 10px; z-index: 4;
+  display: flex; align-items: center; gap: 12px;
+  background: rgba(10,13,30,0.82); border: 1px solid var(--line);
+  border-radius: 14px; padding: 10px 14px; backdrop-filter: blur(8px);
+  max-width: 430px; margin: 0 auto;
+  overflow: hidden;
+}
+.boss-emoji { font-size: 44px; line-height: 1; transition: transform .15s; }
+.boss-emoji.boss-hit { animation: bossHit .35s ease; }
+@keyframes bossHit { 30% { transform: translateX(-6px) rotate(-8deg); filter: brightness(2); } 60% { transform: translateX(5px); } }
+.boss-emoji.boss-atk { animation: bossAtk .5s ease; }
+@keyframes bossAtk { 30% { transform: scale(1.5); filter: drop-shadow(0 0 16px rgba(255,80,80,0.9)); } }
+.boss-emoji.boss-dead { animation: bossDead 1s ease forwards; }
+@keyframes bossDead { to { transform: rotate(180deg) scale(0.4); opacity: 0.15; filter: grayscale(1); } }
+.boss-info { flex: 1; min-width: 0; }
+.boss-name { font-weight: 900; font-size: 15px; margin-bottom: 4px; }
+.boss-hpbar { height: 12px; background: rgba(0,0,0,0.4); border-radius: 6px; overflow: hidden; }
+.boss-hpbar > div {
+  height: 100%; width: 100%; border-radius: 6px;
+  background: linear-gradient(90deg, #ff5d5d, #ffa93d);
+  transition: width .35s cubic-bezier(.2,.8,.2,1);
+  box-shadow: 0 0 10px rgba(255,93,93,0.6);
+}
+.boss-hptext { font-size: 11px; font-weight: 700; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.boss-atkbar { height: 5px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; margin-top: 5px; }
+.boss-atkbar > div { height: 100%; width: 0%; background: linear-gradient(90deg, #ffe14d, #ff5d5d); }
+.dmg-float {
+  position: absolute; top: 44%; font-size: 18px; font-weight: 900; color: #ffdf7e;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.8); pointer-events: none;
+  animation: dmgUp .85s ease forwards;
+}
+.dmg-float.big { font-size: 26px; color: #ff8a5c; }
+@keyframes dmgUp { to { transform: translateY(-34px); opacity: 0; } }
+.boss-select { display: flex; flex-direction: column; gap: 2px; align-items: center; }
+.boss-select small { font-weight: 600; opacity: 0.85; font-size: 11px; }
+
+/* ============ Gem shop / titles ============ */
+.gem-pack {
+  display: flex; justify-content: space-between; align-items: center;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 13px 16px; cursor: pointer; color: var(--text); font-family: inherit;
+  font-size: 15px; font-weight: 800; transition: border-color .15s, transform .12s;
+}
+.gem-pack:hover { border-color: var(--cyan); transform: translateY(-2px); }
+.gem-pack .gp-gems small { color: var(--green); font-size: 11px; margin-left: 4px; }
+.gem-pack .gp-price { color: var(--gold); }
+.title-list { max-height: 55dvh; overflow-y: auto; }
+.title-row {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 14px; cursor: pointer; font-family: inherit; text-align: left;
+  transition: border-color .15s;
+}
+.title-row:hover:not(:disabled) { border-color: var(--blue); }
+.title-row.equipped { border-color: var(--green); box-shadow: 0 0 10px rgba(94,232,110,0.3); }
+.title-row.locked { opacity: 0.45; cursor: default; }
+.title-row .t-name { font-weight: 900; font-size: 15px; }
+.title-row .t-desc { font-size: 11px; color: var(--muted); }
+.lb-title { display: inline-block; font-size: 11px; font-weight: 800; margin-left: 4px; }
+
 /* ============ Kami (ultimate hidden difficulty) ============ */
 .btn-kami {
   background: linear-gradient(135deg, #fdfbef, #ffd75e 45%, #b8860b);
@@ -514,6 +580,7 @@ body {
   50% { filter: brightness(1.35); box-shadow: 0 6px 0 #3d090d, 0 0 34px rgba(255,60,60,0.8); }
 }
 .btn-oni.reveal { animation: oniReveal .8s cubic-bezier(.2,1.4,.4,1), oniPulse 1.6s ease-in-out .8s infinite; }
+.btn-kami.reveal { animation: oniReveal .8s cubic-bezier(.2,1.4,.4,1), kamiPulse 2s ease-in-out .8s infinite; }
 @keyframes oniReveal {
   0% { transform: scale(0) rotate(-14deg); opacity: 0; }
   60% { transform: scale(1.15) rotate(4deg); }

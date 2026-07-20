@@ -41,6 +41,7 @@
         <div class="menu-buttons">
           <button class="btn btn-primary btn-big" id="btnSolo">▶ ソロプレイ</button>
           <button class="btn btn-ai btn-big" id="btnVsAi">🤖 AI対戦</button>
+          <button class="btn btn-boss btn-big" id="btnBoss">🐲 ボス戦</button>
           <button class="btn btn-online btn-big" id="btnOnline">🌐 オンライン対戦</button>
         </div>
         <nav class="menu-nav">
@@ -72,6 +73,15 @@
         <div class="vs-bar"><div id="vsBarMe"></div><div id="vsBarOpp"></div></div>
         <div id="teamTotals" class="team-totals hidden"></div>
         <div id="oppCards"></div>
+      </div>
+      <div id="bossPanel" class="boss-panel hidden">
+        <span id="bossEmoji" class="boss-emoji">🟢</span>
+        <div class="boss-info">
+          <div id="bossName" class="boss-name">ボス</div>
+          <div class="boss-hpbar"><div id="bossHp"></div></div>
+          <div id="bossHpText" class="boss-hptext">0 / 0</div>
+          <div class="boss-atkbar" title="つぎの攻撃"><div id="bossAtkBar"></div></div>
+        </div>
       </div>
       <div class="game-canvas-wrap">
         <canvas id="gameCanvas"></canvas>

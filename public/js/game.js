@@ -288,16 +288,32 @@ export class GameView {
 
     // animated decorations
     for (const d of this.deco) {
-      const x = d.x * this.W;
+      let x = d.x * this.W;
       let y = d.y * this.H;
       let alpha = 0.3 + 0.3 * Math.sin(this.time * d.sp + d.tw);
+      let color = '#cfe0ff';
+      let r = d.r;
+      if (theme.fireflies) color = '#b8ff9e';
+      else if (theme.nebula) color = '#d9b8ff';
       if (theme.bubbles || theme.fireflies) {
         y = ((d.y - this.time * 0.01 * d.sp) % 1 + 1) % 1 * this.H;
+      } else if (theme.embers) {
+        // rising embers with flicker and drift
+        y = ((d.y - this.time * 0.03 * d.sp) % 1 + 1) % 1 * this.H;
+        x += Math.sin(this.time * 2 + d.tw) * 10;
+        color = Math.sin(this.time * 6 + d.tw) > 0 ? '#ff8a5c' : '#ff5d5d';
+        alpha = 0.35 + 0.35 * Math.sin(this.time * 5 + d.tw);
+      } else if (theme.holy) {
+        // slow golden sparkles that swell and fade
+        color = '#ffe9a8';
+        const tw = Math.sin(this.time * d.sp * 1.5 + d.tw);
+        alpha = Math.max(0, tw) * 0.8;
+        r = d.r * (1 + Math.max(0, tw));
       }
       ctx.globalAlpha = Math.max(0, alpha);
-      ctx.fillStyle = theme.fireflies ? '#b8ff9e' : theme.nebula ? '#d9b8ff' : '#cfe0ff';
+      ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(x, y, d.r, 0, Math.PI * 2);
+      ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;

@@ -62,9 +62,10 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : '😀'} ${u.username}</h2>
+    ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
     <div class="result-stats">
       <div class="rs-row"><span>レベル</span><b>Lv.${u.level}</b></div>
       <div class="rs-row"><span>ハイスコア</span><b>${fmt(u.stats.bestScore)}</b></div>
@@ -76,9 +77,11 @@ function showProfileModal() {
     </div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="pLogout">ログアウト</button>
+      <button class="btn btn-gold" id="pTitles">👑 称号</button>
       <button class="btn btn-primary" id="pClose">閉じる</button>
     </div>`);
   m.querySelector('#pClose').onclick = closeModal;
+  m.querySelector('#pTitles').onclick = () => showTitlesModal();
   m.querySelector('#pLogout').onclick = async () => {
     try { await api('/api/logout', { method: 'POST' }); } catch { /* ignore */ }
     setToken(null);
@@ -87,6 +90,107 @@ function showProfileModal() {
     closeModal();
     toast('ログアウトしました');
   };
+}
+
+// ---------------------------------------------------------------------------
+// Title catalog cache (for name lookups in profile / leaderboard)
+// ---------------------------------------------------------------------------
+
+let titlesCatalog = null;
+export async function loadTitles() {
+  try { titlesCatalog = (await api('/api/titles')).titles; } catch { /* offline */ }
+}
+function titleName(id) {
+  const t = titlesCatalog && titlesCatalog.find(x => x.id === id);
+  return t ? t.name : '';
+}
+
+// ---------------------------------------------------------------------------
+// Gem shop (demo payments)
+// ---------------------------------------------------------------------------
+
+let gemPacks = null;
+
+export async function showGemShop() {
+  if (!session.user) { showAuthModal(); return; }
+  try {
+    if (!gemPacks) gemPacks = (await api('/api/gempacks')).packs;
+  } catch (err) { toast(err.message, 'err'); return; }
+  const m = showModal(`
+    <h2>💎 ジェムショップ</h2>
+    <p class="muted center" style="margin-bottom:12px">所持ジェム: <b style="color:var(--cyan)">${fmt(session.user.gems)}</b></p>
+    <div class="form-col">
+      ${gemPacks.map(p => `
+        <button class="gem-pack" data-pack="${p.id}">
+          <span class="gp-gems">💎 ${fmt(p.gems)}${p.bonus ? `<small> +${fmt(p.bonus)}ボーナス</small>` : ''}</span>
+          <span class="gp-price">¥${fmt(p.priceJpy)}</span>
+        </button>`).join('')}
+      <p class="muted center" style="font-size:11px">⚠️ 現在は<b>デモ決済</b>です。実際の請求は発生しません。<br>本番公開時はStripe等の決済サービス接続が必要です（README参照）</p>
+    </div>`);
+  m.querySelectorAll('[data-pack]').forEach(btn => {
+    btn.onclick = () => {
+      const pack = gemPacks.find(p => p.id === btn.dataset.pack);
+      const c = showModal(`
+        <h2>💳 購入確認（デモ）</h2>
+        <div class="result-stats">
+          <div class="rs-row"><span>💎 ジェム</span><b>${fmt(pack.gems + pack.bonus)}</b></div>
+          <div class="rs-row"><span>価格</span><b>¥${fmt(pack.priceJpy)}</b></div>
+          <div class="rs-row"><span>決済方法</span><b>デモ（請求なし）</b></div>
+        </div>
+        <div class="modal-buttons">
+          <button class="btn btn-ghost" id="gpNo">やめる</button>
+          <button class="btn btn-gold" id="gpYes">購入する</button>
+        </div>`);
+      c.querySelector('#gpNo').onclick = () => { closeModal(); showGemShop(); };
+      c.querySelector('#gpYes').onclick = async () => {
+        try {
+          const res = await api('/api/purchase', { method: 'POST', body: { packId: pack.id } });
+          audio.coin();
+          updateTopbar();
+          closeModal();
+          toast(`💎 ${fmt(res.granted)}ジェムを獲得しました！（デモ決済）`, 'ok', 3000);
+        } catch (err) { audio.error(); toast(err.message, 'err'); }
+      };
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Titles (称号)
+// ---------------------------------------------------------------------------
+
+export async function showTitlesModal() {
+  let data;
+  try {
+    data = await api('/api/titles');
+  } catch (err) { toast(err.message, 'err'); return; }
+  const m = showModal(`
+    <h2>👑 称号</h2>
+    <div class="form-col title-list">
+      <button class="title-row ${!data.equipped ? 'equipped' : ''}" data-title="">
+        <span class="t-name" style="color:var(--muted)">称号なし</span>
+      </button>
+      ${data.titles.map(t => {
+        const earned = data.earned.includes(t.id);
+        const eq = data.equipped === t.id;
+        return `
+        <button class="title-row ${eq ? 'equipped' : ''} ${earned ? '' : 'locked'}" data-title="${t.id}" ${earned ? '' : 'disabled'}>
+          <span class="t-name" style="color:${t.color}">${earned ? '' : '🔒 '}${t.name}</span>
+          <span class="t-desc">${t.desc}</span>
+        </button>`;
+      }).join('')}
+    </div>`);
+  m.querySelectorAll('[data-title]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!session.user) { showAuthModal(); return; }
+      try {
+        await api('/api/titles/equip', { method: 'POST', body: { id: btn.dataset.title || null } });
+        audio.click();
+        toast(btn.dataset.title ? '称号を装備しました' : '称号を外しました', 'ok', 1500);
+        closeModal();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -211,12 +315,13 @@ export async function openLeaderboard(board = 'score') {
       return;
     }
     const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈' };
     list.innerHTML = data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
         <div class="lb-name">${escapeHtml(r.username)}
           <span class="lb-badges">${(r.badges || []).map(b => badgeIcons[b] || '').join('')}</span>
+          ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.name)}》</span>` : ''}
           <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${r.pvpWins}勝${r.pvpLosses}敗` : ''}</div>
         </div>
         <div class="lb-score">${fmt(board === 'rating' ? r.rating : r.bestScore)}</div>
@@ -349,7 +454,7 @@ function rewardLabel(r) {
   if (!r) return { icon: '—', label: '' };
   if (r.type === 'coins') return { icon: '🪙', label: fmt(r.amount) };
   if (r.type === 'gems') return { icon: '💎', label: fmt(r.amount) };
-  if (r.type === 'badge') return { icon: { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱' }[r.id] || '🎖️', label: 'バッジ' };
+  if (r.type === 'badge') return { icon: { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈' }[r.id] || '🎖️', label: 'バッジ' };
   const names = { skin_neon: 'ネオン', skin_candy: 'キャンディ', skin_gold: 'ゴールド', board_ocean: 'オーシャン', board_sunset: 'サンセット', fx_fireworks: '花火' };
   return { icon: '🎁', label: names[r.id] || 'アイテム' };
 }
@@ -442,9 +547,10 @@ export async function openAdmin() {
   statsEl.innerHTML = '<p class="muted">読み込み中…</p>';
   usersEl.innerHTML = '';
   try {
-    const [stats, usersData] = await Promise.all([
+    const [stats, usersData, txData] = await Promise.all([
       api('/api/admin/stats'),
       api('/api/admin/users'),
+      api('/api/admin/transactions').catch(() => ({ totalCount: 0, totalJpy: 0 })),
     ]);
     adminStats = stats;
     statsEl.innerHTML = `
@@ -455,7 +561,8 @@ export async function openAdmin() {
       <div class="stat-card"><b>${fmt(stats.totalGames)}</b><span>総プレイ数</span></div>
       <div class="stat-card"><b>${fmt(stats.bannedUsers)}</b><span>凍結中</span></div>
       <div class="stat-card"><b>S${stats.season.number}</b><span>${escapeHtml(stats.season.name)}</span></div>
-      <div class="stat-card" style="${stats.maintenance ? 'border-color:var(--red)' : ''}"><b>${stats.maintenance ? '🛠' : '✅'}</b><span>${stats.maintenance ? 'メンテナンス中' : '稼働中'}</span></div>`;
+      <div class="stat-card" style="${stats.maintenance ? 'border-color:var(--red)' : ''}"><b>${stats.maintenance ? '🛠' : '✅'}</b><span>${stats.maintenance ? 'メンテナンス中' : '稼働中'}</span></div>
+      <div class="stat-card"><b>¥${fmt(txData.totalJpy)}</b><span>売上(デモ) ${fmt(txData.totalCount)}件</span></div>`;
     $('#btnMaintenance').textContent = stats.maintenance ? '✅ メンテ解除' : '🛠 メンテナンス開始';
     renderAdminUsers(usersData.users);
   } catch (err) {

@@ -11,6 +11,7 @@ const DEFAULT_DB = {
   users: {},        // id -> user record
   tokens: {},       // token -> { userId, createdAt }
   season: null,     // { id, name, number, endsAt }
+  transactions: [], // gem purchases (demo)
   meta: { createdAt: Date.now() },
 };
 

@@ -16,6 +16,7 @@ import {
 import {
   SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED,
   BP_TIERS, BP_XP_PER_TIER, BP_PREMIUM_PRICE_GEMS, BP_SEASON_DAYS,
+  BOSSES, TITLES, earnedTitles, GEM_PACKS,
 } from './catalog.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,9 +48,10 @@ function newUser(username, password, role = 'user') {
     id, username, salt, passHash: hash, role,
     banned: false, createdAt: Date.now(),
     coins: 500, gems: 50, xp: 0,
-    stats: { gamesPlayed: 0, bestScore: 0, totalScore: 0, totalLines: 0, maxCombo: 0, aiWins: 0, pvpWins: 0, pvpLosses: 0, rating: 1000 },
+    stats: { gamesPlayed: 0, bestScore: 0, totalScore: 0, totalLines: 0, maxCombo: 0, aiWins: 0, pvpWins: 0, pvpLosses: 0, rating: 1000, bossMax: 0 },
     owned: [...DEFAULT_OWNED],
     equipped: { ...DEFAULT_EQUIPPED },
+    equippedTitle: null,
     battlePass: { season: currentSeason().id, xp: 0, premium: false, claimed: [] },
     badges: [],
     lastDaily: new Date().toISOString().slice(0, 10),
@@ -94,11 +96,13 @@ function publicUser(user) {
     coins: user.coins, gems: user.gems, xp: user.xp, level: levelOf(user.xp),
     stats: user.stats, owned: user.owned, equipped: user.equipped,
     battlePass: user.battlePass, badges: user.badges,
+    equippedTitle: user.equippedTitle || null,
   };
 }
 
 // Sanity-check and apply a finished game's rewards. Returns the reward summary.
-function applyGameResult(user, { mode, score, lines, maxCombo, duration, won }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bossId }) {
+  const extraBossId = typeof bossId === 'string' ? bossId : null;
   score = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
   lines = Math.max(0, Math.min(5000, Math.floor(Number(lines) || 0)));
   maxCombo = Math.max(0, Math.min(200, Math.floor(Number(maxCombo) || 0)));
@@ -122,6 +126,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won }) 
   if (score > s.bestScore) s.bestScore = score;
   if (maxCombo > s.maxCombo) s.maxCombo = maxCombo;
   let badge = null;
+  let gems = 0;
   if (mode.startsWith('ai') && won) s.aiWins += 1;
   if (mode === 'ai_oni' && won && !user.badges.includes('oni')) {
     user.badges.push('oni');
@@ -131,8 +136,23 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won }) 
     user.badges.push('kami');
     badge = 'kami';
   }
+  // Boss battles: sequential progression + first-clear gem bonus.
+  if (mode === 'boss') {
+    const idx = BOSSES.findIndex(b => b.id === extraBossId);
+    if (idx !== -1 && won) {
+      if (idx >= (s.bossMax || 0)) {
+        s.bossMax = idx + 1;
+        gems = BOSSES[idx].gemsFirst;
+        user.gems += gems;
+      }
+      if (BOSSES[idx].id === 'maou' && !user.badges.includes('maou')) {
+        user.badges.push('maou');
+        badge = 'maou';
+      }
+    }
+  }
   saveDb();
-  return { coins, bpXp, accXp, score, badge };
+  return { coins, bpXp, accXp, score, badge, gems };
 }
 
 // Simple in-memory rate limiter (per key, sliding window).
@@ -266,7 +286,12 @@ app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
 
 app.get('/api/leaderboard', (req, res) => {
   const board = req.query.board === 'rating' ? 'rating' : 'score';
-  const users = Object.values(db.users).filter(u => !u.banned && u.stats.gamesPlayed > 0);
+  // Admins are excluded from public rankings.
+  const users = Object.values(db.users).filter(u => !u.banned && u.role !== 'admin' && u.stats.gamesPlayed > 0);
+  const titleOf = u => {
+    const t = TITLES.find(x => x.id === u.equippedTitle);
+    return t ? { name: t.name, color: t.color } : null;
+  };
   const rows = users
     .map(u => ({
       username: u.username,
@@ -276,10 +301,86 @@ app.get('/api/leaderboard', (req, res) => {
       pvpWins: u.stats.pvpWins,
       pvpLosses: u.stats.pvpLosses,
       badges: u.badges,
+      title: titleOf(u),
     }))
     .sort((a, b) => board === 'rating' ? b.rating - a.rating : b.bestScore - a.bestScore)
     .slice(0, 100);
   res.json({ board, rows });
+});
+
+// ---------------------------------------------------------------------------
+// Titles (称号)
+// ---------------------------------------------------------------------------
+
+app.get('/api/titles', (req, res) => {
+  res.json({
+    titles: TITLES,
+    earned: req.user ? earnedTitles(req.user) : [],
+    equipped: req.user ? req.user.equippedTitle : null,
+  });
+});
+
+app.post('/api/titles/equip', requireAuth, (req, res) => {
+  const id = req.body.id === null ? null : String(req.body.id || '');
+  if (id !== null) {
+    if (!TITLES.some(t => t.id === id)) return res.status(404).json({ error: '称号が見つかりません' });
+    if (!earnedTitles(req.user).includes(id)) return res.status(403).json({ error: 'まだ獲得していない称号です' });
+  }
+  req.user.equippedTitle = id;
+  saveDb();
+  res.json({ user: publicUser(req.user) });
+});
+
+// ---------------------------------------------------------------------------
+// Boss battles
+// ---------------------------------------------------------------------------
+
+app.get('/api/bosses', (req, res) => {
+  res.json({
+    bosses: BOSSES,
+    bossMax: req.user ? (req.user.stats.bossMax || 0) : 0,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gem purchases (DEMO payment — no real money is charged)
+// ---------------------------------------------------------------------------
+
+app.get('/api/gempacks', (_req, res) => {
+  res.json({ packs: GEM_PACKS });
+});
+
+app.post('/api/purchase', requireAuth, maintenanceGuard, (req, res) => {
+  if (!rateLimit(`buy:${req.user.id}`, 30, 5 * 60 * 1000)) {
+    return res.status(429).json({ error: '購入リクエストが多すぎます' });
+  }
+  const pack = GEM_PACKS.find(p => p.id === req.body.packId);
+  if (!pack) return res.status(404).json({ error: 'パックが見つかりません' });
+  // DEMO gateway: in production, verify a real PSP session (e.g. Stripe
+  // Checkout webhook) BEFORE granting gems. Never trust the client alone.
+  const total = pack.gems + pack.bonus;
+  req.user.gems += total;
+  db.transactions.push({
+    id: crypto.randomUUID(),
+    userId: req.user.id,
+    username: req.user.username,
+    packId: pack.id,
+    gems: total,
+    jpy: pack.priceJpy,
+    status: 'demo_completed',
+    at: Date.now(),
+  });
+  saveDb();
+  res.json({ user: publicUser(req.user), granted: total, demo: true });
+});
+
+app.get('/api/admin/transactions', requireAuth, requireAdmin, (_req, res) => {
+  const tx = db.transactions.slice(-100).reverse();
+  res.json({
+    transactions: tx,
+    totalCount: db.transactions.length,
+    totalJpy: db.transactions.reduce((a, t) => a + t.jpy, 0),
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -518,16 +619,30 @@ const battle = initBattle(server, {
 // Bootstrap: seed admin account, start server
 // ---------------------------------------------------------------------------
 
+const ADMIN_NAME = 'るみまき';
+
 function seedAdmin() {
+  // One-time migration: rename a legacy "admin" account to the new name.
+  const legacy = Object.values(db.users).find(u => u.role === 'admin' && u.username === 'admin');
+  if (legacy && !Object.values(db.users).some(u => u.username === ADMIN_NAME)) {
+    legacy.username = ADMIN_NAME;
+    saveDb();
+    const credFile = path.join(DATA_DIR, 'admin-credentials.txt');
+    try {
+      const old = fs.existsSync(credFile) ? fs.readFileSync(credFile, 'utf8') : '';
+      fs.writeFileSync(credFile, old.replace(/username: .*/, `username: ${ADMIN_NAME}`));
+    } catch { /* ignore */ }
+    console.log(`[admin] 管理者アカウント名を「${ADMIN_NAME}」に変更しました（パスワードは変更なし）`);
+  }
   const hasAdmin = Object.values(db.users).some(u => u.role === 'admin');
   if (hasAdmin) return;
   const password = crypto.randomBytes(9).toString('base64url');
-  newUser('admin', password, 'admin');
+  newUser(ADMIN_NAME, password, 'admin');
   const credFile = path.join(DATA_DIR, 'admin-credentials.txt');
-  fs.writeFileSync(credFile, `username: admin\npassword: ${password}\n`);
+  fs.writeFileSync(credFile, `username: ${ADMIN_NAME}\npassword: ${password}\n`);
   console.log('='.repeat(60));
   console.log('  管理者アカウントを作成しました');
-  console.log(`  ユーザー名: admin / パスワード: ${password}`);
+  console.log(`  ユーザー名: ${ADMIN_NAME} / パスワード: ${password}`);
   console.log(`  (${credFile} にも保存済み)`);
   console.log('='.repeat(60));
 }

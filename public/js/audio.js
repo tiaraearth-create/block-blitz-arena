@@ -55,6 +55,29 @@ const TRACKS = {
       { chord: [N.D4, N.Fs4, N.A4], bass: N.D2 },
     ],
   },
+  hard: {
+    bpm: 138, swing: 0, padType: 'sawtooth', padVol: 0.05, arpType: 'square',
+    kick: [0, 4, 7, 8, 12], snare: [4, 12], hat: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], hatVol: 0.07, openHat: [6],
+    bassSteps: [0, 2, 3, 6, 8, 10, 11, 14], bassLen: 0.7, bassType: 'sawtooth', bassVol: 0.5, bassFilter: 620,
+    arpSteps: [0, 3, 6, 8, 11, 14], arpVol: 0.11, arpDelay: true, stab: [0, 8],
+    bars: [
+      { chord: [N.B3, N.D4, N.Fs4], bass: N.B1 },
+      { chord: [N.G3, N.B3, N.D4], bass: N.G2 },
+      { chord: [N.A3, N.Cs4, N.E4], bass: N.A1 },
+      { chord: [N.Fs3, N.A3, N.Cs4], bass: N.Fs3 / 2 },
+    ],
+  },
+  boss: {
+    bpm: 118, swing: 0, padType: 'sawtooth', padVol: 0.05, arpType: 'sawtooth',
+    kick: [0, 6, 8, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14], hatVol: 0.08,
+    bassType: 'sawtooth', bassVol: 0.6, bassFilter: 420, detune: 10,
+    riff: { 0: N.C2, 3: N.C2, 6: N.D2, 8: N.C2, 11: 77.78, 14: N.G2 / 2 },
+    drone: N.C2 / 2, stab: [0], arpSteps: [], arpVol: 0,
+    bars: [
+      { chord: [N.C4, 311.13, N.G4], bass: N.C2 },
+      { chord: [N.C4, N.F4, 415.3], bass: N.C2 },
+    ],
+  },
   oni: {
     bpm: 140, swing: 0, padType: 'sawtooth', padVol: 0.04, arpType: 'sawtooth',
     kick: [0, 3, 6, 8, 11, 14], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14], hatVol: 0.09,
@@ -443,6 +466,19 @@ class AudioEngine {
   error() { this.tone({ freq: 180, dur: 0.2, type: 'sawtooth', vol: 0.12, sweep: -80 }); }
   levelUp() {
     [523, 784, 1047].forEach((f, i) => this.tone({ freq: f, dur: 0.3, type: 'sine', vol: 0.2, delay: i * 0.1 }));
+  }
+
+  bossAttack() {
+    // deep impact + growl
+    this.tone({ freq: 70, dur: 0.4, type: 'sawtooth', vol: 0.28, sweep: -30 });
+    this.tone({ freq: 110, dur: 0.3, type: 'square', vol: 0.12, sweep: -60, delay: 0.05 });
+    this.noise({ dur: 0.35, vol: 0.2, freq: 300 });
+  }
+
+  bossDefeated() {
+    [262, 330, 392, 523, 659, 784].forEach((f, i) =>
+      this.tone({ freq: f, dur: 0.3, type: 'triangle', vol: 0.2, delay: i * 0.1 }));
+    this.noise({ dur: 0.8, vol: 0.12, freq: 2500, delay: 0.4 });
   }
 
   kamiDescend() {

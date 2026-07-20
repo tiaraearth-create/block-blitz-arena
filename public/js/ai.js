@@ -2,13 +2,12 @@
 import { SIZE } from './engine.js';
 
 export const AI_LEVELS = {
-  easy:   { name: 'かんたん', moveMs: 2600, noise: 0.5,  lookahead: false, avatar: '🤖' },
-  normal: { name: 'ふつう',   moveMs: 1700, noise: 0.15, lookahead: false, avatar: '🦾' },
-  hard:   { name: 'つよい',   moveMs: 1100, noise: 0.02, lookahead: true,  avatar: '👑' },
-  // Hidden difficulty: unlocked by beating "hard" or tapping the AI modal title 5 times.
-  oni:    { name: 'おに',     moveMs: 700,  noise: 0,    lookahead: true,  deep: true, avatar: '👹', secret: true },
-  // Ultimate hidden difficulty: unlocked by beating "oni". Full-hand beam search.
-  kami:   { name: '神',       moveMs: 520,  noise: 0,    exhaustive: true, avatar: '🔱', secret: true },
+  easy:   { name: '見習い', moveMs: 2600, noise: 0.5,  lookahead: false, avatar: '🤖' },
+  normal: { name: '戦士',   moveMs: 1700, noise: 0.15, lookahead: false, avatar: '🦾' },
+  hard:   { name: '達人',   moveMs: 1100, noise: 0.02, lookahead: true,  avatar: '👑' },
+  oni:    { name: '鬼',     moveMs: 700,  noise: 0,    lookahead: true,  deep: true, avatar: '👹' },
+  // Hidden difficulty: only revealed by the secret command (↑↑↓↓←→←→BA / title x10).
+  kami:   { name: '神',     moveMs: 520,  noise: 0,    exhaustive: true, avatar: '🔱', secret: true },
 };
 
 // Evaluate the grid after a hypothetical placement.

@@ -56,6 +56,7 @@ function rewardsRows(rewards) {
   }
   return `
     <div class="rs-row"><span>🪙 コイン</span><b>+${fmt(rewards.coins)}</b></div>
+    ${rewards.gems ? `<div class="rs-row"><span>💎 初回討伐ボーナス</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
     <div class="rs-row"><span>🎫 パスXP</span><b>+${fmt(rewards.bpXp)}</b></div>
     <div class="rs-row"><span>⭐ アカウントXP</span><b>+${fmt(rewards.accXp)}</b></div>`;
 }
@@ -166,6 +167,7 @@ class SoloMode {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
     this.startedAt = Date.now();
     const v = getView();
     this.engine = new Engine();
@@ -234,6 +236,7 @@ class VersusBase {
     showScreen('game');
     $('#oppPanel').classList.remove('hidden');
     $('#hudTimer').classList.remove('hidden');
+    $('#bossPanel').classList.add('hidden');
     $('#teamTotals').classList.add('hidden');
     this.timeLeft = duration;
     this.updateTimerHud();
@@ -319,6 +322,15 @@ class VersusBase {
 // VS AI
 // ---------------------------------------------------------------------------
 
+// Per-difficulty stage presentation: board theme + music track.
+const DIFF_THEME = {
+  easy:   { board: 'board_forest',  track: 'solo' },
+  normal: { board: 'board_default', track: 'battle' },
+  hard:   { board: 'board_sunset',  track: 'hard' },
+  oni:    { board: 'board_oni',     track: 'oni' },
+  kami:   { board: 'board_kami',    track: 'kami' },
+};
+
 class AiMode extends VersusBase {
   constructor(level) {
     super();
@@ -335,6 +347,8 @@ class AiMode extends VersusBase {
     this.buildPanels([{ slot: 1, name: this.aiLabel(), isAlly: false }]);
     this.startedAt = Date.now();
     const v = getView();
+    const stage = DIFF_THEME[this.level] || DIFF_THEME.normal;
+    v.setTheme({ ...equippedTheme(), boardId: stage.board });
     this.engine = new Engine(seed);
     this.aiEngine = new Engine(seed);
     v.setEngine(this.engine);
@@ -345,7 +359,7 @@ class AiMode extends VersusBase {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack(this.level === 'oni' ? 'oni' : this.level === 'kami' ? 'kami' : 'battle');
+    audio.playTrack(stage.track);
 
     const begin = () => countdownOverlay(3, () => {
       v.inputLocked = false;
@@ -424,15 +438,6 @@ class AiMode extends VersusBase {
     const outcome = me > opp ? 'win' : me < opp ? 'lose' : 'draw';
     if (outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
 
-    if (outcome === 'win' && this.level === 'hard' && localStorage.getItem('bba_oni') !== '1') {
-      localStorage.setItem('bba_oni', '1');
-      setTimeout(() => toast('👹 隠し難易度「おに」が解放された…！', 'announce', 4000), 1200);
-    }
-    if (outcome === 'win' && this.level === 'oni' && localStorage.getItem('bba_kami') !== '1') {
-      localStorage.setItem('bba_kami', '1');
-      setTimeout(() => toast('🔱 究極の隠し難易度「神」が降臨した……', 'announce', 5000), 1200);
-    }
-
     const modeName = this.level === 'oni' ? 'ai_oni' : this.level === 'kami' ? 'ai_kami' : 'ai';
     const rewards = await submitResult({
       mode: modeName, score: me, lines: this.engine.linesCleared,
@@ -472,6 +477,186 @@ class AiMode extends VersusBase {
     this.stopTimer();
     clearTimeout(this.aiTimer);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Boss battles (PvE): deal damage with points, survive the boss's attacks.
+// ---------------------------------------------------------------------------
+
+const BOSS_STAGE = {
+  slime:  { board: 'board_forest', track: 'battle' },
+  golem:  { board: 'board_ocean',  track: 'boss' },
+  dragon: { board: 'board_sunset', track: 'boss' },
+  maou:   { board: 'board_oni',    track: 'oni' },
+};
+
+class BossMode {
+  constructor(boss, bossIndex, bossCount) {
+    this.mode = 'boss';
+    this.boss = boss;
+    this.bossIndex = bossIndex;
+    this.bossCount = bossCount;
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#hudTimer').classList.add('hidden');
+    $('#bossPanel').classList.remove('hidden');
+    $('#bossEmoji').textContent = this.boss.emoji;
+    $('#bossEmoji').className = 'boss-emoji';
+    $('#bossName').textContent = this.boss.name;
+    this.hp = this.boss.hp;
+    this.updateHpBar();
+    this.startedAt = Date.now();
+
+    const v = getView();
+    const stage = BOSS_STAGE[this.boss.id] || {};
+    v.setTheme({ ...equippedTheme(), boardId: stage.board || 'board_default' });
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = r => this.onPlace(r);
+    v.onGameOver = () => this.finish(false);
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack(stage.track || 'boss');
+
+    countdownOverlay(3, () => {
+      v.inputLocked = false;
+      this.nextAtk = Date.now() + this.boss.atkSec * 1000;
+      this.atkInt = setInterval(() => this.tickAttack(), 100);
+    }, audio);
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = '⚔️ 与ダメージ';
+  }
+
+  updateHpBar() {
+    const pct = Math.max(0, (this.hp / this.boss.hp) * 100);
+    $('#bossHp').style.width = `${pct}%`;
+    $('#bossHpText').textContent = `${fmt(Math.max(0, this.hp))} / ${fmt(this.boss.hp)}`;
+  }
+
+  onPlace(result) {
+    this.updateHud();
+    const dmg = result.gained;
+    this.hp -= dmg;
+    this.updateHpBar();
+    this.damageFloat(dmg, result.lineCount > 0);
+    if (result.lineCount > 0) {
+      const em = $('#bossEmoji');
+      em.classList.remove('boss-hit'); void em.offsetWidth; em.classList.add('boss-hit');
+    }
+    if (this.hp <= 0 && !this.ended) this.finish(true);
+  }
+
+  damageFloat(dmg, big) {
+    const span = document.createElement('span');
+    span.className = `dmg-float ${big ? 'big' : ''}`;
+    span.textContent = `-${fmt(dmg)}`;
+    span.style.left = `${30 + Math.random() * 40}%`;
+    $('#bossPanel').appendChild(span);
+    setTimeout(() => span.remove(), 900);
+  }
+
+  tickAttack() {
+    if (this.ended) return;
+    const total = this.boss.atkSec * 1000;
+    const remain = Math.max(0, this.nextAtk - Date.now());
+    $('#bossAtkBar').style.width = `${(1 - remain / total) * 100}%`;
+    if (remain <= 0) {
+      this.nextAtk = Date.now() + total;
+      this.attack();
+    }
+  }
+
+  attack() {
+    if (this.ended || !this.engine || view.inputLocked) return;
+    const cells = this.engine.addGarbage(this.boss.atkCells);
+    audio.bossAttack();
+    const em = $('#bossEmoji');
+    em.classList.remove('boss-atk'); void em.offsetWidth; em.classList.add('boss-atk');
+    for (const [r, c] of cells) {
+      view.spawnAnim.set(r * 8 + c, view.time);
+      const cx = view.boardX + (c + 0.5) * view.cell;
+      const cy = view.boardY + (r + 0.5) * view.cell;
+      view.particles.burstCell(cx, cy, view.cell, 9, 'fx_default');
+    }
+    view.shake = 12;
+    toast(`${this.boss.emoji} ${this.boss.name}の攻撃！`, 'err', 1300);
+    if (this.engine.over) this.finish(false);
+  }
+
+  async finish(won) {
+    if (this.ended) return;
+    this.ended = true;
+    clearInterval(this.atkInt);
+    view.inputLocked = true;
+    if (won) {
+      audio.bossDefeated();
+      confettiBurst(60);
+      $('#bossEmoji').classList.add('boss-dead');
+    } else {
+      audio.gameOver();
+    }
+
+    if (won) {
+      const cur = Number(localStorage.getItem('bba_boss_max') || 0);
+      if (this.bossIndex + 1 > cur) localStorage.setItem('bba_boss_max', String(this.bossIndex + 1));
+    }
+    const rewards = await submitResult({
+      mode: 'boss', bossId: this.boss.id, score: this.engine.score,
+      lines: this.engine.linesCleared, maxCombo: this.engine.maxCombo,
+      duration: (Date.now() - this.startedAt) / 1000, won,
+    });
+    if (rewards && rewards.badge === 'maou') {
+      setTimeout(() => toast('😈 バッジ「魔王討伐」を獲得！', 'announce', 4000), 1200);
+    }
+
+    const hasNext = won && this.bossIndex + 1 < this.bossCount;
+    const m = showModal(`
+      <div class="result-banner ${won ? 'win' : 'lose'}">${won ? `${this.boss.emoji} 討伐成功！` : 'やられた…'}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>与えたダメージ</span><b>${fmt(this.engine.score)}</b></div>
+        ${won ? '' : `<div class="rs-row"><span>${this.boss.name}の残りHP</span><b>${fmt(Math.max(0, this.hp))}</b></div>`}
+        <div class="rs-row"><span>消したライン</span><b>${fmt(this.engine.linesCleared)}</b></div>
+        <div class="rs-row"><span>最大コンボ</span><b>${fmt(this.engine.maxCombo)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">メニュー</button>
+        <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${hasNext ? '次のボスへ' : won ? 'もう一度' : 'リベンジ'}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => {
+      closeModal();
+      this.destroy();
+      if (hasNext && window.__bbaOpenBossSelect) window.__bbaOpenBossSelect(this.bossIndex + 1);
+      else startBoss(this.boss, this.bossIndex, this.bossCount);
+    };
+  }
+
+  quit() { this.finish(false); }
+
+  destroy() {
+    this.ended = true;
+    clearInterval(this.atkInt);
+    $('#bossPanel').classList.add('hidden');
+  }
+}
+
+export function startBoss(boss, bossIndex, bossCount) {
+  if (currentMode) currentMode.destroy();
+  currentMode = new BossMode(boss, bossIndex, bossCount);
+  window.__bbaMode = currentMode;   // debug/testing hook
+  currentMode.start();
 }
 
 // ---------------------------------------------------------------------------
