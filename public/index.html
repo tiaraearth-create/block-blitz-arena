@@ -50,6 +50,7 @@
           <button class="nav-btn hidden" id="btnAdmin"><span>🛡️</span>管理</button>
         </nav>
         <div id="seasonBanner" class="season-banner hidden"></div>
+        <div id="onlineBadge" class="online-badge hidden">🟢 オンライン: <b id="onlineCount">0</b>人</div>
       </div>
     </section>
 
@@ -161,7 +162,12 @@
           <input id="adminMsg" type="text" placeholder="全員へのお知らせを入力…" maxlength="200">
           <button class="btn btn-primary" id="btnBroadcast">送信</button>
         </div>
-        <button class="btn btn-ghost" id="btnNewSeason">🔄 新シーズン開始</button>
+      </div>
+      <div class="admin-actions">
+        <button class="btn btn-ghost btn-sm" id="btnSeasonManage">🗓️ シーズン管理</button>
+        <button class="btn btn-ghost btn-sm" id="btnMaintenance">🛠 メンテナンス</button>
+        <button class="btn btn-ghost btn-sm" id="btnBackup">💾 バックアップDL</button>
+        <button class="btn btn-ghost btn-sm" id="btnLbReset" style="color:var(--red)">🏆 ランキングリセット</button>
       </div>
       <div id="adminUsers" class="admin-users"></div>
     </section>

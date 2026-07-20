@@ -349,6 +349,11 @@ export function initBattle(server, deps) {
         case 'hello': {
           const user = deps.userFromToken(msg.token);
           if (user && user.banned) { send(ws, { type: 'error', error: 'アカウントが凍結されています' }); ws.close(); return; }
+          if (deps.isMaintenance && deps.isMaintenance() && (!user || user.role !== 'admin')) {
+            send(ws, { type: 'error', error: '🛠 メンテナンス中です。しばらくお待ちください' });
+            ws.close();
+            return;
+          }
           ws.user = user ? { id: user.id, username: user.username } : null;
           ws.guestName = user ? null : (sanitizeName(msg.guestName) || `ゲスト${Math.floor(Math.random() * 9999)}`);
           send(ws, { type: 'hello_ok', name: user ? user.username : ws.guestName, online: clients.size });

@@ -7,6 +7,8 @@ export const AI_LEVELS = {
   hard:   { name: 'つよい',   moveMs: 1100, noise: 0.02, lookahead: true,  avatar: '👑' },
   // Hidden difficulty: unlocked by beating "hard" or tapping the AI modal title 5 times.
   oni:    { name: 'おに',     moveMs: 700,  noise: 0,    lookahead: true,  deep: true, avatar: '👹', secret: true },
+  // Ultimate hidden difficulty: unlocked by beating "oni". Full-hand beam search.
+  kami:   { name: '神',       moveMs: 520,  noise: 0,    exhaustive: true, avatar: '🔱', secret: true },
 };
 
 // Evaluate the grid after a hypothetical placement.
@@ -103,9 +105,89 @@ function countPlacements(grid, piece) {
   return n;
 }
 
+// Kami-level beam search: explores placements of the WHOLE hand in every order,
+// keeping the best BEAM states per depth. Returns the first move of the best line.
+// Probe shapes used to measure how "open" a final grid stays for future pieces.
+const PROBES = [
+  [[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]], // 3x3
+  [[0,0],[0,1],[0,2],[0,3],[0,4]],                          // 1x5
+  [[0,0],[1,0],[2,0],[3,0],[4,0]],                          // 5x1
+  [[0,0],[0,1],[1,0],[1,1]],                                // 2x2
+];
+
+function openness(grid) {
+  let score = 0;
+  for (const cells of PROBES) {
+    let rows = 0, cols = 0;
+    for (const [r, c] of cells) { rows = Math.max(rows, r + 1); cols = Math.max(cols, c + 1); }
+    let n = 0;
+    for (let r = 0; r <= SIZE - rows; r++) {
+      for (let c = 0; c <= SIZE - cols; c++) {
+        let ok = true;
+        for (const [dr, dc] of cells) {
+          if (grid[(r + dr) * SIZE + (c + dc)] !== 0) { ok = false; break; }
+        }
+        if (ok && ++n >= 10) break;
+      }
+      if (n >= 10) break;
+    }
+    score += n === 0 ? -120 : n * 9;
+  }
+  return score;
+}
+
+function beamSearch(engine) {
+  const BEAM = 10;
+  const handIdx = [];
+  for (let i = 0; i < engine.hand.length; i++) if (engine.hand[i]) handIdx.push(i);
+  if (!handIdx.length) return null;
+
+  let states = [{ grid: engine.grid, used: 0, lines: 0, first: null, value: -Infinity }];
+  for (let depth = 0; depth < handIdx.length; depth++) {
+    const next = [];
+    for (const st of states) {
+      for (const i of handIdx) {
+        if (st.used & (1 << i)) continue;
+        const piece = engine.hand[i];
+        let rows = 0, cols = 0;
+        for (const [r, c] of piece.cells) { rows = Math.max(rows, r + 1); cols = Math.max(cols, c + 1); }
+        for (let r = 0; r <= SIZE - rows; r++) {
+          for (let c = 0; c <= SIZE - cols; c++) {
+            let ok = true;
+            for (const [dr, dc] of piece.cells) {
+              if (st.grid[(r + dr) * SIZE + (c + dc)] !== 0) { ok = false; break; }
+            }
+            if (!ok) continue;
+            const sim = simulate(st.grid, piece, r, c);
+            const lines = st.lines + sim.lines;
+            next.push({
+              grid: sim.grid, used: st.used | (1 << i), lines,
+              first: st.first || { index: i, row: r, col: c },
+              value: lines * 900 + evaluateGrid(sim.grid),
+            });
+          }
+        }
+      }
+    }
+    if (!next.length) break;   // stuck mid-sequence — keep the best line so far
+    next.sort((a, b) => b.value - a.value);
+    states = next.slice(0, BEAM);
+    // At the final depth, re-rank survivors by how open the board stays.
+    if (depth === handIdx.length - 1) {
+      for (const st of states) st.value += openness(st.grid);
+      states.sort((a, b) => b.value - a.value);
+    }
+  }
+  return states[0] ? states[0].first : null;
+}
+
 // Choose the AI's next move: { index, row, col } or null if stuck.
 export function chooseMove(engine, level) {
   const cfg = AI_LEVELS[level] || AI_LEVELS.normal;
+  if (cfg.exhaustive) {
+    const mv = beamSearch(engine);
+    if (mv) return mv;
+  }
   const candidates = [];
 
   for (let i = 0; i < engine.hand.length; i++) {

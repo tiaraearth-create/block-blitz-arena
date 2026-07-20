@@ -23,8 +23,14 @@ const PORT = process.env.PORT || 3000;
 
 const db = loadDb();
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '64kb' }));
 app.use(authMiddleware);
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  next();
+});
 app.use(express.static(path.join(__dirname, '..', 'public'), {
   // Always revalidate (ETag 304) so client updates ship immediately.
   setHeaders: res => res.setHeader('Cache-Control', 'no-cache'),
@@ -116,13 +122,38 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won }) 
   if (score > s.bestScore) s.bestScore = score;
   if (maxCombo > s.maxCombo) s.maxCombo = maxCombo;
   let badge = null;
-  if ((mode === 'ai' || mode === 'ai_oni') && won) s.aiWins += 1;
+  if (mode.startsWith('ai') && won) s.aiWins += 1;
   if (mode === 'ai_oni' && won && !user.badges.includes('oni')) {
     user.badges.push('oni');
     badge = 'oni';
   }
+  if (mode === 'ai_kami' && won && !user.badges.includes('kami')) {
+    user.badges.push('kami');
+    badge = 'kami';
+  }
   saveDb();
   return { coins, bpXp, accXp, score, badge };
+}
+
+// Simple in-memory rate limiter (per key, sliding window).
+const rateMap = new Map();
+function rateLimit(key, limit, windowMs) {
+  const now = Date.now();
+  const arr = (rateMap.get(key) || []).filter(t => now - t < windowMs);
+  if (arr.length >= limit) { rateMap.set(key, arr); return false; }
+  arr.push(now);
+  rateMap.set(key, arr);
+  return true;
+}
+
+function inMaintenance() { return !!db.meta.maintenance; }
+
+// Blocks gameplay/economy endpoints for non-admins during maintenance.
+function maintenanceGuard(req, res, next) {
+  if (inMaintenance() && (!req.user || req.user.role !== 'admin')) {
+    return res.status(503).json({ error: '🛠 メンテナンス中です。しばらくお待ちください' });
+  }
+  next();
 }
 
 const DAILY_COINS = 100;
@@ -148,6 +179,10 @@ function sanitizeName(name) {
 // ---------------------------------------------------------------------------
 
 app.post('/api/register', (req, res) => {
+  if (!rateLimit(`auth:${req.ip}`, 20, 5 * 60 * 1000)) {
+    return res.status(429).json({ error: '試行回数が多すぎます。しばらく待ってください' });
+  }
+  if (inMaintenance()) return res.status(503).json({ error: '🛠 メンテナンス中です。しばらくお待ちください' });
   const username = sanitizeName(req.body.username);
   const password = String(req.body.password || '');
   if (!/^[\w\-ぁ-んァ-ヶ一-龠ー]{2,16}$/u.test(username)) {
@@ -165,6 +200,9 @@ app.post('/api/register', (req, res) => {
 });
 
 app.post('/api/login', (req, res) => {
+  if (!rateLimit(`auth:${req.ip}`, 20, 5 * 60 * 1000)) {
+    return res.status(429).json({ error: '試行回数が多すぎます。しばらく待ってください' });
+  }
   const username = sanitizeName(req.body.username);
   const password = String(req.body.password || '');
   const user = Object.values(db.users).find(u => u.username.toLowerCase() === username.toLowerCase());
@@ -172,6 +210,9 @@ app.post('/api/login', (req, res) => {
     return res.status(401).json({ error: 'ユーザー名またはパスワードが違います' });
   }
   if (user.banned) return res.status(403).json({ error: 'このアカウントは凍結されています' });
+  if (inMaintenance() && user.role !== 'admin') {
+    return res.status(503).json({ error: '🛠 メンテナンス中です。しばらくお待ちください' });
+  }
   const token = issueToken(user.id);
   const dailyBonus = grantDaily(user);
   res.json({ token, user: publicUser(user), dailyBonus });
@@ -184,14 +225,41 @@ app.post('/api/logout', requireAuth, (req, res) => {
 
 app.get('/api/me', (req, res) => {
   const dailyBonus = req.user && !req.user.banned ? grantDaily(req.user) : null;
-  res.json({ user: publicUser(req.user), season: currentSeason(), dailyBonus });
+  res.json({ user: publicUser(req.user), season: currentSeason(), dailyBonus, maintenance: inMaintenance() });
+});
+
+// Delete own account (password confirmation required).
+app.delete('/api/me', requireAuth, (req, res) => {
+  const user = req.user;
+  const password = String((req.body && req.body.password) || '');
+  if (!verifyPassword(password, user.salt, user.passHash)) {
+    return res.status(401).json({ error: 'パスワードが違います' });
+  }
+  if (user.role === 'admin') {
+    return res.status(400).json({ error: '管理者アカウントは削除できません（先に権限を外してください）' });
+  }
+  delete db.users[user.id];
+  for (const [t, rec] of Object.entries(db.tokens)) {
+    if (rec.userId === user.id) delete db.tokens[t];
+  }
+  saveDb();
+  res.json({ ok: true });
+});
+
+// Public lightweight status (menu online counter).
+app.get('/api/status', (_req, res) => {
+  res.json({
+    online: battle.clients.size,
+    activeMatches: battle.matches.size,
+    maintenance: inMaintenance(),
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Game results & leaderboard
 // ---------------------------------------------------------------------------
 
-app.post('/api/game/result', requireAuth, (req, res) => {
+app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
   const rewards = applyGameResult(req.user, req.body || {});
   res.json({ rewards, user: publicUser(req.user) });
 });
@@ -222,7 +290,7 @@ app.get('/api/shop', (req, res) => {
   res.json({ items: SHOP_ITEMS });
 });
 
-app.post('/api/shop/buy', requireAuth, (req, res) => {
+app.post('/api/shop/buy', requireAuth, maintenanceGuard, (req, res) => {
   const item = SHOP_ITEMS.find(i => i.id === req.body.itemId);
   if (!item) return res.status(404).json({ error: 'アイテムが見つかりません' });
   const user = req.user;
@@ -261,7 +329,7 @@ app.get('/api/battlepass', (req, res) => {
   });
 });
 
-app.post('/api/battlepass/premium', requireAuth, (req, res) => {
+app.post('/api/battlepass/premium', requireAuth, maintenanceGuard, (req, res) => {
   const user = req.user;
   const bp = syncBattlePass(user);
   if (bp.premium) return res.status(409).json({ error: 'すでにプレミアムです' });
@@ -272,7 +340,7 @@ app.post('/api/battlepass/premium', requireAuth, (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
-app.post('/api/battlepass/claim', requireAuth, (req, res) => {
+app.post('/api/battlepass/claim', requireAuth, maintenanceGuard, (req, res) => {
   const user = req.user;
   const bp = syncBattlePass(user);
   const tierNum = Math.floor(Number(req.body.tier));
@@ -352,6 +420,65 @@ app.post('/api/admin/season/new', requireAuth, requireAdmin, (req, res) => {
   res.json({ season: db.season });
 });
 
+// Change the current season — supports reverting the number/name WITHOUT
+// resetting everyone's battle pass progress (keepProgress, default true).
+app.post('/api/admin/season/set', requireAuth, requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const number = Math.max(1, Math.min(999, Math.floor(Number(b.number) || (db.season ? db.season.number : 1))));
+  const name = sanitizeName(b.name) || `シーズン ${number}`;
+  const days = Math.max(1, Math.min(365, Math.floor(Number(b.days) || 0)));
+  const keepProgress = b.keepProgress !== false;
+
+  if (keepProgress && db.season) {
+    db.season.number = number;
+    db.season.name = name;
+    if (b.days) db.season.endsAt = Date.now() + days * 24 * 60 * 60 * 1000;
+  } else {
+    db.season = {
+      id: crypto.randomUUID(),
+      number, name,
+      startedAt: Date.now(),
+      endsAt: Date.now() + (b.days ? days : BP_SEASON_DAYS) * 24 * 60 * 60 * 1000,
+    };
+  }
+  saveDb();
+  res.json({ season: db.season, progressKept: keepProgress });
+});
+
+// Reset competitive stats for all users (scores, ratings, PvP records).
+app.post('/api/admin/leaderboard/reset', requireAuth, requireAdmin, (_req, res) => {
+  let count = 0;
+  for (const u of Object.values(db.users)) {
+    u.stats.bestScore = 0;
+    u.stats.totalScore = 0;
+    u.stats.rating = 1000;
+    u.stats.pvpWins = 0;
+    u.stats.pvpLosses = 0;
+    count++;
+  }
+  saveDb();
+  res.json({ ok: true, affected: count });
+});
+
+// Full database backup download.
+app.get('/api/admin/backup', requireAuth, requireAdmin, (_req, res) => {
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Disposition', `attachment; filename="block-blitz-backup-${stamp}.json"`);
+  res.json(db);
+});
+
+// Maintenance mode: blocks play/shop/login for non-admins.
+app.post('/api/admin/maintenance', requireAuth, requireAdmin, (req, res) => {
+  db.meta.maintenance = !!req.body.on;
+  saveDb();
+  battle.broadcastAll({
+    type: 'announce',
+    message: db.meta.maintenance ? '🛠 まもなくメンテナンスを開始します' : '✅ メンテナンスが終了しました',
+    from: req.user.username,
+  });
+  res.json({ maintenance: db.meta.maintenance });
+});
+
 app.post('/api/admin/broadcast', requireAuth, requireAdmin, (req, res) => {
   const message = String(req.body.message || '').slice(0, 200);
   if (!message) return res.status(400).json({ error: 'メッセージが空です' });
@@ -369,6 +496,7 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     inQueue: battle.queueSize(),
     activeMatches: battle.matches.size,
     openRooms: battle.rooms.size,
+    maintenance: inMaintenance(),
     season: currentSeason(),
   });
 });
@@ -383,6 +511,7 @@ const server = http.createServer(app);
 const battle = initBattle(server, {
   db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, userFromToken,
   MATCH_DURATION,
+  isMaintenance: inMaintenance,
 });
 
 // ---------------------------------------------------------------------------

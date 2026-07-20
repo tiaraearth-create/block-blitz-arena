@@ -62,7 +62,7 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : '😀'} ${u.username}</h2>
     <div class="result-stats">
@@ -120,6 +120,15 @@ export function showSettingsModal() {
           <button data-p="high" ${s.particles === 'high' ? 'class="active"' : ''}>多め</button>
         </div>
       </div>
+      <div class="settings-row danger-row">
+        <label>🗑️ ローカルデータをリセット</label>
+        <button class="btn btn-sm btn-ghost" id="setResetLocal">実行</button>
+      </div>
+      ${session.user ? `
+      <div class="settings-row danger-row">
+        <label>⚠️ アカウントを完全削除</label>
+        <button class="btn btn-sm btn-ghost" id="setDeleteAccount" style="color:var(--red)">削除</button>
+      </div>` : ''}
       <div class="modal-buttons">
         <button class="btn btn-primary" id="setClose">閉じる</button>
       </div>
@@ -139,6 +148,51 @@ export function showSettingsModal() {
     };
   });
   m.querySelector('#setClose').onclick = closeModal;
+
+  m.querySelector('#setResetLocal').onclick = () => {
+    const c = showModal(`
+      <h2>🗑️ ローカルデータをリセット</h2>
+      <p class="muted center" style="margin-bottom:14px">設定・ゲストのベストスコア・隠し難易度の解放状態を消去します。<br>アカウントのデータ（コイン・スコア等）は残ります。</p>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rlNo">やめる</button>
+        <button class="btn btn-ai" id="rlYes">リセットする</button>
+      </div>`);
+    c.querySelector('#rlNo').onclick = () => { closeModal(); showSettingsModal(); };
+    c.querySelector('#rlYes').onclick = () => {
+      for (const key of ['bba_settings', 'bba_best', 'bba_oni', 'bba_kami', 'bba_guest_name']) {
+        localStorage.removeItem(key);
+      }
+      location.reload();
+    };
+  };
+
+  const delBtn = m.querySelector('#setDeleteAccount');
+  if (delBtn) delBtn.onclick = () => {
+    const c = showModal(`
+      <h2>⚠️ アカウント削除</h2>
+      <p class="muted center" style="margin-bottom:14px">「${escapeHtml(session.user.username)}」を完全に削除します。<br>コイン・スコア・購入アイテムはすべて失われ、元に戻せません。</p>
+      <div class="form-col">
+        <input id="delPass" type="password" placeholder="パスワードを入力して確認" autocomplete="current-password">
+        <div class="form-error" id="delError"></div>
+        <div class="modal-buttons">
+          <button class="btn btn-ghost" id="delNo">やめる</button>
+          <button class="btn btn-ai" id="delYes">完全に削除する</button>
+        </div>
+      </div>`);
+    c.querySelector('#delNo').onclick = () => { closeModal(); showSettingsModal(); };
+    c.querySelector('#delYes').onclick = async () => {
+      try {
+        await api('/api/me', { method: 'DELETE', body: { password: c.querySelector('#delPass').value } });
+        setToken(null);
+        session.user = null;
+        toast('アカウントを削除しました。ご利用ありがとうございました', 'ok', 3000);
+        setTimeout(() => location.reload(), 1500);
+      } catch (err) {
+        c.querySelector('#delError').textContent = err.message;
+        audio.error();
+      }
+    };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +211,7 @@ export async function openLeaderboard(board = 'score') {
       return;
     }
     const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱' };
     list.innerHTML = data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
@@ -295,7 +349,7 @@ function rewardLabel(r) {
   if (!r) return { icon: '—', label: '' };
   if (r.type === 'coins') return { icon: '🪙', label: fmt(r.amount) };
   if (r.type === 'gems') return { icon: '💎', label: fmt(r.amount) };
-  if (r.type === 'badge') return { icon: { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹' }[r.id] || '🎖️', label: 'バッジ' };
+  if (r.type === 'badge') return { icon: { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱' }[r.id] || '🎖️', label: 'バッジ' };
   const names = { skin_neon: 'ネオン', skin_candy: 'キャンディ', skin_gold: 'ゴールド', board_ocean: 'オーシャン', board_sunset: 'サンセット', fx_fireworks: '花火' };
   return { icon: '🎁', label: names[r.id] || 'アイテム' };
 }
@@ -379,6 +433,8 @@ function renderBattlePass(data) {
 // Admin panel
 // ---------------------------------------------------------------------------
 
+let adminStats = null;   // last loaded stats (for the maintenance toggle etc.)
+
 export async function openAdmin() {
   showScreen('admin');
   const statsEl = $('#adminStats');
@@ -390,17 +446,59 @@ export async function openAdmin() {
       api('/api/admin/stats'),
       api('/api/admin/users'),
     ]);
+    adminStats = stats;
     statsEl.innerHTML = `
       <div class="stat-card"><b>${fmt(stats.totalUsers)}</b><span>登録ユーザー</span></div>
       <div class="stat-card"><b>${fmt(stats.online)}</b><span>オンライン</span></div>
       <div class="stat-card"><b>${fmt(stats.activeMatches)}</b><span>対戦中</span></div>
+      <div class="stat-card"><b>${fmt(stats.openRooms || 0)}</b><span>ルーム</span></div>
       <div class="stat-card"><b>${fmt(stats.totalGames)}</b><span>総プレイ数</span></div>
       <div class="stat-card"><b>${fmt(stats.bannedUsers)}</b><span>凍結中</span></div>
-      <div class="stat-card"><b>S${stats.season.number}</b><span>${escapeHtml(stats.season.name)}</span></div>`;
+      <div class="stat-card"><b>S${stats.season.number}</b><span>${escapeHtml(stats.season.name)}</span></div>
+      <div class="stat-card" style="${stats.maintenance ? 'border-color:var(--red)' : ''}"><b>${stats.maintenance ? '🛠' : '✅'}</b><span>${stats.maintenance ? 'メンテナンス中' : '稼働中'}</span></div>`;
+    $('#btnMaintenance').textContent = stats.maintenance ? '✅ メンテ解除' : '🛠 メンテナンス開始';
     renderAdminUsers(usersData.users);
   } catch (err) {
     statsEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
+}
+
+function showSeasonModal() {
+  const season = adminStats ? adminStats.season : { number: 1, name: '', endsAt: Date.now() };
+  const daysLeft = Math.max(1, Math.ceil((season.endsAt - Date.now()) / 86400000));
+  const m = showModal(`
+    <h2>🗓️ シーズン管理</h2>
+    <p class="muted center" style="margin-bottom:12px">現在: ${escapeHtml(season.name)}（S${season.number}）</p>
+    <div class="form-col">
+      <div class="settings-row"><label>番号</label><input id="ssNum" type="number" min="1" max="999" value="${season.number}" style="width:80px;text-align:center"></div>
+      <div class="settings-row"><label>名前</label><input id="ssName" type="text" maxlength="16" value="${escapeHtml(season.name)}" style="width:150px"></div>
+      <div class="settings-row"><label>残り日数</label><input id="ssDays" type="number" min="1" max="365" value="${daysLeft}" style="width:80px;text-align:center"></div>
+      <div class="settings-row"><label>🎫 全員のパス進行を維持する</label><input id="ssKeep" type="checkbox" checked></div>
+      <p class="muted center" style="font-size:12px">維持ONなら番号や名前を変えても（例: S2→S1に戻しても）<br>バトルパスの進行はリセットされません</p>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="ssCancel">やめる</button>
+        <button class="btn btn-primary" id="ssApply">適用する</button>
+      </div>
+    </div>`);
+  m.querySelector('#ssCancel').onclick = closeModal;
+  m.querySelector('#ssApply').onclick = async () => {
+    try {
+      const keep = m.querySelector('#ssKeep').checked;
+      if (!keep && !confirm('パス進行を維持せず新シーズンとして開始します。全員のバトルパスがリセットされますが、よろしいですか？')) return;
+      const res = await api('/api/admin/season/set', {
+        method: 'POST',
+        body: {
+          number: Number(m.querySelector('#ssNum').value),
+          name: m.querySelector('#ssName').value.trim(),
+          days: Number(m.querySelector('#ssDays').value),
+          keepProgress: keep,
+        },
+      });
+      closeModal();
+      toast(`${res.season.name}（S${res.season.number}）に設定しました${res.progressKept ? '（進行維持）' : ''}`, 'ok', 3000);
+      openAdmin();
+    } catch (err) { toast(err.message, 'err'); }
+  };
 }
 
 function renderAdminUsers(users) {
@@ -465,11 +563,41 @@ export function bindAdminActions() {
       toast(`${res.delivered}人に配信しました`, 'ok');
     } catch (err) { toast(err.message, 'err'); }
   };
-  $('#btnNewSeason').onclick = async () => {
-    if (!confirm('新シーズンを開始しますか？全員のバトルパス進行がリセットされます。')) return;
+  $('#btnSeasonManage').onclick = () => showSeasonModal();
+
+  $('#btnMaintenance').onclick = async () => {
+    const turningOn = !(adminStats && adminStats.maintenance);
+    if (!confirm(turningOn
+      ? 'メンテナンスモードを開始しますか？一般ユーザーのプレイ・ログインがブロックされます。'
+      : 'メンテナンスモードを終了しますか？')) return;
     try {
-      const res = await api('/api/admin/season/new', { method: 'POST', body: {} });
-      toast(`${res.season.name} を開始しました！`, 'ok');
+      await api('/api/admin/maintenance', { method: 'POST', body: { on: turningOn } });
+      toast(turningOn ? '🛠 メンテナンスを開始しました' : '✅ メンテナンスを終了しました', 'ok');
+      openAdmin();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
+  $('#btnBackup').onclick = async () => {
+    try {
+      const res = await fetch('/api/admin/backup', {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      if (!res.ok) throw new Error('バックアップに失敗しました');
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `block-blitz-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('💾 バックアップをダウンロードしました', 'ok');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
+  $('#btnLbReset').onclick = async () => {
+    if (!confirm('全ユーザーのハイスコア・レート・PvP戦績をリセットします。よろしいですか？')) return;
+    try {
+      const res = await api('/api/admin/leaderboard/reset', { method: 'POST', body: {} });
+      toast(`🏆 ${res.affected}人の戦績をリセットしました`, 'ok');
       openAdmin();
     } catch (err) { toast(err.message, 'err'); }
   };

@@ -13,13 +13,15 @@ $('#btnSolo').onclick = () => { audio.click(); startSolo(); };
 $('#btnVsAi').onclick = () => {
   audio.click();
   const oniUnlocked = localStorage.getItem('bba_oni') === '1';
-  const btnClass = { easy: 'btn-primary', normal: 'btn-ai', hard: 'btn-gold', oni: 'btn-oni' };
+  const kamiUnlocked = localStorage.getItem('bba_kami') === '1';
+  const unlocked = key => key === 'oni' ? oniUnlocked : key === 'kami' ? kamiUnlocked : true;
+  const btnClass = { easy: 'btn-primary', normal: 'btn-ai', hard: 'btn-gold', oni: 'btn-oni', kami: 'btn-kami' };
   const m = showModal(`
     <h2 id="aiModalTitle">🤖 AI対戦</h2>
     <p class="muted center" style="margin-bottom:12px">2分間のスコアバトル！同じピースが配られます</p>
     <div class="form-col" id="aiLevelList">
       ${Object.entries(AI_LEVELS)
-        .filter(([, cfg]) => !cfg.secret || oniUnlocked)
+        .filter(([key]) => unlocked(key))
         .map(([key, cfg]) => `
         <button class="btn ${btnClass[key]}" data-ai="${key}">
           ${cfg.avatar} ${cfg.name}
@@ -99,8 +101,23 @@ $('#btnReroll').onclick = () => rerollCurrent();
 // autopilot (admin only)
 $('#btnAuto').onclick = () => toggleAutopilot();
 
-// unlock audio context on first interaction
-window.addEventListener('pointerdown', () => audio.ensure(), { once: true });
+// unlock audio context on first interaction and start menu music
+window.addEventListener('pointerdown', () => {
+  audio.ensure();
+  if (!audio.playing) audio.playTrack(audio.trackName || 'menu');
+}, { once: true });
+
+// live online counter on the menu
+async function pollStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    $('#onlineCount').textContent = data.online;
+    $('#onlineBadge').classList.remove('hidden');
+  } catch { /* server unreachable — keep hidden */ }
+}
+pollStatus();
+setInterval(pollStatus, 30000);
 
 bindAdminActions();
 

@@ -5,7 +5,7 @@ import { GameView, MiniBoard } from './game.js';
 import { chooseMove, AI_LEVELS } from './ai.js';
 import { audio } from './audio.js';
 import { session, api, BattleClient } from './net.js';
-import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar } from './dom.js';
+import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst } from './dom.js';
 
 const MATCH_SECONDS = 120;
 
@@ -177,7 +177,7 @@ class SoloMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.startMusic();
+    audio.playTrack('solo');
   }
 
   best() {
@@ -204,6 +204,7 @@ class SoloMode {
       maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
     });
     const isBest = e.score >= this.best();
+    if (isBest && e.score > 0) confettiBurst();
     const m = showModal(`
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : 'GAME OVER'}</div>
       <div class="result-stats">
@@ -344,7 +345,7 @@ class AiMode extends VersusBase {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.startMusic();
+    audio.playTrack(this.level === 'oni' ? 'oni' : this.level === 'kami' ? 'kami' : 'battle');
 
     const begin = () => countdownOverlay(3, () => {
       v.inputLocked = false;
@@ -353,6 +354,7 @@ class AiMode extends VersusBase {
     }, audio);
 
     if (this.level === 'oni') this.oniIntro(begin);
+    else if (this.level === 'kami') this.kamiIntro(begin);
     else begin();
   }
 
@@ -365,6 +367,20 @@ class AiMode extends VersusBase {
     audio.gameOver();
     if (view) view.shake = 14;
     setTimeout(() => { el.remove(); next(); }, 1900);
+  }
+
+  // Divine entrance for the ultimate hidden difficulty.
+  kamiIntro(next) {
+    const el = document.createElement('div');
+    el.className = 'kami-intro';
+    el.innerHTML = `
+      <div class="kami-rays"></div>
+      <div class="kami-face">🔱</div>
+      <div class="kami-text">神が 降臨した——</div>`;
+    document.body.appendChild(el);
+    audio.kamiDescend();
+    if (view) view.shake = 8;
+    setTimeout(() => { el.remove(); next(); }, 2300);
   }
 
   aiLoop() {
@@ -406,19 +422,27 @@ class AiMode extends VersusBase {
     getView().inputLocked = true;
     const me = this.engine.score, opp = this.aiEngine.score;
     const outcome = me > opp ? 'win' : me < opp ? 'lose' : 'draw';
-    if (outcome === 'win') audio.victory(); else audio.gameOver();
+    if (outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
 
     if (outcome === 'win' && this.level === 'hard' && localStorage.getItem('bba_oni') !== '1') {
       localStorage.setItem('bba_oni', '1');
       setTimeout(() => toast('👹 隠し難易度「おに」が解放された…！', 'announce', 4000), 1200);
     }
+    if (outcome === 'win' && this.level === 'oni' && localStorage.getItem('bba_kami') !== '1') {
+      localStorage.setItem('bba_kami', '1');
+      setTimeout(() => toast('🔱 究極の隠し難易度「神」が降臨した……', 'announce', 5000), 1200);
+    }
 
+    const modeName = this.level === 'oni' ? 'ai_oni' : this.level === 'kami' ? 'ai_kami' : 'ai';
     const rewards = await submitResult({
-      mode: this.level === 'oni' ? 'ai_oni' : 'ai', score: me, lines: this.engine.linesCleared,
+      mode: modeName, score: me, lines: this.engine.linesCleared,
       maxCombo: this.engine.maxCombo, duration: MATCH_SECONDS, won: outcome === 'win',
     });
     if (rewards && rewards.badge === 'oni') {
       setTimeout(() => toast('👹 バッジ「おに退治」を獲得！', 'announce', 4000), 1200);
+    }
+    if (rewards && rewards.badge === 'kami') {
+      setTimeout(() => toast('🔱 バッジ「神殺し」を獲得！！', 'announce', 5000), 1200);
     }
 
     const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
@@ -611,7 +635,7 @@ class OnlineMode extends VersusBase {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.startMusic();
+    audio.playTrack('battle');
     toast(this.isTeam ? '👥 チーム戦スタート！' : '⚔️ マッチしました！', 'ok');
 
     countdownOverlay(msg.countdown || 3, () => {
@@ -692,7 +716,7 @@ class OnlineMode extends VersusBase {
     this.stopTimer();
     getView().inputLocked = true;
     if (msg.user) { session.user = msg.user; updateTopbar(); }
-    if (msg.outcome === 'win') audio.victory(); else audio.gameOver();
+    if (msg.outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
 
     const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
     const reasonNote =
@@ -765,7 +789,7 @@ function endToMenu() {
   if (currentMode) { currentMode.destroy(); currentMode = null; }
   if (view) view.stop();
   stopAutopilot();
-  audio.stopMusic();
+  audio.playTrack('menu');
   showScreen('menu');
 }
 

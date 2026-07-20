@@ -66,6 +66,25 @@ export function countdownOverlay(n, onDone, audio) {
 
 export function fmt(n) { return Number(n).toLocaleString('ja-JP'); }
 
+// Lightweight DOM confetti celebration (used on wins / big unlocks).
+export function confettiBurst(count = 40) {
+  const colors = ['#ff5d5d', '#ffa93d', '#ffe14d', '#5ee86e', '#43d9e8', '#5b8bff', '#b06bff', '#ff6bd4'];
+  const root = document.createElement('div');
+  root.className = 'dom-confetti';
+  for (let i = 0; i < count; i++) {
+    const s = document.createElement('span');
+    s.style.left = `${Math.random() * 100}%`;
+    s.style.background = colors[(Math.random() * colors.length) | 0];
+    s.style.width = s.style.height = `${6 + Math.random() * 8}px`;
+    s.style.animationDuration = `${1.6 + Math.random() * 1.4}s`;
+    s.style.animationDelay = `${Math.random() * 0.5}s`;
+    if (Math.random() < 0.4) s.style.borderRadius = '50%';
+    root.appendChild(s);
+  }
+  document.body.appendChild(root);
+  setTimeout(() => root.remove(), 3600);
+}
+
 export function updateTopbar() {
   const u = session.user;
   $('#userName').textContent = u ? u.username : 'ゲスト';
