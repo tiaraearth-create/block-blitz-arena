@@ -495,6 +495,13 @@ body {
   font-size: 15px; font-weight: 800; transition: border-color .15s, transform .12s;
 }
 .gem-pack:hover { border-color: var(--cyan); transform: translateY(-2px); }
+.gem-pack.disabled { opacity: 0.45; cursor: default; pointer-events: none; }
+.coming-soon-banner {
+  background: rgba(255,169,61,0.12); border: 1px dashed rgba(255,169,61,0.5);
+  border-radius: 12px; padding: 12px; text-align: center;
+  font-weight: 900; color: var(--yellow); margin-bottom: 12px;
+}
+.coming-soon-banner small { font-weight: 700; color: var(--muted); }
 .gem-pack .gp-gems small { color: var(--green); font-size: 11px; margin-left: 4px; }
 .gem-pack .gp-price { color: var(--gold); }
 .title-list { max-height: 55dvh; overflow-y: auto; }
@@ -589,7 +596,8 @@ body {
   background: radial-gradient(120% 100% at 50% 0%, #1c2547, #0b0e1f 70%);
   cursor: pointer; transition: opacity .45s ease;
 }
-.tap-start.ts-out { opacity: 0; pointer-events: none; }
+/* keep intercepting pointer events during the fade — prevents click-through */
+.tap-start.ts-out { opacity: 0; }
 .ts-blocks { display: grid; grid-template-columns: repeat(2, 56px); gap: 10px; }
 .ts-blocks span {
   width: 56px; height: 56px; border-radius: 14px;

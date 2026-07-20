@@ -366,7 +366,7 @@ const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 const stripeEnabled = () => STRIPE_KEY.length > 0;
 
 app.get('/api/gempacks', (_req, res) => {
-  res.json({ packs: GEM_PACKS, mode: stripeEnabled() ? 'stripe' : 'demo' });
+  res.json({ packs: GEM_PACKS, mode: stripeEnabled() ? 'stripe' : 'coming_soon' });
 });
 
 function grantPack(user, pack, status, extId = null) {
@@ -430,9 +430,8 @@ app.post('/api/purchase', requireAuth, maintenanceGuard, async (req, res) => {
     }
   }
 
-  // Demo gateway (no PSP configured): grant instantly, no real charge.
-  const total = grantPack(req.user, pack, 'demo_completed');
-  res.json({ user: publicUser(req.user), granted: total, demo: true });
+  // No payment provider configured — purchases are under construction.
+  res.status(503).json({ error: '💳 課金機能は製作中です。もうしばらくお待ちください！' });
 });
 
 // Stripe webhook: the ONLY place real purchases grant gems.

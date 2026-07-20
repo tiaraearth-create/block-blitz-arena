@@ -202,13 +202,30 @@ function startAudioNow() {
   if (!audio.playing) audio.playTrack(audio.trackName || 'menu');
 }
 
-function dismissSplash() {
+function dismissSplash(e) {
+  // Swallow the event completely so the tap can NEVER reach buttons
+  // underneath the splash (the splash keeps intercepting during its fade).
+  if (e) { e.preventDefault(); e.stopPropagation(); }
   const splash = $('#tapStart');
   if (!splash.classList.contains('hidden')) {
     splash.classList.add('ts-out');
-    setTimeout(() => splash.classList.add('hidden'), 450);
+    setTimeout(() => splash.classList.add('hidden'), 600);
   }
   startAudioNow();
+}
+
+{
+  const splash = $('#tapStart');
+  // Block every pointer/click event on the splash from bubbling through.
+  splash.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); });
+  splash.addEventListener('pointerup', e => { e.preventDefault(); e.stopPropagation(); });
+  splash.addEventListener('click', dismissSplash);
+  window.addEventListener('keydown', function onKey(e) {
+    if (!splash.classList.contains('hidden')) dismissSplash();
+    window.removeEventListener('keydown', onKey);
+  });
+  // Fallback audio unlock for the no-splash (autoplay-allowed) case.
+  window.addEventListener('pointerdown', () => startAudioNow(), { once: true });
 }
 
 (async () => {
@@ -222,9 +239,6 @@ function dismissSplash() {
     $('#tapStart').classList.remove('hidden');
   }
 })();
-
-window.addEventListener('pointerdown', dismissSplash, { once: true });
-window.addEventListener('keydown', dismissSplash, { once: true });
 
 // live online counter on the menu
 async function pollStatus() {

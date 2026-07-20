@@ -125,49 +125,28 @@ export async function showGemShop() {
   const m = showModal(`
     <h2>💎 ジェムショップ</h2>
     <p class="muted center" style="margin-bottom:12px">所持ジェム: <b style="color:var(--cyan)">${fmt(session.user.gems)}</b></p>
+    ${isStripe ? '' : `
+    <div class="coming-soon-banner">🚧 課金機能は製作中です 🚧<br><small>もうしばらくお待ちください</small></div>`}
     <div class="form-col">
       ${gemPacks.map(p => `
-        <button class="gem-pack" data-pack="${p.id}">
+        <button class="gem-pack ${isStripe ? '' : 'disabled'}" data-pack="${p.id}" ${isStripe ? '' : 'disabled'}>
           <span class="gp-gems">💎 ${fmt(p.gems)}${p.bonus ? `<small> +${fmt(p.bonus)}ボーナス</small>` : ''}</span>
           <span class="gp-price">¥${fmt(p.priceJpy)}</span>
         </button>`).join('')}
       ${isStripe
         ? '<p class="muted center" style="font-size:11px">🔒 決済はStripeの安全なページで行われます</p>'
-        : '<p class="muted center" style="font-size:11px">⚠️ 現在は<b>デモ決済</b>です。実際の請求は発生しません。<br>本番課金はStripeキーを設定すると有効になります（README参照）</p>'}
+        : ''}
     </div>`);
+  if (!isStripe) return;
   m.querySelectorAll('[data-pack]').forEach(btn => {
     btn.onclick = async () => {
       const pack = gemPacks.find(p => p.id === btn.dataset.pack);
-      if (isStripe) {
-        // Real payment: hand off to Stripe's hosted checkout page.
-        try {
-          const res = await api('/api/purchase', { method: 'POST', body: { packId: pack.id } });
-          if (res.checkoutUrl) { location.href = res.checkoutUrl; return; }
-          toast('決済ページを開けませんでした', 'err');
-        } catch (err) { audio.error(); toast(err.message, 'err'); }
-        return;
-      }
-      const c = showModal(`
-        <h2>💳 購入確認（デモ）</h2>
-        <div class="result-stats">
-          <div class="rs-row"><span>💎 ジェム</span><b>${fmt(pack.gems + pack.bonus)}</b></div>
-          <div class="rs-row"><span>価格</span><b>¥${fmt(pack.priceJpy)}</b></div>
-          <div class="rs-row"><span>決済方法</span><b>デモ（請求なし）</b></div>
-        </div>
-        <div class="modal-buttons">
-          <button class="btn btn-ghost" id="gpNo">やめる</button>
-          <button class="btn btn-gold" id="gpYes">購入する</button>
-        </div>`);
-      c.querySelector('#gpNo').onclick = () => { closeModal(); showGemShop(); };
-      c.querySelector('#gpYes').onclick = async () => {
-        try {
-          const res = await api('/api/purchase', { method: 'POST', body: { packId: pack.id } });
-          audio.coin();
-          updateTopbar();
-          closeModal();
-          toast(`💎 ${fmt(res.granted)}ジェムを獲得しました！（デモ決済）`, 'ok', 3000);
-        } catch (err) { audio.error(); toast(err.message, 'err'); }
-      };
+      // Real payment: hand off to Stripe's hosted checkout page.
+      try {
+        const res = await api('/api/purchase', { method: 'POST', body: { packId: pack.id } });
+        if (res.checkoutUrl) { location.href = res.checkoutUrl; return; }
+        toast('決済ページを開けませんでした', 'err');
+      } catch (err) { audio.error(); toast(err.message, 'err'); }
     };
   });
 }
