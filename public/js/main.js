@@ -2,7 +2,7 @@
 import { session, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, cancelMatchmaking, quitCurrent, rerollCurrent } from './modes.js';
+import { startSolo, startVsAi, startOnline, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot } from './modes.js';
 import { showAuthModal, showSettingsModal, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions } from './screens.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
@@ -47,7 +47,20 @@ $('#btnVsAi').onclick = () => {
   });
 };
 
-$('#btnOnline').onclick = () => { audio.click(); startOnline(); };
+$('#btnOnline').onclick = () => {
+  audio.click();
+  const m = showModal(`
+    <h2>🌐 オンライン対戦</h2>
+    <div class="form-col">
+      <button class="btn btn-primary btn-big" data-online="duel">⚔️ 1v1 ランクマッチ</button>
+      <button class="btn btn-online btn-big" data-online="team">👥 2v2 チーム戦</button>
+      <button class="btn btn-gold btn-big" data-online="custom">🔧 カスタムルーム</button>
+      <p class="muted center" style="font-size:12px">人数が足りないときはボットが自動参加します</p>
+    </div>`);
+  m.querySelectorAll('[data-online]').forEach(btn => {
+    btn.onclick = () => { closeModal(); startOnline(btn.dataset.online); };
+  });
+};
 $('#btnCancelQueue').onclick = () => { audio.click(); cancelMatchmaking(); };
 
 $('#btnLeaderboard').onclick = () => { audio.click(); openLeaderboard(); };
@@ -82,6 +95,9 @@ applySettings();
 
 // reroll power-up
 $('#btnReroll').onclick = () => rerollCurrent();
+
+// autopilot (admin only)
+$('#btnAuto').onclick = () => toggleAutopilot();
 
 // unlock audio context on first interaction
 window.addEventListener('pointerdown', () => audio.ensure(), { once: true });

@@ -90,10 +90,15 @@ export class BattleClient {
     }
   }
 
-  queue() { this.send({ type: 'queue' }); }
+  queue(mode = 'duel') { this.send({ type: 'queue', mode }); }
   cancelQueue() { this.send({ type: 'cancel_queue' }); }
   sendState(score, combo, lines, grid) { this.send({ type: 'state', score, combo, lines, grid }); }
-  finish(score) { this.send({ type: 'finish', score }); }
+  finish(score, lines, combo) { this.send({ type: 'finish', score, lines, combo }); }
+  createRoom(settings) { this.send({ type: 'create_room', settings }); }
+  joinRoom(code) { this.send({ type: 'join_room', code }); }
+  setRoom(settings) { this.send({ type: 'room_set', settings }); }
+  leaveRoom() { this.send({ type: 'room_leave' }); }
+  startRoom() { this.send({ type: 'room_start' }); }
 
   close() {
     if (this.ws) { try { this.ws.close(); } catch {} }

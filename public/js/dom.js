@@ -4,7 +4,7 @@ import { session } from './net.js';
 export const $ = sel => document.querySelector(sel);
 export const $$ = sel => [...document.querySelectorAll(sel)];
 
-const SCREENS = ['menu', 'game', 'matchmaking', 'leaderboard', 'shop', 'battlepass', 'admin'];
+const SCREENS = ['menu', 'game', 'matchmaking', 'room', 'leaderboard', 'shop', 'battlepass', 'admin'];
 
 export function showScreen(name) {
   for (const s of SCREENS) {

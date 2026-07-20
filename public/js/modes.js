@@ -1,4 +1,5 @@
-// Game mode controllers: Solo, VS AI, Online 1v1.
+// Game mode controllers: Solo, VS AI, Online (1v1 / 2v2 team / custom rooms),
+// plus the admin-only autopilot.
 import { Engine } from './engine.js';
 import { GameView, MiniBoard } from './game.js';
 import { chooseMove, AI_LEVELS } from './ai.js';
@@ -33,6 +34,10 @@ function equippedTheme() {
 function guestBest() { return Number(localStorage.getItem('bba_best') || 0); }
 function setGuestBest(v) { localStorage.setItem('bba_best', String(v)); }
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
 async function submitResult(payload) {
   if (!session.user) return null;
   try {
@@ -59,13 +64,21 @@ export function quitCurrent() {
   if (currentMode) currentMode.quit();
 }
 
-// ---- reroll power-up (1 per game) ----
+// ---------------------------------------------------------------------------
+// Reroll power-up (1 per game)
+// ---------------------------------------------------------------------------
 
 function updateRerollHud(engine) {
   const btn = $('#btnReroll');
   btn.classList.remove('hidden');
   $('#rerollLeft').textContent = engine.rerolls;
   btn.classList.toggle('off', engine.rerolls <= 0);
+}
+
+function handleEngineOver() {
+  if (!currentMode) return;
+  if (currentMode.onTopOut) currentMode.onTopOut();
+  else currentMode.finish();
 }
 
 export function rerollCurrent() {
@@ -79,10 +92,67 @@ export function rerollCurrent() {
   audio.coin();
   toast('🔄 ピースを引き直しました！', 'ok', 1400);
   updateRerollHud(e);
-  if (e.over) {
-    if (currentMode.onTopOut) currentMode.onTopOut();
-    else currentMode.finish();
+  if (e.over) handleEngineOver();
+}
+
+// ---------------------------------------------------------------------------
+// Autopilot (admin only): the strongest AI plays your board, any mode.
+// ---------------------------------------------------------------------------
+
+const autopilot = { on: false, speed: 1, timer: null };
+
+function isAdmin() { return !!session.user && session.user.role === 'admin'; }
+
+function updateAutoBtn() {
+  const btn = $('#btnAuto');
+  btn.classList.toggle('hidden', !isAdmin());
+  $('#autoState').textContent = autopilot.on ? `x${autopilot.speed}` : 'OFF';
+  btn.classList.toggle('auto-on', autopilot.on);
+}
+
+export function toggleAutopilot() {
+  if (!isAdmin()) return;
+  audio.click();
+  if (!autopilot.on) {
+    autopilot.on = true;
+    autopilot.speed = 1;
+    toast('🤖 オートパイロット起動（再タップで加速）', 'ok', 2000);
+  } else if (autopilot.speed < 4) {
+    autopilot.speed *= 2;
+    toast(`🤖 速度 x${autopilot.speed}`, '', 1200);
+  } else {
+    stopAutopilot();
+    toast('🤖 オートパイロット停止', '', 1500);
+    return;
   }
+  updateAutoBtn();
+  runAutopilot();
+}
+
+function runAutopilot() {
+  clearTimeout(autopilot.timer);
+  if (!autopilot.on) return;
+  autopilot.timer = setTimeout(() => {
+    const m = currentMode;
+    if (m && m.engine && view && view.running && !view.inputLocked && !m.engine.over) {
+      const mv = chooseMove(m.engine, 'oni');
+      if (mv) {
+        const r = m.engine.place(mv.index, mv.row, mv.col);
+        if (r) view.applyResult(r);   // full effects + mode callbacks
+      } else if (m.engine.rerolls > 0) {
+        m.engine.reroll();
+        updateRerollHud(m.engine);
+        if (m.engine.over) handleEngineOver();
+      }
+    }
+    runAutopilot();
+  }, 800 / autopilot.speed);
+}
+
+export function stopAutopilot() {
+  autopilot.on = false;
+  clearTimeout(autopilot.timer);
+  updateAutoBtn();
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +175,7 @@ class SoloMode {
     v.onGameOver = () => this.finish();
     this.updateHud();
     updateRerollHud(this.engine);
+    updateAutoBtn();
     v.start();
     audio.startMusic();
   }
@@ -123,6 +194,8 @@ class SoloMode {
   onPlace() { this.updateHud(); }
 
   async finish() {
+    if (this.ended) return;
+    this.ended = true;
     getView().inputLocked = true;
     const e = this.engine;
     if (e.score > guestBest()) setGuestBest(e.score);
@@ -144,7 +217,7 @@ class SoloMode {
         <button class="btn btn-primary" id="rAgain">もう一度</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
-    m.querySelector('#rAgain').onclick = () => { closeModal(); this.start(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
 
   quit() { this.finish(); }
@@ -152,22 +225,54 @@ class SoloMode {
 }
 
 // ---------------------------------------------------------------------------
-// Timed versus base (shared by AI and Online)
+// Timed versus base (shared by AI battles and online battles)
 // ---------------------------------------------------------------------------
 
 class VersusBase {
-  setupHud(oppName) {
+  setupHud(duration) {
     showScreen('game');
     $('#oppPanel').classList.remove('hidden');
     $('#hudTimer').classList.remove('hidden');
-    $('#oppName').textContent = oppName;
-    $('#oppScore').textContent = '0';
-    $('#oppCombo').textContent = '';
-    this.miniBoard = new MiniBoard($('#oppCanvas'), { skinId: 'skin_default' });
-    this.miniBoard.setGrid(new Array(64).fill(0));
-    this.timeLeft = MATCH_SECONDS;
+    $('#teamTotals').classList.add('hidden');
+    this.timeLeft = duration;
     this.updateTimerHud();
+    this.scores = {};       // slot -> latest score of others
+    this.miniBoards = {};   // slot -> MiniBoard
     this.updateBars(0, 0);
+  }
+
+  // others: [{ slot, name, isAlly }]
+  buildPanels(others) {
+    const cards = $('#oppCards');
+    cards.innerHTML = '';
+    cards.classList.toggle('compact', others.length > 1);
+    for (const o of others) {
+      const card = document.createElement('div');
+      card.className = `opp-card ${o.isAlly ? 'ally' : ''}`;
+      card.innerHTML = `
+        <canvas></canvas>
+        <div class="opp-name">${o.isAlly ? '🤝 ' : ''}${escapeHtml(o.name)}</div>
+        <div class="opp-score" data-slot-score="${o.slot}">0</div>
+        <div class="opp-combo" data-slot-combo="${o.slot}"></div>`;
+      cards.appendChild(card);
+      this.miniBoards[o.slot] = new MiniBoard(card.querySelector('canvas'));
+      this.miniBoards[o.slot].setGrid(new Array(64).fill(0));
+      this.scores[o.slot] = 0;
+    }
+  }
+
+  updateOpp(slot, state) {
+    this.scores[slot] = state.score || 0;
+    const sc = document.querySelector(`[data-slot-score="${slot}"]`);
+    if (sc) sc.textContent = fmt(state.score || 0);
+    if (state.combo >= 2) {
+      const cb = document.querySelector(`[data-slot-combo="${slot}"]`);
+      if (cb) {
+        cb.textContent = `${state.combo} COMBO!`;
+        setTimeout(() => { cb.textContent = ''; }, 1200);
+      }
+    }
+    if (state.grid && this.miniBoards[slot]) this.miniBoards[slot].setGrid(state.grid);
   }
 
   updateTimerHud() {
@@ -179,8 +284,11 @@ class VersusBase {
   }
 
   startTimer(onEnd) {
+    // Wall-clock based: stays accurate even when background tabs throttle timers.
+    if (this.timerInt) clearInterval(this.timerInt);
+    this.endAt = Date.now() + this.timeLeft * 1000;
     this.timerInt = setInterval(() => {
-      this.timeLeft -= 0.25;
+      this.timeLeft = Math.max(0, (this.endAt - Date.now()) / 1000);
       this.updateTimerHud();
       if (this.timeLeft <= 0) {
         clearInterval(this.timerInt);
@@ -189,6 +297,8 @@ class VersusBase {
       }
     }, 250);
   }
+
+  stopTimer() { if (this.timerInt) { clearInterval(this.timerInt); this.timerInt = null; } }
 
   updateBars(me, opp) {
     const total = me + opp;
@@ -202,8 +312,6 @@ class VersusBase {
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = engine.streak >= 2 ? `${engine.streak} COMBO` : 'SCORE';
   }
-
-  stopTimer() { if (this.timerInt) { clearInterval(this.timerInt); this.timerInt = null; } }
 }
 
 // ---------------------------------------------------------------------------
@@ -218,9 +326,12 @@ class AiMode extends VersusBase {
     this.cfg = AI_LEVELS[level];
   }
 
+  aiLabel() { return `${this.cfg.avatar} AI (${this.cfg.name})`; }
+
   start() {
     const seed = (Math.random() * 2 ** 31) | 0;
-    this.setupHud(`${this.cfg.avatar} AI (${this.cfg.name})`);
+    this.setupHud(MATCH_SECONDS);
+    this.buildPanels([{ slot: 1, name: this.aiLabel(), isAlly: false }]);
     this.startedAt = Date.now();
     const v = getView();
     this.engine = new Engine(seed);
@@ -231,6 +342,7 @@ class AiMode extends VersusBase {
     v.onGameOver = () => this.onTopOut();
     this.updateMyHud(this.engine);
     updateRerollHud(this.engine);
+    updateAutoBtn();
     v.start();
     audio.startMusic();
 
@@ -261,15 +373,15 @@ class AiMode extends VersusBase {
       if (this.ended) return;
       if (this.aiEngine.over) this.aiEngine.reviveBoard();
       const move = chooseMove(this.aiEngine, this.level);
+      let combo = 0;
       if (move) {
         const r = this.aiEngine.place(move.index, move.row, move.col);
-        if (r && r.lineCount > 0 && Math.random() < 0.5) {
-          $('#oppCombo').textContent = r.streak >= 2 ? `${r.streak} COMBO!` : 'LINE CLEAR!';
-          setTimeout(() => { $('#oppCombo').textContent = ''; }, 1200);
-        }
+        if (r && r.lineCount > 0) combo = r.streak;
       }
-      this.miniBoard.setGrid(this.aiEngine.snapshot());
-      $('#oppScore').textContent = fmt(this.aiEngine.score);
+      this.updateOpp(1, {
+        score: this.aiEngine.score, combo,
+        grid: this.aiEngine.snapshot(),
+      });
       this.updateBars(this.engine.score, this.aiEngine.score);
       this.aiLoop();
     }, this.cfg.moveMs * jitter);
@@ -281,7 +393,6 @@ class AiMode extends VersusBase {
   }
 
   onTopOut() {
-    // In timed battles a full board revives instead of ending the game.
     if (this.ended) return;
     toast('ボードリセット！スコアは維持されます', '', 1800);
     this.engine.reviveBoard();
@@ -297,7 +408,6 @@ class AiMode extends VersusBase {
     const outcome = me > opp ? 'win' : me < opp ? 'lose' : 'draw';
     if (outcome === 'win') audio.victory(); else audio.gameOver();
 
-    // Beating "hard" unlocks the hidden difficulty.
     if (outcome === 'win' && this.level === 'hard' && localStorage.getItem('bba_oni') !== '1') {
       localStorage.setItem('bba_oni', '1');
       setTimeout(() => toast('👹 隠し難易度「おに」が解放された…！', 'announce', 4000), 1200);
@@ -316,7 +426,7 @@ class AiMode extends VersusBase {
       <div class="result-banner ${outcome}">${banners[outcome]}</div>
       <div class="result-stats">
         <div class="rs-row"><span>あなた</span><b>${fmt(me)}</b></div>
-        <div class="rs-row"><span>${this.cfg.avatar} AI (${this.cfg.name})</span><b>${fmt(opp)}</b></div>
+        <div class="rs-row"><span>${this.aiLabel()}</span><b>${fmt(opp)}</b></div>
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
@@ -341,21 +451,29 @@ class AiMode extends VersusBase {
 }
 
 // ---------------------------------------------------------------------------
-// Online 1v1
+// Online: 1v1 duel / 2v2 team / custom rooms — all via the battle server.
 // ---------------------------------------------------------------------------
 
 class OnlineMode extends VersusBase {
-  constructor() {
+  constructor(kind) {
     super();
     this.mode = 'pvp';
+    this.kind = kind;               // 'duel' | 'team' | 'custom'
     this.client = new BattleClient();
   }
 
   async start() {
-    showScreen('matchmaking');
-    $('#mmStatus').textContent = 'サーバーに接続中…';
+    if (this.kind === 'custom') {
+      showScreen('room');
+      this.showJoinView();
+      this.wireRoomButtons();
+    } else {
+      showScreen('matchmaking');
+      $('#mmStatus').textContent = 'サーバーに接続中…';
+    }
     try {
       const hello = await this.client.connect(localStorage.getItem('bba_guest_name') || undefined);
+      this.onlineCount = hello.online;
       $('#mmOnline').textContent = hello.online;
       if (!session.user) localStorage.setItem('bba_guest_name', hello.name);
     } catch (err) {
@@ -365,13 +483,15 @@ class OnlineMode extends VersusBase {
     }
 
     this.client
-      .on('queued', () => { $('#mmStatus').textContent = '対戦相手を探しています…'; })
       .on('match_found', msg => this.onMatchFound(msg))
       .on('opp_state', msg => this.onOppState(msg))
       .on('result', msg => this.onResult(msg))
       .on('announce', msg => toast(`📢 ${msg.message}`, 'announce', 5000))
+      .on('room_update', msg => this.onRoomUpdate(msg))
+      .on('room_error', msg => { audio.error(); toast(msg.error, 'err'); })
       .on('close', () => {
-        if (!this.ended && this.inMatch) {
+        if (this.ended) return;
+        if (this.inMatch || this.kind === 'custom') {
           toast('サーバーとの接続が切れました', 'err');
           this.ended = true;
           this.destroy();
@@ -379,18 +499,107 @@ class OnlineMode extends VersusBase {
         }
       });
 
-    $('#mmStatus').textContent = '対戦相手を探しています…';
-    this.client.queue();
+    if (this.kind !== 'custom') {
+      $('#mmStatus').textContent = this.kind === 'team'
+        ? 'チームメンバーを探しています…'
+        : '対戦相手を探しています…';
+      $('#mmSub').innerHTML = this.kind === 'team'
+        ? 'オンライン: <span id="mmOnline">-</span>人 ・ 人数が足りない分はボットが参加します'
+        : 'オンライン: <span id="mmOnline">-</span>人 ・ 10秒待つとボットが相手になります';
+      $('#mmOnline').textContent = this.onlineCount ?? '-';
+      this.client.queue(this.kind);
+    }
   }
 
+  // ---- custom room lobby ----
+
+  showJoinView() {
+    $('#roomJoin').classList.remove('hidden');
+    $('#roomLobby').classList.add('hidden');
+  }
+
+  wireRoomButtons() {
+    $('#btnCreateRoom').onclick = () => { audio.click(); this.client.createRoom({}); };
+    const join = () => {
+      const code = $('#roomCodeInput').value.trim();
+      if (code.length !== 4) { toast('4文字のコードを入力してください', 'err'); return; }
+      audio.click();
+      this.client.joinRoom(code);
+    };
+    $('#btnJoinRoom').onclick = join;
+    $('#roomCodeInput').onkeydown = e => { if (e.key === 'Enter') join(); };
+    $('#btnLeaveRoom').onclick = () => { audio.click(); this.client.leaveRoom(); this.showJoinView(); };
+    $('#btnStartRoom').onclick = () => { audio.click(); this.client.startRoom(); };
+    $('#btnRoomBack').onclick = () => { audio.click(); this.quit(); };
+  }
+
+  onRoomUpdate(msg) {
+    this.roomInfo = msg;
+    $('#roomJoin').classList.add('hidden');
+    $('#roomLobby').classList.remove('hidden');
+    $('#roomCodeLabel').textContent = msg.code;
+
+    $('#roomPlayers').innerHTML = msg.players.map((p, i) => `
+      <div class="room-player ${p.isYou ? 'me' : ''}">
+        <span class="rp-team">${msg.settings.team ? (i < 2 ? '🟦' : '🟥') : '⚔️'}</span>
+        <span class="rp-name">${escapeHtml(p.name)}${p.isYou ? '（あなた）' : ''}</span>
+        ${p.isHost ? '<span class="rp-host">👑 ホスト</span>' : ''}
+      </div>`).join('');
+
+    const host = msg.youAreHost;
+    const s = msg.settings;
+    const dis = host ? '' : 'disabled';
+    $('#roomSettings').innerHTML = `
+      <div class="settings-row"><label>⏱️ 試合時間</label><div class="seg" data-rs="duration">
+        ${[60, 120, 180].map(d => `<button data-v="${d}" ${s.duration === d ? 'class="active"' : ''} ${dis}>${d / 60}分</button>`).join('')}
+      </div></div>
+      <div class="settings-row"><label>👥 モード</label><div class="seg" data-rs="team">
+        <button data-v="false" ${!s.team ? 'class="active"' : ''} ${dis}>1v1</button>
+        <button data-v="true" ${s.team ? 'class="active"' : ''} ${dis}>2v2チーム</button>
+      </div></div>
+      <div class="settings-row"><label>🤖 ボット補充</label><input type="checkbox" id="rsBotFill" ${s.botFill ? 'checked' : ''} ${dis}></div>
+      <div class="settings-row"><label>💪 ボットの強さ</label><div class="seg" data-rs="botLevel">
+        ${[['easy', '弱'], ['normal', '中'], ['hard', '強']].map(([v, l]) =>
+          `<button data-v="${v}" ${s.botLevel === v ? 'class="active"' : ''} ${dis}>${l}</button>`).join('')}
+      </div></div>`;
+    $('#btnStartRoom').classList.toggle('hidden', !host);
+
+    if (host) {
+      $('#roomSettings').querySelectorAll('.seg button').forEach(b => {
+        b.onclick = () => {
+          const key = b.parentElement.dataset.rs;
+          let v = b.dataset.v;
+          if (key === 'duration') v = Number(v);
+          if (key === 'team') v = v === 'true';
+          audio.click();
+          this.client.setRoom({ [key]: v });
+        };
+      });
+      const bf = $('#rsBotFill');
+      if (bf) bf.onchange = e => this.client.setRoom({ botFill: e.target.checked });
+    }
+  }
+
+  // ---- match ----
+
   onMatchFound(msg) {
+    if (this.inMatch || this.ended) return;   // guard against duplicates
     this.inMatch = true;
-    this.oppInfo = msg.opponent;
-    const ratingStr = msg.opponent.rating != null ? ` (R${msg.opponent.rating})` : '';
-    this.setupHud(`${msg.opponent.name}${ratingStr}`);
-    this.timeLeft = msg.duration || MATCH_SECONDS;
-    this.updateTimerHud();
-    this.startedAt = Date.now();
+    this.matchInfo = msg;
+    this.you = msg.you;
+    this.isTeam = msg.mode === 'team';
+
+    const others = msg.players.filter(p => !p.isYou).map(p => ({
+      slot: p.slot,
+      name: `${p.name}${p.rating != null ? ` (R${p.rating})` : ''}`,
+      isAlly: this.isTeam && p.team === msg.you.team,
+    }));
+    this.setupHud(msg.duration || MATCH_SECONDS);
+    this.buildPanels(others);
+    if (this.isTeam) {
+      $('#teamTotals').classList.remove('hidden');
+      this.refreshTeamHud();
+    }
 
     const v = getView();
     this.engine = new Engine(msg.seed);
@@ -400,15 +609,37 @@ class OnlineMode extends VersusBase {
     v.onGameOver = () => this.onTopOut();
     this.updateMyHud(this.engine);
     updateRerollHud(this.engine);
+    updateAutoBtn();
     v.start();
     audio.startMusic();
-    toast(`⚔️ ${msg.opponent.name} とマッチしました！`, 'ok');
+    toast(this.isTeam ? '👥 チーム戦スタート！' : '⚔️ マッチしました！', 'ok');
 
     countdownOverlay(msg.countdown || 3, () => {
       v.inputLocked = false;
       this.startTimer(() => this.timeUp());
       this.stateInt = setInterval(() => this.pushState(), 900);
     }, audio);
+  }
+
+  teamTotalsCalc() {
+    const my = this.engine ? this.engine.score : 0;
+    let allies = 0, theirs = 0;
+    for (const p of this.matchInfo.players) {
+      if (p.isYou) continue;
+      const s = this.scores[p.slot] || 0;
+      if (this.isTeam && p.team === this.you.team) allies += s;
+      else theirs += s;
+    }
+    return { mine: my + allies, theirs };
+  }
+
+  refreshTeamHud() {
+    const { mine, theirs } = this.teamTotalsCalc();
+    this.updateBars(mine, theirs);
+    if (this.isTeam) {
+      $('#teamTotals').innerHTML =
+        `<b class="tt-a">${fmt(mine)}</b><span class="muted"> vs </span><b class="tt-b">${fmt(theirs)}</b>`;
+    }
   }
 
   pushState() {
@@ -418,19 +649,13 @@ class OnlineMode extends VersusBase {
 
   onPlace() {
     this.updateMyHud(this.engine);
-    this.updateBars(this.engine.score, this.oppScore || 0);
+    this.refreshTeamHud();
     this.pushState();
   }
 
   onOppState(msg) {
-    this.oppScore = msg.score;
-    $('#oppScore').textContent = fmt(msg.score);
-    if (msg.combo >= 2) {
-      $('#oppCombo').textContent = `${msg.combo} COMBO!`;
-      setTimeout(() => { $('#oppCombo').textContent = ''; }, 1200);
-    }
-    if (msg.grid) this.miniBoard.setGrid(msg.grid);
-    this.updateBars(this.engine ? this.engine.score : 0, msg.score);
+    this.updateOpp(msg.slot, msg);
+    this.refreshTeamHud();
   }
 
   onTopOut() {
@@ -444,14 +669,19 @@ class OnlineMode extends VersusBase {
     if (this.ended) return;
     getView().inputLocked = true;
     clearInterval(this.stateInt);
-    this.client.finish(this.engine.score);
-    this.waitModal = showModal(`
+    this.client.finish(this.engine.score, this.engine.linesCleared, this.engine.maxCombo);
+    showModal(`
       <h2>⌛ 集計中…</h2>
-      <p class="muted center">相手の結果を待っています</p>`, { dismissable: false });
-    // Safety: if no result within 15s, bail out.
+      <p class="muted center">全員の結果を待っています</p>`, { dismissable: false });
     this.resultTimeout = setTimeout(() => {
-      if (!this.ended) { this.ended = true; this.destroy(); closeModal(); toast('結果を受信できませんでした', 'err'); endToMenu(); }
-    }, 15000);
+      if (!this.ended) {
+        this.ended = true;
+        this.destroy();
+        closeModal();
+        toast('結果を受信できませんでした', 'err');
+        endToMenu();
+      }
+    }, 20000);
   }
 
   onResult(msg) {
@@ -465,36 +695,55 @@ class OnlineMode extends VersusBase {
     if (msg.outcome === 'win') audio.victory(); else audio.gameOver();
 
     const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
-    const reasonNote = msg.reason && msg.reason.startsWith('forfeit') ? '<p class="muted center">相手が切断しました</p>' : '';
+    const reasonNote =
+      msg.reason === 'forfeit' ? '<p class="muted center">相手が切断しました</p>' :
+      msg.reason === 'abandoned' ? '<p class="muted center">対戦が中断されました</p>' : '';
+
+    let scoreRows;
+    if (msg.mode === 'team') {
+      const teamRow = t => {
+        const members = msg.players.filter(p => p.team === t);
+        const names = members.map(p => `${p.slot === msg.you.slot ? '⭐' : p.isBot ? '' : '👤'}${escapeHtml(p.name)} ${fmt(p.score)}`).join('<br>');
+        const label = t === msg.you.team ? 'あなたのチーム' : '相手チーム';
+        return `<div class="rs-row team-row"><span>${label}<br><small class="muted">${names}</small></span><b>${fmt(msg.teamScores[t])}</b></div>`;
+      };
+      scoreRows = teamRow(msg.you.team) + teamRow(1 - msg.you.team);
+    } else {
+      scoreRows = msg.players
+        .sort((a, b) => (a.slot === msg.you.slot ? -1 : b.slot === msg.you.slot ? 1 : 0))
+        .map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? 'あなた' : escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`)
+        .join('');
+    }
+
     const ratingRow = msg.ratingDelta
       ? `<div class="rs-row"><span>📈 レート変動</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}</b></div>`
       : '';
+
     const m = showModal(`
       <div class="result-banner ${msg.outcome}">${banners[msg.outcome]}</div>
       ${reasonNote}
       <div class="result-stats">
-        <div class="rs-row"><span>あなた</span><b>${fmt(msg.myScore)}</b></div>
-        <div class="rs-row"><span>${this.oppInfo ? this.oppInfo.name : '相手'}</span><b>${fmt(msg.oppScore)}</b></div>
+        ${scoreRows}
         ${ratingRow}
         ${rewardsRows(msg.rewards)}
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn btn-primary" id="rAgain">もう一戦</button>
+        <button class="btn btn-primary" id="rAgain">${this.kind === 'custom' ? 'ルームへ' : 'もう一戦'}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
-    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline(this.kind); };
   }
 
   quit() {
     if (this.inMatch && !this.ended) {
-      // Forfeit by disconnecting.
       this.ended = true;
       this.destroy();
       toast('対戦を離脱しました', '', 1800);
       endToMenu();
     } else {
       this.client.cancelQueue();
+      this.client.leaveRoom();
       this.destroy();
       endToMenu();
     }
@@ -515,6 +764,7 @@ class OnlineMode extends VersusBase {
 function endToMenu() {
   if (currentMode) { currentMode.destroy(); currentMode = null; }
   if (view) view.stop();
+  stopAutopilot();
   audio.stopMusic();
   showScreen('menu');
 }
@@ -531,9 +781,9 @@ export function startVsAi(level) {
   currentMode.start();
 }
 
-export function startOnline() {
+export function startOnline(kind = 'duel') {
   if (currentMode) currentMode.destroy();
-  currentMode = new OnlineMode();
+  currentMode = new OnlineMode(kind);
   currentMode.start();
 }
 

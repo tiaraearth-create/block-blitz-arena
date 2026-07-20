@@ -6,9 +6,9 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
-import { WebSocketServer } from 'ws';
 
 import { loadDb, saveDb, flushDb, DATA_DIR } from './db.js';
+import { initBattle } from './battle.js';
 import {
   hashPassword, verifyPassword, issueToken, revokeToken,
   authMiddleware, requireAuth, requireAdmin, userFromToken,
@@ -355,8 +355,8 @@ app.post('/api/admin/season/new', requireAuth, requireAdmin, (req, res) => {
 app.post('/api/admin/broadcast', requireAuth, requireAdmin, (req, res) => {
   const message = String(req.body.message || '').slice(0, 200);
   if (!message) return res.status(400).json({ error: 'メッセージが空です' });
-  broadcastAll({ type: 'announce', message, from: req.user.username });
-  res.json({ ok: true, delivered: clients.size });
+  battle.broadcastAll({ type: 'announce', message, from: req.user.username });
+  res.json({ ok: true, delivered: battle.clients.size });
 });
 
 app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
@@ -365,199 +365,25 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     totalUsers: users.length,
     bannedUsers: users.filter(u => u.banned).length,
     totalGames: users.reduce((a, u) => a + u.stats.gamesPlayed, 0),
-    online: clients.size,
-    inQueue: queue.length,
-    activeMatches: matches.size,
+    online: battle.clients.size,
+    inQueue: battle.queueSize(),
+    activeMatches: battle.matches.size,
+    openRooms: battle.rooms.size,
     season: currentSeason(),
   });
 });
 
 // ---------------------------------------------------------------------------
-// WebSocket: matchmaking + 1v1 battle relay
+// WebSocket battles: matchmaking (1v1 / 2v2), custom rooms, server bots
 // ---------------------------------------------------------------------------
-
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
-
-const clients = new Set();       // all connected sockets
-let queue = [];                  // sockets waiting for a match
-const matches = new Map();       // matchId -> match state
 
 const MATCH_DURATION = Number(process.env.MATCH_SECONDS) || 120;  // seconds
 
-function send(ws, msg) {
-  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
-}
-
-function broadcastAll(msg) {
-  for (const ws of clients) send(ws, msg);
-}
-
-function eloUpdate(ra, rb, scoreA /* 1 win, 0.5 draw, 0 loss */) {
-  const K = 32;
-  const ea = 1 / (1 + Math.pow(10, (rb - ra) / 400));
-  return Math.round(K * (scoreA - ea));
-}
-
-function endMatch(match, reason = 'finished') {
-  if (match.ended) return;
-  match.ended = true;
-  clearTimeout(match.timer);
-  matches.delete(match.id);
-
-  const [a, b] = match.players;
-  const sa = match.scores[0] ?? 0;
-  const sb = match.scores[1] ?? 0;
-  let resultA = 0.5;
-  if (reason === 'forfeit_a') resultA = 0;
-  else if (reason === 'forfeit_b') resultA = 1;
-  else resultA = sa > sb ? 1 : sa < sb ? 0 : 0.5;
-
-  const results = [
-    { ws: a, myScore: sa, oppScore: sb, outcome: resultA },
-    { ws: b, myScore: sb, oppScore: sa, outcome: 1 - resultA },
-  ];
-
-  for (const r of results) {
-    let ratingDelta = 0;
-    let rewards = null;
-    const me = r.ws.user ? db.users[r.ws.user.id] : null;
-    const oppUser = (r.ws === a ? b : a).user;
-    const opp = oppUser ? db.users[oppUser.id] : null;
-    if (me) {
-      if (opp) {
-        ratingDelta = eloUpdate(me.stats.rating, opp.stats.rating, r.outcome);
-        me.stats.rating = Math.max(0, me.stats.rating + ratingDelta);
-      }
-      if (r.outcome === 1) me.stats.pvpWins += 1;
-      else if (r.outcome === 0) me.stats.pvpLosses += 1;
-      rewards = applyGameResult(me, {
-        mode: 'pvp', score: r.myScore, lines: r.ws.matchLines || 0,
-        maxCombo: r.ws.matchMaxCombo || 0, duration: MATCH_DURATION, won: r.outcome === 1,
-      });
-    }
-    send(r.ws, {
-      type: 'result',
-      outcome: r.outcome === 1 ? 'win' : r.outcome === 0 ? 'lose' : 'draw',
-      reason,
-      myScore: r.myScore, oppScore: r.oppScore,
-      ratingDelta, rewards,
-      user: me ? publicUser(me) : null,
-    });
-    r.ws.matchId = null;
-  }
-  saveDb();
-}
-
-function tryMatch() {
-  // Drop dead sockets from the queue first.
-  queue = queue.filter(ws => ws.readyState === ws.OPEN);
-  while (queue.length >= 2) {
-    const a = queue.shift();
-    const b = queue.shift();
-    const id = crypto.randomUUID();
-    const seed = Math.floor(Math.random() * 2 ** 31);
-    const match = {
-      id, players: [a, b], scores: [null, null], finished: [false, false],
-      seed, startedAt: Date.now(), ended: false,
-    };
-    matches.set(id, match);
-    a.matchId = id; b.matchId = id;
-    a.matchLines = 0; b.matchLines = 0;
-    a.matchMaxCombo = 0; b.matchMaxCombo = 0;
-
-    const info = ws => ({
-      name: ws.user ? ws.user.username : ws.guestName,
-      level: ws.user ? levelOf(db.users[ws.user.id].xp) : 1,
-      rating: ws.user ? db.users[ws.user.id].stats.rating : null,
-      equipped: ws.user ? db.users[ws.user.id].equipped : { ...DEFAULT_EQUIPPED },
-    });
-    send(a, { type: 'match_found', matchId: id, seed, duration: MATCH_DURATION, countdown: 3, opponent: info(b) });
-    send(b, { type: 'match_found', matchId: id, seed, duration: MATCH_DURATION, countdown: 3, opponent: info(a) });
-
-    // Hard timeout: countdown + duration + grace.
-    match.timer = setTimeout(() => endMatch(match, 'timeout'), (3 + MATCH_DURATION + 10) * 1000);
-  }
-}
-
-wss.on('connection', (ws) => {
-  clients.add(ws);
-  ws.isAlive = true;
-  ws.on('pong', () => { ws.isAlive = true; });
-
-  ws.on('message', (raw) => {
-    let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
-    const match = ws.matchId ? matches.get(ws.matchId) : null;
-
-    switch (msg.type) {
-      case 'hello': {
-        const user = userFromToken(msg.token);
-        if (user && user.banned) { send(ws, { type: 'error', error: 'アカウントが凍結されています' }); ws.close(); return; }
-        ws.user = user ? { id: user.id, username: user.username } : null;
-        ws.guestName = user ? null : (sanitizeName(msg.guestName) || `ゲスト${Math.floor(Math.random() * 9999)}`);
-        send(ws, { type: 'hello_ok', name: user ? user.username : ws.guestName, online: clients.size });
-        break;
-      }
-      case 'queue': {
-        if (ws.matchId || queue.includes(ws)) return;
-        queue.push(ws);
-        send(ws, { type: 'queued', position: queue.length });
-        tryMatch();
-        break;
-      }
-      case 'cancel_queue': {
-        queue = queue.filter(s => s !== ws);
-        send(ws, { type: 'queue_cancelled' });
-        break;
-      }
-      case 'state': {
-        if (!match || match.ended) return;
-        const idx = match.players.indexOf(ws);
-        if (idx === -1) return;
-        ws.matchLines = Math.max(0, Math.floor(Number(msg.lines) || 0));
-        ws.matchMaxCombo = Math.max(ws.matchMaxCombo || 0, Math.floor(Number(msg.combo) || 0));
-        const opp = match.players[1 - idx];
-        send(opp, {
-          type: 'opp_state',
-          score: Math.max(0, Math.floor(Number(msg.score) || 0)),
-          combo: Math.floor(Number(msg.combo) || 0),
-          grid: Array.isArray(msg.grid) ? msg.grid.slice(0, 64) : null,
-        });
-        break;
-      }
-      case 'finish': {
-        if (!match || match.ended) return;
-        const idx = match.players.indexOf(ws);
-        if (idx === -1) return;
-        match.scores[idx] = Math.max(0, Math.min(1_000_000, Math.floor(Number(msg.score) || 0)));
-        match.finished[idx] = true;
-        if (match.finished[0] && match.finished[1]) endMatch(match, 'finished');
-        break;
-      }
-      case 'ping': send(ws, { type: 'pong' }); break;
-    }
-  });
-
-  ws.on('close', () => {
-    clients.delete(ws);
-    queue = queue.filter(s => s !== ws);
-    const match = ws.matchId ? matches.get(ws.matchId) : null;
-    if (match && !match.ended) {
-      const idx = match.players.indexOf(ws);
-      endMatch(match, idx === 0 ? 'forfeit_a' : 'forfeit_b');
-    }
-  });
+const server = http.createServer(app);
+const battle = initBattle(server, {
+  db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, userFromToken,
+  MATCH_DURATION,
 });
-
-// Heartbeat: drop dead connections.
-setInterval(() => {
-  for (const ws of clients) {
-    if (!ws.isAlive) { ws.terminate(); continue; }
-    ws.isAlive = false;
-    try { ws.ping(); } catch { /* ignore */ }
-  }
-}, 30000);
 
 // ---------------------------------------------------------------------------
 // Bootstrap: seed admin account, start server

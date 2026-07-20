@@ -59,6 +59,7 @@
         <div class="hud-left">
           <button id="btnQuit" class="chip icon-btn">✕</button>
           <button id="btnReroll" class="chip icon-btn" title="ピースを引き直す（1ゲーム1回）">🔄<b id="rerollLeft">1</b></button>
+          <button id="btnAuto" class="chip icon-btn hidden" title="オートパイロット（管理者専用）">🤖<b id="autoState">OFF</b></button>
         </div>
         <div class="hud-center">
           <div id="hudScore" class="hud-score">0</div>
@@ -67,13 +68,9 @@
         <div id="hudTimer" class="hud-timer hidden">2:00</div>
       </div>
       <div id="oppPanel" class="opp-panel hidden">
-        <canvas id="oppCanvas" width="120" height="120"></canvas>
-        <div class="opp-info">
-          <div id="oppName" class="opp-name">相手</div>
-          <div id="oppScore" class="opp-score">0</div>
-          <div id="oppCombo" class="opp-combo"></div>
-        </div>
         <div class="vs-bar"><div id="vsBarMe"></div><div id="vsBarOpp"></div></div>
+        <div id="teamTotals" class="team-totals hidden"></div>
+        <div id="oppCards"></div>
       </div>
       <div class="game-canvas-wrap">
         <canvas id="gameCanvas"></canvas>
@@ -87,6 +84,31 @@
         <h2 id="mmStatus">対戦相手を探しています…</h2>
         <p id="mmSub" class="muted">オンライン: <span id="mmOnline">-</span>人</p>
         <button class="btn btn-ghost" id="btnCancelQueue">キャンセル</button>
+      </div>
+    </section>
+
+    <!-- ===================== Custom room ===================== -->
+    <section id="screen-room" class="screen sub-screen hidden">
+      <div class="sub-header">
+        <button class="chip icon-btn" id="btnRoomBack">←</button>
+        <h2>🔧 カスタムルーム</h2>
+      </div>
+      <div id="roomJoin" class="room-join">
+        <button class="btn btn-primary btn-big" id="btnCreateRoom">➕ ルームを作成</button>
+        <div class="room-join-row">
+          <input id="roomCodeInput" type="text" maxlength="4" placeholder="コード" autocomplete="off">
+          <button class="btn btn-online" id="btnJoinRoom">参加する</button>
+        </div>
+        <p class="muted center" style="font-size:13px">友達と同じコードで集まって対戦！<br>チーム戦は先に入った2人がチームAになります</p>
+      </div>
+      <div id="roomLobby" class="room-lobby hidden">
+        <div class="room-code">ルームコード <b id="roomCodeLabel">----</b></div>
+        <div id="roomPlayers" class="room-players"></div>
+        <div id="roomSettings" class="room-settings"></div>
+        <div class="modal-buttons" style="max-width:420px">
+          <button class="btn btn-ghost" id="btnLeaveRoom">退出</button>
+          <button class="btn btn-gold" id="btnStartRoom">🚀 対戦開始！</button>
+        </div>
       </div>
     </section>
 
