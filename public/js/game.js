@@ -1,0 +1,549 @@
+// GameView: canvas renderer + input controller for one board (player or spectator).
+import { SIZE, shapeSize } from './engine.js';
+import { PALETTE, getSkin, getBoard } from './themes.js';
+import { ParticleSystem } from './particles.js';
+import { audio } from './audio.js';
+
+export class GameView {
+  constructor(canvas, opts = {}) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.engine = null;
+    this.interactive = opts.interactive !== false;
+    this.showTray = opts.showTray !== false;
+    this.skinId = opts.skinId || 'skin_default';
+    this.boardId = opts.boardId || 'board_default';
+    this.fxId = opts.fxId || 'fx_default';
+
+    this.particles = new ParticleSystem();
+    this.spawnAnim = new Map();     // cellIndex -> spawn time
+    this.dying = [];                // {r,c,color,t}
+    this.flashes = [];              // {kind:'row'|'col', index, t}
+    this.floatTexts = [];           // {x,y,text,color,t,life,size}
+    this.shake = 0;
+    this.time = 0;
+    this.deco = [];                 // background decorations (stars etc.)
+
+    this.drag = null;               // {index, piece, px, py}
+    this.inputLocked = false;
+    this.onPlace = null;            // callback(result)
+    this.onGameOver = null;
+    this.onIllegal = null;
+
+    this.running = false;
+    this.lastTs = 0;
+
+    this._resize = () => this.resize();
+    window.addEventListener('resize', this._resize);
+    this.resize();
+    this.initDeco();
+
+    if (this.interactive) this.bindInput();
+  }
+
+  destroy() {
+    this.running = false;
+    window.removeEventListener('resize', this._resize);
+  }
+
+  setEngine(engine) {
+    this.engine = engine;
+    this.spawnAnim.clear();
+    this.dying.length = 0;
+    this.flashes.length = 0;
+    this.floatTexts.length = 0;
+    this.particles.clear();
+    this.drag = null;
+  }
+
+  setTheme({ skinId, boardId, fxId }) {
+    if (skinId) this.skinId = skinId;
+    if (boardId) this.boardId = boardId;
+    if (fxId) this.fxId = fxId;
+    this.initDeco();
+  }
+
+  // ------------------------------------------------------------------
+  // Layout
+  // ------------------------------------------------------------------
+
+  resize() {
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.canvas.width = Math.round(rect.width * dpr);
+    this.canvas.height = Math.round(rect.height * dpr);
+    this.dpr = dpr;
+    this.W = rect.width;
+    this.H = rect.height;
+
+    const trayH = this.showTray ? Math.min(this.H * 0.24, 130) : 0;
+    const side = Math.min(this.W - 12, this.H - trayH - 16);
+    this.cell = side / SIZE;
+    this.boardX = (this.W - side) / 2;
+    this.boardY = this.showTray ? 6 : (this.H - side) / 2;
+    this.boardSize = side;
+    this.trayY = this.boardY + side + 8;
+    this.trayH = Math.max(0, this.H - this.trayY - 4);
+  }
+
+  initDeco() {
+    const theme = getBoard(this.boardId);
+    this.deco = [];
+    const n = theme.nebula ? 70 : 40;
+    for (let i = 0; i < n; i++) {
+      this.deco.push({
+        x: Math.random(), y: Math.random(),
+        r: Math.random() * 1.8 + 0.4,
+        tw: Math.random() * Math.PI * 2,
+        sp: 0.3 + Math.random() * 1.2,
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Input (drag & drop)
+  // ------------------------------------------------------------------
+
+  bindInput() {
+    const pos = e => {
+      const rect = this.canvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    };
+
+    this.canvas.addEventListener('pointerdown', e => {
+      if (!this.engine || this.engine.over || !this.running || this.inputLocked) return;
+      const { x, y } = pos(e);
+      const slot = this.trayHit(x, y);
+      if (slot !== -1 && this.engine.hand[slot]) {
+        try { this.canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+        this.drag = { index: slot, piece: this.engine.hand[slot], px: x, py: y };
+        audio.pickup();
+        e.preventDefault();
+      }
+    });
+
+    this.canvas.addEventListener('pointermove', e => {
+      if (!this.drag) return;
+      const { x, y } = pos(e);
+      this.drag.px = x;
+      this.drag.py = y;
+    });
+
+    const drop = e => {
+      if (!this.drag) return;
+      const anchor = this.dragAnchor();
+      const { index } = this.drag;
+      this.drag = null;
+      if (anchor && this.engine.canPlace(this.engine.hand[index], anchor.r, anchor.c)) {
+        const result = this.engine.place(index, anchor.r, anchor.c);
+        if (result) this.applyResult(result);
+      } else {
+        audio.putback();
+      }
+    };
+    this.canvas.addEventListener('pointerup', drop);
+    this.canvas.addEventListener('pointercancel', () => { if (this.drag) { this.drag = null; audio.putback(); } });
+  }
+
+  trayHit(x, y) {
+    if (!this.engine) return -1;
+    const slotW = this.W / 3;
+    if (y < this.trayY) return -1;
+    return Math.max(0, Math.min(2, Math.floor(x / slotW)));
+  }
+
+  // Current drag → board anchor cell (top-left of the piece), or null.
+  dragAnchor() {
+    if (!this.drag) return null;
+    const { piece } = this.drag;
+    const { rows, cols } = shapeSize(piece.cells);
+    const pw = cols * this.cell, ph = rows * this.cell;
+    // Piece floats above the pointer for finger visibility.
+    const lift = this.cell * 1.2;
+    const left = this.drag.px - pw / 2;
+    const top = this.drag.py - ph - lift + ph / 2;
+    const c = Math.round((left - this.boardX) / this.cell);
+    const r = Math.round((top - this.boardY) / this.cell);
+    if (r < -1 || c < -1 || r > SIZE || c > SIZE) return null;
+    return { r: Math.max(0, Math.min(SIZE - rows, r)), c: Math.max(0, Math.min(SIZE - cols, c)) };
+  }
+
+  // ------------------------------------------------------------------
+  // Game events
+  // ------------------------------------------------------------------
+
+  applyResult(result) {
+    const now = this.time;
+    for (const [r, c] of result.placedCells) this.spawnAnim.set(r * SIZE + c, now);
+    audio.place();
+
+    if (result.lineCount > 0) {
+      for (const [r, c, color] of result.clearedCells) {
+        this.dying.push({ r, c, color, t: now });
+        const cx = this.boardX + (c + 0.5) * this.cell;
+        const cy = this.boardY + (r + 0.5) * this.cell;
+        this.particles.burstCell(cx, cy, this.cell, color, this.fxId);
+      }
+      for (const r of result.fullRows) this.flashes.push({ kind: 'row', index: r, t: now });
+      for (const c of result.fullCols) this.flashes.push({ kind: 'col', index: c, t: now });
+
+      this.shake = Math.min(14, 4 + result.lineCount * 3 + result.streak);
+      audio.clearLines(result.lineCount, result.streak);
+
+      const centerX = this.boardX + this.boardSize / 2;
+      const centerY = this.boardY + this.boardSize * 0.4;
+      this.addFloatText(centerX, centerY, `+${result.gained}`, '#ffffff', 1.4);
+      if (result.streak >= 2) {
+        this.addFloatText(centerX, centerY - this.cell * 1.3, `${result.streak} COMBO!`, '#ffe14d', 1.8);
+        audio.combo(result.streak);
+        this.particles.confetti(centerX, centerY, this.cell, 10 + result.streak * 6);
+      }
+      const praise = result.lineCount >= 4 ? 'LEGENDARY!' : result.lineCount === 3 ? 'AMAZING!' : result.lineCount === 2 ? 'GREAT!' : null;
+      if (praise) this.addFloatText(centerX, centerY + this.cell, praise, '#43d9e8', 1.5);
+    } else {
+      const [r, c] = result.placedCells[0];
+      this.addFloatText(
+        this.boardX + (c + 0.5) * this.cell,
+        this.boardY + r * this.cell,
+        `+${result.gained}`, 'rgba(255,255,255,0.75)', 0.9,
+      );
+    }
+
+    if (this.onPlace) this.onPlace(result);
+    if (result.over) {
+      audio.gameOver();
+      if (this.onGameOver) this.onGameOver();
+    }
+  }
+
+  addFloatText(x, y, text, color, size = 1) {
+    this.floatTexts.push({ x, y, text, color, t: this.time, life: 1.1, size });
+  }
+
+  // ------------------------------------------------------------------
+  // Render loop
+  // ------------------------------------------------------------------
+
+  start() {
+    if (this.running) return;
+    this.running = true;
+    this.lastTs = performance.now();
+    const loop = ts => {
+      if (!this.running) return;
+      const dt = Math.min(0.05, (ts - this.lastTs) / 1000);
+      this.lastTs = ts;
+      this.time += dt;
+      this.update(dt);
+      this.render();
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+
+  stop() { this.running = false; }
+
+  update(dt) {
+    this.particles.update(dt);
+    this.shake = Math.max(0, this.shake - dt * 40);
+    const now = this.time;
+    this.dying = this.dying.filter(d => now - d.t < 0.35);
+    this.flashes = this.flashes.filter(f => now - f.t < 0.4);
+    this.floatTexts = this.floatTexts.filter(f => now - f.t < f.life);
+  }
+
+  render() {
+    const { ctx } = this;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.clearRect(0, 0, this.W, this.H);
+
+    if (this.shake > 0) {
+      ctx.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
+    }
+
+    this.drawBackground();
+    this.drawGrid();
+    if (this.engine) {
+      this.drawBlocks();
+      this.drawDying();
+      this.drawFlashes();
+      if (this.drag) this.drawDrag();
+      if (this.showTray) this.drawTray();
+    }
+    this.particles.draw(ctx);
+    this.drawFloatTexts();
+  }
+
+  drawBackground() {
+    const { ctx } = this;
+    const theme = getBoard(this.boardId);
+    const g = ctx.createLinearGradient(0, 0, 0, this.H);
+    g.addColorStop(0, theme.bg[0]);
+    g.addColorStop(1, theme.bg[1]);
+    ctx.fillStyle = g;
+    ctx.fillRect(-20, -20, this.W + 40, this.H + 40);
+
+    // animated decorations
+    for (const d of this.deco) {
+      const x = d.x * this.W;
+      let y = d.y * this.H;
+      let alpha = 0.3 + 0.3 * Math.sin(this.time * d.sp + d.tw);
+      if (theme.bubbles || theme.fireflies) {
+        y = ((d.y - this.time * 0.01 * d.sp) % 1 + 1) % 1 * this.H;
+      }
+      ctx.globalAlpha = Math.max(0, alpha);
+      ctx.fillStyle = theme.fireflies ? '#b8ff9e' : theme.nebula ? '#d9b8ff' : '#cfe0ff';
+      ctx.beginPath();
+      ctx.arc(x, y, d.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  drawGrid() {
+    const { ctx, cell } = this;
+    const theme = getBoard(this.boardId);
+    ctx.fillStyle = theme.cell;
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        const x = this.boardX + c * cell, y = this.boardY + r * cell;
+        ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2);
+      }
+    }
+    ctx.strokeStyle = theme.cellLine;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(this.boardX - 2, this.boardY - 2, this.boardSize + 4, this.boardSize + 4);
+  }
+
+  drawBlocks() {
+    const { ctx, cell } = this;
+    const skin = getSkin(this.skinId);
+    const ghost = this.drag ? this.ghostInfo() : null;
+
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        const v = this.engine.at(r, c);
+        if (!v) continue;
+        const x = this.boardX + c * cell, y = this.boardY + r * cell;
+        const key = r * SIZE + c;
+        const st = this.spawnAnim.get(key);
+        let scale = 1;
+        if (st !== undefined) {
+          const p = (this.time - st) / 0.22;
+          if (p >= 1) this.spawnAnim.delete(key);
+          else scale = 1.25 - 0.25 * this.easeOut(p);
+        }
+        // highlight blocks in lines about to clear
+        let glow = 0;
+        if (ghost && ghost.valid && (ghost.willRows.has(r) || ghost.willCols.has(c))) glow = 1;
+        this.drawScaledBlock(skin, x, y, cell, v, 1, scale, glow);
+      }
+    }
+  }
+
+  drawScaledBlock(skin, x, y, s, color, alpha, scale = 1, glow = 0) {
+    const { ctx } = this;
+    if (scale !== 1) {
+      ctx.save();
+      ctx.translate(x + s / 2, y + s / 2);
+      ctx.scale(scale, scale);
+      ctx.translate(-(x + s / 2), -(y + s / 2));
+    }
+    if (glow) {
+      ctx.save();
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = s * 0.5;
+      skin(ctx, x, y, s, color, alpha);
+      ctx.restore();
+    } else {
+      skin(ctx, x, y, s, color, alpha);
+    }
+    if (scale !== 1) ctx.restore();
+  }
+
+  ghostInfo() {
+    const anchor = this.dragAnchor();
+    if (!anchor) return null;
+    const piece = this.engine.hand[this.drag.index];
+    const valid = this.engine.canPlace(piece, anchor.r, anchor.c);
+    const willRows = new Set(), willCols = new Set();
+    if (valid) {
+      // simulate: which rows/cols become full?
+      const g = this.engine.grid;
+      const temp = new Set(piece.cells.map(([dr, dc]) => (anchor.r + dr) * SIZE + (anchor.c + dc)));
+      for (let r = 0; r < SIZE; r++) {
+        let full = true;
+        for (let c = 0; c < SIZE; c++) { const k = r * SIZE + c; if (!g[k] && !temp.has(k)) { full = false; break; } }
+        if (full) willRows.add(r);
+      }
+      for (let c = 0; c < SIZE; c++) {
+        let full = true;
+        for (let r = 0; r < SIZE; r++) { const k = r * SIZE + c; if (!g[k] && !temp.has(k)) { full = false; break; } }
+        if (full) willCols.add(c);
+      }
+    }
+    return { anchor, piece, valid, willRows, willCols };
+  }
+
+  drawDrag() {
+    const { ctx, cell } = this;
+    const skin = getSkin(this.skinId);
+    const ghost = this.ghostInfo();
+    const piece = this.engine.hand[this.drag.index];
+    if (!piece) return;
+
+    // ghost on board
+    if (ghost) {
+      const { anchor, valid } = ghost;
+      for (const [dr, dc] of piece.cells) {
+        const x = this.boardX + (anchor.c + dc) * cell;
+        const y = this.boardY + (anchor.r + dr) * cell;
+        if (valid) {
+          skin(ctx, x, y, cell, piece.color, 0.35);
+        } else {
+          ctx.globalAlpha = 0.25;
+          ctx.fillStyle = '#ff4444';
+          ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
+          ctx.globalAlpha = 1;
+        }
+      }
+      // pulse rows/cols that would clear
+      if (valid && (ghost.willRows.size || ghost.willCols.size)) {
+        const pulse = 0.25 + 0.15 * Math.sin(this.time * 8);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#ffffff';
+        for (const r of ghost.willRows) ctx.fillRect(this.boardX, this.boardY + r * cell, this.boardSize, cell);
+        for (const c of ghost.willCols) ctx.fillRect(this.boardX + c * cell, this.boardY, cell, this.boardSize);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // floating piece above finger
+    const { rows, cols } = shapeSize(piece.cells);
+    const pw = cols * cell, ph = rows * cell;
+    const lift = cell * 1.2;
+    const left = this.drag.px - pw / 2;
+    const top = this.drag.py - ph - lift + ph / 2;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 16;
+    ctx.shadowOffsetY = 10;
+    for (const [dr, dc] of piece.cells) {
+      skin(ctx, left + dc * cell, top + dr * cell, cell, piece.color, 0.95);
+    }
+    ctx.restore();
+  }
+
+  drawDying() {
+    const { ctx, cell } = this;
+    const skin = getSkin(this.skinId);
+    for (const d of this.dying) {
+      const p = (this.time - d.t) / 0.35;
+      const x = this.boardX + d.c * cell, y = this.boardY + d.r * cell;
+      this.drawScaledBlock(skin, x, y, cell, d.color, 1 - p, 1 + p * 0.4);
+    }
+  }
+
+  drawFlashes() {
+    const { ctx, cell } = this;
+    for (const f of this.flashes) {
+      const p = (this.time - f.t) / 0.4;
+      ctx.globalAlpha = (1 - p) * 0.5;
+      ctx.fillStyle = '#ffffff';
+      if (f.kind === 'row') ctx.fillRect(this.boardX, this.boardY + f.index * cell, this.boardSize, cell);
+      else ctx.fillRect(this.boardX + f.index * cell, this.boardY, cell, this.boardSize);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  drawTray() {
+    const { ctx } = this;
+    const skin = getSkin(this.skinId);
+    const slotW = this.W / 3;
+    for (let i = 0; i < 3; i++) {
+      const piece = this.engine.hand[i];
+      if (!piece || (this.drag && this.drag.index === i)) continue;
+      const { rows, cols } = shapeSize(piece.cells);
+      const maxCell = Math.min((slotW - 20) / cols, (this.trayH - 14) / rows, this.cell * 0.6);
+      const pw = cols * maxCell, ph = rows * maxCell;
+      const ox = i * slotW + (slotW - pw) / 2;
+      const oy = this.trayY + (this.trayH - ph) / 2;
+      const placeable = this.engine.placements(piece).length > 0;
+      const alpha = placeable ? 1 : 0.3;
+      // subtle idle bobbing
+      const bob = Math.sin(this.time * 2 + i * 1.7) * 2;
+      for (const [dr, dc] of piece.cells) {
+        skin(ctx, ox + dc * maxCell, oy + dr * maxCell + bob, maxCell, piece.color, alpha);
+      }
+    }
+  }
+
+  drawFloatTexts() {
+    const { ctx } = this;
+    for (const f of this.floatTexts) {
+      const p = (this.time - f.t) / f.life;
+      const y = f.y - p * this.cell * 1.6;
+      const alpha = p < 0.7 ? 1 : 1 - (p - 0.7) / 0.3;
+      const scale = p < 0.15 ? 0.6 + (p / 0.15) * 0.4 : 1;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, alpha);
+      ctx.translate(f.x, y);
+      ctx.scale(scale, scale);
+      ctx.font = `800 ${Math.round(this.cell * 0.55 * f.size)}px 'Segoe UI', system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.strokeText(f.text, 0, 0);
+      ctx.fillStyle = f.color;
+      ctx.fillText(f.text, 0, 0);
+      ctx.restore();
+    }
+  }
+
+  easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+  // Board revive animation (versus mode top-out)
+  reviveFlash() {
+    this.particles.confetti(this.boardX + this.boardSize / 2, this.boardY + this.boardSize / 2, this.cell, 24);
+    this.shake = 10;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MiniBoard: tiny spectator renderer for the opponent's grid (no engine).
+// ---------------------------------------------------------------------------
+
+export class MiniBoard {
+  constructor(canvas, opts = {}) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.grid = new Array(SIZE * SIZE).fill(0);
+    this.skinId = opts.skinId || 'skin_default';
+  }
+
+  setGrid(grid) {
+    if (Array.isArray(grid) && grid.length === SIZE * SIZE) this.grid = grid;
+    this.render();
+  }
+
+  render() {
+    const rect = this.canvas.getBoundingClientRect();
+    if (!rect.width) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.canvas.width = rect.width * dpr;
+    this.canvas.height = rect.height * dpr;
+    const ctx = this.ctx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const cell = Math.min(rect.width, rect.height) / SIZE;
+    const skin = getSkin(this.skinId);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    ctx.fillStyle = 'rgba(255,255,255,0.04)';
+    for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {
+      ctx.fillRect(c * cell + 0.5, r * cell + 0.5, cell - 1, cell - 1);
+    }
+    for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {
+      const v = this.grid[r * SIZE + c];
+      if (v) skin(ctx, c * cell, r * cell, cell, v, 1);
+    }
+  }
+}

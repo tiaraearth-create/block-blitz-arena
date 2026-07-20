@@ -1,0 +1,5 @@
+node_modules/
+server/data/*.json
+server/data/*.txt
+.DS_Store
+*.log

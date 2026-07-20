@@ -1,0 +1,19 @@
+{
+  "name": "block-blitz-arena",
+  "version": "1.0.0",
+  "description": "Block Blast-style puzzle game with online battles, ranking, shop, battle pass and admin panel",
+  "main": "server/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}

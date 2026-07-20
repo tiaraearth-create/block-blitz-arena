@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Block Blitz Arena</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='8' width='38' height='38' rx='8' fill='%235b8bff'/><rect x='54' y='8' width='38' height='38' rx='8' fill='%23ff5d5d'/><rect x='8' y='54' width='38' height='38' rx='8' fill='%23ffe14d'/><rect x='54' y='54' width='38' height='38' rx='8' fill='%235ee86e'/></svg>">
+</head>
+<body>
+<div id="app">
+
+  <!-- ===================== Top bar ===================== -->
+  <header id="topbar">
+    <button id="userChip" class="chip">
+      <span id="userAvatar">👤</span>
+      <span id="userName">ゲスト</span>
+      <span id="userLevel" class="lvl hidden">Lv.1</span>
+    </button>
+    <div class="currency">
+      <span class="chip coin-chip">🪙 <b id="coinsLabel">0</b></span>
+      <span class="chip gem-chip">💎 <b id="gemsLabel">0</b></span>
+      <button id="btnSound" class="chip icon-btn" title="効果音">🔊</button>
+      <button id="btnMusic" class="chip icon-btn" title="BGM">🎵</button>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- ===================== Menu ===================== -->
+    <section id="screen-menu" class="screen">
+      <div class="menu-bg" aria-hidden="true">
+        <span class="fb fb1"></span><span class="fb fb2"></span><span class="fb fb3"></span>
+        <span class="fb fb4"></span><span class="fb fb5"></span><span class="fb fb6"></span>
+      </div>
+      <div class="menu-content">
+        <h1 class="logo">
+          <span class="logo-block b1">B</span><span class="logo-block b2">L</span><span class="logo-block b3">O</span><span class="logo-block b4">C</span><span class="logo-block b5">K</span>
+          <br>
+          <span class="logo-sub">BLITZ ARENA</span>
+        </h1>
+        <div class="menu-buttons">
+          <button class="btn btn-primary btn-big" id="btnSolo">▶ ソロプレイ</button>
+          <button class="btn btn-ai btn-big" id="btnVsAi">🤖 AI対戦</button>
+          <button class="btn btn-online btn-big" id="btnOnline">🌐 オンライン対戦</button>
+        </div>
+        <nav class="menu-nav">
+          <button class="nav-btn" id="btnLeaderboard"><span>🏆</span>ランキング</button>
+          <button class="nav-btn" id="btnShop"><span>🛍️</span>ショップ</button>
+          <button class="nav-btn" id="btnBattlePass"><span>🎫</span>パス</button>
+          <button class="nav-btn hidden" id="btnAdmin"><span>🛡️</span>管理</button>
+        </nav>
+        <div id="seasonBanner" class="season-banner hidden"></div>
+      </div>
+    </section>
+
+    <!-- ===================== Game ===================== -->
+    <section id="screen-game" class="screen hidden">
+      <div class="game-hud">
+        <button id="btnQuit" class="chip icon-btn">✕</button>
+        <div class="hud-center">
+          <div id="hudScore" class="hud-score">0</div>
+          <div id="hudSub" class="hud-sub">BEST 0</div>
+        </div>
+        <div id="hudTimer" class="hud-timer hidden">2:00</div>
+      </div>
+      <div id="oppPanel" class="opp-panel hidden">
+        <canvas id="oppCanvas" width="120" height="120"></canvas>
+        <div class="opp-info">
+          <div id="oppName" class="opp-name">相手</div>
+          <div id="oppScore" class="opp-score">0</div>
+          <div id="oppCombo" class="opp-combo"></div>
+        </div>
+        <div class="vs-bar"><div id="vsBarMe"></div><div id="vsBarOpp"></div></div>
+      </div>
+      <div class="game-canvas-wrap">
+        <canvas id="gameCanvas"></canvas>
+      </div>
+    </section>
+
+    <!-- ===================== Matchmaking ===================== -->
+    <section id="screen-matchmaking" class="screen hidden">
+      <div class="mm-box">
+        <div class="mm-spinner"><span></span><span></span><span></span><span></span></div>
+        <h2 id="mmStatus">対戦相手を探しています…</h2>
+        <p id="mmSub" class="muted">オンライン: <span id="mmOnline">-</span>人</p>
+        <button class="btn btn-ghost" id="btnCancelQueue">キャンセル</button>
+      </div>
+    </section>
+
+    <!-- ===================== Leaderboard ===================== -->
+    <section id="screen-leaderboard" class="screen sub-screen hidden">
+      <div class="sub-header">
+        <button class="chip icon-btn back-btn" data-back>←</button>
+        <h2>🏆 ランキング</h2>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-lb="score">ハイスコア</button>
+        <button class="tab" data-lb="rating">レート</button>
+      </div>
+      <div id="lbList" class="lb-list"><p class="muted center">読み込み中…</p></div>
+    </section>
+
+    <!-- ===================== Shop ===================== -->
+    <section id="screen-shop" class="screen sub-screen hidden">
+      <div class="sub-header">
+        <button class="chip icon-btn back-btn" data-back>←</button>
+        <h2>🛍️ ショップ</h2>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-shop="skin">ブロック</button>
+        <button class="tab" data-shop="board">ボード</button>
+        <button class="tab" data-shop="fx">エフェクト</button>
+      </div>
+      <div id="shopGrid" class="shop-grid"></div>
+    </section>
+
+    <!-- ===================== Battle pass ===================== -->
+    <section id="screen-battlepass" class="screen sub-screen hidden">
+      <div class="sub-header">
+        <button class="chip icon-btn back-btn" data-back>←</button>
+        <h2>🎫 バトルパス</h2>
+      </div>
+      <div id="bpHeader" class="bp-header"></div>
+      <div id="bpTiers" class="bp-tiers"></div>
+    </section>
+
+    <!-- ===================== Admin ===================== -->
+    <section id="screen-admin" class="screen sub-screen hidden">
+      <div class="sub-header">
+        <button class="chip icon-btn back-btn" data-back>←</button>
+        <h2>🛡️ 管理者パネル</h2>
+      </div>
+      <div id="adminStats" class="admin-stats"></div>
+      <div class="admin-actions">
+        <div class="admin-broadcast">
+          <input id="adminMsg" type="text" placeholder="全員へのお知らせを入力…" maxlength="200">
+          <button class="btn btn-primary" id="btnBroadcast">送信</button>
+        </div>
+        <button class="btn btn-ghost" id="btnNewSeason">🔄 新シーズン開始</button>
+      </div>
+      <div id="adminUsers" class="admin-users"></div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ===================== Modals / toasts ===================== -->
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
