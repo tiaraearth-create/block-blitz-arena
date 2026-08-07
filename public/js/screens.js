@@ -822,6 +822,26 @@ export function bindAdminActions() {
   $('#btnSelfCoins').onclick = () => selfGrant('coins');
   $('#btnSelfGems').onclick = () => selfGrant('gems');
 
+  $('#btnSelfItems').onclick = async () => {
+    const amount = promptAmount('各ブースターを何個付与しますか？（マイナスで没収）');
+    if (amount === null) return;
+    try {
+      await api(`/api/admin/users/${session.user.id}`, { method: 'POST', body: { grantItems: amount } });
+      await refreshMe();
+      updateTopbar();
+      audio.coin();
+      toast(`🧪 💣🧹⭐ を各${fmt(amount)}個付与しました`, 'ok');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
+  $('#btnWeeklyReset').onclick = async () => {
+    if (!confirm('全ユーザーの今週のウィークリーチャレンジ記録を削除します。よろしいですか？')) return;
+    try {
+      const res = await api('/api/admin/weekly/reset', { method: 'POST', body: {} });
+      toast(`🎯 ${res.affected}人のウィークリー記録をリセットしました`, 'ok');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
   $('#btnUnlockHidden').onclick = () => {
     localStorage.setItem('bba_kami', '1');
     localStorage.setItem('bba_souzou', '1');

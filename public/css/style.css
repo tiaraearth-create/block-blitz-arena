@@ -136,7 +136,7 @@ body {
 .btn:disabled { opacity: 0.45; pointer-events: none; }
 .btn-sm { padding: 7px 14px; font-size: 13px; border-radius: 10px; }
 
-.menu-nav { display: flex; gap: 10px; }
+.menu-nav { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; max-width: 94vw; }
 .nav-btn {
   display: flex; flex-direction: column; align-items: center; gap: 3px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
@@ -873,4 +873,35 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
   .opp-card canvas { width: 60px; height: 60px; }
   #oppCards.compact .opp-card canvas { width: 48px; height: 48px; }
   .hud-score { font-size: 28px; }
+
+  /* ---- menu fits a phone: smaller logo/buttons, scroll if needed ---- */
+  #screen-menu { overflow-y: auto; justify-content: flex-start; }
+  .menu-content { gap: 14px; padding: 14px 12px 24px; }
+  .logo-block { font-size: 34px; padding: 2px 7px; margin: 0 2px; border-radius: 10px; }
+  .logo-sub { font-size: 14px; letter-spacing: 0.4em; }
+  .menu-buttons { gap: 9px; }
+  .btn-big { padding: 12px 18px; font-size: 16px; }
+  .menu-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: min(340px, 92vw); }
+  .nav-btn { min-width: 0; padding: 8px 4px; font-size: 11px; border-radius: 13px; }
+  .nav-btn span { font-size: 19px; }
+  .season-banner, .event-banner { font-size: 11px; padding: 6px 12px; text-align: center; }
+  .online-badge { font-size: 11px; }
+
+  /* ---- game HUD: tighter chips so 4-5 fit beside the score ---- */
+  .game-hud { gap: 6px; padding: 4px 4px 6px; }
+  .chip { padding: 6px 9px; font-size: 13px; }
+  .hud-timer { font-size: 18px; padding: 5px 10px; }
+  .item-bar { gap: 6px; padding: 0 6px 6px; }
+
+  /* ---- modals & pickers wrap instead of overflowing ---- */
+  .modal { padding: 18px 14px; }
+  .modal h2 { font-size: 19px; }
+  .result-banner { font-size: 30px; }
+  .tabs { flex-wrap: wrap; gap: 6px; }
+  .tab { padding: 7px 13px; font-size: 12px; }
+  .seg { flex-wrap: wrap; justify-content: flex-end; }
+  .settings-row { flex-wrap: wrap; }
+  .modal-buttons { flex-wrap: wrap; }
+  .perk-icon { font-size: 22px; }
+  .boss-panel { max-width: 96vw; }
 }

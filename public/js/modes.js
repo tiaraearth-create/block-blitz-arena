@@ -241,7 +241,9 @@ export function showAdminPalette() {
       <button class="btn btn-ghost btn-sm" data-cmd="clear">🧹 ボード全消し</button>
       <button class="btn btn-ghost btn-sm" data-cmd="reroll">🔄 リロール +5回</button>
       <button class="btn btn-ghost btn-sm" data-cmd="time">⏱ 残り時間 +60秒</button>
-      <button class="btn btn-ghost btn-sm" data-cmd="bosshalf">👹 ボスHP 半減</button>
+      <button class="btn btn-ghost btn-sm" data-cmd="bosshalf">👹 敵HP 半減</button>
+      <button class="btn btn-ghost btn-sm" data-cmd="floorclear">🏰 フロア即クリア</button>
+      <button class="btn btn-ghost btn-sm" data-cmd="fever">⭐ フィーバー付与（15秒）</button>
     </div>
     <p class="muted center" style="font-size:11px;margin-top:8px">通貨付与や隠し解放はホームの「🛡️管理」から</p>
     <div class="modal-buttons"><button class="btn btn-primary" id="acClose">閉じる</button></div>`);
@@ -290,6 +292,21 @@ async function adminCmd(cmd) {
         if (mode.mode === 'dungeon') mode.floorCleared();
         else mode.finish(true);
       }
+      break;
+    case 'floorclear':
+      if (!mode || mode.mode !== 'dungeon') return toast('ダンジョンのみ使えます', 'err');
+      if (mode.perkOpen) return;
+      mode.engine.score += Math.max(0, mode.hp);
+      mode.hp = 0;
+      mode.updateHpBar();
+      mode.floorCleared();
+      break;
+    case 'fever':
+      if (!eng) return toast('ゲーム中のみ使えます', 'err');
+      eng.feverUntil = Date.now() + 15000;
+      $('#hudScore').classList.add('fever');
+      setTimeout(() => $('#hudScore').classList.remove('fever'), 15000);
+      toast('⭐ フィーバー付与！15秒間スコア2倍', 'ok', 1800);
       break;
   }
 }

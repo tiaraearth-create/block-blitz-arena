@@ -327,6 +327,16 @@ app.get('/api/status', (_req, res) => {
   });
 });
 
+// Wipe everyone's weekly-challenge record (fresh week on demand).
+app.post('/api/admin/weekly/reset', requireAuth, requireAdmin, (req, res) => {
+  let affected = 0;
+  for (const u of Object.values(db.users)) {
+    if (u.stats && u.stats.weekly) { delete u.stats.weekly; affected++; }
+  }
+  saveDb();
+  res.json({ affected });
+});
+
 // Start / stop a limited-time event.
 app.post('/api/admin/event', requireAuth, requireAdmin, (req, res) => {
   if (req.body.on) {
@@ -761,6 +771,12 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   const b = req.body || {};
   if (typeof b.grantCoins === 'number') target.coins = Math.max(0, target.coins + Math.floor(b.grantCoins));
   if (typeof b.grantGems === 'number') target.gems = Math.max(0, target.gems + Math.floor(b.grantGems));
+  if (typeof b.grantItems === 'number') {
+    // grant N of every booster (negative to confiscate)
+    const n = Math.floor(b.grantItems);
+    target.items = target.items || {};
+    for (const it of BOOST_ITEMS) target.items[it.id] = Math.max(0, (target.items[it.id] || 0) + n);
+  }
   if (typeof b.banned === 'boolean') {
     if (target.role === 'admin' && b.banned) return res.status(400).json({ error: '管理者は凍結できません' });
     target.banned = b.banned;
