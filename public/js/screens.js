@@ -4,6 +4,7 @@ import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar } fr
 import { getSkin, BOARDS } from './themes.js';
 import { audio } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
+import { reconnectChat } from './chat.js';
 
 // ---------------------------------------------------------------------------
 // Auth modal
@@ -47,6 +48,7 @@ export function showAuthModal() {
       updateTopbar();
       closeModal();
       audio.coin();
+      reconnectChat();
       toast(mode === 'login' ? `おかえりなさい、${data.user.username}さん！` : `ようこそ、${data.user.username}さん！`, 'ok');
       if (data.dailyBonus) {
         setTimeout(() => toast(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`, 'ok', 3500), 900);
@@ -88,6 +90,7 @@ function showProfileModal() {
     session.user = null;
     updateTopbar();
     closeModal();
+    reconnectChat();
     toast('ログアウトしました');
   };
 }

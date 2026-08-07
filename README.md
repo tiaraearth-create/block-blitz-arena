@@ -65,6 +65,8 @@ npm start
 |---|---|---|
 | `PORT` | 3000 | HTTPポート |
 | `MATCH_SECONDS` | 120 | オンライン対戦の試合時間（秒） |
+| `ADMIN_PASSWORD` | （自動生成） | 設定すると管理者「るみまき」のパスワードを固定（8文字以上）。再デプロイしても変わらなくなる |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | なし | 設定すると課金が「製作中」→本物のStripe決済に切り替わる |
 
 ## 🏗️ 構成
 

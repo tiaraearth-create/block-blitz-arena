@@ -232,6 +232,7 @@ class SoloMode {
     $('#oppPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
     $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
     this.startedAt = Date.now();
     const v = getView();
     this.engine = new Engine();
@@ -301,6 +302,7 @@ class VersusBase {
     $('#oppPanel').classList.remove('hidden');
     $('#hudTimer').classList.remove('hidden');
     $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
     $('#teamTotals').classList.add('hidden');
     this.timeLeft = duration;
     this.updateTimerHud();
@@ -590,6 +592,7 @@ class BossMode {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
     $('#bossPanel').classList.remove('hidden');
     document.querySelector('.boss-atkbar').classList.remove('hidden');
     $('#bossEmoji').textContent = this.boss.emoji;
@@ -770,6 +773,7 @@ class BossRushMode {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
     $('#bossPanel').classList.remove('hidden');
     document.querySelector('.boss-atkbar').classList.remove('hidden');
     this.applyBossPanel();
@@ -963,6 +967,7 @@ class OnlineMode extends VersusBase {
       .on('room_error', msg => { audio.error(); toast(msg.error, 'err'); })
       .on('raid_state', msg => this.onRaidState(msg))
       .on('raid_attack', msg => this.onRaidAttack(msg))
+      .on('emote', msg => this.showEmote(msg.slot, msg.emoji))
       .on('close', () => {
         if (this.ended) return;
         if (this.inMatch || this.kind === 'custom') {
@@ -1102,11 +1107,64 @@ class OnlineMode extends VersusBase {
     toast(this.isRaid ? `🐲 レイド開始！${this.raidBoss ? this.raidBoss.name : ''}を倒せ！`
       : this.isTeam ? '👥 チーム戦スタート！' : '⚔️ マッチしました！', 'ok');
 
+    // Emotes: quick reactions relayed to everyone in the match.
+    const emoteBtn = $('#btnEmote');
+    emoteBtn.classList.remove('hidden');
+    emoteBtn.onclick = () => this.toggleEmotePicker();
+
     countdownOverlay(msg.countdown || 3, () => {
       v.inputLocked = false;
       this.startTimer(() => this.timeUp());
       this.stateInt = setInterval(() => this.pushState(), 900);
     }, audio);
+  }
+
+  toggleEmotePicker() {
+    const existing = document.querySelector('.emote-picker');
+    if (existing) { existing.remove(); return; }
+    const picker = document.createElement('div');
+    picker.className = 'emote-picker';
+    for (const e of ['👍', '🔥', '😂', '😭', '🎉', '😱']) {
+      const b = document.createElement('button');
+      b.textContent = e;
+      b.onclick = () => {
+        this.client.send({ type: 'emote', emoji: e });
+        this.floatEmote(e, 'me');
+        audio.click();
+        picker.remove();
+      };
+      picker.appendChild(b);
+    }
+    $('#screen-game').appendChild(picker);
+    setTimeout(() => picker.remove(), 6000);
+  }
+
+  showEmote(slot, emoji) {
+    this.floatEmote(emoji, slot);
+    audio.pickup();
+  }
+
+  floatEmote(emoji, from) {
+    const el = document.createElement('div');
+    el.className = 'emote-float';
+    let x = window.innerWidth / 2, y = window.innerHeight * 0.55;
+    if (from === 'me') {
+      y = window.innerHeight * 0.6;
+      x = window.innerWidth * 0.25;
+    } else {
+      const scoreEl = document.querySelector(`[data-slot-score="${from}"]`);
+      const card = scoreEl && scoreEl.closest('.opp-card');
+      if (card) {
+        const r = card.getBoundingClientRect();
+        x = r.left + r.width / 2;
+        y = r.top + r.height / 2;
+      }
+    }
+    el.style.left = `${x - 27}px`;
+    el.style.top = `${y - 27}px`;
+    el.textContent = emoji;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 1700);
   }
 
   teamTotalsCalc() {
@@ -1295,6 +1353,9 @@ function endToMenu() {
   if (currentMode) { currentMode.destroy(); currentMode = null; }
   if (view) view.stop();
   stopAutopilot();
+  const picker = document.querySelector('.emote-picker');
+  if (picker) picker.remove();
+  $('#btnEmote').classList.add('hidden');
   audio.playTrack('menu');
   showScreen('menu');
 }

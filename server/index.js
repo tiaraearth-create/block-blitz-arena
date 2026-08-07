@@ -716,6 +716,23 @@ const battle = initBattle(server, {
 
 const ADMIN_NAME = 'るみまき';
 
+// With ADMIN_PASSWORD set (e.g. on Render), the admin password is pinned to it
+// on every boot — it survives redeploys and data resets.
+function pinAdminPassword() {
+  const pinned = process.env.ADMIN_PASSWORD;
+  if (!pinned || pinned.length < 8) {
+    if (pinned) console.warn('[admin] ADMIN_PASSWORD は8文字以上にしてください（無視されました）');
+    return;
+  }
+  const admin = Object.values(db.users).find(u => u.role === 'admin');
+  if (!admin) return;
+  const { salt, hash } = hashPassword(pinned);
+  admin.salt = salt;
+  admin.passHash = hash;
+  saveDb();
+  console.log(`[admin] 管理者パスワードを環境変数 ADMIN_PASSWORD に固定しました`);
+}
+
 function seedAdmin() {
   // One-time migration: rename a legacy "admin" account to the new name.
   const legacy = Object.values(db.users).find(u => u.role === 'admin' && u.username === 'admin');
@@ -744,6 +761,7 @@ function seedAdmin() {
 
 currentSeason();
 seedAdmin();
+pinAdminPassword();
 
 server.listen(PORT, () => {
   console.log(`Block Blitz Arena server: http://localhost:${PORT}`);

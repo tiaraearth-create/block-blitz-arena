@@ -11,6 +11,7 @@ export function showScreen(name) {
     const el = $(`#screen-${s}`);
     if (el) el.classList.toggle('hidden', s !== name);
   }
+  document.body.dataset.screen = name;   // used by CSS (e.g. chat drawer on menu only)
 }
 
 export function toast(message, kind = '', ms = 2600) {

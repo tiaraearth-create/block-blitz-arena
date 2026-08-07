@@ -26,6 +26,17 @@ export function initBattle(server, deps) {
   }
   function broadcastAll(msg) { for (const ws of clients) send(ws, msg); }
 
+  // ---- global chat (in-memory history) ----
+  const chatHistory = [];   // { type:'chat', from, role, text, at }
+
+  function sockRate(ws, key, limit, windowMs) {
+    const now = Date.now();
+    ws[key] = (ws[key] || []).filter(t => now - t < windowMs);
+    if (ws[key].length >= limit) return false;
+    ws[key].push(now);
+    return true;
+  }
+
   function sockName(s) { return s.isBot ? s.name : (s.user ? s.user.username : s.guestName); }
   function sockLevel(s) {
     if (s.isBot) return { easy: 2, normal: 6, hard: 12 }[s.level] || 6;
@@ -415,7 +426,12 @@ export function initBattle(server, deps) {
           }
           ws.user = user ? { id: user.id, username: user.username } : null;
           ws.guestName = user ? null : (sanitizeName(msg.guestName) || `ゲスト${Math.floor(Math.random() * 9999)}`);
-          send(ws, { type: 'hello_ok', name: user ? user.username : ws.guestName, online: clients.size });
+          send(ws, {
+            type: 'hello_ok',
+            name: user ? user.username : ws.guestName,
+            online: clients.size,
+            chat: chatHistory.slice(-40),
+          });
           break;
         }
         case 'queue': {
@@ -483,6 +499,32 @@ export function initBattle(server, deps) {
         }
         case 'room_start': {
           startRoom(ws);
+          break;
+        }
+        case 'chat': {
+          const text = String(msg.text || '').trim().slice(0, 200);
+          if (!text) return;
+          if (!sockRate(ws, 'chatTimes', 5, 10000)) {
+            send(ws, { type: 'error', error: '連投しすぎです。少し待ってください' });
+            return;
+          }
+          const role = ws.user && db.users[ws.user.id] ? db.users[ws.user.id].role : 'guest';
+          const entry = { type: 'chat', from: sockName(ws), role, text, at: Date.now() };
+          chatHistory.push(entry);
+          if (chatHistory.length > 60) chatHistory.shift();
+          broadcastAll(entry);
+          break;
+        }
+        case 'emote': {
+          if (!match || match.ended || !me) return;
+          if (!sockRate(ws, 'emoteTimes', 3, 5000)) return;
+          const EMOJIS = ['👍', '🔥', '😂', '😭', '🎉', '😱'];
+          const emoji = EMOJIS.includes(msg.emoji) ? msg.emoji : '👍';
+          for (const p of match.players) {
+            if (p.sock !== ws && !p.sock.isBot) {
+              send(p.sock, { type: 'emote', slot: me.slot, emoji });
+            }
+          }
           break;
         }
         case 'ping': send(ws, { type: 'pong' }); break;

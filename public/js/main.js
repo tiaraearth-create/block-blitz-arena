@@ -7,6 +7,7 @@ import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderbo
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
+import { initChat } from './chat.js';
 
 // ---- menu buttons ----
 $('#btnSolo').onclick = () => { audio.click(); startSolo(); };
@@ -269,24 +270,35 @@ if (location.search.includes('purchase=success')) {
 }
 
 // ---- session restore ----
+document.body.dataset.screen = 'menu';
+initChat();
+
 (async () => {
   updateTopbar();
   if (session.token) {
-    try {
-      const data = await refreshMe();
-      updateTopbar();
-      if (data.dailyBonus) {
-        toast(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`, 'ok', 3500);
-        audio.coin();
+    // Retry through free-tier cold starts so closing/reopening the app
+    // never looks like a logout.
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        const data = await refreshMe();
+        updateTopbar();
+        if (data.dailyBonus) {
+          toast(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`, 'ok', 3500);
+          audio.coin();
+        }
+        break;
+      } catch (err) {
+        if (String(err.message).includes('凍結')) { toast(err.message, 'err'); break; }
+        // Only drop the session on real auth errors — keep it through outages.
+        if (err.status === 401 || err.status === 403) {
+          setToken(null);
+          session.user = null;
+          updateTopbar();
+          break;
+        }
+        if (attempt === 0) toast('🌙 サーバーを起こしています…そのままお待ちください', '', 8000);
+        await new Promise(r => setTimeout(r, 9000));
       }
-    } catch (err) {
-      if (String(err.message).includes('凍結')) toast(err.message, 'err');
-      // Only drop the session on real auth errors — keep it through outages.
-      if (err.status === 401 || err.status === 403) {
-        setToken(null);
-        session.user = null;
-      }
-      updateTopbar();
     }
   }
   // season banner
