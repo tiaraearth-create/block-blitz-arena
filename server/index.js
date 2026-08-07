@@ -114,7 +114,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bo
   // Cheat guard: cap plausible score rate.
   if (score > duration * 500) score = Math.floor(duration * 500);
 
-  const coins = Math.min(1000, 20 + Math.floor(score / 100) + (won ? 50 : 0));
+  let coins = Math.min(1000, 20 + Math.floor(score / 100) + (won ? 50 : 0));
+  if (mode === 'chaos') coins = Math.min(1500, Math.round(coins * 1.5));   // event bonus
   const bpXp = Math.min(800, 30 + Math.floor(score / 60) + lines * 5 + (won ? 100 : 0));
   const accXp = Math.min(600, 20 + Math.floor(score / 100) + (won ? 80 : 0));
 
@@ -281,13 +282,40 @@ app.delete('/api/me', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// Public lightweight status (menu online counter).
+// Limited-time event (admin-controlled), e.g. chaos mode.
+function currentEvent() {
+  const e = db.meta.event;
+  if (e && e.endsAt > Date.now()) return e;
+  return null;
+}
+
+// Public lightweight status (menu online counter + event).
 app.get('/api/status', (_req, res) => {
   res.json({
     online: battle.clients.size,
     activeMatches: battle.matches.size,
     maintenance: inMaintenance(),
+    event: currentEvent(),
   });
+});
+
+// Start / stop a limited-time event.
+app.post('/api/admin/event', requireAuth, requireAdmin, (req, res) => {
+  if (req.body.on) {
+    const hours = Math.max(1, Math.min(24 * 14, Math.floor(Number(req.body.hours) || 24)));
+    db.meta.event = {
+      id: 'chaos',
+      name: sanitizeName(req.body.name) || 'カオスタイム',
+      startedAt: Date.now(),
+      endsAt: Date.now() + hours * 60 * 60 * 1000,
+    };
+    battle.broadcastAll({ type: 'announce', message: `🌪️ 期間限定イベント「${db.meta.event.name}」開催中！メニューから参加しよう！`, from: req.user.username });
+  } else {
+    db.meta.event = null;
+    battle.broadcastAll({ type: 'announce', message: '🌪️ 期間限定イベントは終了しました。また次回！', from: req.user.username });
+  }
+  saveDb();
+  res.json({ event: currentEvent() });
 });
 
 // ---------------------------------------------------------------------------

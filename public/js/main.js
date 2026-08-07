@@ -2,7 +2,7 @@
 import { session, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette } from './modes.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
@@ -241,17 +241,36 @@ function dismissSplash(e) {
   }
 })();
 
-// live online counter on the menu
+// live online counter + limited-time event on the menu
+window.__bbaEvent = null;
 async function pollStatus() {
   try {
     const res = await fetch('/api/status');
     const data = await res.json();
     $('#onlineCount').textContent = data.online;
     $('#onlineBadge').classList.remove('hidden');
+    window.__bbaEvent = data.event || null;
+    const banner = $('#eventBanner');
+    const btn = $('#btnChaos');
+    if (data.event) {
+      const hoursLeft = Math.max(1, Math.ceil((data.event.endsAt - Date.now()) / 3600000));
+      banner.textContent = `🌪️ 期間限定「${data.event.name}」開催中！ — 残り約${hoursLeft}時間`;
+      banner.classList.remove('hidden');
+      btn.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+      btn.classList.add('hidden');
+    }
   } catch { /* server unreachable — keep hidden */ }
 }
 pollStatus();
 setInterval(pollStatus, 30000);
+
+$('#btnChaos').onclick = () => {
+  if (!window.__bbaEvent) { toast('イベントは開催されていません', 'err'); return; }
+  audio.click();
+  startChaos();
+};
 
 bindAdminActions();
 loadTitles();

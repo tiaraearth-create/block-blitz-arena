@@ -76,6 +76,8 @@ export class Engine {
     this.maxCombo = 0;
     this.piecesPlaced = 0;
     this.rerolls = 1;         // hand rerolls left this game
+    this.scoreMult = 1;       // chaos-event score multiplier
+    this.chaosBig = false;    // chaos-event: draw only big pieces
     this.over = false;
     this.refillHand();
   }
@@ -90,6 +92,12 @@ export class Engine {
   }
 
   drawPiece() {
+    if (this.chaosBig) {
+      const bigs = [];
+      for (let i = 0; i < SHAPES.length; i++) if (SHAPES[i].cells.length >= 5) bigs.push(i);
+      const i = bigs[this.rng.int(bigs.length)];
+      return { shape: i, cells: SHAPES[i].cells, color: SHAPES[i].color };
+    }
     let roll = this.rng.next() * TOTAL_WEIGHT;
     for (let i = 0; i < SHAPES.length; i++) {
       roll -= SHAPES[i].w;
@@ -182,6 +190,7 @@ export class Engine {
     } else {
       this.streak = 0;
     }
+    if (this.scoreMult !== 1) gained = Math.round(gained * this.scoreMult);
     this.score += gained;
 
     this.refillHand();

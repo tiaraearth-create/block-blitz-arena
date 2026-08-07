@@ -724,6 +724,45 @@ export function bindAdminActions() {
     toast('🔓 「神」「創造神」を解放しました（この端末のみ）', 'announce', 3500);
   };
 
+  $('#btnEvent').onclick = async () => {
+    let active = null;
+    try { active = (await api('/api/status')).event; } catch { /* ignore */ }
+    const m = showModal(active ? `
+      <h2>🌪️ 期間限定イベント</h2>
+      <p class="center" style="margin-bottom:14px">「${escapeHtml(active.name)}」開催中<br><small class="muted">終了: ${new Date(active.endsAt).toLocaleString('ja-JP')}</small></p>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="evClose">閉じる</button>
+        <button class="btn btn-ai" id="evStop">イベントを終了する</button>
+      </div>` : `
+      <h2>🌪️ 期間限定イベント</h2>
+      <p class="muted center" style="margin-bottom:12px">カオスモードを全プレイヤーに開放します。<br>15秒ごとにルールが激変＋コイン1.5倍！</p>
+      <div class="form-col">
+        <div class="settings-row"><label>イベント名</label><input id="evName" type="text" maxlength="16" value="カオスタイム" style="width:150px"></div>
+        <div class="settings-row"><label>開催時間（時間）</label><input id="evHours" type="number" min="1" max="336" value="24" style="width:80px;text-align:center"></div>
+        <div class="modal-buttons">
+          <button class="btn btn-ghost" id="evClose">やめる</button>
+          <button class="btn btn-chaos" id="evStart">🌪️ 開催する！</button>
+        </div>
+      </div>`);
+    m.querySelector('#evClose').onclick = closeModal;
+    const startBtn = m.querySelector('#evStart');
+    if (startBtn) startBtn.onclick = async () => {
+      try {
+        await api('/api/admin/event', { method: 'POST', body: { on: true, name: m.querySelector('#evName').value.trim(), hours: Number(m.querySelector('#evHours').value) } });
+        closeModal();
+        toast('🌪️ イベントを開始しました！全員にアナウンス済み', 'ok', 3000);
+      } catch (err) { toast(err.message, 'err'); }
+    };
+    const stopBtn = m.querySelector('#evStop');
+    if (stopBtn) stopBtn.onclick = async () => {
+      try {
+        await api('/api/admin/event', { method: 'POST', body: { on: false } });
+        closeModal();
+        toast('イベントを終了しました', 'ok');
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  };
+
   $('#btnLbReset').onclick = async () => {
     if (!confirm('全ユーザーのハイスコア・レート・PvP戦績をリセットします。よろしいですか？')) return;
     try {

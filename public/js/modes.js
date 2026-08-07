@@ -927,6 +927,177 @@ export function startBossRush(bosses) {
 }
 
 // ---------------------------------------------------------------------------
+// Chaos mode (limited-time event, admin-controlled): the rules mutate every
+// 15 seconds. Pure mayhem, bonus coins.
+// ---------------------------------------------------------------------------
+
+const CHAOS_BOARDS = ['board_default', 'board_ocean', 'board_sunset', 'board_forest', 'board_galaxy', 'board_oni', 'board_kami', 'board_sakura', 'board_volcano'];
+const CHAOS_MODS = {
+  fever:   '🔥 フィーバー！スコア3倍！',
+  rain:    '☔ お邪魔ブロックの雨！',
+  giant:   '🧱 巨大ブロック時代！',
+  heaven:  '✨ 天の恵み！全消し！',
+  shuffle: '🌀 大シャッフル！',
+  reroll:  '🔄 リロール無限！',
+};
+
+class ChaosMode extends VersusBase {
+  constructor() { super(); this.mode = 'chaos'; }
+
+  start() {
+    this.setupHud(120);
+    $('#oppPanel').classList.add('hidden');
+    this.startedAt = Date.now();
+    const v = getView();
+    v.setTheme({ ...equippedTheme(), boardId: 'board_galaxy' });
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = () => this.onPlace();
+    v.onGameOver = () => this.onTopOut();
+    this.updateMyHud(this.engine);
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('boss');
+    toast('🌪️ カオスモード！15秒ごとにルールが変わるぞ！', 'announce', 3000);
+
+    countdownOverlay(3, () => {
+      v.inputLocked = false;
+      this.startTimer(() => this.finish());
+      this.nextModifier();
+      this.modInt = setInterval(() => this.nextModifier(), 15000);
+    }, audio);
+  }
+
+  nextModifier() {
+    if (this.ended) return;
+    const e = this.engine;
+    // clear the previous modifier
+    clearInterval(this.rainInt);
+    e.scoreMult = 1;
+    e.chaosBig = false;
+
+    const ids = Object.keys(CHAOS_MODS);
+    let id = ids[(Math.random() * ids.length) | 0];
+    if (id === this.currentMod) id = ids[(ids.indexOf(id) + 1) % ids.length];
+    this.currentMod = id;
+    this.modName = CHAOS_MODS[id];
+
+    // visual chaos: new random stage + flash + shake
+    view.setTheme({ ...equippedTheme(), boardId: CHAOS_BOARDS[(Math.random() * CHAOS_BOARDS.length) | 0] });
+    view.screenFlash = 0.3;
+    view.shake = 10;
+    audio.combo(8);
+    toast(this.modName, 'announce', 2400);
+    $('#hudSub').textContent = this.modName;
+
+    switch (id) {
+      case 'fever':
+        e.scoreMult = 3;
+        break;
+      case 'rain':
+        this.rainInt = setInterval(() => {
+          if (this.ended || !view || view.inputLocked || view.drag) return;
+          const cells = e.addGarbage(2);
+          for (const [r, c] of cells) {
+            view.spawnAnim.set(r * 8 + c, view.time);
+            view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
+          }
+          audio.place();
+          if (e.over) this.onTopOut();
+        }, 3000);
+        break;
+      case 'giant':
+        e.chaosBig = true;
+        if (!view.drag) e.hand = e.hand.map(p => (p ? e.drawPiece() : null));
+        break;
+      case 'heaven':
+        e.grid.fill(0);
+        view.reviveFlash();
+        confettiBurst(30);
+        break;
+      case 'shuffle': {
+        const values = [];
+        for (let i = 0; i < 64; i++) { if (e.grid[i]) values.push(e.grid[i]); }
+        e.grid.fill(0);
+        const spots = [...Array(64).keys()];
+        for (const v2 of values) {
+          const k = spots.splice((Math.random() * spots.length) | 0, 1)[0];
+          e.grid[k] = v2;
+          view.spawnAnim.set(k, view.time);
+        }
+        view.shake = 14;
+        if (!e.hasAnyMove()) { e.grid.fill(0); }   // shuffle never kills you
+        break;
+      }
+      case 'reroll':
+        e.rerolls += 10;
+        updateRerollHud(e);
+        break;
+    }
+  }
+
+  onPlace() {
+    this.updateMyHud(this.engine);
+    $('#hudSub').textContent = this.modName || 'カオス';
+  }
+
+  onTopOut() {
+    if (this.ended) return;
+    toast('ボードリセット！スコアは維持されます', '', 1600);
+    this.engine.reviveBoard();
+    getView().reviveFlash();
+  }
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    this.stopTimer();
+    clearInterval(this.modInt);
+    clearInterval(this.rainInt);
+    getView().inputLocked = true;
+    audio.victory();
+    confettiBurst(40);
+    const rewards = await submitResult({
+      mode: 'chaos', score: this.engine.score, lines: this.engine.linesCleared,
+      maxCombo: this.engine.maxCombo, duration: 120, won: false,
+    });
+    const m = showModal(`
+      <div class="result-banner win">🌪️ カオス終了！</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>スコア</span><b>${fmt(this.engine.score)}</b></div>
+        <div class="rs-row"><span>消したライン</span><b>${fmt(this.engine.linesCleared)}</b></div>
+        <div class="rs-row"><span>最大コンボ</span><b>${fmt(this.engine.maxCombo)}</b></div>
+        ${rewards ? '<div class="rs-row"><span>🎉 イベントボーナス</span><b>コイン1.5倍！</b></div>' : ''}
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">メニュー</button>
+        <button class="btn btn-chaos" id="rAgain">もう一回！</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startChaos(); };
+  }
+
+  quit() { this.finish(); }
+
+  destroy() {
+    this.ended = true;
+    this.stopTimer();
+    clearInterval(this.modInt);
+    clearInterval(this.rainInt);
+  }
+}
+
+export function startChaos() {
+  if (currentMode) currentMode.destroy();
+  currentMode = new ChaosMode();
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+// ---------------------------------------------------------------------------
 // Online: 1v1 duel / 2v2 team / custom rooms — all via the battle server.
 // ---------------------------------------------------------------------------
 
