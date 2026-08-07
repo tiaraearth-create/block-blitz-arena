@@ -30,6 +30,13 @@ export const SHOP_ITEMS = [
 export const DEFAULT_OWNED = SHOP_ITEMS.filter(i => i.default).map(i => i.id);
 export const DEFAULT_EQUIPPED = { skin: 'skin_default', board: 'board_default', fx: 'fx_default' };
 
+// ---- Booster items (consumables) — usable in solo / boss / dungeon / chaos ----
+export const BOOST_ITEMS = [
+  { id: 'item_bomb',    icon: '💣', name: 'スマートボム', desc: 'いちばん埋まっている3×3を爆破', price: 300, currency: 'coins' },
+  { id: 'item_cleaner', icon: '🧹', name: 'クリーナー',   desc: 'お邪魔ブロック全部＋最下行を掃除', price: 250, currency: 'coins' },
+  { id: 'item_fever',   icon: '⭐', name: 'フィーバー',   desc: '15秒間スコア2倍', price: 400, currency: 'coins' },
+];
+
 // ---- Boss battles ----
 export const BOSSES = [
   { id: 'slime',  name: 'スライムキング',   emoji: '🟢', hp: 3000,  atkSec: 12, atkCells: 3, gemsFirst: 50 },

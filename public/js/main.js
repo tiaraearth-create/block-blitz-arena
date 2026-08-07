@@ -1,9 +1,9 @@
 // App bootstrap: wire menu, session restore, global buttons.
-import { session, refreshMe, setToken } from './net.js';
+import { session, api, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette } from './modes.js';
-import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions } from './screens.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem } from './modes.js';
+import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
@@ -175,6 +175,9 @@ $$('[data-back]').forEach(b => { b.onclick = () => { audio.click(); showScreen('
 
 // quit game
 $('#btnQuit').onclick = () => {
+  // Chaos and dungeon have their own quit dialogs.
+  const cur = window.__bbaMode;
+  if (cur && (cur.mode === 'chaos' || cur.mode === 'dungeon') && !cur.ended) { audio.click(); quitCurrent(); return; }
   const m = showModal(`
     <h2>ゲームを終了しますか？</h2>
     <p class="muted center">オンライン対戦の離脱は<b style="color:var(--red)">敗北</b>になります。<br>それ以外のモードは引き分け扱いです</p>
@@ -243,6 +246,30 @@ function dismissSplash(e) {
 
 // live online counter + limited-time event on the menu
 window.__bbaEvent = null;
+
+function fmtRemain(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s >= 86400) return `${Math.floor(s / 86400)}日${Math.floor((s % 86400) / 3600)}時間`;
+  if (s >= 3600) return `${Math.floor(s / 3600)}時間${Math.floor((s % 3600) / 60)}分`;
+  if (s >= 60) return `${Math.floor(s / 60)}分${s % 60 ? `${s % 60}秒` : ''}`;
+  return `${s}秒`;
+}
+
+function updateEventBanner() {
+  const banner = $('#eventBanner');
+  const btn = $('#btnChaos');
+  const ev = window.__bbaEvent;
+  if (ev && ev.endsAt > Date.now()) {
+    banner.textContent = `🌪️ 期間限定「${ev.name}」開催中！ — 残り${fmtRemain(ev.endsAt - Date.now())}`;
+    banner.classList.remove('hidden');
+    btn.classList.remove('hidden');
+  } else {
+    if (ev) window.__bbaEvent = null;   // expired locally — hide until next poll
+    banner.classList.add('hidden');
+    btn.classList.add('hidden');
+  }
+}
+
 async function pollStatus() {
   try {
     const res = await fetch('/api/status');
@@ -250,27 +277,169 @@ async function pollStatus() {
     $('#onlineCount').textContent = data.online;
     $('#onlineBadge').classList.remove('hidden');
     window.__bbaEvent = data.event || null;
-    const banner = $('#eventBanner');
-    const btn = $('#btnChaos');
-    if (data.event) {
-      const hoursLeft = Math.max(1, Math.ceil((data.event.endsAt - Date.now()) / 3600000));
-      banner.textContent = `🌪️ 期間限定「${data.event.name}」開催中！ — 残り約${hoursLeft}時間`;
-      banner.classList.remove('hidden');
-      btn.classList.remove('hidden');
-    } else {
-      banner.classList.add('hidden');
-      btn.classList.add('hidden');
-    }
+    updateEventBanner();
   } catch { /* server unreachable — keep hidden */ }
 }
 pollStatus();
 setInterval(pollStatus, 30000);
+setInterval(updateEventBanner, 1000);   // live countdown between polls
+
+// ---- chaos setup: pick duration (presets or free min/sec) + mutation interval ----
+function showChaosSetup() {
+  const prefs = JSON.parse(localStorage.getItem('bba_chaos_prefs') || '{}');
+  const best = Number(localStorage.getItem('bba_chaos_best') || 0);
+  let duration = Number(prefs.duration) || 120;
+  let interval = Number(prefs.interval) || 15;
+  const isPreset = [60, 120, 180, 300].includes(duration);
+
+  const m = showModal(`
+    <h2>🌪️ カオスモード</h2>
+    <p class="muted center" style="margin-bottom:10px">一定間隔でルールが激変！コイン1.5倍！${best ? `<br>自己ベスト: <b style="color:var(--yellow)">${fmt(best)}</b>` : ''}</p>
+    <div class="form-col">
+      <div class="settings-row"><label>⏱️ プレイ時間</label><div class="seg" data-cs="duration">
+        ${[60, 120, 180, 300].map(d => `<button data-v="${d}" ${duration === d ? 'class="active"' : ''}>${d / 60}分</button>`).join('')}
+        <button data-v="custom" ${!isPreset ? 'class="active"' : ''}>自由</button>
+      </div></div>
+      <div class="settings-row ${isPreset ? 'hidden' : ''}" id="csCustomRow"><label>自由設定（30秒〜30分）</label>
+        <input id="csMin" type="number" min="0" max="30" value="${Math.floor(duration / 60)}" style="width:52px;text-align:center">分
+        <input id="csSec" type="number" min="0" max="59" value="${duration % 60}" style="width:52px;text-align:center">秒
+      </div>
+      <div class="settings-row"><label>🌀 ルール変化の間隔</label><div class="seg" data-cs="interval">
+        ${[[20, 'ゆるい 20秒'], [15, 'ふつう 15秒'], [8, '激辛 8秒']].map(([v, l]) =>
+          `<button data-v="${v}" ${interval === v ? 'class="active"' : ''}>${l}</button>`).join('')}
+      </div></div>
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="csCancel">やめる</button>
+      <button class="btn btn-chaos" id="csStart">🌪️ 開始！</button>
+    </div>`);
+
+  let durChoice = isPreset ? String(duration) : 'custom';
+  m.querySelectorAll('[data-cs] button').forEach(b => {
+    b.onclick = () => {
+      audio.click();
+      const group = b.parentElement.dataset.cs;
+      b.parentElement.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      if (group === 'duration') {
+        durChoice = b.dataset.v;
+        m.querySelector('#csCustomRow').classList.toggle('hidden', durChoice !== 'custom');
+      } else {
+        interval = Number(b.dataset.v);
+      }
+    };
+  });
+  m.querySelector('#csCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#csStart').onclick = () => {
+    if (durChoice === 'custom') {
+      const mins = Math.max(0, Math.min(30, Math.floor(Number(m.querySelector('#csMin').value) || 0)));
+      const secs = Math.max(0, Math.min(59, Math.floor(Number(m.querySelector('#csSec').value) || 0)));
+      duration = mins * 60 + secs;
+      if (duration < 30) { toast('30秒以上で設定してください', 'err'); return; }
+      if (duration > 1800) { toast('最大30分までです', 'err'); return; }
+    } else {
+      duration = Number(durChoice);
+    }
+    localStorage.setItem('bba_chaos_prefs', JSON.stringify({ duration, interval }));
+    audio.click();
+    closeModal();
+    startChaos({ duration, interval });
+  };
+}
 
 $('#btnChaos').onclick = () => {
   if (!window.__bbaEvent) { toast('イベントは開催されていません', 'err'); return; }
   audio.click();
-  startChaos();
+  showChaosSetup();
 };
+
+// ---- dungeon tower: pick a starting checkpoint, then climb ----
+function dungeonBest() {
+  const local = Number(localStorage.getItem('bba_dungeon_max') || 0);
+  const srv = session.user && session.user.stats ? Number(session.user.stats.dungeonMax || 0) : 0;
+  return Math.max(local, srv);
+}
+
+function showDungeonSelect() {
+  const best = dungeonBest();
+  const cps = [];
+  for (let f = 1; f <= 91; f += 10) if (f === 1 || best >= f - 1) cps.push(f);
+  let startF = cps[cps.length - 1];
+  const m = showModal(`
+    <h2>🏰 ダンジョン</h2>
+    <p class="muted center" style="margin-bottom:10px">100階の塔を登れ！階を進むごとに強化を選択。<br>10階ごとにボス＆チェックポイント${best ? `<br>最高記録: <b style="color:var(--yellow)">F${best}</b> クリア` : ''}</p>
+    <div class="settings-row"><label>開始階</label><div class="seg seg-wrap" data-ds>
+      ${cps.map(f => `<button data-v="${f}" ${f === startF ? 'class="active"' : ''}>F${f}</button>`).join('')}
+    </div></div>
+    ${cps.length > 1 ? '<p class="muted center" style="font-size:11px">チェックポイントから始めると強化ボーナス付き</p>' : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="dgCancel">やめる</button>
+      <button class="btn btn-dungeon" id="dgStart">🏰 挑戦する！</button>
+    </div>`);
+  m.querySelectorAll('[data-ds] button').forEach(b => {
+    b.onclick = () => {
+      audio.click();
+      m.querySelectorAll('[data-ds] button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      startF = Number(b.dataset.v);
+    };
+  });
+  m.querySelector('#dgCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#dgStart').onclick = () => { audio.click(); closeModal(); startDungeon(startF); };
+}
+
+$('#btnDungeon').onclick = () => { audio.click(); showDungeonSelect(); };
+
+// ---- weekly challenge ----
+window.__bbaOpenLeaderboard = openLeaderboard;
+
+function fmtWeeklyRemain(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s >= 86400) return `${Math.floor(s / 86400)}日${Math.floor((s % 86400) / 3600)}時間`;
+  if (s >= 3600) return `${Math.floor(s / 3600)}時間${Math.floor((s % 3600) / 60)}分`;
+  return `${Math.floor(s / 60)}分`;
+}
+
+$('#btnWeekly').onclick = async () => {
+  audio.click();
+  let info;
+  try {
+    info = await api('/api/weekly');
+  } catch {
+    toast('サーバーに接続できません', 'err');
+    return;
+  }
+  const localBest = (() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('bba_weekly_best'));
+      if (v && v.week === info.week) return v.best || 0;
+    } catch { /* ignore */ }
+    return 0;
+  })();
+  const best = Math.max(info.best || 0, localBest);
+  const m = showModal(`
+    <h2>🎯 ウィークリーチャレンジ</h2>
+    <p class="muted center" style="margin-bottom:10px">
+      全プレイヤー共通のピース順で<b>${info.pieces}個</b>限定スコアアタック！<br>
+      リセットまで残り <b>${fmtWeeklyRemain(info.endsAt - Date.now())}</b>
+      ${best ? `<br>今週のベスト: <b style="color:var(--yellow)">${fmt(best)}</b>` : ''}
+      ${session.user ? '' : '<br><small>💡 ランキングに載るにはログイン</small>'}
+    </p>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="wkCancel">やめる</button>
+      <button class="btn btn-ghost" id="wkRank">🏆 順位を見る</button>
+      <button class="btn btn-weekly" id="wkStart">🎯 挑戦する！</button>
+    </div>`);
+  m.querySelector('#wkCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#wkRank').onclick = () => { audio.click(); closeModal(); openLeaderboard('weekly'); };
+  m.querySelector('#wkStart').onclick = () => { audio.click(); closeModal(); startWeekly({ ...info, best }); };
+};
+
+// ---- gacha + in-game items ----
+$('#btnGacha').onclick = () => openGacha();
+$$('#itemBar [data-item]').forEach(b => {
+  b.onclick = () => useGameItem(b.dataset.item);
+});
 
 bindAdminActions();
 loadTitles();

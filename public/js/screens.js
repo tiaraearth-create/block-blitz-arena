@@ -1,6 +1,6 @@
 // Sub-screens: auth modal, leaderboard, shop, battle pass, admin panel.
 import { session, api, setToken, refreshMe } from './net.js';
-import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar } from './dom.js';
+import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar, confettiBurst } from './dom.js';
 import { getSkin, BOARDS } from './themes.js';
 import { audio } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
@@ -314,7 +314,7 @@ export async function openLeaderboard(board = 'score') {
       return;
     }
     const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰' };
     list.innerHTML = data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
@@ -323,7 +323,7 @@ export async function openLeaderboard(board = 'score') {
           ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.name)}》</span>` : ''}
           <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${r.pvpWins}勝${r.pvpLosses}敗` : ''}</div>
         </div>
-        <div class="lb-score">${fmt(board === 'rating' ? r.rating : r.bestScore)}</div>
+        <div class="lb-score">${board === 'dungeon' ? `F${fmt(r.dungeonMax || 0)}` : board === 'weekly' ? fmt(r.weeklyBest || 0) : fmt(board === 'rating' ? r.rating : r.bestScore)}</div>
       </div>`).join('');
   } catch (err) {
     list.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
@@ -335,6 +335,7 @@ export async function openLeaderboard(board = 'score') {
 // ---------------------------------------------------------------------------
 
 let shopItems = null;
+let shopBoosters = null;
 let shopTab = 'skin';
 
 export async function openShop(tab = shopTab) {
@@ -344,7 +345,11 @@ export async function openShop(tab = shopTab) {
   const grid = $('#shopGrid');
   grid.innerHTML = '<p class="muted center">読み込み中…</p>';
   try {
-    if (!shopItems) shopItems = (await api('/api/shop')).items;
+    if (!shopItems) {
+      const data = await api('/api/shop');
+      shopItems = data.items;
+      shopBoosters = data.boosters || [];
+    }
   } catch (err) {
     grid.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
     return;
@@ -353,6 +358,7 @@ export async function openShop(tab = shopTab) {
 }
 
 function renderShop() {
+  if (shopTab === 'item') { renderBoosterShop(); return; }
   const grid = $('#shopGrid');
   const u = session.user;
   const items = shopItems.filter(i => i.cat === shopTab);
@@ -416,6 +422,105 @@ async function buyItem(item) {
     toast(err.message, 'err');
   }
 }
+
+// ---- Booster (consumable) shop tab ----
+
+function renderBoosterShop() {
+  const grid = $('#shopGrid');
+  const u = session.user;
+  grid.innerHTML = '';
+  const note = document.createElement('p');
+  note.className = 'muted center';
+  note.style.gridColumn = '1 / -1';
+  note.textContent = 'ソロ・ボス・ダンジョン・カオスで使える消費アイテム。ゲーム中のHUDから発動！';
+  grid.appendChild(note);
+  shopBoosters.forEach((item, idx) => {
+    const count = u ? (u.items && u.items[item.id]) || 0 : null;
+    const el = document.createElement('div');
+    el.className = 'shop-item';
+    el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
+    el.innerHTML = `
+      <div class="shop-preview booster-preview">${item.icon}</div>
+      <div class="shop-name">${item.name}${count !== null ? ` <span class="muted">×${fmt(count)}</span>` : ''}</div>
+      <div class="shop-desc">${item.desc}</div>
+      <button class="btn btn-sm btn-gold" data-act="buy">🪙 ${fmt(item.price)}</button>
+    `;
+    grid.appendChild(el);
+    el.querySelector('[data-act]').onclick = async () => {
+      if (!session.user) { showAuthModal(); return; }
+      try {
+        await api('/api/items/buy', { method: 'POST', body: { itemId: item.id } });
+        await refreshMe();
+        audio.coin();
+        toast(`${item.icon} ${item.name} を購入しました！`, 'ok');
+        updateTopbar();
+        renderShop();
+      } catch (err) {
+        audio.error();
+        toast(err.message, 'err');
+      }
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Capsule machine (gacha)
+// ---------------------------------------------------------------------------
+
+const RARITY_LABEL = { N: 'ノーマル', R: 'レア', SR: 'スーパーレア', SSR: '激レア', UR: '超激レア' };
+
+export function openGacha() {
+  if (!session.user) { showAuthModal(); return; }
+  audio.click();
+  const m = showModal(`
+    <h2>🎰 カプセルマシン</h2>
+    <p class="muted center" style="margin-bottom:4px">コインで回して お宝ゲット！</p>
+    <p class="center" style="margin-bottom:10px">所持コイン: <b id="gcCoins">🪙 ${fmt(session.user.coins)}</b></p>
+    <div id="gcResults" class="gacha-results"></div>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="gcClose">閉じる</button>
+      <button class="btn btn-primary" id="gcPull1">1回 🪙500</button>
+      <button class="btn btn-gold" id="gcPull10">10連 🪙4,500</button>
+    </div>
+    <p class="muted center" style="font-size:10px;margin-top:8px">N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム150 3%<br>スキン等をコンプ済みの場合はジェムに変換されます</p>`);
+  m.querySelector('#gcClose').onclick = closeModal;
+  const pull = async count => {
+    const b1 = m.querySelector('#gcPull1'), b10 = m.querySelector('#gcPull10');
+    b1.disabled = b10.disabled = true;
+    try {
+      const data = await api('/api/gacha', { method: 'POST', body: { count } });
+      session.user = data.user;
+      updateTopbar();
+      m.querySelector('#gcCoins').textContent = `🪙 ${fmt(data.user.coins)}`;
+      const box = m.querySelector('#gcResults');
+      box.innerHTML = '';
+      audio.coin();
+      let bigWin = false;
+      data.results.forEach((r, i) => {
+        const card = document.createElement('div');
+        card.className = `gacha-card gr-${r.rarity}`;
+        card.style.animationDelay = `${i * 120}ms`;
+        const icon = r.type === 'coins' ? '🪙' : r.type === 'gems' ? '💎' : r.type === 'item' ? r.icon : r.cat === 'skin' ? '🧊' : r.cat === 'board' ? '🖼️' : '✨';
+        const label = r.type === 'coins' ? `コイン +${fmt(r.amount)}`
+          : r.type === 'gems' ? `ジェム +${fmt(r.amount)}${r.complete ? '（コンプ済）' : ''}`
+          : r.type === 'item' ? r.name
+          : r.name;
+        card.innerHTML = `<span class="gc-rarity">${r.rarity}</span><span class="gc-icon">${icon}</span><span class="gc-label">${escapeHtml(label)}</span>`;
+        box.appendChild(card);
+        if (r.rarity === 'SSR' || r.rarity === 'UR') bigWin = true;
+      });
+      if (bigWin) { setTimeout(() => { audio.victory(); confetti(); }, count * 120 + 300); }
+    } catch (err) {
+      audio.error();
+      toast(err.message, 'err');
+    }
+    b1.disabled = b10.disabled = false;
+  };
+  m.querySelector('#gcPull1').onclick = () => pull(1);
+  m.querySelector('#gcPull10').onclick = () => pull(10);
+}
+
+function confetti() { confettiBurst(50); }
 
 async function equipItem(item) {
   if (!session.user) return;
@@ -727,18 +832,29 @@ export function bindAdminActions() {
   $('#btnEvent').onclick = async () => {
     let active = null;
     try { active = (await api('/api/status')).event; } catch { /* ignore */ }
+    const remainText = ms => {
+      const s = Math.max(0, Math.ceil(ms / 1000));
+      if (s >= 86400) return `${Math.floor(s / 86400)}日${Math.floor((s % 86400) / 3600)}時間`;
+      if (s >= 3600) return `${Math.floor(s / 3600)}時間${Math.floor((s % 3600) / 60)}分`;
+      if (s >= 60) return `${Math.floor(s / 60)}分`;
+      return `${s}秒`;
+    };
     const m = showModal(active ? `
       <h2>🌪️ 期間限定イベント</h2>
-      <p class="center" style="margin-bottom:14px">「${escapeHtml(active.name)}」開催中<br><small class="muted">終了: ${new Date(active.endsAt).toLocaleString('ja-JP')}</small></p>
+      <p class="center" style="margin-bottom:14px">「${escapeHtml(active.name)}」開催中 — 残り${remainText(active.endsAt - Date.now())}<br><small class="muted">終了: ${new Date(active.endsAt).toLocaleString('ja-JP')}</small></p>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="evClose">閉じる</button>
         <button class="btn btn-ai" id="evStop">イベントを終了する</button>
       </div>` : `
       <h2>🌪️ 期間限定イベント</h2>
-      <p class="muted center" style="margin-bottom:12px">カオスモードを全プレイヤーに開放します。<br>15秒ごとにルールが激変＋コイン1.5倍！</p>
+      <p class="muted center" style="margin-bottom:12px">カオスモードを全プレイヤーに開放します。<br>ルールが激変＋コイン1.5倍！（時間・変化間隔はプレイヤーが選択）</p>
       <div class="form-col">
         <div class="settings-row"><label>イベント名</label><input id="evName" type="text" maxlength="16" value="カオスタイム" style="width:150px"></div>
-        <div class="settings-row"><label>開催時間（時間）</label><input id="evHours" type="number" min="1" max="336" value="24" style="width:80px;text-align:center"></div>
+        <div class="settings-row"><label>開催期間</label>
+          <input id="evDays" type="number" min="0" max="14" value="1" style="width:50px;text-align:center">日
+          <input id="evHours" type="number" min="0" max="23" value="0" style="width:50px;text-align:center">時間
+          <input id="evMins" type="number" min="0" max="59" value="0" style="width:50px;text-align:center">分
+        </div>
         <div class="modal-buttons">
           <button class="btn btn-ghost" id="evClose">やめる</button>
           <button class="btn btn-chaos" id="evStart">🌪️ 開催する！</button>
@@ -747,8 +863,11 @@ export function bindAdminActions() {
     m.querySelector('#evClose').onclick = closeModal;
     const startBtn = m.querySelector('#evStart');
     if (startBtn) startBtn.onclick = async () => {
+      const num = sel => Math.max(0, Math.floor(Number(m.querySelector(sel).value) || 0));
+      const minutes = num('#evDays') * 1440 + num('#evHours') * 60 + num('#evMins');
+      if (minutes < 1) { toast('開催期間は1分以上で設定してください', 'err'); return; }
       try {
-        await api('/api/admin/event', { method: 'POST', body: { on: true, name: m.querySelector('#evName').value.trim(), hours: Number(m.querySelector('#evHours').value) } });
+        await api('/api/admin/event', { method: 'POST', body: { on: true, name: m.querySelector('#evName').value.trim(), minutes } });
         closeModal();
         toast('🌪️ イベントを開始しました！全員にアナウンス済み', 'ok', 3000);
       } catch (err) { toast(err.message, 'err'); }

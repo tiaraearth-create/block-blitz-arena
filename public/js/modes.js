@@ -72,8 +72,13 @@ export function quitCurrent() {
 function updateRerollHud(engine) {
   const btn = $('#btnReroll');
   btn.classList.remove('hidden');
-  $('#rerollLeft').textContent = engine.rerolls;
-  btn.classList.toggle('off', engine.rerolls <= 0);
+  if (engine.infiniteReroll) {
+    $('#rerollLeft').textContent = '∞';
+    btn.classList.remove('off');
+  } else {
+    $('#rerollLeft').textContent = engine.rerolls;
+    btn.classList.toggle('off', engine.rerolls <= 0);
+  }
 }
 
 function handleEngineOver() {
@@ -94,6 +99,117 @@ export function rerollCurrent() {
   toast('🔄 ピースを引き直しました！', 'ok', 1400);
   updateRerollHud(e);
   if (e.over) handleEngineOver();
+}
+
+// ---------------------------------------------------------------------------
+// Booster items (consumables): usable in solo / boss / rush / dungeon / chaos.
+// Logged-in inventories live on the server; guests use localStorage.
+// ---------------------------------------------------------------------------
+
+const ITEM_DEFS = {
+  item_bomb:    { icon: '💣', name: 'スマートボム' },
+  item_cleaner: { icon: '🧹', name: 'クリーナー' },
+  item_fever:   { icon: '⭐', name: 'フィーバー' },
+};
+
+function getItemCounts() {
+  if (session.user) return session.user.items || {};
+  try {
+    const v = JSON.parse(localStorage.getItem('bba_items'));
+    if (v && typeof v === 'object') return v;
+  } catch { /* fall through */ }
+  const gift = { item_bomb: 1, item_cleaner: 1, item_fever: 1 };   // guest starter gift
+  localStorage.setItem('bba_items', JSON.stringify(gift));
+  return gift;
+}
+
+function spendItem(id) {
+  if (session.user) {
+    session.user.items = session.user.items || {};
+    session.user.items[id] = Math.max(0, (session.user.items[id] || 0) - 1);
+    api('/api/items/use', { method: 'POST', body: { itemId: id } })
+      .then(d => { if (d.user) session.user = d.user; updateItemBar(); })
+      .catch(() => refreshMe().then(updateItemBar).catch(() => {}));
+  } else {
+    const c = getItemCounts();
+    c[id] = Math.max(0, (c[id] || 0) - 1);
+    localStorage.setItem('bba_items', JSON.stringify(c));
+  }
+}
+
+export function showItemBar(on) {
+  $('#itemBar').classList.toggle('hidden', !on);
+  if (on) updateItemBar();
+}
+
+export function updateItemBar() {
+  const counts = getItemCounts();
+  document.querySelectorAll('#itemBar [data-item]').forEach(b => {
+    const id = b.dataset.item;
+    const n = counts[id] || 0;
+    b.querySelector('b').textContent = n;
+    b.classList.toggle('off', n <= 0);
+  });
+}
+
+export function useGameItem(id) {
+  const m = currentMode;
+  if (!m || !m.engine || !view || view.inputLocked || m.ended) return;
+  if (!ITEM_DEFS[id]) return;
+  const counts = getItemCounts();
+  if ((counts[id] || 0) <= 0) {
+    audio.error();
+    toast('アイテムがありません。ショップやガチャで入手！', 'err', 2200);
+    return;
+  }
+  const e = m.engine;
+
+  if (id === 'item_bomb') {
+    // find the densest 3x3 window and blow it up
+    let best = null, bestCount = 0;
+    for (let r = 0; r <= 5; r++) for (let c = 0; c <= 5; c++) {
+      let n = 0;
+      for (let dr = 0; dr < 3; dr++) for (let dc = 0; dc < 3; dc++) {
+        if (e.grid[(r + dr) * 8 + c + dc]) n++;
+      }
+      if (n > bestCount) { bestCount = n; best = [r, c]; }
+    }
+    if (!bestCount) { audio.error(); toast('盤面が空です！', 'err', 1500); return; }
+    const [br, bc] = best;
+    for (let dr = 0; dr < 3; dr++) for (let dc = 0; dc < 3; dc++) {
+      const r = br + dr, c = bc + dc;
+      if (e.grid[r * 8 + c]) {
+        e.grid[r * 8 + c] = 0;
+        view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 14, 'fx_default');
+      }
+    }
+    audio.bossAttack();
+    view.shake = 14;
+    toast('💣 ドカーン！', 'ok', 1400);
+  } else if (id === 'item_cleaner') {
+    let n = 0;
+    for (let i = 0; i < 64; i++) if (e.grid[i] === 9) { e.grid[i] = 0; n++; }
+    for (let c = 0; c < 8; c++) { const k = 7 * 8 + c; if (e.grid[k]) { e.grid[k] = 0; n++; } }
+    if (n === 0) { audio.error(); toast('掃除するものがありません！', 'err', 1500); return; }
+    view.reviveFlash();
+    audio.coin();
+    toast(`🧹 ${n}マスを掃除しました！`, 'ok', 1500);
+  } else if (id === 'item_fever') {
+    e.feverUntil = Date.now() + 15000;
+    view.screenFlash = 0.35;
+    $('#hudScore').classList.add('fever');
+    audio.combo(6);
+    toast('⭐ フィーバー！15秒間スコア2倍！！', 'announce', 2400);
+    setTimeout(() => {
+      $('#hudScore').classList.remove('fever');
+      if (currentMode === m && !m.ended) toast('フィーバー終了', '', 1200);
+    }, 15000);
+  }
+
+  // survivors of a bomb/clean: board changed, over-state may be stale
+  if (e.over && e.hasAnyMove()) e.over = false;
+  spendItem(id);
+  updateItemBar();
 }
 
 // ---------------------------------------------------------------------------
@@ -166,11 +282,14 @@ async function adminCmd(cmd) {
       toast('⏱ +60秒', 'ok', 1400);
       break;
     case 'bosshalf':
-      if (!mode || mode.mode !== 'boss') return toast('ボス戦のみ使えます', 'err');
+      if (!mode || (mode.mode !== 'boss' && mode.mode !== 'dungeon')) return toast('ボス戦・ダンジョンのみ使えます', 'err');
       mode.hp = Math.ceil(mode.hp / 2);
       mode.updateHpBar();
-      toast('👹 ボスHPを半減しました', 'ok', 1400);
-      if (mode.hp <= 0) mode.finish(true);
+      toast('👹 敵HPを半減しました', 'ok', 1400);
+      if (mode.hp <= 0) {
+        if (mode.mode === 'dungeon') mode.floorCleared();
+        else mode.finish(true);
+      }
       break;
   }
 }
@@ -204,7 +323,7 @@ function runAutopilot() {
       if (mv) {
         const r = m.engine.place(mv.index, mv.row, mv.col);
         if (r) view.applyResult(r);   // full effects + mode callbacks
-      } else if (m.engine.rerolls > 0) {
+      } else if (m.engine.rerolls > 0 || m.engine.infiniteReroll) {
         m.engine.reroll();
         updateRerollHud(m.engine);
         if (m.engine.over) handleEngineOver();
@@ -233,6 +352,7 @@ class SoloMode {
     $('#hudTimer').classList.add('hidden');
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
+    showItemBar(true);
     this.startedAt = Date.now();
     const v = getView();
     this.engine = new Engine();
@@ -411,6 +531,7 @@ class AiMode extends VersusBase {
   start() {
     const seed = (Math.random() * 2 ** 31) | 0;
     this.setupHud(MATCH_SECONDS);
+    showItemBar(false);   // fair fight: same pieces, no boosters
     this.buildPanels([{ slot: 1, name: this.aiLabel(), isAlly: false }]);
     this.startedAt = Date.now();
     const v = getView();
@@ -598,6 +719,7 @@ class BossMode {
     $('#bossEmoji').textContent = this.boss.emoji;
     $('#bossEmoji').className = 'boss-emoji';
     $('#bossName').textContent = this.boss.name;
+    showItemBar(true);
     this.hp = this.boss.hp;
     this.updateHpBar();
     this.startedAt = Date.now();
@@ -776,6 +898,7 @@ class BossRushMode {
     $('#btnEmote').classList.add('hidden');
     $('#bossPanel').classList.remove('hidden');
     document.querySelector('.boss-atkbar').classList.remove('hidden');
+    showItemBar(true);
     this.applyBossPanel();
     this.startedAt = Date.now();
 
@@ -927,8 +1050,478 @@ export function startBossRush(bosses) {
 }
 
 // ---------------------------------------------------------------------------
-// Chaos mode (limited-time event, admin-controlled): the rules mutate every
-// 15 seconds. Pure mayhem, bonus coins.
+// Weekly challenge: everyone worldwide gets the same seed and 40 pieces.
+// Pure score attack — resets every Monday 00:00 UTC.
+// ---------------------------------------------------------------------------
+
+class WeeklyMode {
+  constructor(info) {
+    this.mode = 'weekly';
+    this.info = info;   // { week, seed, pieces, endsAt, best }
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    showItemBar(false);   // fair play: no boosters
+    this.startedAt = Date.now();
+    const v = getView();
+    v.setTheme({ ...equippedTheme(), boardId: 'board_galaxy' });
+    this.engine = new Engine(this.info.seed);
+    v.setEngine(this.engine);
+    v.inputLocked = false;
+    v.onPlace = () => this.onPlace();
+    v.onGameOver = () => this.finish();
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('battle');
+    toast(`🎯 ウィークリーチャレンジ！${this.info.pieces}個のピースで限界に挑め！`, 'announce', 2800);
+  }
+
+  piecesLeft() { return Math.max(0, this.info.pieces - this.engine.piecesPlaced); }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = `🎯 ${this.info.week} ・ ベスト ${fmt(this.best())}`;
+    const t = $('#hudTimer');
+    t.textContent = `残り${this.piecesLeft()}個`;
+    t.classList.toggle('urgent', this.piecesLeft() <= 5);
+  }
+
+  best() {
+    const local = this.localBest();
+    return Math.max(this.info.best || 0, local);
+  }
+
+  localBest() {
+    try {
+      const v = JSON.parse(localStorage.getItem('bba_weekly_best'));
+      if (v && v.week === this.info.week) return v.best || 0;
+    } catch { /* ignore */ }
+    return 0;
+  }
+
+  onPlace() {
+    this.updateHud();
+    if (this.piecesLeft() <= 0 && !this.ended) this.finish();
+  }
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    getView().inputLocked = true;
+    const e = this.engine;
+    const prevBest = this.best();
+    const isBest = e.score > prevBest;
+    if (e.score > this.localBest()) {
+      localStorage.setItem('bba_weekly_best', JSON.stringify({ week: this.info.week, best: e.score }));
+    }
+    if (isBest && e.score > 0) { audio.victory(); confettiBurst(50); } else { audio.gameOver(); }
+    const rewards = await submitResult({
+      mode: 'weekly', score: e.score, lines: e.linesCleared,
+      maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
+    });
+    const usedAll = e.piecesPlaced >= this.info.pieces;
+    const m = showModal(`
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? '🎯 今週のベスト更新！' : '🎯 チャレンジ終了'}</div>
+      ${usedAll ? '' : '<p class="muted center">ピースを置く場所がなくなりました</p>'}
+      <div class="result-stats">
+        <div class="rs-row"><span>スコア</span><b>${fmt(e.score)}${isBest ? ' 👑' : ''}</b></div>
+        <div class="rs-row"><span>今週のベスト</span><b>${fmt(Math.max(prevBest, e.score))}</b></div>
+        <div class="rs-row"><span>使ったピース</span><b>${fmt(e.piecesPlaced)} / ${this.info.pieces}</b></div>
+        <div class="rs-row"><span>最大コンボ</span><b>${fmt(e.maxCombo)}</b></div>
+        ${rewardsRows(rewards)}
+        ${session.user ? '' : '<div class="rs-row"><span>💡 ランキング掲載にはログイン</span></div>'}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">メニュー</button>
+        <button class="btn btn-ghost" id="rRank">🏆 順位を見る</button>
+        <button class="btn btn-weekly" id="rAgain">もう一度</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rRank').onclick = () => {
+      closeModal(); endToMenu();
+      if (window.__bbaOpenLeaderboard) window.__bbaOpenLeaderboard('weekly');
+    };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startWeekly({ ...this.info, best: Math.max(this.info.best || 0, e.score) }); };
+  }
+
+  quit() { this.finish(); }
+  destroy() { this.ended = true; }
+}
+
+export function startWeekly(info) {
+  if (currentMode) currentMode.destroy();
+  currentMode = new WeeklyMode(info);
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+// ---------------------------------------------------------------------------
+// Dungeon tower (PvE roguelite): climb 100 floors. Each floor is a foe with
+// HP and periodic garbage attacks; every 10th floor is a boss + checkpoint.
+// After each floor you pick 1 of 3 perks that stack for the whole run.
+// ---------------------------------------------------------------------------
+
+const DUNGEON_BANDS = [
+  { name: '苔の洞窟',   board: 'board_forest',  track: 'battle', foes: [['🦇', 'コウモリ'], ['🐀', '大ネズミ'], ['🟢', 'スライム'], ['🕷️', '毒グモ']], boss: ['👑', 'キングスライム'] },
+  { name: '海底神殿',   board: 'board_ocean',   track: 'battle', foes: [['🐙', 'タコ兵'], ['🦀', '鉄カニ'], ['🐡', 'トゲフグ'], ['🦈', 'サメ傭兵']], boss: ['🧜‍♀️', '海の女王'] },
+  { name: '桜の迷宮',   board: 'board_sakura',  track: 'solo',   foes: [['🦊', '妖狐'], ['🐍', '花蛇'], ['🦋', '幻蝶'], ['🐦', '怪鳥']], boss: ['👺', '大天狗'] },
+  { name: '黄昏の砂漠', board: 'board_sunset',  track: 'hard',   foes: [['🦂', '大サソリ'], ['🐫', '護衛ラクダ'], ['🦅', 'ハゲタカ'], ['🐍', '砂大蛇']], boss: ['🦁', 'スフィンクス'] },
+  { name: '灼熱火山',   board: 'board_volcano', track: 'hard',   foes: [['🔥', '火の精'], ['🦎', '溶岩トカゲ'], ['🐗', 'マグマ猪'], ['🗿', '岩人形']], boss: ['🐲', '火竜グレンド'] },
+  { name: '氷結洞窟',   board: 'board_default', track: 'boss',   foes: [['⛄', '雪人形'], ['🐧', '氷ペンギン兵'], ['🦭', '氷セイウチ'], ['❄️', '氷の精']], boss: ['🐻‍❄️', 'フロストベア'] },
+  { name: '雷雲の頂',   board: 'board_galaxy',  track: 'boss',   foes: [['⚡', '雷精'], ['🦅', '雷鷲'], ['☁️', '雲魔'], ['🌪️', '竜巻魔']], boss: ['🦚', 'サンダーバード'] },
+  { name: '亡霊の城',   board: 'board_oni',     track: 'oni',    foes: [['👻', '亡霊'], ['💀', 'スケルトン'], ['🧟', 'ゾンビ騎士'], ['🦇', '吸血コウモリ']], boss: ['🧛', 'ヴァンパイア卿'] },
+  { name: '鬼の巣窟',   board: 'board_oni',     track: 'oni',    foes: [['👹', '赤鬼'], ['👺', '青鬼'], ['🔥', '鬼火'], ['💀', '骨武者']], boss: ['👹', '鬼神ラセツ'] },
+  { name: '天界の門',   board: 'board_kami',    track: 'kami',   foes: [['🕊️', '堕天使'], ['⚔️', '神殿騎士'], ['🌟', '星霊'], ['🔮', '法陣魔']], boss: ['😈', '魔神ゼルガドス'] },
+];
+
+function dungeonFloor(f) {
+  const band = DUNGEON_BANDS[Math.min(DUNGEON_BANDS.length - 1, Math.floor((f - 1) / 10))];
+  const isBoss = f % 10 === 0;
+  const isFinal = f === 100;
+  const [emoji, name] = isBoss ? band.boss : band.foes[(f - 1) % band.foes.length];
+  let hp = Math.round(260 + f * 95 + f * f * 1.15);
+  if (isBoss) hp = Math.round(hp * (isFinal ? 3 : 2.1));
+  const atkSec = Math.max(5.5, 15 - f * 0.09) * (isBoss ? 1.25 : 1);
+  const atkCells = Math.min(7, 1 + Math.floor(f / 12) + (isBoss ? 2 : 0));
+  return { floor: f, band, isBoss, isFinal, emoji, name, hp, atkSec, atkCells };
+}
+
+const DUNGEON_PERKS = [
+  { id: 'atk',    icon: '💪', name: '攻撃力アップ',     desc: '与ダメージ +60%（重ねがけOK）', w: 5 },
+  { id: 'reroll', icon: '🔄', name: 'リロール補充',     desc: 'リロール +3回', w: 4 },
+  { id: 'heal',   icon: '💊', name: '応急修理',         desc: '下2行とお邪魔ブロックを消す', w: 4 },
+  { id: 'slow',   icon: '⏳', name: 'スロウの呪文',     desc: '敵の攻撃間隔 +25%（重ねがけOK）', w: 3 },
+  { id: 'life',   icon: '❤️', name: '追加ライフ',       desc: '残機 +1（ボードが埋まっても復活）', w: 2 },
+  { id: 'shield', icon: '🛡️', name: 'コンボプロテクト', desc: 'コンボが途切れなくなる（永続）', w: 2 },
+];
+
+function pickPerks(mode) {
+  const bag = DUNGEON_PERKS.filter(p => !(p.id === 'shield' && mode.engine.streakShield));
+  const out = [];
+  while (out.length < 3 && bag.length) {
+    const total = bag.reduce((a, p) => a + p.w, 0);
+    let roll = Math.random() * total;
+    let idx = bag.length - 1;
+    for (let i = 0; i < bag.length; i++) { roll -= bag[i].w; if (roll <= 0) { idx = i; break; } }
+    out.push(bag.splice(idx, 1)[0]);
+  }
+  return out;
+}
+
+class DungeonMode {
+  constructor(startFloor = 1) {
+    this.mode = 'dungeon';
+    this.startFloor = Math.max(1, Math.min(91, startFloor));
+    this.floor = this.startFloor;
+    this.lives = 1;
+    this.atkSlow = 1;   // >1 = slower enemy attacks (perk)
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#hudTimer').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#bossPanel').classList.remove('hidden');
+    document.querySelector('.boss-atkbar').classList.remove('hidden');
+    showItemBar(true);
+    this.startedAt = Date.now();
+    const v = getView();
+    this.engine = new Engine();
+    // Checkpoint head start: rough stand-in for the perks a fresh run would
+    // have accumulated by this floor.
+    const k = Math.floor((this.startFloor - 1) / 10);
+    if (k > 0) {
+      this.engine.scoreMult = 1 + 0.35 * k;
+      this.engine.rerolls += k;
+      this.lives += Math.floor(k / 3);
+    }
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = r => this.onPlace(r);
+    v.onGameOver = () => this.onTopOut();
+    this.loadFloor(this.floor, true);
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    toast(k > 0 ? `🏰 F${this.startFloor} から再開！（強化ボーナス付き）` : '🏰 ダンジョン挑戦開始！100Fを目指せ！', 'announce', 2600);
+    countdownOverlay(3, () => {
+      v.inputLocked = false;
+      this.armAttack();
+    }, audio);
+  }
+
+  loadFloor(f, silent) {
+    this.info = dungeonFloor(f);
+    this.hp = this.info.hp;
+    const v = getView();
+    v.setTheme({ ...equippedTheme(), boardId: this.info.band.board });
+    audio.playTrack(this.info.band.track);
+    $('#bossEmoji').textContent = this.info.emoji;
+    $('#bossEmoji').className = 'boss-emoji';
+    $('#bossName').textContent = `F${f} ${this.info.band.name}：${this.info.name}`;
+    this.updateHpBar();
+    this.updateHud();
+    if (silent) return;
+    if (this.info.isFinal) {
+      toast(`😈 最上階——魔神ゼルガドスが待ち受ける！！`, 'announce', 3000);
+      audio.bossAttack();
+      v.shake = 16;
+    } else if (this.info.isBoss) {
+      toast(`⚠️ ボス階！${this.info.emoji} ${this.info.name}が立ちはだかる！`, 'announce', 2400);
+      audio.bossAttack();
+      v.shake = 12;
+    } else {
+      toast(`${this.info.emoji} ${this.info.name}が あらわれた！`, '', 1400);
+    }
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = `🏰 F${this.floor}/100 ・ ❤️×${this.lives}${this.engine.scoreMult > 1 ? ` ・ 💪×${this.engine.scoreMult.toFixed(1)}` : ''}`;
+  }
+
+  updateHpBar() {
+    const pct = Math.max(0, (this.hp / this.info.hp) * 100);
+    $('#bossHp').style.width = `${pct}%`;
+    $('#bossHpText').textContent = `${fmt(Math.max(0, this.hp))} / ${fmt(this.info.hp)}`;
+  }
+
+  damageFloat(dmg, big) {
+    const span = document.createElement('span');
+    span.className = `dmg-float ${big ? 'big' : ''}`;
+    span.textContent = `-${fmt(dmg)}`;
+    span.style.left = `${30 + Math.random() * 40}%`;
+    $('#bossPanel').appendChild(span);
+    setTimeout(() => span.remove(), 900);
+  }
+
+  armAttack() {
+    clearInterval(this.atkInt);
+    this.nextAtk = Date.now() + this.atkMs();
+    this.atkInt = setInterval(() => this.tickAttack(), 100);
+  }
+
+  atkMs() { return this.info.atkSec * 1000 * this.atkSlow; }
+
+  tickAttack() {
+    if (this.ended || this.perkOpen) return;
+    const total = this.atkMs();
+    const remain = Math.max(0, this.nextAtk - Date.now());
+    $('#bossAtkBar').style.width = `${(1 - remain / total) * 100}%`;
+    if (remain <= 0) {
+      this.nextAtk = Date.now() + total;
+      this.attack();
+    }
+  }
+
+  attack() {
+    if (this.ended || !this.engine || view.inputLocked) return;
+    const cells = this.engine.addGarbage(this.info.atkCells);
+    audio.bossAttack();
+    const em = $('#bossEmoji');
+    em.classList.remove('boss-atk'); void em.offsetWidth; em.classList.add('boss-atk');
+    for (const [r, c] of cells) {
+      view.spawnAnim.set(r * 8 + c, view.time);
+      view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
+    }
+    view.shake = 10;
+    toast(`${this.info.emoji} ${this.info.name}の攻撃！`, 'err', 1100);
+    if (this.engine.over) this.onTopOut();
+  }
+
+  onPlace(result) {
+    this.updateHud();
+    this.hp -= result.gained;
+    this.updateHpBar();
+    this.damageFloat(result.gained, result.lineCount > 0);
+    if (result.lineCount > 0) {
+      const em = $('#bossEmoji');
+      em.classList.remove('boss-hit'); void em.offsetWidth; em.classList.add('boss-hit');
+    }
+    if (this.hp <= 0 && !this.ended) this.floorCleared();
+  }
+
+  floorCleared() {
+    clearInterval(this.atkInt);
+    audio.bossDefeated();
+    $('#bossEmoji').classList.add('boss-dead');
+    // Progressive best: floors cleared count even if the run ends later.
+    const cleared = this.floor;
+    if (cleared > Number(localStorage.getItem('bba_dungeon_max') || 0)) {
+      localStorage.setItem('bba_dungeon_max', String(cleared));
+    }
+    if (this.floor >= 100) { this.finish(true); return; }
+    confettiBurst(this.info.isBoss ? 45 : 12);
+    if (this.info.isBoss) {
+      toast(`🎉 ボス撃破！チェックポイント到達（次回からF${this.floor + 1}で再開可能）`, 'announce', 3000);
+    }
+    view.inputLocked = true;
+    this.perkOpen = true;
+    this.offerPerk(() => {
+      this.perkOpen = false;
+      this.floor++;
+      this.loadFloor(this.floor);
+      const e = this.engine;
+      // Mercy: never enter a floor without a legal move.
+      if (!e.hasAnyMove()) { e.reviveBoard(); view.reviveFlash(); }
+      else e.over = false;
+      view.inputLocked = false;
+      this.armAttack();
+    });
+  }
+
+  offerPerk(next) {
+    const choices = pickPerks(this);
+    const m = showModal(`
+      <h2>${this.info.isBoss ? '👑 ボス撃破！' : `✅ F${this.floor} クリア！`}</h2>
+      <p class="muted center" style="margin-bottom:10px">ごほうびを1つ選ぼう</p>
+      <div class="form-col">
+        ${choices.map(p => `
+          <button class="btn btn-ghost perk-btn" data-perk="${p.id}">
+            <span class="perk-icon">${p.icon}</span>
+            <span class="perk-body"><b>${p.name}</b><small>${p.desc}</small></span>
+          </button>`).join('')}
+      </div>`, { dismissable: false });
+    m.querySelectorAll('[data-perk]').forEach(b => {
+      b.onclick = () => { this.applyPerk(b.dataset.perk); closeModal(); next(); };
+    });
+  }
+
+  applyPerk(id) {
+    const e = this.engine;
+    audio.coin();
+    switch (id) {
+      case 'atk':
+        e.scoreMult = Math.round((e.scoreMult + 0.6) * 100) / 100;
+        break;
+      case 'reroll':
+        e.rerolls += 3;
+        updateRerollHud(e);
+        break;
+      case 'heal': {
+        for (let i = 0; i < 64; i++) if (e.grid[i] === 9) e.grid[i] = 0;
+        for (let r = 6; r < 8; r++) for (let c = 0; c < 8; c++) e.grid[r * 8 + c] = 0;
+        view.reviveFlash();
+        break;
+      }
+      case 'slow':
+        this.atkSlow *= 1.25;
+        break;
+      case 'life':
+        this.lives++;
+        break;
+      case 'shield':
+        e.streakShield = true;
+        break;
+    }
+    this.updateHud();
+  }
+
+  onTopOut() {
+    if (this.ended || this.perkOpen) return;
+    if (this.lives > 1) {
+      this.lives--;
+      this.engine.reviveBoard();
+      getView().reviveFlash();
+      toast(`❤️ 残機を使って復活！のこり×${this.lives}`, 'announce', 2200);
+      this.updateHud();
+    } else {
+      this.finish(false);
+    }
+  }
+
+  async finish(won) {
+    if (this.ended) return;
+    this.ended = true;
+    clearInterval(this.atkInt);
+    getView().inputLocked = true;
+    const cleared = won ? 100 : this.floor - 1;
+    if (cleared > Number(localStorage.getItem('bba_dungeon_max') || 0)) {
+      localStorage.setItem('bba_dungeon_max', String(cleared));
+    }
+    if (won) {
+      audio.victory();
+      confettiBurst(100);
+      $('#bossEmoji').classList.add('boss-dead');
+    } else if (!this.aborted) {
+      audio.gameOver();
+    }
+    const e = this.engine;
+    const rewards = await submitResult({
+      mode: 'dungeon', floor: cleared, score: e.score, lines: e.linesCleared,
+      maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won,
+    });
+    if (rewards && rewards.badge === 'dungeon') {
+      setTimeout(() => { toast('🏰 バッジ「百塔踏破」を獲得！+500💎', 'announce', 6000); confettiBurst(80); }, 1200);
+    }
+    const cp = Math.floor(cleared / 10) * 10 + 1;
+    const banner = won ? '🏆 100F 完全制覇！！' : this.aborted ? `🚪 リタイア（F${this.floor}）` : `F${this.floor} で力尽きた…`;
+    const m = showModal(`
+      <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>クリアした階</span><b>${won ? '全100階！' : `F${fmt(cleared)}`}</b></div>
+        <div class="rs-row"><span>総ダメージ</span><b>${fmt(e.score)}</b></div>
+        <div class="rs-row"><span>消したライン</span><b>${fmt(e.linesCleared)}</b></div>
+        <div class="rs-row"><span>最大コンボ</span><b>${fmt(e.maxCombo)}</b></div>
+        ${won ? '' : `<div class="rs-row"><span>次回の再開地点</span><b>F${cp}</b></div>`}
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">メニュー</button>
+        <button class="btn btn-dungeon" id="rAgain">${won ? 'もう一周' : `F${cp}から再挑戦`}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startDungeon(won ? 1 : cp); };
+  }
+
+  quit() {
+    if (this.ended) return;
+    const m = showModal(`
+      <h2>🏰 ダンジョンから撤退しますか？</h2>
+      <p class="muted center" style="margin-bottom:10px">ここまでにクリアした階は記録されます</p>
+      <div class="modal-buttons">
+        <button class="btn btn-primary" id="dqResume">続ける</button>
+        <button class="btn btn-ai" id="dqQuit">撤退する</button>
+      </div>`);
+    m.querySelector('#dqResume').onclick = () => { audio.click(); closeModal(); };
+    m.querySelector('#dqQuit').onclick = () => {
+      audio.click();
+      closeModal();
+      this.aborted = true;
+      this.finish(false);
+    };
+  }
+
+  destroy() {
+    this.ended = true;
+    clearInterval(this.atkInt);
+    $('#bossPanel').classList.add('hidden');
+  }
+}
+
+export function startDungeon(startFloor = 1) {
+  if (currentMode) currentMode.destroy();
+  currentMode = new DungeonMode(startFloor);
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+// ---------------------------------------------------------------------------
+// Chaos mode (limited-time event, admin-controlled): the rules mutate on an
+// interval the player chooses. Duration is also player-chosen (min/sec).
+// Pure mayhem, bonus coins.
 // ---------------------------------------------------------------------------
 
 const CHAOS_BOARDS = ['board_default', 'board_ocean', 'board_sunset', 'board_forest', 'board_galaxy', 'board_oni', 'board_kami', 'board_sakura', 'board_volcano'];
@@ -936,18 +1529,31 @@ const CHAOS_MODS = {
   fever:   '🔥 フィーバー！スコア3倍！',
   rain:    '☔ お邪魔ブロックの雨！',
   giant:   '🧱 巨大ブロック時代！',
+  mini:    '🐜 ミニブロック時代！',
   heaven:  '✨ 天の恵み！全消し！',
   shuffle: '🌀 大シャッフル！',
   reroll:  '🔄 リロール無限！',
+  bomb:    '💣 爆撃！ボードに大穴！',
+  freeze:  '⏱️ 時間停止！残り+10秒！',
+  gravity: '🧲 重力発生！ブロック落下！',
+  cleanse: '🧹 お邪魔ブロック浄化！',
+  shield:  '🛡️ コンボプロテクト！',
 };
 
 class ChaosMode extends VersusBase {
-  constructor() { super(); this.mode = 'chaos'; }
+  constructor(opts = {}) {
+    super();
+    this.mode = 'chaos';
+    this.duration = Math.max(30, Math.min(1800, Math.floor(Number(opts.duration) || 120)));
+    this.interval = Math.max(5, Math.min(60, Math.floor(Number(opts.interval) || 15)));
+  }
 
   start() {
-    this.setupHud(120);
+    this.setupHud(this.duration);
     $('#oppPanel').classList.add('hidden');
+    showItemBar(true);
     this.startedAt = Date.now();
+    this.modCount = 0;
     const v = getView();
     v.setTheme({ ...equippedTheme(), boardId: 'board_galaxy' });
     this.engine = new Engine();
@@ -960,27 +1566,41 @@ class ChaosMode extends VersusBase {
     updateAutoBtn();
     v.start();
     audio.playTrack('boss');
-    toast('🌪️ カオスモード！15秒ごとにルールが変わるぞ！', 'announce', 3000);
+    toast(`🌪️ カオスモード！${this.interval}秒ごとにルールが変わるぞ！`, 'announce', 3000);
 
     countdownOverlay(3, () => {
       v.inputLocked = false;
       this.startTimer(() => this.finish());
       this.nextModifier();
-      this.modInt = setInterval(() => this.nextModifier(), 15000);
+      this.modInt = setInterval(() => this.nextModifier(), this.interval * 1000);
+      // slim progress bar counting down to the next rule mutation
+      $('#chaosBar').classList.remove('hidden');
+      this.barInt = setInterval(() => {
+        const remain = Math.max(0, (this.nextModAt || 0) - Date.now());
+        $('#chaosBarFill').style.width = `${(remain / (this.interval * 1000)) * 100}%`;
+      }, 100);
     }, audio);
   }
 
   nextModifier() {
     if (this.ended) return;
     const e = this.engine;
+    this.nextModAt = Date.now() + this.interval * 1000;
+    this.modCount++;
     // clear the previous modifier
     clearInterval(this.rainInt);
     e.scoreMult = 1;
     e.chaosBig = false;
+    e.chaosMini = false;
+    e.streakShield = false;
+    if (e.infiniteReroll) { e.infiniteReroll = false; updateRerollHud(e); }
 
     const ids = Object.keys(CHAOS_MODS);
     let id = ids[(Math.random() * ids.length) | 0];
     if (id === this.currentMod) id = ids[(ids.indexOf(id) + 1) % ids.length];
+    // freeze makes no sense twice in a row and cleanse needs garbage to shine —
+    // reroll them once if they'd be a dud.
+    if (id === 'cleanse' && !e.grid.includes(9)) id = ids[(Math.random() * ids.length) | 0];
     this.currentMod = id;
     this.modName = CHAOS_MODS[id];
 
@@ -1012,6 +1632,10 @@ class ChaosMode extends VersusBase {
         e.chaosBig = true;
         if (!view.drag) e.hand = e.hand.map(p => (p ? e.drawPiece() : null));
         break;
+      case 'mini':
+        e.chaosMini = true;
+        if (!view.drag) e.hand = e.hand.map(p => (p ? e.drawPiece() : null));
+        break;
       case 'heaven':
         e.grid.fill(0);
         view.reviveFlash();
@@ -1032,8 +1656,61 @@ class ChaosMode extends VersusBase {
         break;
       }
       case 'reroll':
-        e.rerolls += 10;
+        // TRULY infinite while this modifier is active — the button never runs out.
+        e.infiniteReroll = true;
         updateRerollHud(e);
+        break;
+      case 'bomb': {
+        // two friendly 3x3 explosions carve holes in the board
+        for (let b = 0; b < 2; b++) {
+          const cr = 1 + ((Math.random() * 6) | 0), cc = 1 + ((Math.random() * 6) | 0);
+          for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+            const r = cr + dr, c = cc + dc;
+            const k = r * 8 + c;
+            if (e.grid[k]) {
+              e.grid[k] = 0;
+              view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 12, 'fx_default');
+            }
+          }
+        }
+        audio.bossAttack();
+        view.shake = 14;
+        break;
+      }
+      case 'freeze':
+        this.endAt += 10000;
+        this.timeLeft += 10;
+        this.updateTimerHud();
+        break;
+      case 'gravity': {
+        // every column falls to the bottom
+        for (let c = 0; c < 8; c++) {
+          const col = [];
+          for (let r = 0; r < 8; r++) { const cv = e.grid[r * 8 + c]; if (cv) col.push(cv); }
+          for (let r = 0; r < 8; r++) {
+            const k = r * 8 + c;
+            const nv = r < 8 - col.length ? 0 : col[r - (8 - col.length)];
+            if (e.grid[k] !== nv) { e.grid[k] = nv; if (nv) view.spawnAnim.set(k, view.time); }
+          }
+        }
+        view.shake = 12;
+        if (!e.hasAnyMove()) { e.grid.fill(0); }   // gravity never kills you
+        break;
+      }
+      case 'cleanse': {
+        let n = 0;
+        for (let i = 0; i < 64; i++) if (e.grid[i] === 9) { e.grid[i] = 0; n++; }
+        if (n > 0) {
+          view.reviveFlash();
+        } else {
+          e.score += 300;   // no garbage? take a consolation bonus
+          this.updateMyHud(e);
+          view.addFloatText(view.boardX + view.boardSize / 2, view.boardY + view.boardSize / 2, '+300', '#43d9e8', 1.2);
+        }
+        break;
+      }
+      case 'shield':
+        e.streakShield = true;
         break;
     }
   }
@@ -1056,19 +1733,27 @@ class ChaosMode extends VersusBase {
     this.stopTimer();
     clearInterval(this.modInt);
     clearInterval(this.rainInt);
+    clearInterval(this.barInt);
+    $('#chaosBar').classList.add('hidden');
     getView().inputLocked = true;
     audio.victory();
     confettiBurst(40);
+    const e = this.engine;
+    const prevBest = Number(localStorage.getItem('bba_chaos_best') || 0);
+    const isBest = e.score > prevBest;
+    if (isBest) localStorage.setItem('bba_chaos_best', String(e.score));
     const rewards = await submitResult({
-      mode: 'chaos', score: this.engine.score, lines: this.engine.linesCleared,
-      maxCombo: this.engine.maxCombo, duration: 120, won: false,
+      mode: 'chaos', score: e.score, lines: e.linesCleared,
+      maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
     });
     const m = showModal(`
-      <div class="result-banner win">🌪️ カオス終了！</div>
+      <div class="result-banner win">${isBest ? '🌪️ カオス新記録！！' : '🌪️ カオス終了！'}</div>
       <div class="result-stats">
-        <div class="rs-row"><span>スコア</span><b>${fmt(this.engine.score)}</b></div>
-        <div class="rs-row"><span>消したライン</span><b>${fmt(this.engine.linesCleared)}</b></div>
-        <div class="rs-row"><span>最大コンボ</span><b>${fmt(this.engine.maxCombo)}</b></div>
+        <div class="rs-row"><span>スコア</span><b>${fmt(e.score)}${isBest ? ' 👑' : ''}</b></div>
+        <div class="rs-row"><span>自己ベスト</span><b>${fmt(Math.max(prevBest, e.score))}</b></div>
+        <div class="rs-row"><span>発動したルール</span><b>${fmt(this.modCount)}回</b></div>
+        <div class="rs-row"><span>消したライン</span><b>${fmt(e.linesCleared)}</b></div>
+        <div class="rs-row"><span>最大コンボ</span><b>${fmt(e.maxCombo)}</b></div>
         ${rewards ? '<div class="rs-row"><span>🎉 イベントボーナス</span><b>コイン1.5倍！</b></div>' : ''}
         ${rewardsRows(rewards)}
       </div>
@@ -1077,22 +1762,45 @@ class ChaosMode extends VersusBase {
         <button class="btn btn-chaos" id="rAgain">もう一回！</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
-    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startChaos(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startChaos({ duration: this.duration, interval: this.interval }); };
   }
 
-  quit() { this.finish(); }
+  quit() {
+    if (this.ended) return;
+    // Mid-run cancel: let the player abort (no record), cash out early, or resume.
+    const m = showModal(`
+      <h2>🌪️ カオスモードを中断しますか？</h2>
+      <p class="muted center" style="margin-bottom:10px">「中断する」は記録なしでメニューに戻ります。<br>「終了して集計」はここまでのスコアで報酬を受け取ります。</p>
+      <div class="modal-buttons">
+        <button class="btn btn-primary" id="cqResume">続ける</button>
+        <button class="btn btn-ghost" id="cqAbort">中断する（記録なし）</button>
+        <button class="btn btn-chaos" id="cqFinish">終了して集計</button>
+      </div>`);
+    m.querySelector('#cqResume').onclick = () => { audio.click(); closeModal(); };
+    m.querySelector('#cqAbort').onclick = () => {
+      audio.click();
+      closeModal();
+      this.ended = true;
+      this.destroy();
+      toast('🌪️ カオスモードを中断しました（記録なし）', '', 2200);
+      endToMenu();
+    };
+    m.querySelector('#cqFinish').onclick = () => { audio.click(); closeModal(); this.finish(); };
+  }
 
   destroy() {
     this.ended = true;
     this.stopTimer();
     clearInterval(this.modInt);
     clearInterval(this.rainInt);
+    clearInterval(this.barInt);
+    $('#chaosBar').classList.add('hidden');
   }
 }
 
-export function startChaos() {
+export function startChaos(opts) {
   if (currentMode) currentMode.destroy();
-  currentMode = new ChaosMode();
+  currentMode = new ChaosMode(opts);
   window.__bbaMode = currentMode;
   currentMode.start();
 }
@@ -1248,6 +1956,7 @@ class OnlineMode extends VersusBase {
       isAlly: (this.isTeam && p.team === msg.you.team) || this.isRaid,
     }));
     this.setupHud(msg.duration || MATCH_SECONDS);
+    showItemBar(false);   // no boosters in PvP
     this.buildPanels(others);
     if (this.isTeam) {
       $('#teamTotals').classList.remove('hidden');
@@ -1527,6 +2236,7 @@ function endToMenu() {
   const picker = document.querySelector('.emote-picker');
   if (picker) picker.remove();
   $('#btnEmote').classList.add('hidden');
+  showItemBar(false);
   audio.playTrack('menu');
   showScreen('menu');
 }

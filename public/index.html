@@ -47,12 +47,15 @@
           <button class="btn btn-primary btn-big" id="btnSolo">▶ ソロプレイ</button>
           <button class="btn btn-ai btn-big" id="btnVsAi">🤖 AI対戦</button>
           <button class="btn btn-boss btn-big" id="btnBoss">🐲 ボス戦</button>
+          <button class="btn btn-dungeon btn-big" id="btnDungeon">🏰 ダンジョン</button>
+          <button class="btn btn-weekly btn-big" id="btnWeekly">🎯 ウィークリー</button>
           <button class="btn btn-chaos btn-big hidden" id="btnChaos">🌪️ カオスモード</button>
           <button class="btn btn-online btn-big" id="btnOnline">🌐 オンライン対戦</button>
         </div>
         <nav class="menu-nav">
           <button class="nav-btn" id="btnLeaderboard"><span>🏆</span>ランキング</button>
           <button class="nav-btn" id="btnShop"><span>🛍️</span>ショップ</button>
+          <button class="nav-btn" id="btnGacha"><span>🎰</span>ガチャ</button>
           <button class="nav-btn" id="btnGemShop"><span>💎</span>課金</button>
           <button class="nav-btn" id="btnBattlePass"><span>🎫</span>バトルパス</button>
           <button class="nav-btn hidden" id="btnAdmin"><span>🛡️</span>管理</button>
@@ -78,6 +81,12 @@
           <div id="hudSub" class="hud-sub">BEST 0</div>
         </div>
         <div id="hudTimer" class="hud-timer hidden">2:00</div>
+      </div>
+      <div id="chaosBar" class="chaos-bar hidden" title="つぎのルール変化まで"><div id="chaosBarFill"></div></div>
+      <div id="itemBar" class="item-bar hidden">
+        <button class="chip icon-btn" data-item="item_bomb" title="スマートボム：いちばん埋まった3×3を爆破">💣<b>0</b></button>
+        <button class="chip icon-btn" data-item="item_cleaner" title="クリーナー：お邪魔＋最下行を掃除">🧹<b>0</b></button>
+        <button class="chip icon-btn" data-item="item_fever" title="フィーバー：15秒間スコア2倍">⭐<b>0</b></button>
       </div>
       <div id="oppPanel" class="opp-panel hidden">
         <div class="vs-bar"><div id="vsBarMe"></div><div id="vsBarOpp"></div></div>
@@ -142,6 +151,8 @@
       <div class="tabs">
         <button class="tab active" data-lb="score">ハイスコア</button>
         <button class="tab" data-lb="rating">レート</button>
+        <button class="tab" data-lb="dungeon">ダンジョン</button>
+        <button class="tab" data-lb="weekly">ウィークリー</button>
       </div>
       <div id="lbList" class="lb-list"><p class="muted center">読み込み中…</p></div>
     </section>
@@ -156,6 +167,7 @@
         <button class="tab active" data-shop="skin">ブロック</button>
         <button class="tab" data-shop="board">ボード</button>
         <button class="tab" data-shop="fx">エフェクト</button>
+        <button class="tab" data-shop="item">アイテム</button>
       </div>
       <div id="shopGrid" class="shop-grid"></div>
     </section>

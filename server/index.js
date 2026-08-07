@@ -14,7 +14,7 @@ import {
   authMiddleware, requireAuth, requireAdmin, userFromToken,
 } from './auth.js';
 import {
-  SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED,
+  SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED, BOOST_ITEMS,
   BP_TIERS, BP_XP_PER_TIER, BP_PREMIUM_PRICE_GEMS, BP_SEASON_DAYS,
   BOSSES, TITLES, earnedTitles, GEM_PACKS,
 } from './catalog.js';
@@ -54,6 +54,7 @@ function newUser(username, password, role = 'user') {
     coins: 500, gems: 50, xp: 0,
     stats: { gamesPlayed: 0, bestScore: 0, totalScore: 0, totalLines: 0, maxCombo: 0, aiWins: 0, pvpWins: 0, pvpLosses: 0, rating: 1000, bossMax: 0 },
     owned: [...DEFAULT_OWNED],
+    items: { item_bomb: 1, item_cleaner: 1, item_fever: 1 },   // starter boosters
     equipped: { ...DEFAULT_EQUIPPED },
     equippedTitle: null,
     battlePass: { season: currentSeason().id, xp: 0, premium: false, claimed: [] },
@@ -99,13 +100,14 @@ function publicUser(user) {
     id: user.id, username: user.username, role: user.role, banned: user.banned,
     coins: user.coins, gems: user.gems, xp: user.xp, level: levelOf(user.xp),
     stats: user.stats, owned: user.owned, equipped: user.equipped,
+    items: user.items || {},
     battlePass: user.battlePass, badges: user.badges,
     equippedTitle: user.equippedTitle || null,
   };
 }
 
 // Sanity-check and apply a finished game's rewards. Returns the reward summary.
-function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bossId }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bossId, floor }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   score = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
   lines = Math.max(0, Math.min(5000, Math.floor(Number(lines) || 0)));
@@ -151,6 +153,32 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bo
     badge = 'rush';
     gems = 300;
     user.gems += 300;
+  }
+  // Weekly challenge: per-week personal best.
+  if (mode === 'weekly') {
+    const w = weekIdOf(currentWeekNum());
+    if (!s.weekly || s.weekly.week !== w) s.weekly = { week: w, best: 0 };
+    if (score > s.weekly.best) s.weekly.best = score;
+  }
+  // Dungeon tower: track highest floor cleared; gems for each newly reached
+  // checkpoint decade, badge + big gem bonus for conquering all 100 floors.
+  if (mode === 'dungeon') {
+    const fl = Math.max(0, Math.min(100, Math.floor(Number(floor) || 0)));
+    const prevMax = s.dungeonMax || 0;
+    if (fl > prevMax) {
+      const decades = Math.floor(fl / 10) - Math.floor(prevMax / 10);
+      if (decades > 0) {
+        gems += decades * 20;
+        user.gems += decades * 20;
+      }
+      s.dungeonMax = fl;
+    }
+    if (fl >= 100 && !user.badges.includes('dungeon')) {
+      user.badges.push('dungeon');
+      badge = 'dungeon';
+      gems += 500;
+      user.gems += 500;
+    }
   }
   // Boss battles: sequential progression + first-clear gem bonus.
   if (mode === 'boss') {
@@ -302,12 +330,18 @@ app.get('/api/status', (_req, res) => {
 // Start / stop a limited-time event.
 app.post('/api/admin/event', requireAuth, requireAdmin, (req, res) => {
   if (req.body.on) {
-    const hours = Math.max(1, Math.min(24 * 14, Math.floor(Number(req.body.hours) || 24)));
+    // Duration in minutes (1 min .. 14 days). Legacy clients may still send hours.
+    const rawMinutes = Number(req.body.minutes);
+    const legacyHours = Number(req.body.hours);
+    const minutes = Math.max(1, Math.min(24 * 14 * 60, Math.floor(
+      Number.isFinite(rawMinutes) && rawMinutes > 0 ? rawMinutes
+        : Number.isFinite(legacyHours) && legacyHours > 0 ? legacyHours * 60
+        : 24 * 60)));
     db.meta.event = {
       id: 'chaos',
       name: sanitizeName(req.body.name) || 'カオスタイム',
       startedAt: Date.now(),
-      endsAt: Date.now() + hours * 60 * 60 * 1000,
+      endsAt: Date.now() + minutes * 60 * 1000,
     };
     battle.broadcastAll({ type: 'announce', message: `🌪️ 期間限定イベント「${db.meta.event.name}」開催中！メニューから参加しよう！`, from: req.user.username });
   } else {
@@ -316,6 +350,39 @@ app.post('/api/admin/event', requireAuth, requireAdmin, (req, res) => {
   }
   saveDb();
   res.json({ event: currentEvent() });
+});
+
+// ---------------------------------------------------------------------------
+// Weekly challenge: one shared seed per week (Monday 00:00 UTC reset).
+// Everyone gets the identical piece sequence — pure score attack.
+// ---------------------------------------------------------------------------
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const WEEKLY_PIECES = 40;
+
+function currentWeekNum() {
+  // Unix epoch was a Thursday; shift by 4 days so weeks flip on Monday UTC.
+  return Math.floor((Date.now() - 4 * 24 * 60 * 60 * 1000) / WEEK_MS);
+}
+function weekIdOf(n) { return `W${n}`; }
+function weeklySeed(weekId) {
+  let h = 0;
+  const s = `bba-weekly-${weekId}`;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return (h >>> 0) & 0x7fffffff;
+}
+
+app.get('/api/weekly', (req, res) => {
+  const n = currentWeekNum();
+  const week = weekIdOf(n);
+  const w = req.user && req.user.stats.weekly;
+  res.json({
+    week,
+    seed: weeklySeed(week),
+    pieces: WEEKLY_PIECES,
+    endsAt: (n + 1) * WEEK_MS + 4 * 24 * 60 * 60 * 1000,
+    best: w && w.week === week ? w.best : 0,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -328,9 +395,13 @@ app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
 });
 
 app.get('/api/leaderboard', (req, res) => {
-  const board = req.query.board === 'rating' ? 'rating' : 'score';
+  const board = ['rating', 'dungeon', 'weekly'].includes(req.query.board) ? req.query.board : 'score';
+  const week = weekIdOf(currentWeekNum());
+  const weeklyBestOf = u => (u.stats.weekly && u.stats.weekly.week === week ? u.stats.weekly.best : 0);
   // Admins are excluded from public rankings.
-  const users = Object.values(db.users).filter(u => !u.banned && u.role !== 'admin' && u.stats.gamesPlayed > 0);
+  let users = Object.values(db.users).filter(u => !u.banned && u.role !== 'admin' && u.stats.gamesPlayed > 0);
+  if (board === 'dungeon') users = users.filter(u => (u.stats.dungeonMax || 0) > 0);
+  if (board === 'weekly') users = users.filter(u => weeklyBestOf(u) > 0);
   const titleOf = u => {
     const t = TITLES.find(x => x.id === u.equippedTitle);
     return t ? { name: t.name, color: t.color } : null;
@@ -343,10 +414,15 @@ app.get('/api/leaderboard', (req, res) => {
       rating: u.stats.rating,
       pvpWins: u.stats.pvpWins,
       pvpLosses: u.stats.pvpLosses,
+      dungeonMax: u.stats.dungeonMax || 0,
+      weeklyBest: weeklyBestOf(u),
       badges: u.badges,
       title: titleOf(u),
     }))
-    .sort((a, b) => board === 'rating' ? b.rating - a.rating : b.bestScore - a.bestScore)
+    .sort((a, b) => board === 'rating' ? b.rating - a.rating
+      : board === 'dungeon' ? b.dungeonMax - a.dungeonMax
+      : board === 'weekly' ? b.weeklyBest - a.weeklyBest
+      : b.bestScore - a.bestScore)
     .slice(0, 100);
   res.json({ board, rows });
 });
@@ -511,8 +587,86 @@ app.get('/api/admin/transactions', requireAuth, requireAdmin, (_req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get('/api/shop', (req, res) => {
-  res.json({ items: SHOP_ITEMS });
+  res.json({ items: SHOP_ITEMS, boosters: BOOST_ITEMS });
 });
+
+// ---- Booster items (consumables) ----
+
+app.post('/api/items/buy', requireAuth, maintenanceGuard, (req, res) => {
+  const item = BOOST_ITEMS.find(i => i.id === req.body.itemId);
+  if (!item) return res.status(404).json({ error: 'アイテムが見つかりません' });
+  const count = Math.max(1, Math.min(10, Math.floor(Number(req.body.count) || 1)));
+  const cost = item.price * count;
+  const user = req.user;
+  if (user.coins < cost) return res.status(402).json({ error: 'コインが足りません' });
+  user.coins -= cost;
+  user.items = user.items || {};
+  user.items[item.id] = (user.items[item.id] || 0) + count;
+  saveDb();
+  res.json({ user: publicUser(user) });
+});
+
+app.post('/api/items/use', requireAuth, (req, res) => {
+  const user = req.user;
+  user.items = user.items || {};
+  const id = String(req.body.itemId || '');
+  if (!BOOST_ITEMS.some(i => i.id === id)) return res.status(404).json({ error: 'アイテムが見つかりません' });
+  if ((user.items[id] || 0) <= 0) return res.status(409).json({ error: 'アイテムを持っていません' });
+  user.items[id] -= 1;
+  saveDb();
+  res.json({ user: publicUser(user) });
+});
+
+// ---- Capsule machine (coin gacha) ----
+
+const GACHA_COST_1 = 500;
+const GACHA_COST_10 = 4500;
+
+function gachaPull(user) {
+  const roll = Math.random() * 100;
+  if (roll < 50) {   // N: coins
+    const amount = 150 + Math.floor(Math.random() * 6) * 50;
+    user.coins += amount;
+    return { type: 'coins', amount, rarity: 'N' };
+  }
+  if (roll < 72) {   // R: booster item
+    const it = BOOST_ITEMS[Math.floor(Math.random() * BOOST_ITEMS.length)];
+    user.items[it.id] = (user.items[it.id] || 0) + 1;
+    return { type: 'item', id: it.id, name: it.name, icon: it.icon, rarity: 'R' };
+  }
+  if (roll < 87) {   // SR: gems
+    const amount = 15 + Math.floor(Math.random() * 6) * 5;
+    user.gems += amount;
+    return { type: 'gems', amount, rarity: 'SR' };
+  }
+  if (roll < 97) {   // SSR: unowned cosmetic (or big gems when complete)
+    const unowned = SHOP_ITEMS.filter(i => !i.default && !user.owned.includes(i.id));
+    if (unowned.length === 0) {
+      user.gems += 50;
+      return { type: 'gems', amount: 50, rarity: 'SSR', complete: true };
+    }
+    const it = unowned[Math.floor(Math.random() * unowned.length)];
+    user.owned.push(it.id);
+    return { type: 'cosmetic', id: it.id, name: it.name, cat: it.cat, rarity: 'SSR' };
+  }
+  // UR: jackpot gems
+  user.gems += 150;
+  return { type: 'gems', amount: 150, rarity: 'UR' };
+}
+
+app.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
+  const count = Number(req.body.count) === 10 ? 10 : 1;
+  const cost = count === 10 ? GACHA_COST_10 : GACHA_COST_1;
+  const user = req.user;
+  if (user.coins < cost) return res.status(402).json({ error: `コインが足りません（${fmtNum(cost)}必要）` });
+  user.coins -= cost;
+  user.items = user.items || {};
+  const results = Array.from({ length: count }, () => gachaPull(user));
+  saveDb();
+  res.json({ results, user: publicUser(user) });
+});
+
+function fmtNum(n) { return n.toLocaleString('ja-JP'); }
 
 app.post('/api/shop/buy', requireAuth, maintenanceGuard, (req, res) => {
   const item = SHOP_ITEMS.find(i => i.id === req.body.itemId);

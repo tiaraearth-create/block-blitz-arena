@@ -76,22 +76,35 @@ export class Engine {
     this.maxCombo = 0;
     this.piecesPlaced = 0;
     this.rerolls = 1;         // hand rerolls left this game
+    this.infiniteReroll = false; // chaos-event: rerolls cost nothing while active
     this.scoreMult = 1;       // chaos-event score multiplier
+    this.feverUntil = 0;      // booster: timestamp until which score is doubled
     this.chaosBig = false;    // chaos-event: draw only big pieces
+    this.chaosMini = false;   // chaos-event: draw only tiny pieces
+    this.streakShield = false; // chaos-event: combo never breaks
     this.over = false;
     this.refillHand();
   }
 
   // Replace the whole hand with fresh pieces (once per game power-up).
   reroll() {
-    if (this.over || this.rerolls <= 0) return false;
-    this.rerolls--;
+    if (this.over) return false;
+    if (!this.infiniteReroll) {
+      if (this.rerolls <= 0) return false;
+      this.rerolls--;
+    }
     for (let i = 0; i < 3; i++) this.hand[i] = this.drawPiece();
     if (!this.hasAnyMove()) this.over = true;
     return true;
   }
 
   drawPiece() {
+    if (this.chaosMini) {
+      const minis = [];
+      for (let i = 0; i < SHAPES.length; i++) if (SHAPES[i].cells.length <= 3) minis.push(i);
+      const i = minis[this.rng.int(minis.length)];
+      return { shape: i, cells: SHAPES[i].cells, color: SHAPES[i].color };
+    }
     if (this.chaosBig) {
       const bigs = [];
       for (let i = 0; i < SHAPES.length; i++) if (SHAPES[i].cells.length >= 5) bigs.push(i);
@@ -187,10 +200,11 @@ export class Engine {
       gained += Math.round(lineCount * lineCount * 100 * comboMult);
       this.linesCleared += lineCount;
       if (this.streak > this.maxCombo) this.maxCombo = this.streak;
-    } else {
+    } else if (!this.streakShield) {
       this.streak = 0;
     }
     if (this.scoreMult !== 1) gained = Math.round(gained * this.scoreMult);
+    if (this.feverUntil && Date.now() < this.feverUntil) gained *= 2;
     this.score += gained;
 
     this.refillHand();
