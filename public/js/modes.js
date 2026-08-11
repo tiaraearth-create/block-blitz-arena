@@ -1880,9 +1880,7 @@ class OnlineMode extends VersusBase {
         : this.kind === 'raid'
         ? 'レイドパーティを募集しています…'
         : '対戦相手を探しています…';
-      $('#mmSub').innerHTML = this.kind === 'team'
-        ? 'オンライン: <span id="mmOnline">-</span>人 ・ 人数が足りない分はボットが参加します'
-        : 'オンライン: <span id="mmOnline">-</span>人 ・ 10秒待つとボットが相手になります';
+      $('#mmSub').innerHTML = 'オンライン: <span id="mmOnline">-</span>人 ・ 対戦相手を検索中…';
       $('#mmOnline').textContent = this.onlineCount ?? '-';
       this.client.queue(this.kind);
     }
@@ -1936,7 +1934,7 @@ class OnlineMode extends VersusBase {
       </div></div>
       <div class="settings-row"><label>🤖 ボット補充</label><input type="checkbox" id="rsBotFill" ${s.botFill ? 'checked' : ''} ${dis}></div>
       <div class="settings-row"><label>💪 ボットの強さ</label><div class="seg" data-rs="botLevel">
-        ${[['easy', '弱'], ['normal', '中'], ['hard', '強']].map(([v, l]) =>
+        ${[['random', '🎲'], ['easy', '弱'], ['normal', '中'], ['hard', '強'], ['oni', '鬼']].map(([v, l]) =>
           `<button data-v="${v}" ${s.botLevel === v ? 'class="active"' : ''} ${dis}>${l}</button>`).join('')}
       </div></div>`;
     $('#btnStartRoom').classList.toggle('hidden', !host);
@@ -2183,11 +2181,11 @@ class OnlineMode extends VersusBase {
       scoreRows = `
         <div class="rs-row"><span>${msg.boss ? escapeHtml(msg.boss.name) : 'ボス'} HP</span><b>${fmt(msg.boss ? msg.boss.hp : 0)}</b></div>
         <div class="rs-row"><span>パーティ総ダメージ</span><b>${fmt(total)}</b></div>
-        ${msg.players.map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? '⭐あなた' : (p.isBot ? '' : '👤') + escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`).join('')}`;
+        ${msg.players.map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? '⭐あなた' : '👤' + escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`).join('')}`;
     } else if (msg.mode === 'team') {
       const teamRow = t => {
         const members = msg.players.filter(p => p.team === t);
-        const names = members.map(p => `${p.slot === msg.you.slot ? '⭐' : p.isBot ? '' : '👤'}${escapeHtml(p.name)} ${fmt(p.score)}`).join('<br>');
+        const names = members.map(p => `${p.slot === msg.you.slot ? '⭐' : '👤'}${escapeHtml(p.name)} ${fmt(p.score)}`).join('<br>');
         const label = t === msg.you.team ? 'あなたのチーム' : '相手チーム';
         return `<div class="rs-row team-row"><span>${label}<br><small class="muted">${names}</small></span><b>${fmt(msg.teamScores[t])}</b></div>`;
       };

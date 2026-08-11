@@ -659,7 +659,8 @@ export async function openAdmin() {
     adminStats = stats;
     statsEl.innerHTML = `
       <div class="stat-card"><b>${fmt(stats.totalUsers)}</b><span>登録ユーザー</span></div>
-      <div class="stat-card"><b>${fmt(stats.online)}</b><span>オンライン</span></div>
+      <div class="stat-card"><b>${fmt(stats.online)}</b><span>実オンライン</span></div>
+      <div class="stat-card"><b>${fmt(stats.displayOnline ?? stats.online)}</b><span>表示人数(AI込)</span></div>
       <div class="stat-card"><b>${fmt(stats.activeMatches)}</b><span>対戦中</span></div>
       <div class="stat-card"><b>${fmt(stats.openRooms || 0)}</b><span>ルーム</span></div>
       <div class="stat-card"><b>${fmt(stats.totalGames)}</b><span>総プレイ数</span></div>

@@ -5,10 +5,13 @@ import { WebSocketServer } from 'ws';
 import { Engine } from '../public/js/engine.js';
 import { chooseMove } from '../public/js/ai.js';
 import { RAID_BOSSES } from './catalog.js';
+import { POP_SCALE, pickPersona, ambientOnline, ambientMatches, randomChatLine } from './ambient.js';
 
 const COUNTDOWN = 3;
-const DUEL_BOT_WAIT = 10000;   // ms alone in 1v1 queue before a bot joins
-const TEAM_BOT_WAIT = 8000;    // ms in team queue before bots fill
+// ms alone in queue before an AI player fills the seat (randomized per entry
+// so joins don't feel mechanical)
+const duelBotWait = () => 4000 + Math.random() * 5000;
+const teamBotWait = () => 5000 + Math.random() * 5000;
 const DURATIONS = [60, 120, 180];
 
 export function initBattle(server, deps) {
@@ -26,8 +29,41 @@ export function initBattle(server, deps) {
   }
   function broadcastAll(msg) { for (const ws of clients) send(ws, msg); }
 
+  // Displayed population = real sockets + simulated ambient players.
+  const displayOnline = () => clients.size + ambientOnline();
+  const displayMatches = () => matches.size + ambientMatches();
+
   // ---- global chat (in-memory history) ----
   const chatHistory = [];   // { type:'chat', from, role, text, at }
+
+  // Ambient chat: simulated players keep the lobby lively. Seed a little
+  // back-history so the chat never looks dead, then post at a natural pace.
+  if (POP_SCALE) {
+    let t = Date.now() - 25 * 60 * 1000;
+    const used = new Set();
+    for (let i = 0; i < 6; i++) {
+      t += (2 + Math.random() * 4) * 60 * 1000;
+      chatHistory.push({
+        type: 'chat', from: pickPersona({ used }).name, role: 'user',
+        text: randomChatLine(), at: Math.min(t, Date.now() - 30000),
+      });
+    }
+    const ambientChat = () => {
+      setTimeout(() => {
+        if (clients.size > 0) {
+          const entry = {
+            type: 'chat', from: pickPersona({}).name, role: 'user',
+            text: randomChatLine(), at: Date.now(),
+          };
+          chatHistory.push(entry);
+          if (chatHistory.length > 60) chatHistory.shift();
+          broadcastAll(entry);
+        }
+        ambientChat();
+      }, 40000 + Math.random() * 100000);
+    };
+    ambientChat();
+  }
 
   function sockRate(ws, key, limit, windowMs) {
     const now = Date.now();
@@ -39,30 +75,46 @@ export function initBattle(server, deps) {
 
   function sockName(s) { return s.isBot ? s.name : (s.user ? s.user.username : s.guestName); }
   function sockLevel(s) {
-    if (s.isBot) return { easy: 2, normal: 6, hard: 12 }[s.level] || 6;
+    if (s.isBot) return s.fakeLevel;
     return s.user && db.users[s.user.id] ? levelOf(db.users[s.user.id].xp) : 1;
   }
   function sockRating(s) {
-    return !s.isBot && s.user && db.users[s.user.id] ? db.users[s.user.id].stats.rating : null;
+    if (s.isBot) return s.rating;
+    return s.user && db.users[s.user.id] ? db.users[s.user.id].stats.rating : null;
   }
 
   // -------------------------------------------------------------------------
-  // Bots
+  // Bots — disguised as normal players: human-like persona names, a fake
+  // rating/level that matches their strength, and randomized strength.
   // -------------------------------------------------------------------------
 
-  const BOT_NAMES = ['ブロッコ', 'ピクセル', 'キューブ', 'テトラ', 'ネオン', 'ラピッド', 'モザイク', 'グリッド'];
+  const BOT_LEVELS = ['easy', 'normal', 'hard', 'oni'];
+  function randomBotLevel() {
+    const r = Math.random();
+    return r < 0.28 ? 'easy' : r < 0.62 ? 'normal' : r < 0.88 ? 'hard' : 'oni';
+  }
+  const BOT_RATING = { easy: [720, 1020], normal: [980, 1300], hard: [1240, 1600], oni: [1520, 1950] };
+  const BOT_LVL = { easy: [1, 7], normal: [5, 16], hard: [12, 30], oni: [22, 48] };
+  const BOT_MOVE_MS = { easy: 2600, normal: 1700, hard: 1050, oni: 820 };
+  const EMOTE_SET = ['👍', '🔥', '😂', '😭', '🎉', '😱'];
 
   class Bot {
-    constructor(level = 'normal') {
+    constructor(level = 'random', used) {
       this.isBot = true;
-      this.level = level;
-      this.name = `🤖${BOT_NAMES[crypto.randomInt(BOT_NAMES.length)]}`;
+      this.level = BOT_LEVELS.includes(level) ? level : randomBotLevel();
+      const persona = pickPersona({ used });
+      this.name = persona.name;
+      const [rLo, rHi] = BOT_RATING[this.level];
+      this.rating = persona.registered ? rLo + crypto.randomInt(rHi - rLo) : null;
+      const [lLo, lHi] = BOT_LVL[this.level];
+      this.fakeLevel = persona.registered ? lLo + crypto.randomInt(lHi - lLo) : 1;
       this.timer = null;
+      this.emoteTimer = null;
     }
 
     startPlay(match, slot) {
       this.engine = new Engine(match.seed);
-      const moveMs = { easy: 2500, normal: 1600, hard: 1000 }[this.level] || 1600;
+      const moveMs = BOT_MOVE_MS[this.level] || 1700;
       const endAt = match.startedAt + (COUNTDOWN + match.duration) * 1000;
       const tick = () => {
         if (match.ended) return;
@@ -84,12 +136,28 @@ export function initBattle(server, deps) {
             grid: this.engine.snapshot(),
           });
         }
-        this.timer = setTimeout(tick, moveMs * (0.8 + Math.random() * 0.4));
+        // Human-ish pacing: jitter plus an occasional longer "thinking" pause.
+        const pause = Math.random() < 0.08 ? 1200 + Math.random() * 2200 : 0;
+        this.timer = setTimeout(tick, moveMs * (0.75 + Math.random() * 0.5) + pause);
       };
       this.timer = setTimeout(tick, COUNTDOWN * 1000 + moveMs);
+      this.scheduleEmote(match, slot);
     }
 
-    stop() { clearTimeout(this.timer); }
+    scheduleEmote(match, slot) {
+      this.emoteTimer = setTimeout(() => {
+        if (match.ended) return;
+        if (Math.random() < 0.55 && Date.now() > match.startedAt + COUNTDOWN * 1000) {
+          const emoji = EMOTE_SET[crypto.randomInt(EMOTE_SET.length)];
+          for (const p of match.players) {
+            if (!p.sock.isBot) send(p.sock, { type: 'emote', slot, emoji });
+          }
+        }
+        this.scheduleEmote(match, slot);
+      }, 14000 + Math.random() * 26000);
+    }
+
+    stop() { clearTimeout(this.timer); clearTimeout(this.emoteTimer); }
   }
 
   // -------------------------------------------------------------------------
@@ -218,8 +286,9 @@ export function initBattle(server, deps) {
 
     const humanUsers = match.players.map(p =>
       (!p.sock.isBot && p.sock.user) ? db.users[p.sock.user.id] : null);
-    const isRatedDuel = match.rated && match.mode === 'duel' && match.players.length === 2
-      && humanUsers[0] && humanUsers[1] && humanUsers[0].id !== humanUsers[1].id;
+    // Rated 1v1: vs another account, or vs a "registered" AI player (its fake
+    // rating drives a real Elo update so ranked works even when nobody's on).
+    const duel2 = match.rated && match.mode === 'duel' && match.players.length === 2;
 
     for (const p of match.players) {
       if (p.sock.isBot) continue;
@@ -232,10 +301,15 @@ export function initBattle(server, deps) {
       let ratingDelta = 0;
       let rewards = null;
       if (me) {
-        if (isRatedDuel) {
-          const opp = humanUsers[1 - p.slot];
-          ratingDelta = eloUpdate(me.stats.rating, opp.stats.rating, outcome);
-          me.stats.rating = Math.max(0, me.stats.rating + ratingDelta);
+        if (duel2) {
+          const oppUser = humanUsers[1 - p.slot];
+          const oppSock = match.players[1 - p.slot].sock;
+          const oppRating = oppUser && oppUser.id !== me.id ? oppUser.stats.rating
+            : oppSock.isBot && oppSock.rating != null ? oppSock.rating : null;
+          if (oppRating != null) {
+            ratingDelta = eloUpdate(me.stats.rating, oppRating, outcome);
+            me.stats.rating = Math.max(0, me.stats.rating + ratingDelta);
+          }
         }
         if (match.rated && match.mode !== 'raid') {
           if (outcome === 1) me.stats.pvpWins += 1;
@@ -276,7 +350,8 @@ export function initBattle(server, deps) {
   function joinQueue(ws, mode) {
     if (ws.matchId || ws.roomCode) return;
     leaveQueues(ws);
-    queues[mode].push({ ws, since: Date.now() });
+    const wait = mode === 'duel' ? duelBotWait() : teamBotWait();
+    queues[mode].push({ ws, since: Date.now(), botAt: Date.now() + wait });
     send(ws, { type: 'queued', mode });
     sweepQueues();
   }
@@ -289,25 +364,26 @@ export function initBattle(server, deps) {
   }
 
   function sweepQueues() {
-    for (const mode of ['duel', 'team']) {
+    for (const mode of ['duel', 'team', 'raid']) {
       queues[mode] = queues[mode].filter(e => e.ws.readyState === e.ws.OPEN && !e.ws.matchId);
     }
     while (queues.duel.length >= 2) {
       const [a, b] = queues.duel.splice(0, 2);
       createMatch({ mode: 'duel', entries: [{ sock: a.ws, team: 0 }, { sock: b.ws, team: 1 }] });
     }
-    if (queues.duel.length === 1 && Date.now() - queues.duel[0].since > DUEL_BOT_WAIT) {
+    if (queues.duel.length === 1 && Date.now() >= queues.duel[0].botAt) {
       const [a] = queues.duel.splice(0, 1);
-      createMatch({ mode: 'duel', entries: [{ sock: a.ws, team: 0 }, { sock: new Bot('normal'), team: 1 }] });
+      createMatch({ mode: 'duel', entries: [{ sock: a.ws, team: 0 }, { sock: new Bot('random'), team: 1 }] });
     }
     while (queues.team.length >= 4) {
       const four = queues.team.splice(0, 4);
       createMatch({ mode: 'team', entries: four.map((e, i) => ({ sock: e.ws, team: i % 2 })) });
     }
-    if (queues.team.length > 0 && Date.now() - queues.team[0].since > TEAM_BOT_WAIT) {
+    if (queues.team.length > 0 && Date.now() >= queues.team[0].botAt) {
       const humans = queues.team.splice(0, queues.team.length);
       const entries = humans.map((e, i) => ({ sock: e.ws, team: i % 2 }));
-      while (entries.length < 4) entries.push({ sock: new Bot('normal'), team: entries.length % 2 });
+      const used = new Set(humans.map(e => sockName(e.ws)));
+      while (entries.length < 4) entries.push({ sock: new Bot('random', used), team: entries.length % 2 });
       createMatch({ mode: 'team', entries });
     }
     // raid: co-op party of 4 (all on team 0), bots fill after the wait
@@ -315,10 +391,11 @@ export function initBattle(server, deps) {
       const four = queues.raid.splice(0, 4);
       createMatch({ mode: 'raid', entries: four.map(e => ({ sock: e.ws, team: 0 })), rated: false });
     }
-    if (queues.raid.length > 0 && Date.now() - queues.raid[0].since > TEAM_BOT_WAIT) {
+    if (queues.raid.length > 0 && Date.now() >= queues.raid[0].botAt) {
       const humans = queues.raid.splice(0, queues.raid.length);
       const entries = humans.map(e => ({ sock: e.ws, team: 0 }));
-      while (entries.length < 4) entries.push({ sock: new Bot('normal'), team: 0 });
+      const used = new Set(humans.map(e => sockName(e.ws)));
+      while (entries.length < 4) entries.push({ sock: new Bot('random', used), team: 0 });
       createMatch({ mode: 'raid', entries, rated: false });
     }
   }
@@ -344,7 +421,7 @@ export function initBattle(server, deps) {
       duration: DURATIONS.includes(Number(s.duration)) ? Number(s.duration) : MATCH_DURATION,
       team: !!s.team,
       botFill: s.botFill !== false,
-      botLevel: ['easy', 'normal', 'hard'].includes(s.botLevel) ? s.botLevel : 'normal',
+      botLevel: ['random', 'easy', 'normal', 'hard', 'oni'].includes(s.botLevel) ? s.botLevel : 'random',
     };
   }
 
@@ -388,7 +465,8 @@ export function initBattle(server, deps) {
     // Humans keep join order: in team mode the first two are team A.
     const teamOf = i => room.settings.team ? (i < 2 ? 0 : 1) : i % 2;
     const entries = room.players.map((p, i) => ({ sock: p, team: teamOf(i) }));
-    while (entries.length < need) entries.push({ sock: new Bot(room.settings.botLevel), team: teamOf(entries.length) });
+    const used = new Set(room.players.map(p => sockName(p)));
+    while (entries.length < need) entries.push({ sock: new Bot(room.settings.botLevel, used), team: teamOf(entries.length) });
     const players = room.players.slice();
     rooms.delete(room.code);
     for (const p of players) p.roomCode = null;
@@ -429,7 +507,7 @@ export function initBattle(server, deps) {
           send(ws, {
             type: 'hello_ok',
             name: user ? user.username : ws.guestName,
-            online: clients.size,
+            online: displayOnline(),
             chat: chatHistory.slice(-40),
           });
           break;
@@ -566,6 +644,7 @@ export function initBattle(server, deps) {
   return {
     clients, matches, rooms,
     queueSize: () => queues.duel.length + queues.team.length,
+    displayOnline, displayMatches,
     broadcastAll,
   };
 }

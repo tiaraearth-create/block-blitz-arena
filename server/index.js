@@ -18,6 +18,7 @@ import {
   BP_TIERS, BP_XP_PER_TIER, BP_PREMIUM_PRICE_GEMS, BP_SEASON_DAYS,
   BOSSES, TITLES, earnedTitles, GEM_PACKS,
 } from './catalog.js';
+import { ghostRows } from './ambient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -320,8 +321,8 @@ function currentEvent() {
 // Public lightweight status (menu online counter + event).
 app.get('/api/status', (_req, res) => {
   res.json({
-    online: battle.clients.size,
-    activeMatches: battle.matches.size,
+    online: battle.displayOnline(),
+    activeMatches: battle.displayMatches(),
     maintenance: inMaintenance(),
     event: currentEvent(),
   });
@@ -416,19 +417,22 @@ app.get('/api/leaderboard', (req, res) => {
     const t = TITLES.find(x => x.id === u.equippedTitle);
     return t ? { name: t.name, color: t.color } : null;
   };
-  const rows = users
-    .map(u => ({
-      username: u.username,
-      level: levelOf(u.xp),
-      bestScore: u.stats.bestScore,
-      rating: u.stats.rating,
-      pvpWins: u.stats.pvpWins,
-      pvpLosses: u.stats.pvpLosses,
-      dungeonMax: u.stats.dungeonMax || 0,
-      weeklyBest: weeklyBestOf(u),
-      badges: u.badges,
-      title: titleOf(u),
-    }))
+  const realRows = users.map(u => ({
+    username: u.username,
+    level: levelOf(u.xp),
+    bestScore: u.stats.bestScore,
+    rating: u.stats.rating,
+    pvpWins: u.stats.pvpWins,
+    pvpLosses: u.stats.pvpLosses,
+    dungeonMax: u.stats.dungeonMax || 0,
+    weeklyBest: weeklyBestOf(u),
+    badges: u.badges,
+    title: titleOf(u),
+  }));
+  // Ghost players pad the boards so rankings feel populated (weekly reshuffle).
+  const taken = new Set(Object.values(db.users).map(u => u.username));
+  const rows = realRows
+    .concat(ghostRows(board, week, taken))
     .sort((a, b) => board === 'rating' ? b.rating - a.rating
       : board === 'dungeon' ? b.dungeonMax - a.dungeonMax
       : board === 'weekly' ? b.weeklyBest - a.weeklyBest
@@ -887,6 +891,7 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     bannedUsers: users.filter(u => u.banned).length,
     totalGames: users.reduce((a, u) => a + u.stats.gamesPlayed, 0),
     online: battle.clients.size,
+    displayOnline: battle.displayOnline(),
     inQueue: battle.queueSize(),
     activeMatches: battle.matches.size,
     openRooms: battle.rooms.size,
