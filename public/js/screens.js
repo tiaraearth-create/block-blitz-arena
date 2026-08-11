@@ -5,7 +5,7 @@ import { getSkin, BOARDS } from './themes.js';
 import { audio } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
 import { reconnectChat } from './chat.js';
-import { t as tr, setLang, LANG } from './i18n.js';
+import { t as tr, setLang, LANG, catName, catDesc } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Auth modal
@@ -65,7 +65,7 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : '😀'} ${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
@@ -138,7 +138,7 @@ export async function loadTitles() {
 }
 function titleName(id) {
   const t = titlesCatalog && titlesCatalog.find(x => x.id === id);
-  return t ? t.name : '';
+  return t ? catName(t) : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -159,18 +159,18 @@ export async function showGemShop() {
   } catch (err) { toast(err.message, 'err'); return; }
   const isStripe = gemMode === 'stripe';
   const m = showModal(`
-    <h2>💎 ジェムショップ</h2>
-    <p class="muted center" style="margin-bottom:12px">所持ジェム: <b style="color:var(--cyan)">${fmt(session.user.gems)}</b></p>
+    <h2>${tr('💎 ジェムショップ', '💎 Gem Shop')}</h2>
+    <p class="muted center" style="margin-bottom:12px">${tr('所持ジェム', 'Your gems')}: <b style="color:var(--cyan)">${fmt(session.user.gems)}</b></p>
     ${isStripe ? '' : `
-    <div class="coming-soon-banner">🚧 課金機能は製作中です 🚧<br><small>もうしばらくお待ちください</small></div>`}
+    <div class="coming-soon-banner">${tr('🚧 課金機能は製作中です 🚧', '🚧 Payments are under construction 🚧')}<br><small>${tr('もうしばらくお待ちください', 'Check back soon!')}</small></div>`}
     <div class="form-col">
       ${gemPacks.map(p => `
         <button class="gem-pack ${isStripe ? '' : 'disabled'}" data-pack="${p.id}" ${isStripe ? '' : 'disabled'}>
-          <span class="gp-gems">💎 ${fmt(p.gems)}${p.bonus ? `<small> +${fmt(p.bonus)}ボーナス</small>` : ''}</span>
+          <span class="gp-gems">💎 ${fmt(p.gems)}${p.bonus ? `<small> ${tr(`+${fmt(p.bonus)}ボーナス`, `+${fmt(p.bonus)} bonus`)}</small>` : ''}</span>
           <span class="gp-price">¥${fmt(p.priceJpy)}</span>
         </button>`).join('')}
       ${isStripe
-        ? '<p class="muted center" style="font-size:11px">🔒 決済はStripeの安全なページで行われます</p>'
+        ? `<p class="muted center" style="font-size:11px">${tr('🔒 決済はStripeの安全なページで行われます', "🔒 Checkout is handled on Stripe's secure page")}</p>`
         : ''}
     </div>`);
   if (!isStripe) return;
@@ -181,7 +181,7 @@ export async function showGemShop() {
       try {
         const res = await api('/api/purchase', { method: 'POST', body: { packId: pack.id } });
         if (res.checkoutUrl) { location.href = res.checkoutUrl; return; }
-        toast('決済ページを開けませんでした', 'err');
+        toast(tr('決済ページを開けませんでした', 'Could not open the checkout page'), 'err');
       } catch (err) { audio.error(); toast(err.message, 'err'); }
     };
   });
@@ -197,18 +197,18 @@ export async function showTitlesModal() {
     data = await api('/api/titles');
   } catch (err) { toast(err.message, 'err'); return; }
   const m = showModal(`
-    <h2>👑 称号</h2>
+    <h2>${tr('👑 称号', '👑 Titles')}</h2>
     <div class="form-col title-list">
       <button class="title-row ${!data.equipped ? 'equipped' : ''}" data-title="">
-        <span class="t-name" style="color:var(--muted)">称号なし</span>
+        <span class="t-name" style="color:var(--muted)">${tr('称号なし', 'No title')}</span>
       </button>
       ${data.titles.map(t => {
         const earned = data.earned.includes(t.id);
         const eq = data.equipped === t.id;
         return `
         <button class="title-row ${eq ? 'equipped' : ''} ${earned ? '' : 'locked'}" data-title="${t.id}" ${earned ? '' : 'disabled'}>
-          <span class="t-name" style="color:${t.color}">${earned ? '' : '🔒 '}${t.name}</span>
-          <span class="t-desc">${t.desc}</span>
+          <span class="t-name" style="color:${t.color}">${earned ? '' : '🔒 '}${catName(t)}</span>
+          <span class="t-desc">${catDesc(t)}</span>
         </button>`;
       }).join('')}
     </div>`);
@@ -218,7 +218,7 @@ export async function showTitlesModal() {
       try {
         await api('/api/titles/equip', { method: 'POST', body: { id: btn.dataset.title || null } });
         audio.click();
-        toast(btn.dataset.title ? '称号を装備しました' : '称号を外しました', 'ok', 1500);
+        toast(btn.dataset.title ? tr('称号を装備しました', 'Title equipped') : tr('称号を外しました', 'Title removed'), 'ok', 1500);
         closeModal();
       } catch (err) { toast(err.message, 'err'); }
     };
@@ -324,11 +324,11 @@ export function showSettingsModal() {
 
   m.querySelector('#setResetLocal').onclick = () => {
     const c = showModal(`
-      <h2>🗑️ ローカルデータをリセット</h2>
-      <p class="muted center" style="margin-bottom:14px">設定・ゲストのベストスコア・隠し難易度の解放状態を消去します。<br>アカウントのデータ（コイン・スコア等）は残ります。</p>
+      <h2>${tr('🗑️ ローカルデータをリセット', '🗑️ Reset local data')}</h2>
+      <p class="muted center" style="margin-bottom:14px">${tr('設定・ゲストのベストスコア・隠し難易度の解放状態を消去します。', 'This clears your settings, guest best score and hidden-difficulty unlocks.')}<br>${tr('アカウントのデータ（コイン・スコア等）は残ります。', 'Your account data (coins, scores, etc.) is kept.')}</p>
       <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rlNo">やめる</button>
-        <button class="btn btn-ai" id="rlYes">リセットする</button>
+        <button class="btn btn-ghost" id="rlNo">${tr('やめる', 'Cancel')}</button>
+        <button class="btn btn-ai" id="rlYes">${tr('リセットする', 'Reset')}</button>
       </div>`);
     c.querySelector('#rlNo').onclick = () => { closeModal(); showSettingsModal(); };
     c.querySelector('#rlYes').onclick = () => {
@@ -342,14 +342,14 @@ export function showSettingsModal() {
   const delBtn = m.querySelector('#setDeleteAccount');
   if (delBtn) delBtn.onclick = () => {
     const c = showModal(`
-      <h2>⚠️ アカウント削除</h2>
-      <p class="muted center" style="margin-bottom:14px">「${escapeHtml(session.user.username)}」を完全に削除します。<br>コイン・スコア・購入アイテムはすべて失われ、元に戻せません。</p>
+      <h2>${tr('⚠️ アカウント削除', '⚠️ Delete account')}</h2>
+      <p class="muted center" style="margin-bottom:14px">${tr(`「${escapeHtml(session.user.username)}」を完全に削除します。`, `This will permanently delete "${escapeHtml(session.user.username)}".`)}<br>${tr('コイン・スコア・購入アイテムはすべて失われ、元に戻せません。', 'All coins, scores and purchases will be lost — this cannot be undone.')}</p>
       <div class="form-col">
-        <input id="delPass" type="password" placeholder="パスワードを入力して確認" autocomplete="current-password">
+        <input id="delPass" type="password" placeholder="${tr('パスワードを入力して確認', 'Enter password to confirm')}" autocomplete="current-password">
         <div class="form-error" id="delError"></div>
         <div class="modal-buttons">
-          <button class="btn btn-ghost" id="delNo">やめる</button>
-          <button class="btn btn-ai" id="delYes">完全に削除する</button>
+          <button class="btn btn-ghost" id="delNo">${tr('やめる', 'Cancel')}</button>
+          <button class="btn btn-ai" id="delYes">${tr('完全に削除する', 'Delete forever')}</button>
         </div>
       </div>`);
     c.querySelector('#delNo').onclick = () => { closeModal(); showSettingsModal(); };
@@ -358,7 +358,7 @@ export function showSettingsModal() {
         await api('/api/me', { method: 'DELETE', body: { password: c.querySelector('#delPass').value } });
         setToken(null);
         session.user = null;
-        toast('アカウントを削除しました。ご利用ありがとうございました', 'ok', 3000);
+        toast(tr('アカウントを削除しました。ご利用ありがとうございました', 'Account deleted. Thanks for playing!'), 'ok', 3000);
         setTimeout(() => location.reload(), 1500);
       } catch (err) {
         c.querySelector('#delError').textContent = err.message;
@@ -376,22 +376,22 @@ export async function openLeaderboard(board = 'score') {
   showScreen('leaderboard');
   $$('[data-lb]').forEach(t => t.classList.toggle('active', t.dataset.lb === board));
   const list = $('#lbList');
-  list.innerHTML = '<p class="muted center">読み込み中…</p>';
+  list.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
   try {
     const data = await api(`/api/leaderboard?board=${board}`);
     if (!data.rows.length) {
-      list.innerHTML = '<p class="muted center">まだ記録がありません。最初の挑戦者になろう！</p>';
+      list.innerHTML = `<p class="muted center">${tr('まだ記録がありません。最初の挑戦者になろう！', 'No records yet — be the first challenger!')}</p>`;
       return;
     }
     const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆' };
     list.innerHTML = data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
         <div class="lb-name">${escapeHtml(r.username)}
           <span class="lb-badges">${(r.badges || []).map(b => badgeIcons[b] || '').join('')}</span>
           ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.name)}》</span>` : ''}
-          <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${r.pvpWins}勝${r.pvpLosses}敗` : ''}</div>
+          <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}</div>
         </div>
         <div class="lb-score">${board === 'dungeon' ? `F${fmt(r.dungeonMax || 0)}` : board === 'weekly' ? fmt(r.weeklyBest || 0) : fmt(board === 'rating' ? r.rating : r.bestScore)}</div>
       </div>`).join('');
@@ -413,7 +413,7 @@ export async function openShop(tab = shopTab) {
   shopTab = tab;
   $$('[data-shop]').forEach(t => t.classList.toggle('active', t.dataset.shop === tab));
   const grid = $('#shopGrid');
-  grid.innerHTML = '<p class="muted center">読み込み中…</p>';
+  grid.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
   try {
     if (!shopItems) {
       const data = await api('/api/shop');
@@ -442,12 +442,12 @@ function renderShop() {
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
     el.innerHTML = `
       <div class="shop-preview" data-pv="${item.id}"></div>
-      <div class="shop-name">${item.name}</div>
-      <div class="shop-desc">${item.desc}</div>
+      <div class="shop-name">${catName(item)}</div>
+      <div class="shop-desc">${catDesc(item)}</div>
       ${equipped
-        ? '<button class="btn btn-sm btn-ghost" disabled>✓ 装備中</button>'
+        ? `<button class="btn btn-sm btn-ghost" disabled>${tr('✓ 装備中', '✓ Equipped')}</button>`
         : owned
-          ? '<button class="btn btn-sm btn-primary" data-act="equip">装備する</button>'
+          ? `<button class="btn btn-sm btn-primary" data-act="equip">${tr('装備する', 'Equip')}</button>`
           : `<button class="btn btn-sm btn-gold" data-act="buy">${cur} ${fmt(item.price)}</button>`}
     `;
     grid.appendChild(el);
@@ -484,7 +484,7 @@ async function buyItem(item) {
   try {
     await api('/api/shop/buy', { method: 'POST', body: { itemId: item.id } });
     audio.coin();
-    toast(`${item.name} を購入しました！`, 'ok');
+    toast(tr(`${item.name} を購入しました！`, `Bought ${catName(item)}!`), 'ok');
     updateTopbar();
     renderShop();
   } catch (err) {
@@ -502,7 +502,7 @@ function renderBoosterShop() {
   const note = document.createElement('p');
   note.className = 'muted center';
   note.style.gridColumn = '1 / -1';
-  note.textContent = 'ソロ・ボス・ダンジョン・カオスで使える消費アイテム。ゲーム中のHUDから発動！';
+  note.textContent = tr('ソロ・ボス・ダンジョン・カオスで使える消費アイテム。ゲーム中のHUDから発動！', 'Consumables for Solo, Boss, Dungeon and Chaos. Activate them from the in-game HUD!');
   grid.appendChild(note);
   shopBoosters.forEach((item, idx) => {
     const count = u ? (u.items && u.items[item.id]) || 0 : null;
@@ -511,8 +511,8 @@ function renderBoosterShop() {
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
     el.innerHTML = `
       <div class="shop-preview booster-preview">${item.icon}</div>
-      <div class="shop-name">${item.name}${count !== null ? ` <span class="muted">×${fmt(count)}</span>` : ''}</div>
-      <div class="shop-desc">${item.desc}</div>
+      <div class="shop-name">${catName(item)}${count !== null ? ` <span class="muted">×${fmt(count)}</span>` : ''}</div>
+      <div class="shop-desc">${catDesc(item)}</div>
       <button class="btn btn-sm btn-gold" data-act="buy">🪙 ${fmt(item.price)}</button>
     `;
     grid.appendChild(el);
@@ -522,7 +522,7 @@ function renderBoosterShop() {
         await api('/api/items/buy', { method: 'POST', body: { itemId: item.id } });
         await refreshMe();
         audio.coin();
-        toast(`${item.icon} ${item.name} を購入しました！`, 'ok');
+        toast(tr(`${item.icon} ${item.name} を購入しました！`, `Bought ${item.icon} ${catName(item)}!`), 'ok');
         updateTopbar();
         renderShop();
       } catch (err) {
@@ -537,22 +537,22 @@ function renderBoosterShop() {
 // Capsule machine (gacha)
 // ---------------------------------------------------------------------------
 
-const RARITY_LABEL = { N: 'ノーマル', R: 'レア', SR: 'スーパーレア', SSR: '激レア', UR: '超激レア' };
+const RARITY_LABEL = { N: tr('ノーマル', 'Normal'), R: tr('レア', 'Rare'), SR: tr('スーパーレア', 'Super Rare'), SSR: tr('激レア', 'Ultra Rare'), UR: tr('超激レア', 'Legendary') };
 
 export function openGacha() {
   if (!session.user) { showAuthModal(); return; }
   audio.click();
   const m = showModal(`
-    <h2>🎰 カプセルマシン</h2>
-    <p class="muted center" style="margin-bottom:4px">コインで回して お宝ゲット！</p>
-    <p class="center" style="margin-bottom:10px">所持コイン: <b id="gcCoins">🪙 ${fmt(session.user.coins)}</b></p>
+    <h2>${tr('🎰 カプセルマシン', '🎰 Capsule Machine')}</h2>
+    <p class="muted center" style="margin-bottom:4px">${tr('コインで回して お宝ゲット！', 'Spin with coins and win treasure!')}</p>
+    <p class="center" style="margin-bottom:10px">${tr('所持コイン', 'Your coins')}: <b id="gcCoins">🪙 ${fmt(session.user.coins)}</b></p>
     <div id="gcResults" class="gacha-results"></div>
     <div class="modal-buttons">
-      <button class="btn btn-ghost" id="gcClose">閉じる</button>
-      <button class="btn btn-primary" id="gcPull1">1回 🪙500</button>
-      <button class="btn btn-gold" id="gcPull10">10連 🪙4,500</button>
+      <button class="btn btn-ghost" id="gcClose">${tr('閉じる', 'Close')}</button>
+      <button class="btn btn-primary" id="gcPull1">${tr('1回 🪙500', '1 pull 🪙500')}</button>
+      <button class="btn btn-gold" id="gcPull10">${tr('10連 🪙4,500', '10 pulls 🪙4,500')}</button>
     </div>
-    <p class="muted center" style="font-size:10px;margin-top:8px">N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム150 3%<br>スキン等をコンプ済みの場合はジェムに変換されます</p>`);
+    <p class="muted center" style="font-size:10px;margin-top:8px">${tr('N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム150 3%', 'N Coins 50% ・ R Items 22% ・ SR Gems 15% ・ SSR Cosmetics 10% ・ UR 150 Gems 3%')}<br>${tr('スキン等をコンプ済みの場合はジェムに変換されます', 'Duplicate cosmetics are converted to gems')}</p>`);
   m.querySelector('#gcClose').onclick = closeModal;
   const pull = async count => {
     const b1 = m.querySelector('#gcPull1'), b10 = m.querySelector('#gcPull10');
@@ -571,10 +571,10 @@ export function openGacha() {
         card.className = `gacha-card gr-${r.rarity}`;
         card.style.animationDelay = `${i * 120}ms`;
         const icon = r.type === 'coins' ? '🪙' : r.type === 'gems' ? '💎' : r.type === 'item' ? r.icon : r.cat === 'skin' ? '🧊' : r.cat === 'board' ? '🖼️' : '✨';
-        const label = r.type === 'coins' ? `コイン +${fmt(r.amount)}`
-          : r.type === 'gems' ? `ジェム +${fmt(r.amount)}${r.complete ? '（コンプ済）' : ''}`
-          : r.type === 'item' ? r.name
-          : r.name;
+        const label = r.type === 'coins' ? tr(`コイン +${fmt(r.amount)}`, `Coins +${fmt(r.amount)}`)
+          : r.type === 'gems' ? tr(`ジェム +${fmt(r.amount)}${r.complete ? '（コンプ済）' : ''}`, `Gems +${fmt(r.amount)}${r.complete ? ' (all collected)' : ''}`)
+          : r.type === 'item' ? catName(r)
+          : catName(r);
         card.innerHTML = `<span class="gc-rarity">${r.rarity}</span><span class="gc-icon">${icon}</span><span class="gc-label">${escapeHtml(label)}</span>`;
         box.appendChild(card);
         if (r.rarity === 'SSR' || r.rarity === 'UR') bigWin = true;
@@ -597,7 +597,7 @@ async function equipItem(item) {
   try {
     await api('/api/equip', { method: 'POST', body: { slot: item.cat, itemId: item.id } });
     audio.click();
-    toast(`${item.name} を装備しました`, 'ok');
+    toast(tr(`${item.name} を装備しました`, `Equipped ${catName(item)}`), 'ok');
     renderShop();
   } catch (err) {
     toast(err.message, 'err');
@@ -612,7 +612,7 @@ export async function openBattlePass() {
   showScreen('battlepass');
   const header = $('#bpHeader');
   const tiersEl = $('#bpTiers');
-  header.innerHTML = '<p class="muted">読み込み中…</p>';
+  header.innerHTML = `<p class="muted">${tr('読み込み中…', 'Loading…')}</p>`;
   tiersEl.innerHTML = '';
   let data;
   try {
@@ -628,9 +628,9 @@ function rewardLabel(r) {
   if (!r) return { icon: '—', label: '' };
   if (r.type === 'coins') return { icon: '🪙', label: fmt(r.amount) };
   if (r.type === 'gems') return { icon: '💎', label: fmt(r.amount) };
-  if (r.type === 'badge') return { icon: { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈' }[r.id] || '🎖️', label: 'バッジ' };
+  if (r.type === 'badge') return { icon: { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈' }[r.id] || '🎖️', label: tr('バッジ', 'Badge') };
   const names = { skin_neon: 'ネオン', skin_candy: 'キャンディ', skin_gold: 'ゴールド', board_ocean: 'オーシャン', board_sunset: 'サンセット', fx_fireworks: '花火' };
-  return { icon: '🎁', label: names[r.id] || 'アイテム' };
+  return { icon: '🎁', label: catName({ id: r.id, name: names[r.id] || tr('アイテム', 'Item') }) };
 }
 
 function renderBattlePass(data) {
@@ -647,16 +647,16 @@ function renderBattlePass(data) {
   header.innerHTML = `
     <div class="bp-row">
       <h3>✨ ${escapeHtml(data.season.name)}</h3>
-      <span class="muted" style="font-size:13px">残り ${daysLeft}日</span>
+      <span class="muted" style="font-size:13px">${tr(`残り ${daysLeft}日`, `${daysLeft} days left`)}</span>
     </div>
     <div class="bp-xpbar"><div style="width:${pct}%"></div></div>
     <div class="bp-row">
-      <span style="font-size:13px;font-weight:700">ティア ${Math.min(unlockedTier, maxTier)} / ${maxTier}
-        <span class="muted">（次まで ${unlockedTier >= maxTier ? '—' : fmt(data.xpPerTier - inTier) + ' XP'}）</span></span>
+      <span style="font-size:13px;font-weight:700">${tr('ティア', 'Tier')} ${Math.min(unlockedTier, maxTier)} / ${maxTier}
+        <span class="muted">${tr(`（次まで ${unlockedTier >= maxTier ? '—' : fmt(data.xpPerTier - inTier) + ' XP'}）`, `(${unlockedTier >= maxTier ? '—' : fmt(data.xpPerTier - inTier) + ' XP'} to next)`)}</span></span>
       ${prog && !prog.premium
-        ? `<button class="btn btn-sm btn-gold" id="bpBuyPremium">💎 ${fmt(data.premiumPriceGems)} でプレミアム解放</button>`
-        : prog ? '<span style="color:var(--gold);font-weight:800">👑 プレミアム</span>'
-        : '<span class="muted" style="font-size:12px">ログインで進行が有効になります</span>'}
+        ? `<button class="btn btn-sm btn-gold" id="bpBuyPremium">${tr(`💎 ${fmt(data.premiumPriceGems)} でプレミアム解放`, `Unlock Premium 💎 ${fmt(data.premiumPriceGems)}`)}</button>`
+        : prog ? `<span style="color:var(--gold);font-weight:800">${tr('👑 プレミアム', '👑 Premium')}</span>`
+        : `<span class="muted" style="font-size:12px">${tr('ログインで進行が有効になります', 'Log in to track your progress')}</span>`}
     </div>`;
 
   const buyBtn = $('#bpBuyPremium');
@@ -664,7 +664,7 @@ function renderBattlePass(data) {
     try {
       await api('/api/battlepass/premium', { method: 'POST' });
       audio.levelUp();
-      toast('プレミアムパスを解放しました！', 'ok');
+      toast(tr('プレミアムパスを解放しました！', 'Premium pass unlocked!'), 'ok');
       updateTopbar();
       openBattlePass();
     } catch (err) { audio.error(); toast(err.message, 'err'); }
@@ -684,7 +684,7 @@ function renderBattlePass(data) {
       return `
         <div class="bp-cell ${track === 'premium' ? 'premium-cell' : ''} ${!unlocked ? 'locked' : ''} ${claimed ? 'claimed' : ''}">
           <span class="rw-icon">${icon}</span><span>${label}</span>
-          ${claimable ? `<button class="bp-claim-btn" data-tier="${t.tier}" data-track="${track}">受取</button>` : ''}
+          ${claimable ? `<button class="bp-claim-btn" data-tier="${t.tier}" data-track="${track}">${tr('受取', 'Claim')}</button>` : ''}
         </div>`;
     };
     el.innerHTML = `
@@ -700,7 +700,7 @@ function renderBattlePass(data) {
         const res = await api('/api/battlepass/claim', { method: 'POST', body: { tier: Number(btn.dataset.tier), track: btn.dataset.track } });
         audio.coin();
         const { icon, label } = rewardLabel(res.reward);
-        toast(`${icon} ${label} を受け取りました！`, 'ok');
+        toast(tr(`${icon} ${label} を受け取りました！`, `Claimed ${icon} ${label}!`), 'ok');
         updateTopbar();
         openBattlePass();
       } catch (err) { audio.error(); toast(err.message, 'err'); }

@@ -1,4 +1,5 @@
 // REST API client + WebSocket battle client.
+import { trServer } from './i18n.js';
 
 const TOKEN_KEY = 'bba_token';
 
@@ -21,14 +22,14 @@ export async function api(path, { method = 'GET', body } = {}) {
   try {
     res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   } catch {
-    const e = new Error('サーバーに接続できません');
+    const e = new Error(trServer('サーバーに接続できません'));
     e.status = 0;
     throw e;
   }
   let data = {};
   try { data = await res.json(); } catch { /* empty body */ }
   if (!res.ok) {
-    const e = new Error(data.error || `エラー (${res.status})`);
+    const e = new Error(trServer(data.error) || `Error (${res.status})`);
     e.status = res.status;
     throw e;
   }

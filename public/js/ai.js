@@ -2,14 +2,14 @@
 import { SIZE } from './engine.js';
 
 export const AI_LEVELS = {
-  easy:   { name: '見習い', moveMs: 2600, noise: 0.5,  lookahead: false, avatar: '🤖' },
-  normal: { name: '戦士',   moveMs: 1700, noise: 0.15, lookahead: false, avatar: '🦾' },
-  hard:   { name: '達人',   moveMs: 1100, noise: 0.02, lookahead: true,  avatar: '👑' },
-  oni:    { name: '鬼',     moveMs: 700,  noise: 0,    lookahead: true,  deep: true, avatar: '👹' },
+  easy:   { name: '見習い', nameEn: 'Novice',  moveMs: 2600, noise: 0.5,  lookahead: false, avatar: '🤖' },
+  normal: { name: '戦士',   nameEn: 'Warrior', moveMs: 1700, noise: 0.15, lookahead: false, avatar: '🦾' },
+  hard:   { name: '達人',   nameEn: 'Master',  moveMs: 1100, noise: 0.02, lookahead: true,  avatar: '👑' },
+  oni:    { name: '鬼',     nameEn: 'Oni',     moveMs: 700,  noise: 0,    lookahead: true,  deep: true, avatar: '👹' },
   // Hidden difficulty: only revealed by the secret command (↑↑↓↓←→←→BA / title x10).
-  kami:   { name: '神',     moveMs: 520,  noise: 0,    exhaustive: true, avatar: '🔱', secret: true },
+  kami:   { name: '神',     nameEn: 'Kami',    moveMs: 520,  noise: 0,    exhaustive: true, avatar: '🔱', secret: true },
   // TRUE hidden difficulty: ultra-secret command only (↑↑↓↓←→←→BABA↓↑↓↑).
-  souzou: { name: '創造神', moveMs: 380,  noise: 0,    exhaustive: true, beam: 14, avatar: '🌌', secret: true },
+  souzou: { name: '創造神', nameEn: 'Creator God', moveMs: 380, noise: 0, exhaustive: true, beam: 14, avatar: '🌌', secret: true },
 };
 
 // Evaluate the grid after a hypothetical placement.

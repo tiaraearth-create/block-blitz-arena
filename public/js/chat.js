@@ -2,7 +2,7 @@
 import { session } from './net.js';
 import { $, toast } from './dom.js';
 import { audio } from './audio.js';
-import { t } from './i18n.js';
+import { t, trServer } from './i18n.js';
 
 let ws = null;
 let open = false;
@@ -73,7 +73,7 @@ function connect() {
     } else if (msg.type === 'announce') {
       appendMsg({ from: msg.from || '運営', role: 'admin', text: `📢 ${msg.message}`, at: Date.now() });
     } else if (msg.type === 'error') {
-      toast(msg.error, 'err', 1800);
+      toast(trServer(msg.error), 'err', 1800);
     }
   };
   ws.onclose = () => scheduleReconnect();

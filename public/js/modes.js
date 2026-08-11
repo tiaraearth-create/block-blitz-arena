@@ -6,7 +6,7 @@ import { chooseMove, AI_LEVELS } from './ai.js';
 import { audio } from './audio.js';
 import { session, api, refreshMe, BattleClient } from './net.js';
 import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst } from './dom.js';
-import { t } from './i18n.js';
+import { t, trServer, catName } from './i18n.js';
 
 const MATCH_SECONDS = 120;
 
@@ -93,11 +93,11 @@ export function rerollCurrent() {
   const e = currentMode.engine;
   if (!e.reroll()) {
     audio.error();
-    toast('リロールは使い切りました', 'err', 1400);
+    toast(t('リロールは使い切りました', 'No rerolls left'), 'err', 1400);
     return;
   }
   audio.coin();
-  toast('🔄 ピースを引き直しました！', 'ok', 1400);
+  toast(t('🔄 ピースを引き直しました！', '🔄 New pieces drawn!'), 'ok', 1400);
   updateRerollHud(e);
   if (e.over) handleEngineOver();
 }
@@ -108,9 +108,9 @@ export function rerollCurrent() {
 // ---------------------------------------------------------------------------
 
 const ITEM_DEFS = {
-  item_bomb:    { icon: '💣', name: 'スマートボム' },
-  item_cleaner: { icon: '🧹', name: 'クリーナー' },
-  item_fever:   { icon: '⭐', name: 'フィーバー' },
+  item_bomb:    { icon: '💣', name: 'スマートボム', nameEn: 'Smart Bomb' },
+  item_cleaner: { icon: '🧹', name: 'クリーナー', nameEn: 'Cleaner' },
+  item_fever:   { icon: '⭐', name: 'フィーバー', nameEn: 'Fever' },
 };
 
 function getItemCounts() {
@@ -160,7 +160,7 @@ export function useGameItem(id) {
   const counts = getItemCounts();
   if ((counts[id] || 0) <= 0) {
     audio.error();
-    toast('アイテムがありません。ショップやガチャで入手！', 'err', 2200);
+    toast(t('アイテムがありません。ショップやガチャで入手！', 'No items left — get more in the Shop or Gacha!'), 'err', 2200);
     return;
   }
   const e = m.engine;
@@ -175,7 +175,7 @@ export function useGameItem(id) {
       }
       if (n > bestCount) { bestCount = n; best = [r, c]; }
     }
-    if (!bestCount) { audio.error(); toast('盤面が空です！', 'err', 1500); return; }
+    if (!bestCount) { audio.error(); toast(t('盤面が空です！', 'The board is empty!'), 'err', 1500); return; }
     const [br, bc] = best;
     for (let dr = 0; dr < 3; dr++) for (let dc = 0; dc < 3; dc++) {
       const r = br + dr, c = bc + dc;
@@ -186,24 +186,24 @@ export function useGameItem(id) {
     }
     audio.bossAttack();
     view.shake = 14;
-    toast('💣 ドカーン！', 'ok', 1400);
+    toast(t('💣 ドカーン！', '💣 KABOOM!'), 'ok', 1400);
   } else if (id === 'item_cleaner') {
     let n = 0;
     for (let i = 0; i < 64; i++) if (e.grid[i] === 9) { e.grid[i] = 0; n++; }
     for (let c = 0; c < 8; c++) { const k = 7 * 8 + c; if (e.grid[k]) { e.grid[k] = 0; n++; } }
-    if (n === 0) { audio.error(); toast('掃除するものがありません！', 'err', 1500); return; }
+    if (n === 0) { audio.error(); toast(t('掃除するものがありません！', 'Nothing to clean up!'), 'err', 1500); return; }
     view.reviveFlash();
     audio.coin();
-    toast(`🧹 ${n}マスを掃除しました！`, 'ok', 1500);
+    toast(t(`🧹 ${n}マスを掃除しました！`, `🧹 Cleaned up ${n} cells!`), 'ok', 1500);
   } else if (id === 'item_fever') {
     e.feverUntil = Date.now() + 15000;
     view.screenFlash = 0.35;
     $('#hudScore').classList.add('fever');
     audio.combo(6);
-    toast('⭐ フィーバー！15秒間スコア2倍！！', 'announce', 2400);
+    toast(t('⭐ フィーバー！15秒間スコア2倍！！', '⭐ FEVER! 2x score for 15 seconds!!'), 'announce', 2400);
     setTimeout(() => {
       $('#hudScore').classList.remove('fever');
-      if (currentMode === m && !m.ended) toast('フィーバー終了', '', 1200);
+      if (currentMode === m && !m.ended) toast(t('フィーバー終了', 'Fever over'), '', 1200);
     }, 15000);
   }
 
@@ -413,14 +413,14 @@ class SoloMode {
     const m = showModal(`
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : 'GAME OVER'}</div>
       <div class="result-stats">
-        <div class="rs-row"><span>スコア</span><b>${fmt(e.score)}</b></div>
-        <div class="rs-row"><span>消したライン</span><b>${fmt(e.linesCleared)}</b></div>
-        <div class="rs-row"><span>最大コンボ</span><b>${fmt(e.maxCombo)}</b></div>
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn btn-primary" id="rAgain">もう一度</button>
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
@@ -544,7 +544,7 @@ class AiMode extends VersusBase {
     this.cfg = AI_LEVELS[level];
   }
 
-  aiLabel() { return `${this.cfg.avatar} AI (${this.cfg.name})`; }
+  aiLabel() { return `${this.cfg.avatar} AI (${t(this.cfg.name, this.cfg.nameEn)})`; }
 
   start() {
     const seed = (Math.random() * 2 ** 31) | 0;
@@ -586,7 +586,7 @@ class AiMode extends VersusBase {
     el.innerHTML = `
       <div class="kami-rays"></div>
       <div class="kami-face">🌌</div>
-      <div class="kami-text">創造神が 目覚めた————</div>`;
+      <div class="kami-text">${t('創造神が 目覚めた————', 'The Creator God has awakened————')}</div>`;
     document.body.appendChild(el);
     audio.kamiDescend();
     audio.bossAttack();
@@ -598,7 +598,7 @@ class AiMode extends VersusBase {
   oniIntro(next) {
     const el = document.createElement('div');
     el.className = 'oni-intro';
-    el.innerHTML = `<div class="oni-face">👹</div><div class="oni-text">おにが あらわれた！</div>`;
+    el.innerHTML = `<div class="oni-face">👹</div><div class="oni-text">${t('おにが あらわれた！', 'The Oni appears!')}</div>`;
     document.body.appendChild(el);
     audio.gameOver();
     if (view) view.shake = 14;
@@ -612,7 +612,7 @@ class AiMode extends VersusBase {
     el.innerHTML = `
       <div class="kami-rays"></div>
       <div class="kami-face">🔱</div>
-      <div class="kami-text">神が 降臨した——</div>`;
+      <div class="kami-text">${t('神が 降臨した——', 'A God descends——')}</div>`;
     document.body.appendChild(el);
     audio.kamiDescend();
     if (view) view.shake = 8;
@@ -670,27 +670,27 @@ class AiMode extends VersusBase {
       maxCombo: this.engine.maxCombo, duration: MATCH_SECONDS, won: outcome === 'win',
     });
     if (rewards && rewards.badge === 'oni') {
-      setTimeout(() => toast('👹 バッジ「おに退治」を獲得！', 'announce', 4000), 1200);
+      setTimeout(() => toast(t('👹 バッジ「おに退治」を獲得！', '👹 Badge earned: Oni Slayer!'), 'announce', 4000), 1200);
     }
     if (rewards && rewards.badge === 'kami') {
-      setTimeout(() => toast('🔱 バッジ「神殺し」を獲得！！', 'announce', 5000), 1200);
+      setTimeout(() => toast(t('🔱 バッジ「神殺し」を獲得！！', '🔱 Badge earned: God Slayer!!'), 'announce', 5000), 1200);
     }
     if (rewards && rewards.badge === 'souzou') {
-      setTimeout(() => { toast('🌌 バッジ「創造を超えし者」を獲得！！！', 'announce', 6000); confettiBurst(80); }, 1200);
+      setTimeout(() => { toast(t('🌌 バッジ「創造を超えし者」を獲得！！！', '🌌 Badge earned: Beyond Creation!!!'), 'announce', 6000); confettiBurst(80); }, 1200);
     }
 
-    const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: this.aborted ? '🤝 引き分け（中断）' : 'DRAW' };
+    const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: this.aborted ? t('🤝 引き分け（中断）', '🤝 Draw (aborted)') : 'DRAW' };
     const m = showModal(`
       <div class="result-banner ${outcome}">${banners[outcome]}</div>
-      ${this.aborted ? '<p class="muted center">途中終了は引き分け扱いです。敗北にはなりません</p>' : ''}
+      ${this.aborted ? `<p class="muted center">${t('途中終了は引き分け扱いです。敗北にはなりません', 'Quitting early counts as a draw, not a loss')}</p>` : ''}
       <div class="result-stats">
-        <div class="rs-row"><span>あなた</span><b>${fmt(me)}</b></div>
+        <div class="rs-row"><span>${t('あなた', 'You')}</span><b>${fmt(me)}</b></div>
         <div class="rs-row"><span>${this.aiLabel()}</span><b>${fmt(opp)}</b></div>
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn btn-primary" id="rAgain">再戦</button>
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-primary" id="rAgain">${t('再戦', 'Rematch')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startVsAi(this.level); };
@@ -736,7 +736,7 @@ class BossMode {
     document.querySelector('.boss-atkbar').classList.remove('hidden');
     $('#bossEmoji').textContent = this.boss.emoji;
     $('#bossEmoji').className = 'boss-emoji';
-    $('#bossName').textContent = this.boss.name;
+    $('#bossName').textContent = catName(this.boss);
     showItemBar(true);
     this.hp = this.boss.hp;
     this.updateHpBar();
@@ -767,7 +767,7 @@ class BossMode {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = '⚔️ 与ダメージ';
+    $('#hudSub').textContent = t('⚔️ 与ダメージ', '⚔️ Damage dealt');
   }
 
   updateHpBar() {
@@ -822,7 +822,7 @@ class BossMode {
       view.particles.burstCell(cx, cy, view.cell, 9, 'fx_default');
     }
     view.shake = 12;
-    toast(`${this.boss.emoji} ${this.boss.name}の攻撃！`, 'err', 1300);
+    toast(t(`${this.boss.emoji} ${this.boss.name}の攻撃！`, `${this.boss.emoji} ${catName(this.boss)} attacks!`), 'err', 1300);
     if (this.engine.over) this.finish(false);
   }
 
@@ -849,24 +849,24 @@ class BossMode {
       duration: (Date.now() - this.startedAt) / 1000, won,
     });
     if (rewards && rewards.badge === 'maou') {
-      setTimeout(() => toast('😈 バッジ「魔王討伐」を獲得！', 'announce', 4000), 1200);
+      setTimeout(() => toast(t('😈 バッジ「魔王討伐」を獲得！', '😈 Badge earned: Demon Lord Slain!'), 'announce', 4000), 1200);
     }
 
     const hasNext = won && this.bossIndex + 1 < this.bossCount;
-    const banner = won ? `${this.boss.emoji} 討伐成功！` : this.aborted ? '🤝 中断（引き分け）' : 'やられた…';
+    const banner = won ? t(`${this.boss.emoji} 討伐成功！`, `${this.boss.emoji} Boss defeated!`) : this.aborted ? t('🤝 中断（引き分け）', '🤝 Aborted (draw)') : t('やられた…', 'Defeated…');
     const m = showModal(`
       <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
-      ${this.aborted ? '<p class="muted center">途中終了は引き分け扱いです。敗北にはなりません</p>' : ''}
+      ${this.aborted ? `<p class="muted center">${t('途中終了は引き分け扱いです。敗北にはなりません', 'Quitting early counts as a draw, not a loss')}</p>` : ''}
       <div class="result-stats">
-        <div class="rs-row"><span>与えたダメージ</span><b>${fmt(this.engine.score)}</b></div>
-        ${won ? '' : `<div class="rs-row"><span>${this.boss.name}の残りHP</span><b>${fmt(Math.max(0, this.hp))}</b></div>`}
-        <div class="rs-row"><span>消したライン</span><b>${fmt(this.engine.linesCleared)}</b></div>
-        <div class="rs-row"><span>最大コンボ</span><b>${fmt(this.engine.maxCombo)}</b></div>
+        <div class="rs-row"><span>${t('与えたダメージ', 'Damage dealt')}</span><b>${fmt(this.engine.score)}</b></div>
+        ${won ? '' : `<div class="rs-row"><span>${t(`${this.boss.name}の残りHP`, `${catName(this.boss)}'s HP left`)}</span><b>${fmt(Math.max(0, this.hp))}</b></div>`}
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(this.engine.linesCleared)}</b></div>
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(this.engine.maxCombo)}</b></div>
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${hasNext ? '次のボスへ' : won ? 'もう一度' : this.aborted ? 'もう一度' : 'リベンジ'}</button>
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${hasNext ? t('次のボスへ', 'Next boss') : won ? t('もう一度', 'Play again') : this.aborted ? t('もう一度', 'Play again') : t('リベンジ', 'Revenge!')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => {
@@ -932,7 +932,7 @@ class BossRushMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('boss');
-    toast('⚔️ ボスラッシュ開始！全ボスを連続で討伐せよ！', 'announce', 2600);
+    toast(t('⚔️ ボスラッシュ開始！全ボスを連続で討伐せよ！', '⚔️ Boss Rush! Take down every boss back to back!'), 'announce', 2600);
 
     countdownOverlay(3, () => {
       v.inputLocked = false;
@@ -945,7 +945,7 @@ class BossRushMode {
     this.hp = this.boss.hp;
     $('#bossEmoji').textContent = this.boss.emoji;
     $('#bossEmoji').className = 'boss-emoji';
-    $('#bossName').textContent = `${this.boss.name}（${this.stage + 1}/${this.bosses.length}）`;
+    $('#bossName').textContent = t(`${this.boss.name}（${this.stage + 1}/${this.bosses.length}）`, `${catName(this.boss)} (${this.stage + 1}/${this.bosses.length})`);
     this.updateHpBar();
   }
 
@@ -953,7 +953,7 @@ class BossRushMode {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = `⚔️ ボスラッシュ ${this.stage + 1}/${this.bosses.length}`;
+    $('#hudSub').textContent = t(`⚔️ ボスラッシュ ${this.stage + 1}/${this.bosses.length}`, `⚔️ Boss Rush ${this.stage + 1}/${this.bosses.length}`);
   }
 
   updateHpBar() {
@@ -982,7 +982,7 @@ class BossRushMode {
     audio.bossDefeated();
     confettiBurst(30);
     if (view) view.shake = 12;
-    toast(`${this.bosses[this.stage - 1].emoji} 撃破！つぎは ${this.boss.emoji} ${this.boss.name}！`, 'announce', 2400);
+    toast(t(`${this.bosses[this.stage - 1].emoji} 撃破！つぎは ${this.boss.emoji} ${this.boss.name}！`, `${this.bosses[this.stage - 1].emoji} Down! Next up: ${this.boss.emoji} ${catName(this.boss)}!`), 'announce', 2400);
     this.applyBossPanel();
     this.updateHud();
     this.nextAtk = Date.now() + this.boss.atkSec * 1000;
@@ -1010,7 +1010,7 @@ class BossRushMode {
       view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
     }
     view.shake = 12;
-    toast(`${this.boss.emoji} ${this.boss.name}の攻撃！`, 'err', 1300);
+    toast(t(`${this.boss.emoji} ${this.boss.name}の攻撃！`, `${this.boss.emoji} ${catName(this.boss)} attacks!`), 'err', 1300);
     if (this.engine.over) this.finish(false);
   }
 
@@ -1032,20 +1032,20 @@ class BossRushMode {
       duration: (Date.now() - this.startedAt) / 1000, won,
     });
     if (rewards && rewards.badge === 'rush') {
-      setTimeout(() => toast('⚔️ バッジ「ボスラッシュ制覇」を獲得！+300💎', 'announce', 5000), 1200);
+      setTimeout(() => toast(t('⚔️ バッジ「ボスラッシュ制覇」を獲得！+300💎', '⚔️ Badge earned: Boss Rush Conqueror! +300💎'), 'announce', 5000), 1200);
     }
-    const banner = won ? '⚔️ ボスラッシュ制覇！！' : this.aborted ? '🤝 中断（引き分け）' : `${this.boss.emoji} に敗北…`;
+    const banner = won ? t('⚔️ ボスラッシュ制覇！！', '⚔️ Boss Rush conquered!!') : this.aborted ? t('🤝 中断（引き分け）', '🤝 Aborted (draw)') : t(`${this.boss.emoji} に敗北…`, `Defeated by ${this.boss.emoji}…`);
     const m = showModal(`
       <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
       <div class="result-stats">
-        <div class="rs-row"><span>到達</span><b>${won ? '完全制覇' : `${this.stage + 1}体目 (${this.boss.name})`}</b></div>
-        <div class="rs-row"><span>総ダメージ</span><b>${fmt(this.engine.score)}</b></div>
-        <div class="rs-row"><span>最大コンボ</span><b>${fmt(this.engine.maxCombo)}</b></div>
+        <div class="rs-row"><span>${t('到達', 'Progress')}</span><b>${won ? t('完全制覇', 'Full clear') : t(`${this.stage + 1}体目 (${this.boss.name})`, `Boss ${this.stage + 1} (${catName(this.boss)})`)}</b></div>
+        <div class="rs-row"><span>${t('総ダメージ', 'Total damage')}</span><b>${fmt(this.engine.score)}</b></div>
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(this.engine.maxCombo)}</b></div>
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${won ? 'もう一周' : 'リベンジ'}</button>
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${won ? t('もう一周', 'Run it again') : t('リベンジ', 'Revenge!')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startBossRush(this.bosses); };
@@ -1098,7 +1098,7 @@ class WeeklyMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('battle');
-    toast(`🎯 ウィークリーチャレンジ！${this.info.pieces}個のピースで限界に挑め！`, 'announce', 2800);
+    toast(t(`🎯 ウィークリーチャレンジ！${this.info.pieces}個のピースで限界に挑め！`, `🎯 Weekly Challenge! Push your limit with ${this.info.pieces} pieces!`), 'announce', 2800);
   }
 
   piecesLeft() { return Math.max(0, this.info.pieces - this.engine.piecesPlaced); }
@@ -1107,10 +1107,10 @@ class WeeklyMode {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = `🎯 ${this.info.week} ・ ベスト ${fmt(this.best())}`;
-    const t = $('#hudTimer');
-    t.textContent = `残り${this.piecesLeft()}個`;
-    t.classList.toggle('urgent', this.piecesLeft() <= 5);
+    $('#hudSub').textContent = t(`🎯 ${this.info.week} ・ ベスト ${fmt(this.best())}`, `🎯 ${this.info.week} ・ Best ${fmt(this.best())}`);
+    const tm = $('#hudTimer');
+    tm.textContent = t(`残り${this.piecesLeft()}個`, `${this.piecesLeft()} left`);
+    tm.classList.toggle('urgent', this.piecesLeft() <= 5);
   }
 
   best() {
@@ -1148,20 +1148,20 @@ class WeeklyMode {
     });
     const usedAll = e.piecesPlaced >= this.info.pieces;
     const m = showModal(`
-      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? '🎯 今週のベスト更新！' : '🎯 チャレンジ終了'}</div>
-      ${usedAll ? '' : '<p class="muted center">ピースを置く場所がなくなりました</p>'}
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? t('🎯 今週のベスト更新！', '🎯 New weekly best!') : t('🎯 チャレンジ終了', '🎯 Challenge complete')}</div>
+      ${usedAll ? '' : `<p class="muted center">${t('ピースを置く場所がなくなりました', 'No room left to place a piece')}</p>`}
       <div class="result-stats">
-        <div class="rs-row"><span>スコア</span><b>${fmt(e.score)}${isBest ? ' 👑' : ''}</b></div>
-        <div class="rs-row"><span>今週のベスト</span><b>${fmt(Math.max(prevBest, e.score))}</b></div>
-        <div class="rs-row"><span>使ったピース</span><b>${fmt(e.piecesPlaced)} / ${this.info.pieces}</b></div>
-        <div class="rs-row"><span>最大コンボ</span><b>${fmt(e.maxCombo)}</b></div>
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}${isBest ? ' 👑' : ''}</b></div>
+        <div class="rs-row"><span>${t('今週のベスト', "This week's best")}</span><b>${fmt(Math.max(prevBest, e.score))}</b></div>
+        <div class="rs-row"><span>${t('使ったピース', 'Pieces used')}</span><b>${fmt(e.piecesPlaced)} / ${this.info.pieces}</b></div>
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
         ${rewardsRows(rewards)}
-        ${session.user ? '' : '<div class="rs-row"><span>💡 ランキング掲載にはログイン</span></div>'}
+        ${session.user ? '' : `<div class="rs-row"><span>${t('💡 ランキング掲載にはログイン', '💡 Log in to appear on the ranking')}</span></div>`}
       </div>
       <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn btn-ghost" id="rRank">🏆 順位を見る</button>
-        <button class="btn btn-weekly" id="rAgain">もう一度</button>
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-ghost" id="rRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
+        <button class="btn btn-weekly" id="rAgain">${t('もう一度', 'Play again')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rRank').onclick = () => {
@@ -1189,37 +1189,37 @@ export function startWeekly(info) {
 // ---------------------------------------------------------------------------
 
 const DUNGEON_BANDS = [
-  { name: '苔の洞窟',   board: 'board_forest',  track: 'battle', foes: [['🦇', 'コウモリ'], ['🐀', '大ネズミ'], ['🟢', 'スライム'], ['🕷️', '毒グモ']], boss: ['👑', 'キングスライム'] },
-  { name: '海底神殿',   board: 'board_ocean',   track: 'battle', foes: [['🐙', 'タコ兵'], ['🦀', '鉄カニ'], ['🐡', 'トゲフグ'], ['🦈', 'サメ傭兵']], boss: ['🧜‍♀️', '海の女王'] },
-  { name: '桜の迷宮',   board: 'board_sakura',  track: 'solo',   foes: [['🦊', '妖狐'], ['🐍', '花蛇'], ['🦋', '幻蝶'], ['🐦', '怪鳥']], boss: ['👺', '大天狗'] },
-  { name: '黄昏の砂漠', board: 'board_sunset',  track: 'hard',   foes: [['🦂', '大サソリ'], ['🐫', '護衛ラクダ'], ['🦅', 'ハゲタカ'], ['🐍', '砂大蛇']], boss: ['🦁', 'スフィンクス'] },
-  { name: '灼熱火山',   board: 'board_volcano', track: 'hard',   foes: [['🔥', '火の精'], ['🦎', '溶岩トカゲ'], ['🐗', 'マグマ猪'], ['🗿', '岩人形']], boss: ['🐲', '火竜グレンド'] },
-  { name: '氷結洞窟',   board: 'board_default', track: 'boss',   foes: [['⛄', '雪人形'], ['🐧', '氷ペンギン兵'], ['🦭', '氷セイウチ'], ['❄️', '氷の精']], boss: ['🐻‍❄️', 'フロストベア'] },
-  { name: '雷雲の頂',   board: 'board_galaxy',  track: 'boss',   foes: [['⚡', '雷精'], ['🦅', '雷鷲'], ['☁️', '雲魔'], ['🌪️', '竜巻魔']], boss: ['🦚', 'サンダーバード'] },
-  { name: '亡霊の城',   board: 'board_oni',     track: 'oni',    foes: [['👻', '亡霊'], ['💀', 'スケルトン'], ['🧟', 'ゾンビ騎士'], ['🦇', '吸血コウモリ']], boss: ['🧛', 'ヴァンパイア卿'] },
-  { name: '鬼の巣窟',   board: 'board_oni',     track: 'oni',    foes: [['👹', '赤鬼'], ['👺', '青鬼'], ['🔥', '鬼火'], ['💀', '骨武者']], boss: ['👹', '鬼神ラセツ'] },
-  { name: '天界の門',   board: 'board_kami',    track: 'kami',   foes: [['🕊️', '堕天使'], ['⚔️', '神殿騎士'], ['🌟', '星霊'], ['🔮', '法陣魔']], boss: ['😈', '魔神ゼルガドス'] },
+  { name: '苔の洞窟',   nameEn: 'Mossy Cave',       board: 'board_forest',  track: 'battle', foes: [['🦇', 'コウモリ', 'Bat'], ['🐀', '大ネズミ', 'Giant Rat'], ['🟢', 'スライム', 'Slime'], ['🕷️', '毒グモ', 'Venom Spider']], boss: ['👑', 'キングスライム', 'King Slime'] },
+  { name: '海底神殿',   nameEn: 'Sunken Temple',    board: 'board_ocean',   track: 'battle', foes: [['🐙', 'タコ兵', 'Octopus Trooper'], ['🦀', '鉄カニ', 'Iron Crab'], ['🐡', 'トゲフグ', 'Spike Puffer'], ['🦈', 'サメ傭兵', 'Shark Mercenary']], boss: ['🧜‍♀️', '海の女王', 'Queen of the Sea'] },
+  { name: '桜の迷宮',   nameEn: 'Sakura Labyrinth', board: 'board_sakura',  track: 'solo',   foes: [['🦊', '妖狐', 'Fox Spirit'], ['🐍', '花蛇', 'Blossom Snake'], ['🦋', '幻蝶', 'Phantom Butterfly'], ['🐦', '怪鳥', 'Dread Bird']], boss: ['👺', '大天狗', 'Great Tengu'] },
+  { name: '黄昏の砂漠', nameEn: 'Twilight Desert',  board: 'board_sunset',  track: 'hard',   foes: [['🦂', '大サソリ', 'Giant Scorpion'], ['🐫', '護衛ラクダ', 'Guard Camel'], ['🦅', 'ハゲタカ', 'Vulture'], ['🐍', '砂大蛇', 'Sand Serpent']], boss: ['🦁', 'スフィンクス', 'Sphinx'] },
+  { name: '灼熱火山',   nameEn: 'Scorching Volcano', board: 'board_volcano', track: 'hard',  foes: [['🔥', '火の精', 'Fire Sprite'], ['🦎', '溶岩トカゲ', 'Lava Lizard'], ['🐗', 'マグマ猪', 'Magma Boar'], ['🗿', '岩人形', 'Stone Golem']], boss: ['🐲', '火竜グレンド', 'Grend the Fire Dragon'] },
+  { name: '氷結洞窟',   nameEn: 'Frozen Cavern',    board: 'board_default', track: 'boss',   foes: [['⛄', '雪人形', 'Snow Golem'], ['🐧', '氷ペンギン兵', 'Ice Penguin Trooper'], ['🦭', '氷セイウチ', 'Ice Walrus'], ['❄️', '氷の精', 'Frost Sprite']], boss: ['🐻‍❄️', 'フロストベア', 'Frost Bear'] },
+  { name: '雷雲の頂',   nameEn: 'Thunderhead Peak', board: 'board_galaxy',  track: 'boss',   foes: [['⚡', '雷精', 'Storm Sprite'], ['🦅', '雷鷲', 'Thunder Eagle'], ['☁️', '雲魔', 'Cloud Fiend'], ['🌪️', '竜巻魔', 'Tornado Fiend']], boss: ['🦚', 'サンダーバード', 'Thunderbird'] },
+  { name: '亡霊の城',   nameEn: 'Haunted Castle',   board: 'board_oni',     track: 'oni',    foes: [['👻', '亡霊', 'Wraith'], ['💀', 'スケルトン', 'Skeleton'], ['🧟', 'ゾンビ騎士', 'Zombie Knight'], ['🦇', '吸血コウモリ', 'Vampire Bat']], boss: ['🧛', 'ヴァンパイア卿', 'Lord Vampire'] },
+  { name: '鬼の巣窟',   nameEn: 'Oni Den',          board: 'board_oni',     track: 'oni',    foes: [['👹', '赤鬼', 'Red Oni'], ['👺', '青鬼', 'Blue Oni'], ['🔥', '鬼火', 'Ghost Flame'], ['💀', '骨武者', 'Bone Samurai']], boss: ['👹', '鬼神ラセツ', 'Rasetsu the Oni God'] },
+  { name: '天界の門',   nameEn: 'Heavenly Gate',    board: 'board_kami',    track: 'kami',   foes: [['🕊️', '堕天使', 'Fallen Angel'], ['⚔️', '神殿騎士', 'Temple Knight'], ['🌟', '星霊', 'Star Spirit'], ['🔮', '法陣魔', 'Rune Fiend']], boss: ['😈', '魔神ゼルガドス', 'Zelgados the Demon God'] },
 ];
 
 function dungeonFloor(f) {
   const band = DUNGEON_BANDS[Math.min(DUNGEON_BANDS.length - 1, Math.floor((f - 1) / 10))];
   const isBoss = f % 10 === 0;
   const isFinal = f === 100;
-  const [emoji, name] = isBoss ? band.boss : band.foes[(f - 1) % band.foes.length];
+  const [emoji, name, nameEn] = isBoss ? band.boss : band.foes[(f - 1) % band.foes.length];
   let hp = Math.round(260 + f * 95 + f * f * 1.15);
   if (isBoss) hp = Math.round(hp * (isFinal ? 3 : 2.1));
   const atkSec = Math.max(5.5, 15 - f * 0.09) * (isBoss ? 1.25 : 1);
   const atkCells = Math.min(7, 1 + Math.floor(f / 12) + (isBoss ? 2 : 0));
-  return { floor: f, band, isBoss, isFinal, emoji, name, hp, atkSec, atkCells };
+  return { floor: f, band, isBoss, isFinal, emoji, name, nameEn, hp, atkSec, atkCells };
 }
 
 const DUNGEON_PERKS = [
-  { id: 'atk',    icon: '💪', name: '攻撃力アップ',     desc: '与ダメージ +60%（重ねがけOK）', w: 5 },
-  { id: 'reroll', icon: '🔄', name: 'リロール補充',     desc: 'リロール +3回', w: 4 },
-  { id: 'heal',   icon: '💊', name: '応急修理',         desc: '下2行とお邪魔ブロックを消す', w: 4 },
-  { id: 'slow',   icon: '⏳', name: 'スロウの呪文',     desc: '敵の攻撃間隔 +25%（重ねがけOK）', w: 3 },
-  { id: 'life',   icon: '❤️', name: '追加ライフ',       desc: '残機 +1（ボードが埋まっても復活）', w: 2 },
-  { id: 'shield', icon: '🛡️', name: 'コンボプロテクト', desc: 'コンボが途切れなくなる（永続）', w: 2 },
+  { id: 'atk',    icon: '💪', name: '攻撃力アップ',     nameEn: 'Attack Up',     desc: '与ダメージ +60%（重ねがけOK）', descEn: '+60% damage (stacks)', w: 5 },
+  { id: 'reroll', icon: '🔄', name: 'リロール補充',     nameEn: 'Reroll Refill', desc: 'リロール +3回', descEn: '+3 rerolls', w: 4 },
+  { id: 'heal',   icon: '💊', name: '応急修理',         nameEn: 'Field Repair',  desc: '下2行とお邪魔ブロックを消す', descEn: 'Clears the bottom 2 rows + all garbage', w: 4 },
+  { id: 'slow',   icon: '⏳', name: 'スロウの呪文',     nameEn: 'Slow Spell',    desc: '敵の攻撃間隔 +25%（重ねがけOK）', descEn: 'Enemy attacks 25% slower (stacks)', w: 3 },
+  { id: 'life',   icon: '❤️', name: '追加ライフ',       nameEn: 'Extra Life',    desc: '残機 +1（ボードが埋まっても復活）', descEn: '+1 life (revive when the board fills)', w: 2 },
+  { id: 'shield', icon: '🛡️', name: 'コンボプロテクト', nameEn: 'Combo Protect', desc: 'コンボが途切れなくなる（永続）', descEn: 'Your combo never breaks (permanent)', w: 2 },
 ];
 
 function pickPerks(mode) {
@@ -1271,7 +1271,7 @@ class DungeonMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    toast(k > 0 ? `🏰 F${this.startFloor} から再開！（強化ボーナス付き）` : '🏰 ダンジョン挑戦開始！100Fを目指せ！', 'announce', 2600);
+    toast(k > 0 ? t(`🏰 F${this.startFloor} から再開！（強化ボーナス付き）`, `🏰 Resuming from F${this.startFloor}! (bonus perks included)`) : t('🏰 ダンジョン挑戦開始！100Fを目指せ！', '🏰 The climb begins! Reach floor 100!'), 'announce', 2600);
     countdownOverlay(3, () => {
       v.inputLocked = false;
       this.armAttack();
@@ -1286,20 +1286,20 @@ class DungeonMode {
     audio.playTrack(this.info.band.track);
     $('#bossEmoji').textContent = this.info.emoji;
     $('#bossEmoji').className = 'boss-emoji';
-    $('#bossName').textContent = `F${f} ${this.info.band.name}：${this.info.name}`;
+    $('#bossName').textContent = t(`F${f} ${this.info.band.name}：${this.info.name}`, `F${f} ${this.info.band.nameEn}: ${this.info.nameEn}`);
     this.updateHpBar();
     this.updateHud();
     if (silent) return;
     if (this.info.isFinal) {
-      toast(`😈 最上階——魔神ゼルガドスが待ち受ける！！`, 'announce', 3000);
+      toast(t(`😈 最上階——魔神ゼルガドスが待ち受ける！！`, `😈 The top floor — Zelgados the Demon God awaits!!`), 'announce', 3000);
       audio.bossAttack();
       v.shake = 16;
     } else if (this.info.isBoss) {
-      toast(`⚠️ ボス階！${this.info.emoji} ${this.info.name}が立ちはだかる！`, 'announce', 2400);
+      toast(t(`⚠️ ボス階！${this.info.emoji} ${this.info.name}が立ちはだかる！`, `⚠️ Boss floor! ${this.info.emoji} ${this.info.nameEn} blocks your path!`), 'announce', 2400);
       audio.bossAttack();
       v.shake = 12;
     } else {
-      toast(`${this.info.emoji} ${this.info.name}が あらわれた！`, '', 1400);
+      toast(t(`${this.info.emoji} ${this.info.name}が あらわれた！`, `${this.info.emoji} ${this.info.nameEn} appears!`), '', 1400);
     }
   }
 
@@ -1355,7 +1355,7 @@ class DungeonMode {
       view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
     }
     view.shake = 10;
-    toast(`${this.info.emoji} ${this.info.name}の攻撃！`, 'err', 1100);
+    toast(t(`${this.info.emoji} ${this.info.name}の攻撃！`, `${this.info.emoji} ${this.info.nameEn} attacks!`), 'err', 1100);
     if (this.engine.over) this.onTopOut();
   }
 
@@ -1383,7 +1383,7 @@ class DungeonMode {
     if (this.floor >= 100) { this.finish(true); return; }
     confettiBurst(this.info.isBoss ? 45 : 12);
     if (this.info.isBoss) {
-      toast(`🎉 ボス撃破！チェックポイント到達（次回からF${this.floor + 1}で再開可能）`, 'announce', 3000);
+      toast(t(`🎉 ボス撃破！チェックポイント到達（次回からF${this.floor + 1}で再開可能）`, `🎉 Boss down! Checkpoint reached (you can restart from F${this.floor + 1})`), 'announce', 3000);
     }
     view.inputLocked = true;
     this.perkOpen = true;
@@ -1403,13 +1403,13 @@ class DungeonMode {
   offerPerk(next) {
     const choices = pickPerks(this);
     const m = showModal(`
-      <h2>${this.info.isBoss ? '👑 ボス撃破！' : `✅ F${this.floor} クリア！`}</h2>
-      <p class="muted center" style="margin-bottom:10px">ごほうびを1つ選ぼう</p>
+      <h2>${this.info.isBoss ? t('👑 ボス撃破！', '👑 Boss defeated!') : t(`✅ F${this.floor} クリア！`, `✅ Floor ${this.floor} cleared!`)}</h2>
+      <p class="muted center" style="margin-bottom:10px">${t('ごほうびを1つ選ぼう', 'Pick one reward')}</p>
       <div class="form-col">
         ${choices.map(p => `
           <button class="btn btn-ghost perk-btn" data-perk="${p.id}">
             <span class="perk-icon">${p.icon}</span>
-            <span class="perk-body"><b>${p.name}</b><small>${p.desc}</small></span>
+            <span class="perk-body"><b>${t(p.name, p.nameEn)}</b><small>${t(p.desc, p.descEn)}</small></span>
           </button>`).join('')}
       </div>`, { dismissable: false });
     m.querySelectorAll('[data-perk]').forEach(b => {
@@ -1453,7 +1453,7 @@ class DungeonMode {
       this.lives--;
       this.engine.reviveBoard();
       getView().reviveFlash();
-      toast(`❤️ 残機を使って復活！のこり×${this.lives}`, 'announce', 2200);
+      toast(t(`❤️ 残機を使って復活！のこり×${this.lives}`, `❤️ Life used — revived! ×${this.lives} left`), 'announce', 2200);
       this.updateHud();
     } else {
       this.finish(false);
@@ -1482,23 +1482,23 @@ class DungeonMode {
       maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won,
     });
     if (rewards && rewards.badge === 'dungeon') {
-      setTimeout(() => { toast('🏰 バッジ「百塔踏破」を獲得！+500💎', 'announce', 6000); confettiBurst(80); }, 1200);
+      setTimeout(() => { toast(t('🏰 バッジ「百塔踏破」を獲得！+500💎', '🏰 Badge earned: Hundred-Floor Conqueror! +500💎'), 'announce', 6000); confettiBurst(80); }, 1200);
     }
     const cp = Math.floor(cleared / 10) * 10 + 1;
-    const banner = won ? '🏆 100F 完全制覇！！' : this.aborted ? `🚪 リタイア（F${this.floor}）` : `F${this.floor} で力尽きた…`;
+    const banner = won ? t('🏆 100F 完全制覇！！', '🏆 Floor 100 conquered!!') : this.aborted ? t(`🚪 リタイア（F${this.floor}）`, `🚪 Retired (F${this.floor})`) : t(`F${this.floor} で力尽きた…`, `Fell on F${this.floor}…`);
     const m = showModal(`
       <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
       <div class="result-stats">
-        <div class="rs-row"><span>クリアした階</span><b>${won ? '全100階！' : `F${fmt(cleared)}`}</b></div>
-        <div class="rs-row"><span>総ダメージ</span><b>${fmt(e.score)}</b></div>
-        <div class="rs-row"><span>消したライン</span><b>${fmt(e.linesCleared)}</b></div>
-        <div class="rs-row"><span>最大コンボ</span><b>${fmt(e.maxCombo)}</b></div>
-        ${won ? '' : `<div class="rs-row"><span>次回の再開地点</span><b>F${cp}</b></div>`}
+        <div class="rs-row"><span>${t('クリアした階', 'Floors cleared')}</span><b>${won ? t('全100階！', 'All 100!') : `F${fmt(cleared)}`}</b></div>
+        <div class="rs-row"><span>${t('総ダメージ', 'Total damage')}</span><b>${fmt(e.score)}</b></div>
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
+        ${won ? '' : `<div class="rs-row"><span>${t('次回の再開地点', 'Next run resumes at')}</span><b>F${cp}</b></div>`}
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn btn-dungeon" id="rAgain">${won ? 'もう一周' : `F${cp}から再挑戦`}</button>
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-dungeon" id="rAgain">${won ? t('もう一周', 'Run it again') : t(`F${cp}から再挑戦`, `Retry from F${cp}`)}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startDungeon(won ? 1 : cp); };
@@ -1507,11 +1507,11 @@ class DungeonMode {
   quit() {
     if (this.ended) return;
     const m = showModal(`
-      <h2>🏰 ダンジョンから撤退しますか？</h2>
-      <p class="muted center" style="margin-bottom:10px">ここまでにクリアした階は記録されます</p>
+      <h2>${t('🏰 ダンジョンから撤退しますか？', '🏰 Retreat from the dungeon?')}</h2>
+      <p class="muted center" style="margin-bottom:10px">${t('ここまでにクリアした階は記録されます', 'Floors cleared so far will be saved')}</p>
       <div class="modal-buttons">
-        <button class="btn btn-primary" id="dqResume">続ける</button>
-        <button class="btn btn-ai" id="dqQuit">撤退する</button>
+        <button class="btn btn-primary" id="dqResume">${t('続ける', 'Keep going')}</button>
+        <button class="btn btn-ai" id="dqQuit">${t('撤退する', 'Retreat')}</button>
       </div>`);
     m.querySelector('#dqResume').onclick = () => { audio.click(); closeModal(); };
     m.querySelector('#dqQuit').onclick = () => {
@@ -1544,18 +1544,18 @@ export function startDungeon(startFloor = 1) {
 
 const CHAOS_BOARDS = ['board_default', 'board_ocean', 'board_sunset', 'board_forest', 'board_galaxy', 'board_oni', 'board_kami', 'board_sakura', 'board_volcano'];
 const CHAOS_MODS = {
-  fever:   '🔥 フィーバー！スコア3倍！',
-  rain:    '☔ お邪魔ブロックの雨！',
-  giant:   '🧱 巨大ブロック時代！',
-  mini:    '🐜 ミニブロック時代！',
-  heaven:  '✨ 天の恵み！全消し！',
-  shuffle: '🌀 大シャッフル！',
-  reroll:  '🔄 リロール無限！',
-  bomb:    '💣 爆撃！ボードに大穴！',
-  freeze:  '⏱️ 時間停止！残り+10秒！',
-  gravity: '🧲 重力発生！ブロック落下！',
-  cleanse: '🧹 お邪魔ブロック浄化！',
-  shield:  '🛡️ コンボプロテクト！',
+  fever:   t('🔥 フィーバー！スコア3倍！', '🔥 Fever! 3x score!'),
+  rain:    t('☔ お邪魔ブロックの雨！', '☔ Garbage rain!'),
+  giant:   t('🧱 巨大ブロック時代！', '🧱 Age of giant blocks!'),
+  mini:    t('🐜 ミニブロック時代！', '🐜 Age of mini blocks!'),
+  heaven:  t('✨ 天の恵み！全消し！', '✨ Divine gift! Board cleared!'),
+  shuffle: t('🌀 大シャッフル！', '🌀 Grand shuffle!'),
+  reroll:  t('🔄 リロール無限！', '🔄 Infinite rerolls!'),
+  bomb:    t('💣 爆撃！ボードに大穴！', '💣 Bombing run! Holes everywhere!'),
+  freeze:  t('⏱️ 時間停止！残り+10秒！', '⏱️ Time freeze! +10 seconds!'),
+  gravity: t('🧲 重力発生！ブロック落下！', '🧲 Gravity! Blocks fall!'),
+  cleanse: t('🧹 お邪魔ブロック浄化！', '🧹 Garbage purged!'),
+  shield:  t('🛡️ コンボプロテクト！', '🛡️ Combo protect!'),
 };
 
 class ChaosMode extends VersusBase {
@@ -1584,7 +1584,7 @@ class ChaosMode extends VersusBase {
     updateAutoBtn();
     v.start();
     audio.playTrack('boss');
-    toast(`🌪️ カオスモード！${this.interval}秒ごとにルールが変わるぞ！`, 'announce', 3000);
+    toast(t(`🌪️ カオスモード！${this.interval}秒ごとにルールが変わるぞ！`, `🌪️ Chaos Mode! The rules change every ${this.interval} seconds!`), 'announce', 3000);
 
     countdownOverlay(3, () => {
       v.inputLocked = false;
@@ -1735,12 +1735,12 @@ class ChaosMode extends VersusBase {
 
   onPlace() {
     this.updateMyHud(this.engine);
-    $('#hudSub').textContent = this.modName || 'カオス';
+    $('#hudSub').textContent = this.modName || t('カオス', 'Chaos');
   }
 
   onTopOut() {
     if (this.ended) return;
-    toast('ボードリセット！スコアは維持されます', '', 1600);
+    toast(t('ボードリセット！スコアは維持されます', 'Board reset! Your score is kept'), '', 1600);
     this.engine.reviveBoard();
     getView().reviveFlash();
   }
@@ -1765,19 +1765,19 @@ class ChaosMode extends VersusBase {
       maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
     });
     const m = showModal(`
-      <div class="result-banner win">${isBest ? '🌪️ カオス新記録！！' : '🌪️ カオス終了！'}</div>
+      <div class="result-banner win">${isBest ? t('🌪️ カオス新記録！！', '🌪️ New chaos record!!') : t('🌪️ カオス終了！', '🌪️ Chaos over!')}</div>
       <div class="result-stats">
-        <div class="rs-row"><span>スコア</span><b>${fmt(e.score)}${isBest ? ' 👑' : ''}</b></div>
-        <div class="rs-row"><span>自己ベスト</span><b>${fmt(Math.max(prevBest, e.score))}</b></div>
-        <div class="rs-row"><span>発動したルール</span><b>${fmt(this.modCount)}回</b></div>
-        <div class="rs-row"><span>消したライン</span><b>${fmt(e.linesCleared)}</b></div>
-        <div class="rs-row"><span>最大コンボ</span><b>${fmt(e.maxCombo)}</b></div>
-        ${rewards ? '<div class="rs-row"><span>🎉 イベントボーナス</span><b>コイン1.5倍！</b></div>' : ''}
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}${isBest ? ' 👑' : ''}</b></div>
+        <div class="rs-row"><span>${t('自己ベスト', 'Personal best')}</span><b>${fmt(Math.max(prevBest, e.score))}</b></div>
+        <div class="rs-row"><span>${t('発動したルール', 'Rules triggered')}</span><b>${t(`${fmt(this.modCount)}回`, `${fmt(this.modCount)}`)}</b></div>
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
+        ${rewards ? `<div class="rs-row"><span>${t('🎉 イベントボーナス', '🎉 Event bonus')}</span><b>${t('コイン1.5倍！', '1.5x coins!')}</b></div>` : ''}
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn btn-chaos" id="rAgain">もう一回！</button>
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-chaos" id="rAgain">${t('もう一回！', 'One more!')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startChaos({ duration: this.duration, interval: this.interval }); };
@@ -1787,12 +1787,12 @@ class ChaosMode extends VersusBase {
     if (this.ended) return;
     // Mid-run cancel: let the player abort (no record), cash out early, or resume.
     const m = showModal(`
-      <h2>🌪️ カオスモードを中断しますか？</h2>
-      <p class="muted center" style="margin-bottom:10px">「中断する」は記録なしでメニューに戻ります。<br>「終了して集計」はここまでのスコアで報酬を受け取ります。</p>
+      <h2>${t('🌪️ カオスモードを中断しますか？', '🌪️ Stop the chaos run?')}</h2>
+      <p class="muted center" style="margin-bottom:10px">${t('「中断する」は記録なしでメニューに戻ります。<br>「終了して集計」はここまでのスコアで報酬を受け取ります。', '"Abort" returns to the menu with no record.<br>"Finish &amp; score" collects rewards for your score so far.')}</p>
       <div class="modal-buttons">
-        <button class="btn btn-primary" id="cqResume">続ける</button>
-        <button class="btn btn-ghost" id="cqAbort">中断する（記録なし）</button>
-        <button class="btn btn-chaos" id="cqFinish">終了して集計</button>
+        <button class="btn btn-primary" id="cqResume">${t('続ける', 'Keep playing')}</button>
+        <button class="btn btn-ghost" id="cqAbort">${t('中断する（記録なし）', 'Abort (no record)')}</button>
+        <button class="btn btn-chaos" id="cqFinish">${t('終了して集計', 'Finish & score')}</button>
       </div>`);
     m.querySelector('#cqResume').onclick = () => { audio.click(); closeModal(); };
     m.querySelector('#cqAbort').onclick = () => {
@@ -1800,7 +1800,7 @@ class ChaosMode extends VersusBase {
       closeModal();
       this.ended = true;
       this.destroy();
-      toast('🌪️ カオスモードを中断しました（記録なし）', '', 2200);
+      toast(t('🌪️ カオスモードを中断しました（記録なし）', '🌪️ Chaos run aborted (no record)'), '', 2200);
       endToMenu();
     };
     m.querySelector('#cqFinish').onclick = () => { audio.click(); closeModal(); this.finish(); };
@@ -1861,7 +1861,7 @@ class OnlineMode extends VersusBase {
       .on('result', msg => this.onResult(msg))
       .on('announce', msg => toast(`📢 ${msg.message}`, 'announce', 5000))
       .on('room_update', msg => this.onRoomUpdate(msg))
-      .on('room_error', msg => { audio.error(); toast(msg.error, 'err'); })
+      .on('room_error', msg => { audio.error(); toast(trServer(msg.error), 'err'); })
       .on('raid_state', msg => this.onRaidState(msg))
       .on('raid_attack', msg => this.onRaidAttack(msg))
       .on('emote', msg => this.showEmote(msg.slot, msg.emoji))
@@ -1904,7 +1904,7 @@ class OnlineMode extends VersusBase {
     $('#btnCreateRoom').onclick = () => { audio.click(); this.client.createRoom({}); };
     const join = () => {
       const code = $('#roomCodeInput').value.trim();
-      if (code.length !== 4) { toast('4文字のコードを入力してください', 'err'); return; }
+      if (code.length !== 4) { toast(t('4文字のコードを入力してください', 'Enter the 4-letter code'), 'err'); return; }
       audio.click();
       this.client.joinRoom(code);
     };
@@ -1924,8 +1924,8 @@ class OnlineMode extends VersusBase {
     $('#roomPlayers').innerHTML = msg.players.map((p, i) => `
       <div class="room-player ${p.isYou ? 'me' : ''}">
         <span class="rp-team">${msg.settings.team ? (i < 2 ? '🟦' : '🟥') : '⚔️'}</span>
-        <span class="rp-name">${escapeHtml(p.name)}${p.isYou ? '（あなた）' : ''}</span>
-        ${p.isHost ? '<span class="rp-host">👑 ホスト</span>' : ''}
+        <span class="rp-name">${escapeHtml(p.name)}${p.isYou ? t('（あなた）', ' (you)') : ''}</span>
+        ${p.isHost ? `<span class="rp-host">${t('👑 ホスト', '👑 Host')}</span>` : ''}
       </div>`).join('');
 
     const host = msg.youAreHost;
@@ -1990,7 +1990,7 @@ class OnlineMode extends VersusBase {
       $('#bossPanel').classList.remove('hidden');
       $('#bossEmoji').textContent = msg.boss.emoji;
       $('#bossEmoji').className = 'boss-emoji';
-      $('#bossName').textContent = `${msg.boss.name}（レイド）`;
+      $('#bossName').textContent = t(`${msg.boss.name}（レイド）`, `${catName(msg.boss)} (Raid)`);
       document.querySelector('.boss-atkbar').classList.add('hidden');
       this.updateRaidHp();
     }
@@ -2006,7 +2006,7 @@ class OnlineMode extends VersusBase {
     updateAutoBtn();
     v.start();
     audio.playTrack(this.isRaid ? 'boss' : 'battle');
-    toast(this.isRaid ? t(`🐲 レイド開始！${this.raidBoss ? this.raidBoss.name : ''}を倒せ！`, `🐲 Raid start! Take down ${this.raidBoss ? this.raidBoss.name : 'the boss'}!`)
+    toast(this.isRaid ? t(`🐲 レイド開始！${this.raidBoss ? this.raidBoss.name : ''}を倒せ！`, `🐲 Raid start! Take down ${this.raidBoss ? catName(this.raidBoss) : 'the boss'}!`)
       : this.isTeam ? t('👥 チーム戦スタート！', '👥 Team battle start!') : t('⚔️ マッチしました！', '⚔️ Match found!'), 'ok');
 
     // Emotes: quick reactions relayed to everyone in the match.
@@ -2135,7 +2135,7 @@ class OnlineMode extends VersusBase {
       view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
     }
     view.shake = 12;
-    toast(`${this.raidBoss.emoji} ${this.raidBoss.name}の攻撃！`, 'err', 1300);
+    toast(t(`${this.raidBoss.emoji} ${this.raidBoss.name}の攻撃！`, `${this.raidBoss.emoji} ${catName(this.raidBoss)} attacks!`), 'err', 1300);
     if (this.engine.over) this.onTopOut();
   }
 
@@ -2186,7 +2186,7 @@ class OnlineMode extends VersusBase {
     if (msg.mode === 'raid') {
       const total = msg.players.reduce((a, p) => a + p.score, 0);
       scoreRows = `
-        <div class="rs-row"><span>${msg.boss ? escapeHtml(msg.boss.name) : t('ボス', 'Boss')} HP</span><b>${fmt(msg.boss ? msg.boss.hp : 0)}</b></div>
+        <div class="rs-row"><span>${msg.boss ? escapeHtml(catName(msg.boss)) : t('ボス', 'Boss')} HP</span><b>${fmt(msg.boss ? msg.boss.hp : 0)}</b></div>
         <div class="rs-row"><span>${t('パーティ総ダメージ', 'Party total damage')}</span><b>${fmt(total)}</b></div>
         ${msg.players.map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? t('⭐あなた', '⭐You') : '👤' + escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`).join('')}`;
     } else if (msg.mode === 'team') {
@@ -2245,6 +2245,347 @@ class OnlineMode extends VersusBase {
     $('#bossPanel').classList.add('hidden');
     this.client.close();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Tournament: 8-player knockout bracket vs AI players (QF → SF → Final).
+// Opponents get stronger every round; ties go to the human.
+// ---------------------------------------------------------------------------
+
+const TOURNEY_NAMES = [
+  'そらまめ', 'ミサキ', 'Blocky', 'PixelCat', 'ドラゴン太郎', 'NovaStar', 'たける', 'こむぎ',
+  'Waffle', 'ハヤテ', 'ComboQueen', 'ぽんず', 'Sakura99', 'リク', 'Mocha', 'クロネコ',
+  'GridKing', 'いちごみるく', 'Turbo', 'ホシゾラ',
+];
+
+const TOURNEY_ROUNDS = [
+  { ja: '準々決勝', en: 'Quarterfinal', secs: 60, levels: ['easy', 'normal'], board: 'board_default', track: 'battle' },
+  { ja: '準決勝',   en: 'Semifinal',    secs: 60, levels: ['normal', 'hard'], board: 'board_sunset',  track: 'battle' },
+  { ja: '決勝',     en: 'Final',        secs: 90, levels: ['hard', 'oni'],    board: 'board_oni',     track: 'oni' },
+];
+
+function tourneyWins() { return Number(localStorage.getItem('bba_tourney_wins') || 0); }
+
+class TournamentMode extends VersusBase {
+  constructor() {
+    super();
+    this.mode = 'tournament';
+    this.round = 0;
+    this.totalScore = 0;
+    this.playedSecs = 0;
+    const pool = [...TOURNEY_NAMES].sort(() => Math.random() - 0.5);
+    const myName = session.user ? session.user.username
+      : (localStorage.getItem('bba_guest_name') || t('あなた', 'You'));
+    this.alive = [{ name: myName, you: true }, ...pool.slice(0, 7).map(n => ({ name: n }))];
+  }
+
+  start() { this.showBracket(); }
+
+  roundName() { const r = TOURNEY_ROUNDS[this.round]; return t(r.ja, r.en); }
+
+  bracketRows() {
+    const rows = [];
+    for (let i = 0; i < this.alive.length; i += 2) {
+      const a = this.alive[i], b = this.alive[i + 1];
+      const nm = p => p.you ? `⭐<b>${escapeHtml(p.name)}</b>` : escapeHtml(p.name);
+      rows.push(`<div class="rs-row"><span>${nm(a)}</span><span style="opacity:.6">⚔️</span><span>${nm(b)}</span></div>`);
+    }
+    return rows.join('');
+  }
+
+  showBracket() {
+    const wins = tourneyWins();
+    const m = showModal(`
+      <h2>🏆 ${t('トーナメント', 'Tournament')} — ${this.roundName()}</h2>
+      <p class="muted center" style="margin-bottom:10px">${t('8人制ノックアウト！ラウンドごとに相手が強くなる', '8-player knockout! Opponents get stronger every round')}${wins ? `<br>${t('優勝回数', 'Championships')}: <b style="color:var(--yellow)">${wins}</b>` : ''}</p>
+      <div class="result-stats">${this.bracketRows()}</div>
+      <p class="muted center" style="font-size:12px;margin-top:8px">${t(`あなたの相手: `, 'Your opponent: ')}<b>${escapeHtml(this.alive[1].name)}</b> ・ ${TOURNEY_ROUNDS[this.round].secs}${t('秒', 's')}</p>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="tnQuit">${t('やめる', 'Quit')}</button>
+        <button class="btn btn-gold" id="tnFight">⚔️ ${t('対戦開始！', 'Fight!')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#tnQuit').onclick = () => { audio.click(); closeModal(); this.destroy(); endToMenu(); };
+    m.querySelector('#tnFight').onclick = () => { audio.click(); closeModal(); this.playMatch(); };
+  }
+
+  playMatch() {
+    const info = TOURNEY_ROUNDS[this.round];
+    this.level = info.levels[(Math.random() * info.levels.length) | 0];
+    this.cfg = AI_LEVELS[this.level];
+    const seed = (Math.random() * 2 ** 31) | 0;
+    this.setupHud(info.secs);
+    showItemBar(false);   // fair bracket: same pieces, no boosters
+    this.opp = this.alive[1];
+    this.buildPanels([{ slot: 1, name: this.opp.name, isAlly: false }]);
+    const v = getView();
+    v.setTheme({ ...equippedTheme(), boardId: info.board });
+    this.engine = new Engine(seed);
+    this.aiEngine = new Engine(seed);
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = () => { this.updateMyHud(this.engine); this.updateBars(this.engine.score, this.aiEngine.score); };
+    v.onGameOver = () => this.onTopOut();
+    this.updateMyHud(this.engine);
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack(info.track);
+    countdownOverlay(3, () => {
+      v.inputLocked = false;
+      this.startTimer(() => this.endRound());
+      this.aiLoop();
+    }, audio);
+  }
+
+  aiLoop() {
+    this.aiTimer = setTimeout(() => {
+      if (this.ended || !this.aiEngine) return;
+      if (this.aiEngine.over) this.aiEngine.reviveBoard();
+      const move = chooseMove(this.aiEngine, this.level);
+      let combo = 0;
+      if (move) {
+        const r = this.aiEngine.place(move.index, move.row, move.col);
+        if (r && r.lineCount > 0) combo = r.streak;
+      }
+      this.updateOpp(1, { score: this.aiEngine.score, combo, grid: this.aiEngine.snapshot() });
+      this.updateBars(this.engine.score, this.aiEngine.score);
+      this.aiLoop();
+    }, this.cfg.moveMs * (0.75 + Math.random() * 0.5));
+  }
+
+  onTopOut() {
+    if (this.ended) return;
+    toast(t('ボードリセット！スコアは維持されます', 'Board reset! Your score is kept'), '', 1800);
+    this.engine.reviveBoard();
+    getView().reviveFlash();
+  }
+
+  // Everyone else's matches resolve randomly; winners keep bracket order.
+  simulateOthers() {
+    const next = [this.alive[0]];
+    for (let i = 2; i < this.alive.length; i += 2) {
+      next.push(this.alive[Math.random() < 0.5 ? i : i + 1]);
+    }
+    this.alive = next;
+  }
+
+  async endRound() {
+    if (this.ended) return;
+    this.stopTimer();
+    clearTimeout(this.aiTimer);
+    getView().inputLocked = true;
+    const me = this.engine.score, opp = this.aiEngine.score;
+    this.totalScore += me;
+    this.playedSecs += TOURNEY_ROUNDS[this.round].secs;
+    const won = me >= opp;   // the crowd roots for you — ties advance the human
+
+    if (!won) {
+      audio.gameOver();
+      this.ended = true;
+      const rewards = await submitResult({
+        mode: 'tournament', score: this.totalScore, lines: this.engine.linesCleared,
+        maxCombo: this.engine.maxCombo, duration: this.playedSecs, won: false,
+      });
+      const m = showModal(`
+        <div class="result-banner lose">${t('敗退…', 'Eliminated…')}</div>
+        <p class="muted center">${this.roundName()}${t('で敗退しました', ' — better luck next time')}</p>
+        <div class="result-stats">
+          <div class="rs-row"><span>${t('あなた', 'You')}</span><b>${fmt(me)}</b></div>
+          <div class="rs-row"><span>${escapeHtml(this.opp.name)}</span><b>${fmt(opp)}</b></div>
+          ${rewardsRows(rewards)}
+        </div>
+        <div class="modal-buttons">
+          <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+          <button class="btn btn-gold" id="rAgain">${t('再挑戦', 'Try again')}</button>
+        </div>`, { dismissable: false });
+      m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+      m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startTournament(); };
+      return;
+    }
+
+    audio.victory();
+    this.simulateOthers();
+    this.round++;
+
+    if (this.round >= TOURNEY_ROUNDS.length) {
+      // CHAMPION!
+      this.ended = true;
+      confettiBurst(70);
+      localStorage.setItem('bba_tourney_wins', String(tourneyWins() + 1));
+      const rewards = await submitResult({
+        mode: 'tournament', score: this.totalScore, lines: this.engine.linesCleared,
+        maxCombo: this.engine.maxCombo, duration: this.playedSecs, won: true,
+      });
+      if (rewards && rewards.badge === 'tourney') {
+        setTimeout(() => toast(t('🏆 バッジ「初優勝」を獲得！+100💎', '🏆 Badge earned: First Champion! +100💎'), 'announce', 4500), 1200);
+      }
+      const m = showModal(`
+        <div class="result-banner win">👑 ${t('優勝！！', 'CHAMPION!!')}</div>
+        <p class="muted center">${t('8人トーナメントを制覇しました！', 'You conquered the 8-player bracket!')}</p>
+        <div class="result-stats">
+          <div class="rs-row"><span>${t('決勝スコア', 'Final score')}</span><b>${fmt(me)}</b></div>
+          <div class="rs-row"><span>${t('大会合計スコア', 'Tournament total')}</span><b>${fmt(this.totalScore)}</b></div>
+          <div class="rs-row"><span>${t('優勝回数', 'Championships')}</span><b>${tourneyWins()}</b></div>
+          ${rewardsRows(rewards)}
+        </div>
+        <div class="modal-buttons">
+          <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+          <button class="btn btn-gold" id="rAgain">${t('もう一度優勝する', 'Win it again')}</button>
+        </div>`, { dismissable: false });
+      m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+      m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startTournament(); };
+      return;
+    }
+
+    const m = showModal(`
+      <div class="result-banner win">${t('勝利！', 'Victory!')}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('あなた', 'You')}</span><b>${fmt(me)}</b></div>
+        <div class="rs-row"><span>${escapeHtml(this.opp.name)}</span><b>${fmt(opp)}</b></div>
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-gold" id="tnNext">${t('つぎのラウンドへ →', 'Next round →')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#tnNext').onclick = () => { audio.click(); closeModal(); this.showBracket(); };
+  }
+
+  quit() {
+    if (this.ended) return;
+    this.ended = true;
+    this.destroy();
+    toast(t('🏆 トーナメントを棄権しました', '🏆 You withdrew from the tournament'), '', 2200);
+    endToMenu();
+  }
+
+  destroy() {
+    this.ended = true;
+    this.stopTimer();
+    clearTimeout(this.aiTimer);
+  }
+}
+
+export function startTournament() {
+  if (currentMode) currentMode.destroy();
+  currentMode = new TournamentMode();
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+// ---------------------------------------------------------------------------
+// Survival: endless garbage waves on an accelerating timer. How long can
+// you keep the board alive?
+// ---------------------------------------------------------------------------
+
+class SurvivalMode {
+  constructor() {
+    this.mode = 'survival';
+    this.wave = 0;
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    showItemBar(true);
+    this.startedAt = Date.now();
+    const v = getView();
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.inputLocked = false;
+    v.onPlace = () => this.updateHud();
+    v.onGameOver = () => this.finish();
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('hard');
+    this.nextAt = Date.now() + 15000;
+    this.int = setInterval(() => this.tick(), 200);
+    toast(t('💀 15秒ごとにお邪魔ブロックが降ってくる！生き延びろ！', '💀 Garbage drops every 15s — survive!'), 'announce', 3000);
+  }
+
+  best() { return Number(localStorage.getItem('bba_survival_best') || 0); }
+  bestWave() { return Number(localStorage.getItem('bba_survival_wave') || 0); }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = `WAVE ${this.wave}${this.bestWave() ? ` ・ BEST W${this.bestWave()}` : ''}`;
+  }
+
+  tick() {
+    if (this.ended) return;
+    const remain = Math.max(0, this.nextAt - Date.now());
+    const el = $('#hudTimer');
+    el.textContent = `☠ ${Math.ceil(remain / 1000)}`;
+    el.classList.toggle('urgent', remain <= 3000);
+    if (remain <= 0) this.dropWave();
+  }
+
+  dropWave() {
+    this.wave++;
+    const cells = Math.min(2 + Math.floor(this.wave / 2), 7);
+    const added = this.engine.addGarbage(cells);
+    audio.bossAttack();
+    if (view) {
+      view.shake = 10;
+      for (const [r, c] of added) {
+        view.spawnAnim.set(r * 8 + c, view.time);
+        view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 8, 'fx_default');
+      }
+    }
+    toast(t(`💀 WAVE ${this.wave}！お邪魔${cells}個`, `💀 WAVE ${this.wave}! ${cells} garbage blocks`), 'err', 1300);
+    const interval = Math.max(5, 15 - this.wave * 0.6);
+    this.nextAt = Date.now() + interval * 1000;
+    this.updateHud();
+    if (this.engine.over || !this.engine.hasAnyMove()) this.finish();
+  }
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    clearInterval(this.int);
+    getView().inputLocked = true;
+    const e = this.engine;
+    const survived = Math.round((Date.now() - this.startedAt) / 1000);
+    const isBest = e.score > this.best();
+    if (isBest) localStorage.setItem('bba_survival_best', String(e.score));
+    if (this.wave > this.bestWave()) localStorage.setItem('bba_survival_wave', String(this.wave));
+    if (isBest && e.score > 0) confettiBurst();
+    audio.gameOver();
+    const rewards = await submitResult({
+      mode: 'survival', score: e.score, lines: e.linesCleared,
+      maxCombo: e.maxCombo, duration: survived, won: false,
+    });
+    const m = showModal(`
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : t('生存終了…', 'You were buried…')}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('到達ウェーブ', 'Wave reached')}</span><b>W${this.wave}</b></div>
+        <div class="rs-row"><span>${t('生存時間', 'Time survived')}</span><b>${Math.floor(survived / 60)}:${String(survived % 60).padStart(2, '0')}</b></div>
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-oni" id="rAgain">${t('もう一度生き残る', 'Survive again')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startSurvival(); };
+  }
+
+  quit() { this.finish(); }
+  destroy() { this.ended = true; clearInterval(this.int); }
+}
+
+export function startSurvival() {
+  if (currentMode) currentMode.destroy();
+  currentMode = new SurvivalMode();
+  window.__bbaMode = currentMode;
+  currentMode.start();
 }
 
 // ---------------------------------------------------------------------------

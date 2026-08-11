@@ -2,13 +2,13 @@
 import { session, api, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startTournament, startSurvival, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem } from './modes.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
 import { initChat } from './chat.js';
-import { t, applyStaticI18n } from './i18n.js';
+import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
 
 applyStaticI18n();
 
@@ -58,7 +58,7 @@ function unlockKami() {
   localStorage.setItem('bba_kami', '1');
   audio.kamiDescend();
   confettiBurst(50);
-  toast('🔱 天から声が聞こえる……隠し難易度「神」が解放された', 'announce', 5000);
+  toast(t('🔱 天から声が聞こえる……隠し難易度「神」が解放された', '🔱 A voice echoes from the heavens… hidden difficulty "Kami" unlocked!'), 'announce', 5000);
 }
 
 function unlockSouzou() {
@@ -68,7 +68,7 @@ function unlockSouzou() {
   audio.kamiDescend();
   audio.bossAttack();
   confettiBurst(80);
-  toast('🌌 宇宙の彼方から視線を感じる……真の隠し難易度「創造神」が姿を現した', 'announce', 6000);
+  toast(t('🌌 宇宙の彼方から視線を感じる……真の隠し難易度「創造神」が姿を現した', '🌌 Something watches from beyond the cosmos… the true hidden difficulty "Creator God" has appeared!'), 'announce', 6000);
 }
 
 const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
@@ -110,7 +110,7 @@ async function openBossSelect(preferIndex = null) {
           const cleared = i < bossMax;
           return `
           <button class="btn boss-select ${locked ? 'btn-ghost' : 'btn-boss'}" data-boss="${i}" ${locked ? 'disabled' : ''}>
-            <span>${locked ? '🔒' : b.emoji} ${b.name}</span>
+            <span>${locked ? '🔒' : b.emoji} ${catName(b)}</span>
             <small>${locked ? t('前のボスを倒すと解放', 'Beat the previous boss to unlock') : `HP ${Number(b.hp).toLocaleString()}${cleared ? t(' ・ ✓討伐済', ' ・ ✓cleared') : ''}`}</small>
           </button>`;
         }).join('')}
@@ -137,7 +137,7 @@ async function openBossSelect(preferIndex = null) {
       if (btn) btn.classList.add('reveal');
     }
   } catch {
-    toast('ボス情報を取得できません', 'err');
+    toast(t('ボス情報を取得できません', 'Could not load boss data'), 'err');
   }
 }
 window.__bbaOpenBossSelect = openBossSelect;
@@ -212,6 +212,9 @@ function dismissSplash(e) {
   // Swallow the event completely so the tap can NEVER reach buttons
   // underneath the splash (the splash keeps intercepting during its fade).
   if (e) { e.preventDefault(); e.stopPropagation(); }
+  // First visit: the splash doubles as the language picker — a stray tap
+  // must not skip it. The picker buttons store the language, then call us.
+  if (!localStorage.getItem('bba_lang')) return;
   const splash = $('#tapStart');
   if (!splash.classList.contains('hidden')) {
     splash.classList.add('ts-out');
@@ -222,6 +225,28 @@ function dismissSplash(e) {
 
 {
   const splash = $('#tapStart');
+  // First launch: pick a language before anything else.
+  if (!localStorage.getItem('bba_lang')) {
+    splash.querySelector('.ts-tap').classList.add('hidden');
+    const pick = document.createElement('div');
+    pick.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:22px;align-items:center';
+    pick.innerHTML = `
+      <button class="btn btn-primary btn-big" data-lang="ja">🇯🇵 日本語ではじめる</button>
+      <button class="btn btn-online btn-big" data-lang="en">🌍 Play in English</button>
+      <small style="opacity:.65">Language / 言語はあとで⚙️設定から変更できます</small>`;
+    splash.appendChild(pick);
+    pick.querySelectorAll('[data-lang]').forEach(b => {
+      b.addEventListener('click', e => {
+        e.stopPropagation();
+        const lang = b.dataset.lang;
+        setLang(lang);
+        if (lang !== LANG) { location.reload(); return; }   // re-render in the chosen language
+        pick.remove();
+        splash.querySelector('.ts-tap').classList.remove('hidden');
+        dismissSplash();
+      });
+    });
+  }
   // Block every pointer/click event on the splash from bubbling through.
   splash.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); });
   splash.addEventListener('pointerup', e => { e.preventDefault(); e.stopPropagation(); });
@@ -237,9 +262,13 @@ function dismissSplash(e) {
 (async () => {
   // Try silent autoplay first — succeeds on repeat visits where the browser
   // has granted audio permission; otherwise show the tap-to-start splash.
+  // First launch (no language chosen yet): ALWAYS show the splash — it
+  // doubles as the language picker.
   audio.ensure();
   await new Promise(r => setTimeout(r, 250));
-  if (audio.ctx && audio.ctx.state === 'running') {
+  if (!localStorage.getItem('bba_lang')) {
+    $('#tapStart').classList.remove('hidden');
+  } else if (audio.ctx && audio.ctx.state === 'running') {
     startAudioNow();
   } else {
     $('#tapStart').classList.remove('hidden');
@@ -341,8 +370,8 @@ function showChaosSetup() {
       const mins = Math.max(0, Math.min(30, Math.floor(Number(m.querySelector('#csMin').value) || 0)));
       const secs = Math.max(0, Math.min(59, Math.floor(Number(m.querySelector('#csSec').value) || 0)));
       duration = mins * 60 + secs;
-      if (duration < 30) { toast('30秒以上で設定してください', 'err'); return; }
-      if (duration > 1800) { toast('最大30分までです', 'err'); return; }
+      if (duration < 30) { toast(t('30秒以上で設定してください', 'Set at least 30 seconds'), 'err'); return; }
+      if (duration > 1800) { toast(t('最大30分までです', '30 minutes max'), 'err'); return; }
     } else {
       duration = Number(durChoice);
     }
@@ -354,7 +383,7 @@ function showChaosSetup() {
 }
 
 $('#btnChaos').onclick = () => {
-  if (!window.__bbaEvent) { toast('イベントは開催されていません', 'err'); return; }
+  if (!window.__bbaEvent) { toast(t('イベントは開催されていません', 'No event is live right now'), 'err'); return; }
   audio.click();
   showChaosSetup();
 };
@@ -396,6 +425,10 @@ function showDungeonSelect() {
 
 $('#btnDungeon').onclick = () => { audio.click(); showDungeonSelect(); };
 
+// ---- tournament + survival ----
+$('#btnTourney').onclick = () => { audio.click(); startTournament(); };
+$('#btnSurvival').onclick = () => { audio.click(); startSurvival(); };
+
 // ---- weekly challenge ----
 window.__bbaOpenLeaderboard = openLeaderboard;
 
@@ -412,7 +445,7 @@ $('#btnWeekly').onclick = async () => {
   try {
     info = await api('/api/weekly');
   } catch {
-    toast('サーバーに接続できません', 'err');
+    toast(t('サーバーに接続できません', 'Cannot reach the server'), 'err');
     return;
   }
   const localBest = (() => {
@@ -456,11 +489,11 @@ if (location.search.includes('purchase=success')) {
   setTimeout(async () => {
     try { await refreshMe(); updateTopbar(); } catch { /* ignore */ }
     audio.coin();
-    toast('💎 購入ありがとうございます！ジェムを付与しました', 'ok', 4000);
+    toast(t('💎 購入ありがとうございます！ジェムを付与しました', '💎 Thank you for your purchase! Gems added'), 'ok', 4000);
   }, 1500);
 } else if (location.search.includes('purchase=cancel')) {
   history.replaceState(null, '', '/');
-  toast('購入をキャンセルしました', '', 2500);
+  toast(t('購入をキャンセルしました', 'Purchase canceled'), '', 2500);
 }
 
 // ---- session restore ----

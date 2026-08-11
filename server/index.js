@@ -165,6 +165,13 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bo
     gems = 300;
     user.gems += 300;
   }
+  // Tournament: first championship earns a badge + one-time gems.
+  if (mode === 'tournament' && won && !user.badges.includes('tourney')) {
+    user.badges.push('tourney');
+    badge = 'tourney';
+    gems += 100;
+    user.gems += 100;
+  }
   // Weekly challenge: per-week personal best.
   if (mode === 'weekly') {
     const w = weekIdOf(currentWeekNum());
