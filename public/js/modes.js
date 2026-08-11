@@ -6,6 +6,7 @@ import { chooseMove, AI_LEVELS } from './ai.js';
 import { audio } from './audio.js';
 import { session, api, refreshMe, BattleClient } from './net.js';
 import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst } from './dom.js';
+import { t } from './i18n.js';
 
 const MATCH_SECONDS = 120;
 
@@ -52,13 +53,13 @@ async function submitResult(payload) {
 
 function rewardsRows(rewards) {
   if (!rewards) {
-    return `<div class="rs-row"><span>💡 報酬を受け取るにはログイン</span></div>`;
+    return `<div class="rs-row"><span>${t('💡 報酬を受け取るにはログイン', '💡 Log in to earn rewards')}</span></div>`;
   }
   return `
-    <div class="rs-row"><span>🪙 コイン</span><b>+${fmt(rewards.coins)}</b></div>
-    ${rewards.gems ? `<div class="rs-row"><span>💎 初回討伐ボーナス</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
-    <div class="rs-row"><span>🎫 パスXP</span><b>+${fmt(rewards.bpXp)}</b></div>
-    <div class="rs-row"><span>⭐ アカウントXP</span><b>+${fmt(rewards.accXp)}</b></div>`;
+    <div class="rs-row"><span>${t('🪙 コイン', '🪙 Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
+    ${rewards.gems ? `<div class="rs-row"><span>${t('💎 初回討伐ボーナス', '💎 First-clear bonus')}</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
+    <div class="rs-row"><span>${t('🎫 パスXP', '🎫 Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
+    <div class="rs-row"><span>${t('⭐ アカウントXP', '⭐ Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>`;
 }
 
 export function quitCurrent() {
@@ -645,7 +646,7 @@ class AiMode extends VersusBase {
 
   onTopOut() {
     if (this.ended) return;
-    toast('ボードリセット！スコアは維持されます', '', 1800);
+    toast(t('ボードリセット！スコアは維持されます', 'Board reset! Your score is kept'), '', 1800);
     this.engine.reviveBoard();
     getView().reviveFlash();
   }
@@ -1841,7 +1842,7 @@ class OnlineMode extends VersusBase {
       this.wireRoomButtons();
     } else {
       showScreen('matchmaking');
-      $('#mmStatus').textContent = 'サーバーに接続中…';
+      $('#mmStatus').textContent = t('サーバーに接続中…', 'Connecting to server…');
     }
     try {
       const hello = await this.client.connect(localStorage.getItem('bba_guest_name') || undefined);
@@ -1864,10 +1865,15 @@ class OnlineMode extends VersusBase {
       .on('raid_state', msg => this.onRaidState(msg))
       .on('raid_attack', msg => this.onRaidAttack(msg))
       .on('emote', msg => this.showEmote(msg.slot, msg.emoji))
+      .on('online', msg => {
+        this.onlineCount = msg.online;
+        const el = $('#mmOnline');
+        if (el) el.textContent = msg.online;
+      })
       .on('close', () => {
         if (this.ended) return;
         if (this.inMatch || this.kind === 'custom') {
-          toast('サーバーとの接続が切れました', 'err');
+          toast(t('サーバーとの接続が切れました', 'Lost connection to the server'), 'err');
           this.ended = true;
           this.destroy();
           endToMenu();
@@ -1876,11 +1882,12 @@ class OnlineMode extends VersusBase {
 
     if (this.kind !== 'custom') {
       $('#mmStatus').textContent = this.kind === 'team'
-        ? 'チームメンバーを探しています…'
+        ? t('チームメンバーを探しています…', 'Looking for teammates…')
         : this.kind === 'raid'
-        ? 'レイドパーティを募集しています…'
-        : '対戦相手を探しています…';
-      $('#mmSub').innerHTML = 'オンライン: <span id="mmOnline">-</span>人 ・ 対戦相手を検索中…';
+        ? t('レイドパーティを募集しています…', 'Gathering a raid party…')
+        : t('対戦相手を探しています…', 'Looking for an opponent…');
+      $('#mmSub').innerHTML = t('オンライン: <span id="mmOnline">-</span>人 ・ 対戦相手を検索中…',
+        'Online: <span id="mmOnline">-</span> players ・ searching…');
       $('#mmOnline').textContent = this.onlineCount ?? '-';
       this.client.queue(this.kind);
     }
@@ -1925,16 +1932,16 @@ class OnlineMode extends VersusBase {
     const s = msg.settings;
     const dis = host ? '' : 'disabled';
     $('#roomSettings').innerHTML = `
-      <div class="settings-row"><label>⏱️ 試合時間</label><div class="seg" data-rs="duration">
-        ${[60, 120, 180].map(d => `<button data-v="${d}" ${s.duration === d ? 'class="active"' : ''} ${dis}>${d / 60}分</button>`).join('')}
+      <div class="settings-row"><label>${t('⏱️ 試合時間', '⏱️ Match time')}</label><div class="seg" data-rs="duration">
+        ${[60, 120, 180].map(d => `<button data-v="${d}" ${s.duration === d ? 'class="active"' : ''} ${dis}>${d / 60}${t('分', 'min')}</button>`).join('')}
       </div></div>
-      <div class="settings-row"><label>👥 モード</label><div class="seg" data-rs="team">
+      <div class="settings-row"><label>${t('👥 モード', '👥 Mode')}</label><div class="seg" data-rs="team">
         <button data-v="false" ${!s.team ? 'class="active"' : ''} ${dis}>1v1</button>
-        <button data-v="true" ${s.team ? 'class="active"' : ''} ${dis}>2v2チーム</button>
+        <button data-v="true" ${s.team ? 'class="active"' : ''} ${dis}>${t('2v2チーム', '2v2 Team')}</button>
       </div></div>
-      <div class="settings-row"><label>🤖 ボット補充</label><input type="checkbox" id="rsBotFill" ${s.botFill ? 'checked' : ''} ${dis}></div>
-      <div class="settings-row"><label>💪 ボットの強さ</label><div class="seg" data-rs="botLevel">
-        ${[['random', '🎲'], ['easy', '弱'], ['normal', '中'], ['hard', '強'], ['oni', '鬼']].map(([v, l]) =>
+      <div class="settings-row"><label>${t('🤖 ボット補充', '🤖 Fill with bots')}</label><input type="checkbox" id="rsBotFill" ${s.botFill ? 'checked' : ''} ${dis}></div>
+      <div class="settings-row"><label>${t('💪 ボットの強さ', '💪 Bot strength')}</label><div class="seg" data-rs="botLevel">
+        ${[['random', '🎲'], ['easy', t('弱', 'Easy')], ['normal', t('中', 'Mid')], ['hard', t('強', 'Hard')], ['oni', t('鬼', 'Oni')]].map(([v, l]) =>
           `<button data-v="${v}" ${s.botLevel === v ? 'class="active"' : ''} ${dis}>${l}</button>`).join('')}
       </div></div>`;
     $('#btnStartRoom').classList.toggle('hidden', !host);
@@ -1999,8 +2006,8 @@ class OnlineMode extends VersusBase {
     updateAutoBtn();
     v.start();
     audio.playTrack(this.isRaid ? 'boss' : 'battle');
-    toast(this.isRaid ? `🐲 レイド開始！${this.raidBoss ? this.raidBoss.name : ''}を倒せ！`
-      : this.isTeam ? '👥 チーム戦スタート！' : '⚔️ マッチしました！', 'ok');
+    toast(this.isRaid ? t(`🐲 レイド開始！${this.raidBoss ? this.raidBoss.name : ''}を倒せ！`, `🐲 Raid start! Take down ${this.raidBoss ? this.raidBoss.name : 'the boss'}!`)
+      : this.isTeam ? t('👥 チーム戦スタート！', '👥 Team battle start!') : t('⚔️ マッチしました！', '⚔️ Match found!'), 'ok');
 
     // Emotes: quick reactions relayed to everyone in the match.
     const emoteBtn = $('#btnEmote');
@@ -2134,7 +2141,7 @@ class OnlineMode extends VersusBase {
 
   onTopOut() {
     if (this.ended) return;
-    toast('ボードリセット！スコアは維持されます', '', 1800);
+    toast(t('ボードリセット！スコアは維持されます', 'Board reset! Your score is kept'), '', 1800);
     this.engine.reviveBoard();
     getView().reviveFlash();
   }
@@ -2145,14 +2152,14 @@ class OnlineMode extends VersusBase {
     clearInterval(this.stateInt);
     this.client.finish(this.engine.score, this.engine.linesCleared, this.engine.maxCombo);
     showModal(`
-      <h2>⌛ 集計中…</h2>
-      <p class="muted center">全員の結果を待っています</p>`, { dismissable: false });
+      <h2>${t('⌛ 集計中…', '⌛ Tallying…')}</h2>
+      <p class="muted center">${t('全員の結果を待っています', 'Waiting for all results')}</p>`, { dismissable: false });
     this.resultTimeout = setTimeout(() => {
       if (!this.ended) {
         this.ended = true;
         this.destroy();
         closeModal();
-        toast('結果を受信できませんでした', 'err');
+        toast(t('結果を受信できませんでした', 'Could not receive the results'), 'err');
         endToMenu();
       }
     }, 20000);
@@ -2169,36 +2176,36 @@ class OnlineMode extends VersusBase {
     if (msg.outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
 
     const banners = msg.mode === 'raid'
-      ? { win: `${msg.boss ? msg.boss.emoji : '🐲'} レイドボス討伐！`, lose: '討伐失敗…', draw: 'DRAW' }
+      ? { win: t(`${msg.boss ? msg.boss.emoji : '🐲'} レイドボス討伐！`, `${msg.boss ? msg.boss.emoji : '🐲'} Raid boss down!`), lose: t('討伐失敗…', 'Raid failed…'), draw: 'DRAW' }
       : { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
     const reasonNote =
-      msg.reason === 'forfeit' ? '<p class="muted center">相手が切断しました</p>' :
-      msg.reason === 'abandoned' ? '<p class="muted center">対戦が中断されました</p>' : '';
+      msg.reason === 'forfeit' ? `<p class="muted center">${t('相手が切断しました', 'Your opponent disconnected')}</p>` :
+      msg.reason === 'abandoned' ? `<p class="muted center">${t('対戦が中断されました', 'The match was abandoned')}</p>` : '';
 
     let scoreRows;
     if (msg.mode === 'raid') {
       const total = msg.players.reduce((a, p) => a + p.score, 0);
       scoreRows = `
-        <div class="rs-row"><span>${msg.boss ? escapeHtml(msg.boss.name) : 'ボス'} HP</span><b>${fmt(msg.boss ? msg.boss.hp : 0)}</b></div>
-        <div class="rs-row"><span>パーティ総ダメージ</span><b>${fmt(total)}</b></div>
-        ${msg.players.map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? '⭐あなた' : '👤' + escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`).join('')}`;
+        <div class="rs-row"><span>${msg.boss ? escapeHtml(msg.boss.name) : t('ボス', 'Boss')} HP</span><b>${fmt(msg.boss ? msg.boss.hp : 0)}</b></div>
+        <div class="rs-row"><span>${t('パーティ総ダメージ', 'Party total damage')}</span><b>${fmt(total)}</b></div>
+        ${msg.players.map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? t('⭐あなた', '⭐You') : '👤' + escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`).join('')}`;
     } else if (msg.mode === 'team') {
-      const teamRow = t => {
-        const members = msg.players.filter(p => p.team === t);
+      const teamRow = tm => {
+        const members = msg.players.filter(p => p.team === tm);
         const names = members.map(p => `${p.slot === msg.you.slot ? '⭐' : '👤'}${escapeHtml(p.name)} ${fmt(p.score)}`).join('<br>');
-        const label = t === msg.you.team ? 'あなたのチーム' : '相手チーム';
-        return `<div class="rs-row team-row"><span>${label}<br><small class="muted">${names}</small></span><b>${fmt(msg.teamScores[t])}</b></div>`;
+        const label = tm === msg.you.team ? t('あなたのチーム', 'Your team') : t('相手チーム', 'Enemy team');
+        return `<div class="rs-row team-row"><span>${label}<br><small class="muted">${names}</small></span><b>${fmt(msg.teamScores[tm])}</b></div>`;
       };
       scoreRows = teamRow(msg.you.team) + teamRow(1 - msg.you.team);
     } else {
       scoreRows = msg.players
         .sort((a, b) => (a.slot === msg.you.slot ? -1 : b.slot === msg.you.slot ? 1 : 0))
-        .map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? 'あなた' : escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`)
+        .map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? t('あなた', 'You') : escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`)
         .join('');
     }
 
     const ratingRow = msg.ratingDelta
-      ? `<div class="rs-row"><span>📈 レート変動</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}</b></div>`
+      ? `<div class="rs-row"><span>${t('📈 レート変動', '📈 Rating')}</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}</b></div>`
       : '';
 
     const m = showModal(`
@@ -2210,8 +2217,8 @@ class OnlineMode extends VersusBase {
         ${rewardsRows(msg.rewards)}
       </div>
       <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rMenu">メニュー</button>
-        <button class="btn btn-primary" id="rAgain">${this.kind === 'custom' ? 'ルームへ' : 'もう一戦'}</button>
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-primary" id="rAgain">${this.kind === 'custom' ? t('ルームへ', 'To room') : t('もう一戦', 'Play again')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline(this.kind); };
@@ -2221,7 +2228,7 @@ class OnlineMode extends VersusBase {
     if (this.inMatch && !this.ended) {
       this.ended = true;
       this.destroy();
-      toast('🏳️ 対戦から離脱しました（敗北扱い・相手の不戦勝）', 'err', 2600);
+      toast(t('🏳️ 対戦から離脱しました（敗北扱い・相手の不戦勝）', '🏳️ You left the match (counts as a loss)'), 'err', 2600);
       endToMenu();
     } else {
       this.client.cancelQueue();

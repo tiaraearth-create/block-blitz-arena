@@ -18,12 +18,13 @@ import {
   BP_TIERS, BP_XP_PER_TIER, BP_PREMIUM_PRICE_GEMS, BP_SEASON_DAYS,
   BOSSES, TITLES, earnedTitles, GEM_PACKS,
 } from './catalog.js';
-import { ghostRows } from './ambient.js';
+import { ghostRows, setLiveScale, getLiveScale } from './ambient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 
 const db = loadDb();
+setLiveScale(db.meta.popScale === undefined ? 1 : db.meta.popScale);
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({
@@ -291,6 +292,29 @@ app.post('/api/logout', requireAuth, (req, res) => {
 app.get('/api/me', (req, res) => {
   const dailyBonus = req.user && !req.user.banned ? grantDaily(req.user) : null;
   res.json({ user: publicUser(req.user), season: currentSeason(), dailyBonus, maintenance: inMaintenance() });
+});
+
+// Change own username (once per 24h; admins exempt from the cooldown).
+app.post('/api/me/rename', requireAuth, (req, res) => {
+  const user = req.user;
+  const username = sanitizeName(req.body.username);
+  if (!/^[\w\-ぁ-んァ-ヶ一-龠ー]{2,16}$/u.test(username)) {
+    return res.status(400).json({ error: 'ユーザー名は2〜16文字（英数字・日本語）で入力してください' });
+  }
+  if (username.toLowerCase() !== user.username.toLowerCase()) {
+    const exists = Object.values(db.users).some(u => u.id !== user.id && u.username.toLowerCase() === username.toLowerCase());
+    if (exists) return res.status(409).json({ error: 'そのユーザー名は既に使われています' });
+  }
+  const DAY = 24 * 60 * 60 * 1000;
+  if (user.role !== 'admin' && user.lastRename && Date.now() - user.lastRename < DAY) {
+    const left = Math.ceil((user.lastRename + DAY - Date.now()) / 3600000);
+    return res.status(429).json({ error: `名前変更は1日1回までです（あと約${left}時間）` });
+  }
+  if (username === user.username) return res.status(400).json({ error: '現在と同じ名前です' });
+  user.username = username;
+  user.lastRename = Date.now();
+  saveDb();
+  res.json({ user: publicUser(user) });
 });
 
 // Delete own account (password confirmation required).
@@ -762,7 +786,7 @@ app.post('/api/battlepass/claim', requireAuth, maintenanceGuard, (req, res) => {
 
 app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   const users = Object.values(db.users).map(u => ({
-    id: u.id, username: u.username, role: u.role, banned: u.banned,
+    id: u.id, username: u.username, role: u.role, banned: u.banned, muted: !!u.muted,
     coins: u.coins, gems: u.gems, level: levelOf(u.xp),
     stats: u.stats, createdAt: u.createdAt,
   }));
@@ -784,6 +808,16 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   if (typeof b.banned === 'boolean') {
     if (target.role === 'admin' && b.banned) return res.status(400).json({ error: '管理者は凍結できません' });
     target.banned = b.banned;
+  }
+  if (typeof b.muted === 'boolean') {
+    if (target.role === 'admin' && b.muted) return res.status(400).json({ error: '管理者はミュートできません' });
+    target.muted = b.muted;
+  }
+  if (typeof b.setRating === 'number') target.stats.rating = Math.max(0, Math.min(5000, Math.floor(b.setRating)));
+  if (typeof b.setLevel === 'number') {
+    // levelOf(xp) = 1 + floor(xp/1000)  →  xp for level L is (L-1)*1000
+    const lv = Math.max(1, Math.min(999, Math.floor(b.setLevel)));
+    target.xp = (lv - 1) * 1000;
   }
   if (b.role === 'admin' || b.role === 'user') target.role = b.role;
   if (b.resetStats === true) {
@@ -884,6 +918,29 @@ app.post('/api/admin/broadcast', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true, delivered: battle.clients.size });
 });
 
+// Live crowd (にぎわい) control: scales AI population/chat/ghost rankings.
+app.post('/api/admin/pop', requireAuth, requireAdmin, (req, res) => {
+  const scale = Math.max(0, Math.min(3, Number(req.body.scale)));
+  if (!Number.isFinite(scale)) return res.status(400).json({ error: '0〜3の数値で指定してください' });
+  db.meta.popScale = scale;
+  setLiveScale(scale);
+  saveDb();
+  res.json({ scale: getLiveScale(), online: battle.displayOnline(), activeMatches: battle.displayMatches() });
+});
+
+// Wipe the global chat for everyone (history + connected clients).
+app.post('/api/admin/chat/clear', requireAuth, requireAdmin, (_req, res) => {
+  battle.chatOps.clear();
+  res.json({ ok: true });
+});
+
+// Make an AI player speak (given text, or a random line when empty).
+app.post('/api/admin/chat/say', requireAuth, requireAdmin, (req, res) => {
+  const text = String(req.body.text || '').trim().slice(0, 200);
+  const entry = battle.chatOps.say(text || undefined);
+  res.json({ ok: true, from: entry.from, text: entry.text });
+});
+
 app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
   const users = Object.values(db.users);
   res.json({
@@ -895,6 +952,7 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     inQueue: battle.queueSize(),
     activeMatches: battle.matches.size,
     openRooms: battle.rooms.size,
+    popScale: getLiveScale(),
     maintenance: inMaintenance(),
     season: currentSeason(),
   });

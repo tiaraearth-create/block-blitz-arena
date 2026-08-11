@@ -2,6 +2,7 @@
 import { session } from './net.js';
 import { $, toast } from './dom.js';
 import { audio } from './audio.js';
+import { t } from './i18n.js';
 
 let ws = null;
 let open = false;
@@ -57,11 +58,15 @@ function connect() {
       $('#chatMsgs').innerHTML = '';
       (msg.chat || []).forEach(m => appendMsg(m, false));
       $('#chatMsgs').scrollTop = $('#chatMsgs').scrollHeight;
-      if (typeof msg.online === 'number') {
-        $('#chatOnline').textContent = `🟢 ${msg.online}人`;
-        $('#onlineCount').textContent = msg.online;
-        $('#onlineBadge').classList.remove('hidden');
-      }
+      if (typeof msg.online === 'number') setOnlineCount(msg.online);
+    } else if (msg.type === 'online') {
+      // Server pushes the live count so every counter stays in sync.
+      setOnlineCount(msg.online);
+      const mm = $('#mmOnline');
+      if (mm) mm.textContent = msg.online;
+    } else if (msg.type === 'chat_clear') {
+      $('#chatMsgs').innerHTML = '';
+      setUnread(0);
     } else if (msg.type === 'chat') {
       appendMsg(msg);
       if (!open) setUnread(unread + 1);
@@ -75,6 +80,12 @@ function connect() {
   ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
 }
 
+function setOnlineCount(n) {
+  $('#chatOnline').textContent = t(`🟢 ${n}人`, `🟢 ${n} online`);
+  $('#onlineCount').textContent = n;
+  $('#onlineBadge').classList.remove('hidden');
+}
+
 function scheduleReconnect() {
   setTimeout(connect, retryMs);
   retryMs = Math.min(30000, retryMs * 1.5);
@@ -85,7 +96,7 @@ function sendChat() {
   const text = input.value.trim();
   if (!text) return;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    toast('チャットサーバーに接続中です…', 'err', 1500);
+    toast(t('チャットサーバーに接続中です…', 'Connecting to chat server…'), 'err', 1500);
     return;
   }
   ws.send(JSON.stringify({ type: 'chat', text }));

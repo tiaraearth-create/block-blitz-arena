@@ -8,6 +8,9 @@ import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
 import { initChat } from './chat.js';
+import { t, applyStaticI18n } from './i18n.js';
+
+applyStaticI18n();
 
 // ---- menu buttons ----
 $('#btnSolo').onclick = () => { audio.click(); startSolo(); };
@@ -19,8 +22,8 @@ $('#btnVsAi').onclick = () => {
   const unlocked = key => key === 'kami' ? kamiUnlocked : key === 'souzou' ? souzouUnlocked : true;
   const btnClass = { easy: 'btn-primary', normal: 'btn-ai', hard: 'btn-gold', oni: 'btn-oni', kami: 'btn-kami', souzou: 'btn-souzou' };
   const m = showModal(`
-    <h2 id="aiModalTitle">🤖 AI対戦</h2>
-    <p class="muted center" style="margin-bottom:12px">2分間のスコアバトル！同じピースが配られます</p>
+    <h2 id="aiModalTitle">${t('🤖 AI対戦', '🤖 VS AI')}</h2>
+    <p class="muted center" style="margin-bottom:12px">${t('2分間のスコアバトル！同じピースが配られます', 'A 2-minute score battle! You both get the same pieces')}</p>
     <div class="form-col" id="aiLevelList">
       ${Object.entries(AI_LEVELS)
         .filter(([key]) => unlocked(key))
@@ -99,8 +102,8 @@ async function openBossSelect(preferIndex = null) {
     const data = await fetch('/api/bosses', { headers }).then(r => r.json());
     const bossMax = Math.max(data.bossMax || 0, Number(localStorage.getItem('bba_boss_max') || 0));
     const m = showModal(`
-      <h2>🐲 ボス戦</h2>
-      <p class="muted center" style="margin-bottom:12px">ラインを消してダメージを与えろ！<br>ボスはお邪魔ブロックで反撃してくる。盤面が埋まったら敗北！</p>
+      <h2>${t('🐲 ボス戦', '🐲 Boss Battle')}</h2>
+      <p class="muted center" style="margin-bottom:12px">${t('ラインを消してダメージを与えろ！<br>ボスはお邪魔ブロックで反撃してくる。盤面が埋まったら敗北！', 'Clear lines to damage the boss!<br>It fights back with garbage blocks. Fill up the board and you lose!')}</p>
       <div class="form-col">
         ${data.bosses.map((b, i) => {
           const locked = i > bossMax;
@@ -108,15 +111,15 @@ async function openBossSelect(preferIndex = null) {
           return `
           <button class="btn boss-select ${locked ? 'btn-ghost' : 'btn-boss'}" data-boss="${i}" ${locked ? 'disabled' : ''}>
             <span>${locked ? '🔒' : b.emoji} ${b.name}</span>
-            <small>${locked ? '前のボスを倒すと解放' : `HP ${Number(b.hp).toLocaleString()}${cleared ? ' ・ ✓討伐済' : ''}`}</small>
+            <small>${locked ? t('前のボスを倒すと解放', 'Beat the previous boss to unlock') : `HP ${Number(b.hp).toLocaleString()}${cleared ? t(' ・ ✓討伐済', ' ・ ✓cleared') : ''}`}</small>
           </button>`;
         }).join('')}
         ${(() => {
           const rushOpen = bossMax >= data.bosses.length;
           return `
           <button class="btn boss-select ${rushOpen ? 'btn-oni' : 'btn-ghost'}" data-rush ${rushOpen ? '' : 'disabled'}>
-            <span>${rushOpen ? '⚔️' : '🔒'} ボスラッシュ</span>
-            <small>${rushOpen ? '全4体を連戦！休憩なし・1ミスで終了' : '全ボスを討伐すると解放'}</small>
+            <span>${rushOpen ? '⚔️' : '🔒'} ${t('ボスラッシュ', 'Boss Rush')}</span>
+            <small>${rushOpen ? t('全4体を連戦！休憩なし・1ミスで終了', 'All 4 bosses back to back! No breaks, one loss ends it') : t('全ボスを討伐すると解放', 'Defeat every boss to unlock')}</small>
           </button>`;
         })()}
       </div>`);
@@ -143,13 +146,12 @@ $('#btnBoss').onclick = () => openBossSelect();
 $('#btnOnline').onclick = () => {
   audio.click();
   const m = showModal(`
-    <h2>🌐 オンライン対戦</h2>
+    <h2>${t('🌐 オンライン対戦', '🌐 Online Battle')}</h2>
     <div class="form-col">
-      <button class="btn btn-primary btn-big" data-online="duel">⚔️ 1v1 ランクマッチ</button>
-      <button class="btn btn-online btn-big" data-online="team">👥 2v2 チーム戦</button>
-      <button class="btn btn-boss btn-big" data-online="raid">🐲 レイドボス戦（協力）</button>
-      <button class="btn btn-gold btn-big" data-online="custom">🔧 カスタムルーム</button>
-      <p class="muted center" style="font-size:12px">人数が足りないときはボットが自動参加します</p>
+      <button class="btn btn-primary btn-big" data-online="duel">${t('⚔️ 1v1 ランクマッチ', '⚔️ 1v1 Ranked')}</button>
+      <button class="btn btn-online btn-big" data-online="team">${t('👥 2v2 チーム戦', '👥 2v2 Team Battle')}</button>
+      <button class="btn btn-boss btn-big" data-online="raid">${t('🐲 レイドボス戦（協力）', '🐲 Raid Boss (co-op)')}</button>
+      <button class="btn btn-gold btn-big" data-online="custom">${t('🔧 カスタムルーム', '🔧 Custom Room')}</button>
     </div>`);
   m.querySelectorAll('[data-online]').forEach(btn => {
     btn.onclick = () => { closeModal(); startOnline(btn.dataset.online); };
@@ -179,11 +181,11 @@ $('#btnQuit').onclick = () => {
   const cur = window.__bbaMode;
   if (cur && (cur.mode === 'chaos' || cur.mode === 'dungeon') && !cur.ended) { audio.click(); quitCurrent(); return; }
   const m = showModal(`
-    <h2>ゲームを終了しますか？</h2>
-    <p class="muted center">オンライン対戦の離脱は<b style="color:var(--red)">敗北</b>になります。<br>それ以外のモードは引き分け扱いです</p>
+    <h2>${t('ゲームを終了しますか？', 'Quit this game?')}</h2>
+    <p class="muted center">${t('オンライン対戦の離脱は<b style="color:var(--red)">敗北</b>になります。<br>それ以外のモードは引き分け扱いです', 'Leaving an online battle counts as a <b style="color:var(--red)">loss</b>.<br>Other modes count as a draw')}</p>
     <div class="modal-buttons">
-      <button class="btn btn-ghost" id="qNo">続ける</button>
-      <button class="btn btn-ai" id="qYes">終了する</button>
+      <button class="btn btn-ghost" id="qNo">${t('続ける', 'Keep playing')}</button>
+      <button class="btn btn-ai" id="qYes">${t('終了する', 'Quit')}</button>
     </div>`);
   m.querySelector('#qNo').onclick = closeModal;
   m.querySelector('#qYes').onclick = () => { closeModal(); quitCurrent(); };
@@ -249,10 +251,11 @@ window.__bbaEvent = null;
 
 function fmtRemain(ms) {
   const s = Math.max(0, Math.ceil(ms / 1000));
-  if (s >= 86400) return `${Math.floor(s / 86400)}日${Math.floor((s % 86400) / 3600)}時間`;
-  if (s >= 3600) return `${Math.floor(s / 3600)}時間${Math.floor((s % 3600) / 60)}分`;
-  if (s >= 60) return `${Math.floor(s / 60)}分${s % 60 ? `${s % 60}秒` : ''}`;
-  return `${s}秒`;
+  const u = { d: t('日', 'd '), h: t('時間', 'h '), m: t('分', 'm '), s: t('秒', 's') };
+  if (s >= 86400) return `${Math.floor(s / 86400)}${u.d}${Math.floor((s % 86400) / 3600)}${u.h}`.trim();
+  if (s >= 3600) return `${Math.floor(s / 3600)}${u.h}${Math.floor((s % 3600) / 60)}${u.m}`.trim();
+  if (s >= 60) return `${Math.floor(s / 60)}${u.m}${s % 60 ? `${s % 60}${u.s}` : ''}`.trim();
+  return `${s}${u.s}`;
 }
 
 function updateEventBanner() {
@@ -260,7 +263,8 @@ function updateEventBanner() {
   const btn = $('#btnChaos');
   const ev = window.__bbaEvent;
   if (ev && ev.endsAt > Date.now()) {
-    banner.textContent = `🌪️ 期間限定「${ev.name}」開催中！ — 残り${fmtRemain(ev.endsAt - Date.now())}`;
+    banner.textContent = t(`🌪️ 期間限定「${ev.name}」開催中！ — 残り${fmtRemain(ev.endsAt - Date.now())}`,
+      `🌪️ Limited event "${ev.name}" is live! — ${fmtRemain(ev.endsAt - Date.now())} left`);
     banner.classList.remove('hidden');
     btn.classList.remove('hidden');
   } else {
@@ -274,7 +278,9 @@ async function pollStatus() {
   try {
     const res = await fetch('/api/status');
     const data = await res.json();
+    // Keep every counter (menu badge + chat drawer) on the same number.
     $('#onlineCount').textContent = data.online;
+    $('#chatOnline').textContent = t(`🟢 ${data.online}人`, `🟢 ${data.online} online`);
     $('#onlineBadge').classList.remove('hidden');
     window.__bbaEvent = data.event || null;
     updateEventBanner();
@@ -293,25 +299,25 @@ function showChaosSetup() {
   const isPreset = [60, 120, 180, 300].includes(duration);
 
   const m = showModal(`
-    <h2>🌪️ カオスモード</h2>
-    <p class="muted center" style="margin-bottom:10px">一定間隔でルールが激変！コイン1.5倍！${best ? `<br>自己ベスト: <b style="color:var(--yellow)">${fmt(best)}</b>` : ''}</p>
+    <h2>${t('🌪️ カオスモード', '🌪️ Chaos Mode')}</h2>
+    <p class="muted center" style="margin-bottom:10px">${t('一定間隔でルールが激変！コイン1.5倍！', 'The rules mutate on a timer! 1.5x coins!')}${best ? `<br>${t('自己ベスト', 'Personal best')}: <b style="color:var(--yellow)">${fmt(best)}</b>` : ''}</p>
     <div class="form-col">
-      <div class="settings-row"><label>⏱️ プレイ時間</label><div class="seg" data-cs="duration">
-        ${[60, 120, 180, 300].map(d => `<button data-v="${d}" ${duration === d ? 'class="active"' : ''}>${d / 60}分</button>`).join('')}
-        <button data-v="custom" ${!isPreset ? 'class="active"' : ''}>自由</button>
+      <div class="settings-row"><label>${t('⏱️ プレイ時間', '⏱️ Duration')}</label><div class="seg" data-cs="duration">
+        ${[60, 120, 180, 300].map(d => `<button data-v="${d}" ${duration === d ? 'class="active"' : ''}>${d / 60}${t('分', 'min')}</button>`).join('')}
+        <button data-v="custom" ${!isPreset ? 'class="active"' : ''}>${t('自由', 'Custom')}</button>
       </div></div>
-      <div class="settings-row ${isPreset ? 'hidden' : ''}" id="csCustomRow"><label>自由設定（30秒〜30分）</label>
-        <input id="csMin" type="number" min="0" max="30" value="${Math.floor(duration / 60)}" style="width:52px;text-align:center">分
-        <input id="csSec" type="number" min="0" max="59" value="${duration % 60}" style="width:52px;text-align:center">秒
+      <div class="settings-row ${isPreset ? 'hidden' : ''}" id="csCustomRow"><label>${t('自由設定（30秒〜30分）', 'Custom (30s〜30min)')}</label>
+        <input id="csMin" type="number" min="0" max="30" value="${Math.floor(duration / 60)}" style="width:52px;text-align:center">${t('分', 'min')}
+        <input id="csSec" type="number" min="0" max="59" value="${duration % 60}" style="width:52px;text-align:center">${t('秒', 'sec')}
       </div>
-      <div class="settings-row"><label>🌀 ルール変化の間隔</label><div class="seg" data-cs="interval">
-        ${[[20, 'ゆるい 20秒'], [15, 'ふつう 15秒'], [8, '激辛 8秒']].map(([v, l]) =>
+      <div class="settings-row"><label>${t('🌀 ルール変化の間隔', '🌀 Mutation interval')}</label><div class="seg" data-cs="interval">
+        ${[[20, t('ゆるい 20秒', 'Chill 20s')], [15, t('ふつう 15秒', 'Normal 15s')], [8, t('激辛 8秒', 'Spicy 8s')]].map(([v, l]) =>
           `<button data-v="${v}" ${interval === v ? 'class="active"' : ''}>${l}</button>`).join('')}
       </div></div>
     </div>
     <div class="modal-buttons">
-      <button class="btn btn-ghost" id="csCancel">やめる</button>
-      <button class="btn btn-chaos" id="csStart">🌪️ 開始！</button>
+      <button class="btn btn-ghost" id="csCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-chaos" id="csStart">${t('🌪️ 開始！', '🌪️ Start!')}</button>
     </div>`);
 
   let durChoice = isPreset ? String(duration) : 'custom';
@@ -366,15 +372,15 @@ function showDungeonSelect() {
   for (let f = 1; f <= 91; f += 10) if (f === 1 || best >= f - 1) cps.push(f);
   let startF = cps[cps.length - 1];
   const m = showModal(`
-    <h2>🏰 ダンジョン</h2>
-    <p class="muted center" style="margin-bottom:10px">100階の塔を登れ！階を進むごとに強化を選択。<br>10階ごとにボス＆チェックポイント${best ? `<br>最高記録: <b style="color:var(--yellow)">F${best}</b> クリア` : ''}</p>
-    <div class="settings-row"><label>開始階</label><div class="seg seg-wrap" data-ds>
+    <h2>${t('🏰 ダンジョン', '🏰 Dungeon')}</h2>
+    <p class="muted center" style="margin-bottom:10px">${t('100階の塔を登れ！階を進むごとに強化を選択。<br>10階ごとにボス＆チェックポイント', 'Climb the 100-floor tower! Pick a perk after every floor.<br>Boss + checkpoint every 10 floors')}${best ? `<br>${t('最高記録', 'Best')}: <b style="color:var(--yellow)">F${best}</b>${t(' クリア', ' cleared')}` : ''}</p>
+    <div class="settings-row"><label>${t('開始階', 'Start floor')}</label><div class="seg seg-wrap" data-ds>
       ${cps.map(f => `<button data-v="${f}" ${f === startF ? 'class="active"' : ''}>F${f}</button>`).join('')}
     </div></div>
-    ${cps.length > 1 ? '<p class="muted center" style="font-size:11px">チェックポイントから始めると強化ボーナス付き</p>' : ''}
+    ${cps.length > 1 ? `<p class="muted center" style="font-size:11px">${t('チェックポイントから始めると強化ボーナス付き', 'Starting from a checkpoint grants bonus perks')}</p>` : ''}
     <div class="modal-buttons">
-      <button class="btn btn-ghost" id="dgCancel">やめる</button>
-      <button class="btn btn-dungeon" id="dgStart">🏰 挑戦する！</button>
+      <button class="btn btn-ghost" id="dgCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-dungeon" id="dgStart">${t('🏰 挑戦する！', '🏰 Climb!')}</button>
     </div>`);
   m.querySelectorAll('[data-ds] button').forEach(b => {
     b.onclick = () => {
@@ -395,9 +401,9 @@ window.__bbaOpenLeaderboard = openLeaderboard;
 
 function fmtWeeklyRemain(ms) {
   const s = Math.max(0, Math.ceil(ms / 1000));
-  if (s >= 86400) return `${Math.floor(s / 86400)}日${Math.floor((s % 86400) / 3600)}時間`;
-  if (s >= 3600) return `${Math.floor(s / 3600)}時間${Math.floor((s % 3600) / 60)}分`;
-  return `${Math.floor(s / 60)}分`;
+  if (s >= 86400) return `${Math.floor(s / 86400)}${t('日', 'd ')}${Math.floor((s % 86400) / 3600)}${t('時間', 'h')}`.trim();
+  if (s >= 3600) return `${Math.floor(s / 3600)}${t('時間', 'h ')}${Math.floor((s % 3600) / 60)}${t('分', 'm')}`.trim();
+  return `${Math.floor(s / 60)}${t('分', 'm')}`;
 }
 
 $('#btnWeekly').onclick = async () => {
@@ -418,17 +424,17 @@ $('#btnWeekly').onclick = async () => {
   })();
   const best = Math.max(info.best || 0, localBest);
   const m = showModal(`
-    <h2>🎯 ウィークリーチャレンジ</h2>
+    <h2>${t('🎯 ウィークリーチャレンジ', '🎯 Weekly Challenge')}</h2>
     <p class="muted center" style="margin-bottom:10px">
-      全プレイヤー共通のピース順で<b>${info.pieces}個</b>限定スコアアタック！<br>
-      リセットまで残り <b>${fmtWeeklyRemain(info.endsAt - Date.now())}</b>
-      ${best ? `<br>今週のベスト: <b style="color:var(--yellow)">${fmt(best)}</b>` : ''}
-      ${session.user ? '' : '<br><small>💡 ランキングに載るにはログイン</small>'}
+      ${t(`全プレイヤー共通のピース順で<b>${info.pieces}個</b>限定スコアアタック！`, `Score attack with <b>${info.pieces}</b> pieces — same order for every player!`)}<br>
+      ${t('リセットまで残り', 'Resets in')} <b>${fmtWeeklyRemain(info.endsAt - Date.now())}</b>
+      ${best ? `<br>${t('今週のベスト', "This week's best")}: <b style="color:var(--yellow)">${fmt(best)}</b>` : ''}
+      ${session.user ? '' : `<br><small>${t('💡 ランキングに載るにはログイン', '💡 Log in to appear on the ranking')}</small>`}
     </p>
     <div class="modal-buttons">
-      <button class="btn btn-ghost" id="wkCancel">やめる</button>
-      <button class="btn btn-ghost" id="wkRank">🏆 順位を見る</button>
-      <button class="btn btn-weekly" id="wkStart">🎯 挑戦する！</button>
+      <button class="btn btn-ghost" id="wkCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-ghost" id="wkRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
+      <button class="btn btn-weekly" id="wkStart">${t('🎯 挑戦する！', '🎯 Play!')}</button>
     </div>`);
   m.querySelector('#wkCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#wkRank').onclick = () => { audio.click(); closeModal(); openLeaderboard('weekly'); };
@@ -471,7 +477,8 @@ initChat();
         const data = await refreshMe();
         updateTopbar();
         if (data.dailyBonus) {
-          toast(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`, 'ok', 3500);
+          toast(t(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`,
+            `🎁 Daily bonus +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`), 'ok', 3500);
           audio.coin();
         }
         break;
@@ -484,7 +491,7 @@ initChat();
           updateTopbar();
           break;
         }
-        if (attempt === 0) toast('🌙 サーバーを起こしています…そのままお待ちください', '', 8000);
+        if (attempt === 0) toast(t('🌙 サーバーを起こしています…そのままお待ちください', '🌙 Waking up the server… please hang on'), '', 8000);
         await new Promise(r => setTimeout(r, 9000));
       }
     }
@@ -496,7 +503,8 @@ initChat();
   if (session.season) {
     const days = Math.max(0, Math.ceil((session.season.endsAt - Date.now()) / 86400000));
     const banner = $('#seasonBanner');
-    banner.textContent = `✨ ${session.season.name} 開催中 — 残り${days}日`;
+    banner.textContent = t(`✨ ${session.season.name} 開催中 — 残り${days}日`,
+      `✨ ${session.season.name} — ${days} days left`);
     banner.classList.remove('hidden');
   }
 })();

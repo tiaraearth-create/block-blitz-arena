@@ -5,6 +5,7 @@ import { getSkin, BOARDS } from './themes.js';
 import { audio } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
 import { reconnectChat } from './chat.js';
+import { t as tr, setLang, LANG } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Auth modal
@@ -13,17 +14,17 @@ import { reconnectChat } from './chat.js';
 export function showAuthModal() {
   if (session.user) return showProfileModal();
   const m = showModal(`
-    <h2>アカウント</h2>
+    <h2>${tr('アカウント', 'Account')}</h2>
     <div class="tabs" style="justify-content:center">
-      <button class="tab active" data-auth="login">ログイン</button>
-      <button class="tab" data-auth="register">新規登録</button>
+      <button class="tab active" data-auth="login">${tr('ログイン', 'Log in')}</button>
+      <button class="tab" data-auth="register">${tr('新規登録', 'Sign up')}</button>
     </div>
     <div class="form-col">
-      <input id="authUser" type="text" placeholder="ユーザー名" maxlength="16" autocomplete="username">
-      <input id="authPass" type="password" placeholder="パスワード（6文字以上）" autocomplete="current-password">
+      <input id="authUser" type="text" placeholder="${tr('ユーザー名', 'Username')}" maxlength="16" autocomplete="username">
+      <input id="authPass" type="password" placeholder="${tr('パスワード（6文字以上）', 'Password (6+ characters)')}" autocomplete="current-password">
       <div class="form-error" id="authError"></div>
-      <button class="btn btn-primary" id="authSubmit">ログイン</button>
-      <p class="muted center" style="font-size:12px">登録するとランキング・報酬・オンラインレートが有効になります</p>
+      <button class="btn btn-primary" id="authSubmit">${tr('ログイン', 'Log in')}</button>
+      <p class="muted center" style="font-size:12px">${tr('登録するとランキング・報酬・オンラインレートが有効になります', 'Sign up to unlock rankings, rewards and online rating')}</p>
     </div>`);
 
   let mode = 'login';
@@ -32,7 +33,7 @@ export function showAuthModal() {
       m.querySelectorAll('[data-auth]').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       mode = tab.dataset.auth;
-      m.querySelector('#authSubmit').textContent = mode === 'login' ? 'ログイン' : '登録する';
+      m.querySelector('#authSubmit').textContent = mode === 'login' ? tr('ログイン', 'Log in') : tr('登録する', 'Sign up');
     };
   });
 
@@ -49,9 +50,9 @@ export function showAuthModal() {
       closeModal();
       audio.coin();
       reconnectChat();
-      toast(mode === 'login' ? `おかえりなさい、${data.user.username}さん！` : `ようこそ、${data.user.username}さん！`, 'ok');
+      toast(mode === 'login' ? tr(`おかえりなさい、${data.user.username}さん！`, `Welcome back, ${data.user.username}!`) : tr(`ようこそ、${data.user.username}さん！`, `Welcome, ${data.user.username}!`), 'ok');
       if (data.dailyBonus) {
-        setTimeout(() => toast(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`, 'ok', 3500), 900);
+        setTimeout(() => toast(tr(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`, `🎁 Daily bonus +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`), 'ok', 3500), 900);
       }
     } catch (err) {
       errEl.textContent = err.message;
@@ -69,21 +70,23 @@ function showProfileModal() {
     <h2>${u.role === 'admin' ? '🛡️' : '😀'} ${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
     <div class="result-stats">
-      <div class="rs-row"><span>レベル</span><b>Lv.${u.level}</b></div>
-      <div class="rs-row"><span>ハイスコア</span><b>${fmt(u.stats.bestScore)}</b></div>
-      <div class="rs-row"><span>レート</span><b>${fmt(u.stats.rating)}</b></div>
-      <div class="rs-row"><span>オンライン戦績</span><b>${u.stats.pvpWins}勝 ${u.stats.pvpLosses}敗</b></div>
-      <div class="rs-row"><span>AI撃破</span><b>${fmt(u.stats.aiWins)}</b></div>
-      <div class="rs-row"><span>プレイ回数</span><b>${fmt(u.stats.gamesPlayed)}</b></div>
-      <div class="rs-row"><span>バッジ</span><b>${u.badges.length ? u.badges.map(b => badgeIcons[b] || '🎖️').join(' ') : 'なし'}</b></div>
+      <div class="rs-row"><span>${tr('レベル', 'Level')}</span><b>Lv.${u.level}</b></div>
+      <div class="rs-row"><span>${tr('ハイスコア', 'High score')}</span><b>${fmt(u.stats.bestScore)}</b></div>
+      <div class="rs-row"><span>${tr('レート', 'Rating')}</span><b>${fmt(u.stats.rating)}</b></div>
+      <div class="rs-row"><span>${tr('オンライン戦績', 'Online record')}</span><b>${tr(`${u.stats.pvpWins}勝 ${u.stats.pvpLosses}敗`, `${u.stats.pvpWins}W ${u.stats.pvpLosses}L`)}</b></div>
+      <div class="rs-row"><span>${tr('AI撃破', 'AI wins')}</span><b>${fmt(u.stats.aiWins)}</b></div>
+      <div class="rs-row"><span>${tr('プレイ回数', 'Games played')}</span><b>${fmt(u.stats.gamesPlayed)}</b></div>
+      <div class="rs-row"><span>${tr('バッジ', 'Badges')}</span><b>${u.badges.length ? u.badges.map(b => badgeIcons[b] || '🎖️').join(' ') : tr('なし', 'None')}</b></div>
     </div>
     <div class="modal-buttons">
-      <button class="btn btn-ghost" id="pLogout">ログアウト</button>
-      <button class="btn btn-gold" id="pTitles">👑 称号</button>
-      <button class="btn btn-primary" id="pClose">閉じる</button>
+      <button class="btn btn-ghost" id="pLogout">${tr('ログアウト', 'Log out')}</button>
+      <button class="btn btn-ghost" id="pRename">${tr('✏️ 名前変更', '✏️ Rename')}</button>
+      <button class="btn btn-gold" id="pTitles">${tr('👑 称号', '👑 Titles')}</button>
+      <button class="btn btn-primary" id="pClose">${tr('閉じる', 'Close')}</button>
     </div>`);
   m.querySelector('#pClose').onclick = closeModal;
   m.querySelector('#pTitles').onclick = () => showTitlesModal();
+  m.querySelector('#pRename').onclick = () => showRenameModal();
   m.querySelector('#pLogout').onclick = async () => {
     try { await api('/api/logout', { method: 'POST' }); } catch { /* ignore */ }
     setToken(null);
@@ -91,7 +94,37 @@ function showProfileModal() {
     updateTopbar();
     closeModal();
     reconnectChat();
-    toast('ログアウトしました');
+    toast(tr('ログアウトしました', 'Logged out'));
+  };
+}
+
+// Rename: account name (logged in) — once per day, enforced server-side.
+function showRenameModal() {
+  const m = showModal(`
+    <h2>${tr('✏️ 名前変更', '✏️ Change name')}</h2>
+    <p class="muted center" style="margin-bottom:10px">${tr('2〜16文字（英数字・日本語）・1日1回まで', '2–16 characters ・ once per day')}</p>
+    <div class="form-col">
+      <input id="rnName" type="text" maxlength="16" value="${escapeHtml(session.user.username)}" autocomplete="off">
+      <div class="form-error" id="rnError"></div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rnCancel">${tr('やめる', 'Cancel')}</button>
+        <button class="btn btn-primary" id="rnApply">${tr('変更する', 'Rename')}</button>
+      </div>
+    </div>`);
+  m.querySelector('#rnCancel').onclick = closeModal;
+  m.querySelector('#rnApply').onclick = async () => {
+    try {
+      const data = await api('/api/me/rename', { method: 'POST', body: { username: m.querySelector('#rnName').value.trim() } });
+      session.user = data.user;
+      updateTopbar();
+      reconnectChat();
+      closeModal();
+      audio.coin();
+      toast(tr(`名前を「${data.user.username}」に変更しました！`, `Renamed to "${data.user.username}"!`), 'ok', 3000);
+    } catch (err) {
+      m.querySelector('#rnError').textContent = err.message;
+      audio.error();
+    }
   };
 }
 
@@ -198,11 +231,19 @@ export async function showTitlesModal() {
 
 export function showSettingsModal() {
   const s = getSettings();
+  const guestName = localStorage.getItem('bba_guest_name') || '';
   const m = showModal(`
-    <h2>⚙️ 設定</h2>
+    <h2>${tr('⚙️ 設定', '⚙️ Settings')}</h2>
     <div class="form-col">
       <div class="settings-row">
-        <label>🔊 効果音</label>
+        <label>${tr('🌐 言語 / Language', '🌐 Language / 言語')}</label>
+        <div class="seg" id="setLang">
+          <button data-l="ja" ${LANG === 'ja' ? 'class="active"' : ''}>日本語</button>
+          <button data-l="en" ${LANG === 'en' ? 'class="active"' : ''}>English</button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <label>${tr('🔊 効果音', '🔊 Sound FX')}</label>
         <input type="range" id="setSfxVol" min="0" max="100" value="${Math.round(s.sfxVol * 100)}">
         <input type="checkbox" id="setSfxOn" ${s.sfxOn ? 'checked' : ''}>
       </div>
@@ -212,30 +253,59 @@ export function showSettingsModal() {
         <input type="checkbox" id="setMusicOn" ${s.musicOn ? 'checked' : ''}>
       </div>
       <div class="settings-row">
-        <label>📳 画面シェイク</label>
+        <label>${tr('📳 画面シェイク', '📳 Screen shake')}</label>
         <input type="checkbox" id="setShake" ${s.shake ? 'checked' : ''}>
       </div>
       <div class="settings-row">
-        <label>✨ パーティクル量</label>
+        <label>${tr('✨ パーティクル量', '✨ Particles')}</label>
         <div class="seg" id="setParticles">
-          <button data-p="low" ${s.particles === 'low' ? 'class="active"' : ''}>少なめ</button>
-          <button data-p="normal" ${s.particles === 'normal' ? 'class="active"' : ''}>標準</button>
-          <button data-p="high" ${s.particles === 'high' ? 'class="active"' : ''}>多め</button>
+          <button data-p="low" ${s.particles === 'low' ? 'class="active"' : ''}>${tr('少なめ', 'Low')}</button>
+          <button data-p="normal" ${s.particles === 'normal' ? 'class="active"' : ''}>${tr('標準', 'Normal')}</button>
+          <button data-p="high" ${s.particles === 'high' ? 'class="active"' : ''}>${tr('多め', 'High')}</button>
         </div>
       </div>
+      ${session.user ? `
+      <div class="settings-row">
+        <label>${tr('✏️ 名前を変更', '✏️ Change name')}</label>
+        <button class="btn btn-sm btn-ghost" id="setRename">${escapeHtml(session.user.username)}</button>
+      </div>` : `
+      <div class="settings-row">
+        <label>${tr('✏️ ゲスト名', '✏️ Guest name')}</label>
+        <input id="setGuestName" type="text" maxlength="16" value="${escapeHtml(guestName)}" placeholder="${tr('ゲスト1234', 'Guest1234')}" style="width:130px">
+      </div>`}
       <div class="settings-row danger-row">
-        <label>🗑️ ローカルデータをリセット</label>
-        <button class="btn btn-sm btn-ghost" id="setResetLocal">実行</button>
+        <label>${tr('🗑️ ローカルデータをリセット', '🗑️ Reset local data')}</label>
+        <button class="btn btn-sm btn-ghost" id="setResetLocal">${tr('実行', 'Reset')}</button>
       </div>
       ${session.user ? `
       <div class="settings-row danger-row">
-        <label>⚠️ アカウントを完全削除</label>
-        <button class="btn btn-sm btn-ghost" id="setDeleteAccount" style="color:var(--red)">削除</button>
+        <label>${tr('⚠️ アカウントを完全削除', '⚠️ Delete account')}</label>
+        <button class="btn btn-sm btn-ghost" id="setDeleteAccount" style="color:var(--red)">${tr('削除', 'Delete')}</button>
       </div>` : ''}
       <div class="modal-buttons">
-        <button class="btn btn-primary" id="setClose">閉じる</button>
+        <button class="btn btn-primary" id="setClose">${tr('閉じる', 'Close')}</button>
       </div>
     </div>`);
+
+  m.querySelectorAll('#setLang button').forEach(b => {
+    b.onclick = () => {
+      if (b.dataset.l === LANG) return;
+      setLang(b.dataset.l);
+      location.reload();   // reapply every static/dynamic string in one shot
+    };
+  });
+
+  const renameBtn = m.querySelector('#setRename');
+  if (renameBtn) renameBtn.onclick = () => showRenameModal();
+
+  const guestInput = m.querySelector('#setGuestName');
+  if (guestInput) guestInput.onchange = () => {
+    const name = guestInput.value.trim().slice(0, 16).replace(/[<>"'`]/g, '');
+    if (!name) return;
+    localStorage.setItem('bba_guest_name', name);
+    reconnectChat();
+    toast(tr(`ゲスト名を「${name}」にしました`, `Guest name set to "${name}"`), 'ok', 2000);
+  };
 
   m.querySelector('#setSfxOn').onchange = e => { updateSettings({ sfxOn: e.target.checked }); audio.click(); };
   m.querySelector('#setMusicOn').onchange = e => updateSettings({ musicOn: e.target.checked });
@@ -665,6 +735,7 @@ export async function openAdmin() {
       <div class="stat-card"><b>${fmt(stats.openRooms || 0)}</b><span>ルーム</span></div>
       <div class="stat-card"><b>${fmt(stats.totalGames)}</b><span>総プレイ数</span></div>
       <div class="stat-card"><b>${fmt(stats.bannedUsers)}</b><span>凍結中</span></div>
+      <div class="stat-card"><b>×${stats.popScale ?? 1}</b><span>にぎわい倍率</span></div>
       <div class="stat-card"><b>S${stats.season.number}</b><span>${escapeHtml(stats.season.name)}</span></div>
       <div class="stat-card" style="${stats.maintenance ? 'border-color:var(--red)' : ''}"><b>${stats.maintenance ? '🛠' : '✅'}</b><span>${stats.maintenance ? 'メンテナンス中' : '稼働中'}</span></div>
       <div class="stat-card"><b>¥${fmt(txData.totalJpy)}</b><span>売上(デモ) ${fmt(txData.totalCount)}件</span></div>`;
@@ -720,11 +791,14 @@ function renderAdminUsers(users) {
     .map(u => `
     <div class="admin-user-row ${u.banned ? 'banned' : ''}" data-uid="${u.id}">
       <span class="au-name">${u.role === 'admin' ? '🛡️' : '👤'} ${escapeHtml(u.username)}</span>
-      <span class="au-meta">Lv.${u.level} ・ 🪙${fmt(u.coins)} ・ 💎${fmt(u.gems)} ・ 🏆${fmt(u.stats.bestScore)} ・ R${u.stats.rating}${u.banned ? ' ・ ⛔凍結中' : ''}</span>
+      <span class="au-meta">Lv.${u.level} ・ 🪙${fmt(u.coins)} ・ 💎${fmt(u.gems)} ・ 🏆${fmt(u.stats.bestScore)} ・ R${u.stats.rating}${u.banned ? ' ・ ⛔凍結中' : ''}${u.muted ? ' ・ 🔇ミュート中' : ''}</span>
       <span class="au-actions">
         <button class="btn btn-sm btn-ghost" data-a="coins">+🪙</button>
         <button class="btn btn-sm btn-ghost" data-a="gems">+💎</button>
+        <button class="btn btn-sm btn-ghost" data-a="rating" title="レートを設定">R</button>
+        <button class="btn btn-sm btn-ghost" data-a="level" title="レベルを設定">Lv</button>
         ${u.role !== 'admin' ? `
+          <button class="btn btn-sm btn-ghost" data-a="mute" title="チャット禁止の切替">${u.muted ? '🔈' : '🔇'}</button>
           <button class="btn btn-sm btn-ghost" data-a="ban">${u.banned ? '解除' : '凍結'}</button>
           <button class="btn btn-sm btn-ghost" data-a="del" style="color:var(--red)">削除</button>` : ''}
       </span>
@@ -742,6 +816,19 @@ function renderAdminUsers(users) {
             if (amount === null) return;
             await api(`/api/admin/users/${uid}`, { method: 'POST', body: act === 'coins' ? { grantCoins: amount } : { grantGems: amount } });
             toast(`${user.username} に付与しました`, 'ok');
+          } else if (act === 'rating') {
+            const v = prompt(`${user.username} のレートを設定`, String(user.stats.rating));
+            if (v === null) return;
+            await api(`/api/admin/users/${uid}`, { method: 'POST', body: { setRating: Math.floor(Number(v)) } });
+            toast('レートを設定しました', 'ok');
+          } else if (act === 'level') {
+            const v = prompt(`${user.username} のレベルを設定`, String(user.level));
+            if (v === null) return;
+            await api(`/api/admin/users/${uid}`, { method: 'POST', body: { setLevel: Math.floor(Number(v)) } });
+            toast('レベルを設定しました', 'ok');
+          } else if (act === 'mute') {
+            await api(`/api/admin/users/${uid}`, { method: 'POST', body: { muted: !user.muted } });
+            toast(user.muted ? '🔈 ミュートを解除しました' : '🔇 チャットを禁止しました', 'ok');
           } else if (act === 'ban') {
             await api(`/api/admin/users/${uid}`, { method: 'POST', body: { banned: !user.banned } });
             toast(user.banned ? '凍結を解除しました' : 'アカウントを凍結しました', 'ok');
@@ -901,6 +988,49 @@ export function bindAdminActions() {
         toast('イベントを終了しました', 'ok');
       } catch (err) { toast(err.message, 'err'); }
     };
+  };
+
+  // ---- crowd (にぎわい) controls ----
+  $('#btnPop').onclick = () => {
+    const cur = adminStats ? (adminStats.popScale ?? 1) : 1;
+    const m = showModal(`
+      <h2>🎭 にぎわい設定</h2>
+      <p class="muted center" style="margin-bottom:10px">AIプレイヤーの人口・チャット・ランキングの量を調整します<br>現在: <b>×${cur}</b>（0でオフ / 最大×3）</p>
+      <div class="seg seg-wrap" id="popSeg" style="justify-content:center">
+        ${[0, 0.5, 1, 1.5, 2, 3].map(v => `<button data-v="${v}" ${v === cur ? 'class="active"' : ''}>×${v}</button>`).join('')}
+      </div>
+      <div class="modal-buttons" style="margin-top:12px">
+        <button class="btn btn-primary" id="popClose">閉じる</button>
+      </div>`);
+    m.querySelector('#popClose').onclick = closeModal;
+    m.querySelectorAll('#popSeg button').forEach(b => {
+      b.onclick = async () => {
+        try {
+          const res = await api('/api/admin/pop', { method: 'POST', body: { scale: Number(b.dataset.v) } });
+          m.querySelectorAll('#popSeg button').forEach(x => x.classList.remove('active'));
+          b.classList.add('active');
+          audio.click();
+          toast(`🎭 にぎわい ×${res.scale} — 表示人数 ${fmt(res.online)}人`, 'ok', 2500);
+        } catch (err) { toast(err.message, 'err'); }
+      };
+    });
+  };
+
+  $('#btnChatSay').onclick = async () => {
+    const text = prompt('AIプレイヤーに発言させる内容（空欄でランダム）', '');
+    if (text === null) return;
+    try {
+      const res = await api('/api/admin/chat/say', { method: 'POST', body: { text } });
+      toast(`💬 ${res.from}「${res.text}」`, 'ok', 3000);
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
+  $('#btnChatClear').onclick = async () => {
+    if (!confirm('全体チャットの履歴を全員分クリアします。よろしいですか？')) return;
+    try {
+      await api('/api/admin/chat/clear', { method: 'POST', body: {} });
+      toast('🧹 チャットをクリアしました', 'ok');
+    } catch (err) { toast(err.message, 'err'); }
   };
 
   $('#btnLbReset').onclick = async () => {

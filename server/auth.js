@@ -2,7 +2,8 @@
 import crypto from 'crypto';
 import { loadDb, saveDb } from './db.js';
 
-const TOKEN_TTL = 1000 * 60 * 60 * 24 * 30; // 30 days
+const TOKEN_TTL = 1000 * 60 * 60 * 24 * 180; // 180 days (sliding — refreshed on use)
+const TOKEN_REFRESH_AFTER = 1000 * 60 * 60 * 24; // bump createdAt at most daily
 
 export function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.pbkdf2Sync(password, salt, 120000, 32, 'sha256').toString('hex');
@@ -39,6 +40,12 @@ export function userFromToken(token) {
   const rec = db.tokens[token];
   if (!rec) return null;
   if (Date.now() - rec.createdAt > TOKEN_TTL) { delete db.tokens[token]; saveDb(); return null; }
+  // Sliding expiry: active players stay logged in forever (throttled to
+  // one refresh per day so we don't rewrite the db on every request).
+  if (Date.now() - rec.createdAt > TOKEN_REFRESH_AFTER) {
+    rec.createdAt = Date.now();
+    saveDb();
+  }
   return db.users[rec.userId] || null;
 }
 

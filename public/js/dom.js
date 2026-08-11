@@ -1,5 +1,6 @@
 // Small DOM helpers: screen router, toasts, modals, top bar.
 import { session } from './net.js';
+import { t } from './i18n.js';
 
 export const $ = sel => document.querySelector(sel);
 export const $$ = sel => [...document.querySelectorAll(sel)];
@@ -88,7 +89,7 @@ export function confettiBurst(count = 40) {
 
 export function updateTopbar() {
   const u = session.user;
-  $('#userName').textContent = u ? u.username : 'ゲスト';
+  $('#userName').textContent = u ? u.username : t('ゲスト', 'Guest');
   $('#userAvatar').textContent = u ? (u.role === 'admin' ? '🛡️' : '😀') : '👤';
   $('#coinsLabel').textContent = fmt(u ? u.coins : 0);
   $('#gemsLabel').textContent = fmt(u ? u.gems : 0);

@@ -5,7 +5,10 @@ import { WebSocketServer } from 'ws';
 import { Engine } from '../public/js/engine.js';
 import { chooseMove } from '../public/js/ai.js';
 import { RAID_BOSSES } from './catalog.js';
-import { POP_SCALE, pickPersona, ambientOnline, ambientMatches, randomChatLine } from './ambient.js';
+import {
+  effectiveScale, pickPersona, lobbyPersona,
+  ambientOnline, ambientMatches, randomChatLine, chooseReplies,
+} from './ambient.js';
 
 const COUNTDOWN = 3;
 // ms alone in queue before an AI player fills the seat (randomized per entry
@@ -38,32 +41,56 @@ export function initBattle(server, deps) {
 
   // Ambient chat: simulated players keep the lobby lively. Seed a little
   // back-history so the chat never looks dead, then post at a natural pace.
-  if (POP_SCALE) {
+  function postAmbient(text) {
+    const entry = {
+      type: 'chat', from: lobbyPersona().name, role: 'user',
+      text: text || randomChatLine(), at: Date.now(),
+    };
+    chatHistory.push(entry);
+    if (chatHistory.length > 60) chatHistory.shift();
+    broadcastAll(entry);
+    return entry;
+  }
+
+  if (effectiveScale()) {
     let t = Date.now() - 25 * 60 * 1000;
     const used = new Set();
-    for (let i = 0; i < 6; i++) {
-      t += (2 + Math.random() * 4) * 60 * 1000;
+    for (let i = 0; i < 8; i++) {
+      t += (1.5 + Math.random() * 3) * 60 * 1000;
       chatHistory.push({
         type: 'chat', from: pickPersona({ used }).name, role: 'user',
         text: randomChatLine(), at: Math.min(t, Date.now() - 30000),
       });
     }
-    const ambientChat = () => {
-      setTimeout(() => {
-        if (clients.size > 0) {
-          const entry = {
-            type: 'chat', from: pickPersona({}).name, role: 'user',
-            text: randomChatLine(), at: Date.now(),
-          };
-          chatHistory.push(entry);
-          if (chatHistory.length > 60) chatHistory.shift();
-          broadcastAll(entry);
-        }
-        ambientChat();
-      }, 40000 + Math.random() * 100000);
-    };
-    ambientChat();
   }
+  const ambientChat = () => {
+    setTimeout(() => {
+      if (effectiveScale() && clients.size > 0) postAmbient();
+      ambientChat();
+    }, 22000 + Math.random() * 53000);
+  };
+  ambientChat();
+
+  // AI players answer real messages (rate-limited so they never spam).
+  let replyCooldownUntil = 0;
+  function maybeAmbientReply(text) {
+    if (!effectiveScale()) return;
+    if (Date.now() < replyCooldownUntil) return;
+    if (Math.random() > 0.85) return;
+    const replies = chooseReplies(text);
+    if (!replies.length) return;
+    replyCooldownUntil = Date.now() + 12000;
+    for (const r of replies) {
+      setTimeout(() => { if (clients.size > 0) postAmbient(r.text); }, r.delay);
+    }
+  }
+
+  // Live population sync: keep every client's counters in agreement.
+  setInterval(() => {
+    if (clients.size > 0) {
+      broadcastAll({ type: 'online', online: displayOnline(), matches: displayMatches() });
+    }
+  }, 25000);
 
   function sockRate(ws, key, limit, windowMs) {
     const now = Date.now();
@@ -582,15 +609,21 @@ export function initBattle(server, deps) {
         case 'chat': {
           const text = String(msg.text || '').trim().slice(0, 200);
           if (!text) return;
+          const u = ws.user ? db.users[ws.user.id] : null;
+          if (u && u.muted) {
+            send(ws, { type: 'error', error: '🔇 管理者によりチャットが制限されています' });
+            return;
+          }
           if (!sockRate(ws, 'chatTimes', 5, 10000)) {
             send(ws, { type: 'error', error: '連投しすぎです。少し待ってください' });
             return;
           }
-          const role = ws.user && db.users[ws.user.id] ? db.users[ws.user.id].role : 'guest';
+          const role = u ? u.role : 'guest';
           const entry = { type: 'chat', from: sockName(ws), role, text, at: Date.now() };
           chatHistory.push(entry);
           if (chatHistory.length > 60) chatHistory.shift();
           broadcastAll(entry);
+          maybeAmbientReply(text);
           break;
         }
         case 'emote': {
@@ -646,5 +679,12 @@ export function initBattle(server, deps) {
     queueSize: () => queues.duel.length + queues.team.length,
     displayOnline, displayMatches,
     broadcastAll,
+    chatOps: {
+      clear: () => {
+        chatHistory.length = 0;
+        broadcastAll({ type: 'chat_clear' });
+      },
+      say: (text) => postAmbient(text),
+    },
   };
 }
