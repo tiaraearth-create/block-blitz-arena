@@ -1,6 +1,7 @@
 // Block Blitz Arena — game server
 // Express REST API (auth / leaderboard / shop / battle pass / admin) + WebSocket 1v1 battles.
 import express from 'express';
+import compression from 'compression';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -27,6 +28,7 @@ const db = loadDb();
 setLiveScale(db.meta.popScale === undefined ? 1 : db.meta.popScale);
 const app = express();
 app.set('trust proxy', 1);
+app.use(compression());   // gzip — big win for overseas players on slow links
 app.use(express.json({
   limit: '64kb',
   // Keep the raw body for Stripe webhook signature verification.
@@ -39,8 +41,15 @@ app.use((_req, res, next) => {
   next();
 });
 app.use(express.static(path.join(__dirname, '..', 'public'), {
-  // Always revalidate (ETag 304) so client updates ship immediately.
-  setHeaders: res => res.setHeader('Cache-Control', 'no-cache'),
+  // Icons are immutable — cache a week. Everything else revalidates
+  // (ETag 304) so client updates ship immediately.
+  setHeaders: (res, filePath) => {
+    if (filePath.includes(`${path.sep}icons${path.sep}`)) {
+      res.setHeader('Cache-Control', 'public, max-age=604800');
+    } else {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  },
 }));
 
 // ---------------------------------------------------------------------------
@@ -1023,6 +1032,25 @@ function seedAdmin() {
 currentSeason();
 seedAdmin();
 pinAdminPassword();
+
+// Unknown paths (shared links, typos) land on the game instead of an error.
+app.use((req, res) => {
+  if (req.method === 'GET' && !req.path.startsWith('/api/')) {
+    return res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+  }
+  res.status(404).json({ error: 'Not found' });
+});
+
+// Render free tier spins down after ~15min idle (50s cold start + the
+// in-memory data dies with the instance). Pinging our own public URL
+// keeps the instance warm. RENDER_EXTERNAL_URL is set by Render.
+const KEEPALIVE_URL = process.env.RENDER_EXTERNAL_URL || process.env.KEEPALIVE_URL;
+if (KEEPALIVE_URL) {
+  setInterval(() => {
+    fetch(`${KEEPALIVE_URL}/api/status`).catch(() => { /* transient — retry next tick */ });
+  }, 10 * 60 * 1000);
+  console.log(`[keepalive] ${KEEPALIVE_URL} を10分ごとにpingしてスリープを防止します`);
+}
 
 server.listen(PORT, () => {
   console.log(`Block Blitz Arena server: http://localhost:${PORT}`);
