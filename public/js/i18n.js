@@ -85,6 +85,18 @@ const CATALOG_EN = {
   onislayer: { name: 'Oni Slayer', desc: 'Beat "Oni" difficulty' },
   kamislayer: { name: 'God Slayer', desc: 'Beat "Kami" difficulty' },
   souzouslayer: { name: 'Beyond Creation', desc: 'Beat "Creator God" difficulty' },
+  tourneyking: { name: 'Tournament King', desc: 'Win an online tournament' },
+  apex100: { name: 'Apex of 100', desc: 'Take #1 in Battle Royale' },
+  streak5: { name: 'Streak Rider', desc: 'Win 5 ranked duels in a row' },
+  diamond: { name: 'Diamond Pride', desc: 'Reach 1500 rating' },
+  grandmaster: { name: 'Peak Master', desc: 'Reach 1700 rating' },
+  veteran: { name: 'Born Blocker', desc: 'Play 200 games' },
+  combo15: { name: 'Combo Divinity', desc: 'Reach a 15 combo' },
+  score300k: { name: 'Legend of 300K', desc: 'Score 300,000' },
+  liner: { name: 'Line Artisan', desc: 'Clear 5,000 total lines' },
+  pvp50: { name: 'Hundred Battles', desc: 'Win 50 online battles' },
+  explorer: { name: 'Tower Explorer', desc: 'Reach F50 in the Dungeon Tower' },
+  towerlord: { name: 'Lord of 100 Floors', desc: 'Conquer all 100 tower floors' },
 };
 
 // Name/description for a catalog object ({id, name, desc}) in the UI language.

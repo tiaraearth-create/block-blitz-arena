@@ -102,8 +102,10 @@ export function updateTopbar() {
   const u = session.user;
   $('#userName').textContent = u ? u.username : t('ゲスト', 'Guest');
   $('#userAvatar').textContent = u ? (u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀') : '👤';
-  $('#coinsLabel').textContent = fmt(u ? u.coins : 0);
-  $('#gemsLabel').textContent = fmt(u ? u.gems : 0);
+  // Admins run on infinite money.
+  const inf = u && u.role === 'admin';
+  $('#coinsLabel').textContent = inf ? '∞' : fmt(u ? u.coins : 0);
+  $('#gemsLabel').textContent = inf ? '∞' : fmt(u ? u.gems : 0);
   const lvl = $('#userLevel');
   if (u) { lvl.classList.remove('hidden'); lvl.textContent = `Lv.${u.level}`; }
   else lvl.classList.add('hidden');

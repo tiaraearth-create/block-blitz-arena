@@ -12,13 +12,16 @@ import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
 
 applyStaticI18n();
 
+// Admins have every unlockable open from the start.
+const isAdminUser = () => !!session.user && session.user.role === 'admin';
+
 // ---- menu buttons ----
 $('#btnSolo').onclick = () => { audio.click(); startSolo(); };
 
 $('#btnVsAi').onclick = () => {
   audio.click();
-  const kamiUnlocked = localStorage.getItem('bba_kami') === '1';
-  const souzouUnlocked = localStorage.getItem('bba_souzou') === '1';
+  const kamiUnlocked = localStorage.getItem('bba_kami') === '1' || isAdminUser();
+  const souzouUnlocked = localStorage.getItem('bba_souzou') === '1' || isAdminUser();
   const unlocked = key => key === 'kami' ? kamiUnlocked : key === 'souzou' ? souzouUnlocked : true;
   const btnClass = { easy: 'btn-primary', normal: 'btn-ai', hard: 'btn-gold', oni: 'btn-oni', kami: 'btn-kami', souzou: 'btn-souzou' };
   const m = showModal(`
@@ -301,7 +304,8 @@ function updateEventBanner() {
   } else {
     if (ev) window.__bbaEvent = null;   // expired locally — hide until next poll
     banner.classList.add('hidden');
-    btn.classList.add('hidden');
+    // Admins can play Chaos any time, event or not.
+    btn.classList.toggle('hidden', !isAdminUser());
   }
 }
 
@@ -385,7 +389,7 @@ function showChaosSetup() {
 }
 
 $('#btnChaos').onclick = () => {
-  if (!window.__bbaEvent) { toast(t('イベントは開催されていません', 'No event is live right now'), 'err'); return; }
+  if (!window.__bbaEvent && !isAdminUser()) { toast(t('イベントは開催されていません', 'No event is live right now'), 'err'); return; }
   audio.click();
   showChaosSetup();
 };
@@ -401,7 +405,7 @@ function dungeonBest(realm) {
 
 function showDungeonSelect(realmId = 'tower') {
   const realm = DUNGEON_REALMS[realmId] || DUNGEON_REALMS.tower;
-  const best = dungeonBest(realm);
+  const best = isAdminUser() ? realm.floors : dungeonBest(realm);
   const P = realm.prefix;
   const cps = [];
   for (let f = 1; f <= realm.floors - 9; f += 10) if (f === 1 || best >= f - 1) cps.push(f);

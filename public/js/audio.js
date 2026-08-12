@@ -89,19 +89,19 @@ const TRACKS = {
       { chord: [N.E4, N.G4, N.Bb2 * 4], bass: N.E2 },
     ],
   },
-  // Dreamy pixel skies — an ORIGINAL floaty chiptune lullaby (square-wave
-  // arps shimmering through delay over soft maj7 pads). Used by Battle
-  // Royale and the Heavenly Ascent dungeon.
+  // PIXELATION-inspired (Sol's RNG / t+pazolite "CENSORED!" energy):
+  // an ORIGINAL high-speed chiptune rush — racing square arps, pounding
+  // four-on-the-floor, octave-jumping bleeps. No melodies borrowed.
   pixel: {
-    bpm: 108, swing: 0.1, padType: 'sine', padVol: 0.15, padVibrato: true, arpType: 'square',
-    kick: [0, 8], snare: [12], hat: [2, 6, 10, 14], hatVol: 0.05,
-    bassSteps: [0, 6, 8, 14], bassLen: 1.4, bassType: 'triangle', bassVol: 0.42,
-    arpSteps: [0, 2, 4, 6, 8, 10, 12, 14], arpVol: 0.11, arpDelay: true, arpOctave: true, melody: 0.22,
+    bpm: 182, swing: 0, padType: 'square', padVol: 0.035, arpType: 'square',
+    kick: [0, 4, 8, 12], snare: [4, 12], hat: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], hatVol: 0.07, openHat: [2, 10],
+    bassSteps: [0, 2, 4, 6, 8, 10, 12, 14], bassLen: 0.5, bassType: 'square', bassVol: 0.42, bassFilter: 900,
+    arpSteps: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], arpVol: 0.12, arpDelay: true, arpOctave: true, melody: 0.35, stab: [0, 8],
     bars: [
-      { chord: [N.C4, N.E4, N.G4, N.B4], bass: N.C3, scale: [N.E5, N.G5, N.A5, N.B5, N.D5] },   // Cmaj7
-      { chord: [N.E4, N.G4, N.B4, N.D5], bass: N.E3, scale: [N.B4, N.D5, N.E5, N.G5, N.A5] },   // Em9
-      { chord: [N.A3, N.C4, N.E4, N.G4], bass: N.A2, scale: [N.C5, N.D5, N.E5, N.G5, N.A5] },   // Am7
-      { chord: [N.F3, N.A3, N.C4, N.E4], bass: N.F2, scale: [N.A4, N.C5, N.D5, N.E5, N.G5] },   // Fmaj7
+      { chord: [N.A3, N.C4, N.E4], bass: N.A2, scale: [N.A4, N.C5, N.E5, N.G5, N.A5] },   // Am
+      { chord: [N.F3, N.A3, N.C4], bass: N.F2, scale: [N.A4, N.C5, N.D5, N.E5, N.G5] },   // F
+      { chord: [N.G3, N.B3, N.D4], bass: N.G2, scale: [N.G4, N.B4, N.D5, N.E5, N.G5] },   // G
+      { chord: [N.E4, N.G4, N.B4], bass: N.E2, scale: [N.E5, N.G5, N.A5, N.B5, N.E6] },   // Em
     ],
   },
   kami: {

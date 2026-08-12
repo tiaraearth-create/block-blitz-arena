@@ -129,6 +129,32 @@ function showRenameModal() {
 }
 
 // ---------------------------------------------------------------------------
+// Credits
+// ---------------------------------------------------------------------------
+
+function showCreditsModal() {
+  const m = showModal(`
+    <div class="center" style="margin-bottom:6px">
+      <span style="font-size:28px">🟥🟦<br>🟨🟩</span>
+    </div>
+    <h2>BLOCK BLITZ ARENA</h2>
+    <div class="result-stats" style="margin-top:10px">
+      <div class="rs-row"><span>${tr('企画・運営', 'Produced by')}</span><b>るみまき</b></div>
+      <div class="rs-row"><span>${tr('開発・プログラム', 'Development')}</span><b>Claude (Anthropic) × るみまき</b></div>
+      <div class="rs-row"><span>${tr('ゲームデザイン', 'Game design')}</span><b>るみまき & Claude</b></div>
+      <div class="rs-row"><span>${tr('音楽・効果音', 'Music & SFX')}</span><b>${tr('オリジナル（WebAudioシンセ）', 'Original (WebAudio synth)')}</b></div>
+      <div class="rs-row"><span>${tr('グラフィック', 'Graphics')}</span><b>${tr('Canvas 手描きレンダリング', 'Hand-drawn Canvas rendering')}</b></div>
+      <div class="rs-row"><span>Special Thanks</span><b>${tr('遊んでくれるキミ！', 'YOU, for playing!')}</b></div>
+    </div>
+    <p class="muted center" style="font-size:11px;margin-top:10px">© 2026 Block Blitz Arena ・ Made with 🧱 & ❤️</p>
+    <div class="modal-buttons">
+      <button class="btn btn-primary" id="crClose">${tr('閉じる', 'Close')}</button>
+    </div>`);
+  m.querySelector('#crClose').onclick = () => { closeModal(); showSettingsModal(); };
+  confettiBurst(25);
+}
+
+// ---------------------------------------------------------------------------
 // Title catalog cache (for name lookups in profile / leaderboard)
 // ---------------------------------------------------------------------------
 
@@ -273,6 +299,10 @@ export function showSettingsModal() {
         <label>${tr('✏️ ゲスト名', '✏️ Guest name')}</label>
         <input id="setGuestName" type="text" maxlength="16" value="${escapeHtml(guestName)}" placeholder="${tr('ゲスト1234', 'Guest1234')}" style="width:130px">
       </div>`}
+      <div class="settings-row">
+        <label>${tr('📜 クレジット', '📜 Credits')}</label>
+        <button class="btn btn-sm btn-ghost" id="setCredits">${tr('見る', 'View')}</button>
+      </div>
       <div class="settings-row danger-row">
         <label>${tr('🗑️ ローカルデータをリセット', '🗑️ Reset local data')}</label>
         <button class="btn btn-sm btn-ghost" id="setResetLocal">${tr('実行', 'Reset')}</button>
@@ -294,6 +324,8 @@ export function showSettingsModal() {
       location.reload();   // reapply every static/dynamic string in one shot
     };
   });
+
+  m.querySelector('#setCredits').onclick = () => showCreditsModal();
 
   const renameBtn = m.querySelector('#setRename');
   if (renameBtn) renameBtn.onclick = () => showRenameModal();
@@ -1105,19 +1137,40 @@ export function bindAdminActions() {
     };
   };
 
-  // ---- crowd (にぎわい) controls ----
+  // ---- crowd (にぎわい) controls: scale + chattiness + custom AI ----
   $('#btnPop').onclick = () => {
     const cur = adminStats ? (adminStats.popScale ?? 1) : 1;
+    const amb = (adminStats && adminStats.ambient) || { names: [], lines: [], chatPace: 1 };
     const m = showModal(`
       <h2>🎭 にぎわい設定</h2>
-      <p class="muted center" style="margin-bottom:10px">AIプレイヤーの人口・チャット・ランキングの量を調整します<br>現在: <b>×${cur}</b>（0でオフ / 最大×10 — ×10で夜は7,000人規模！）</p>
+      <p class="muted center" style="margin-bottom:10px">AIプレイヤーの人口・チャット・ランキングを自由に調整<br>人口: <b>×${cur}</b>（0でオフ / ×10で夜は7,000人規模）</p>
       <div class="seg seg-wrap" id="popSeg" style="justify-content:center">
         ${[0, 0.5, 1, 1.5, 2, 3, 5, 7, 10].map(v => `<button data-v="${v}" ${v === cur ? 'class="active"' : ''}>×${v}</button>`).join('')}
       </div>
+      <div class="settings-row" style="margin-top:10px"><label>💬 チャット頻度</label><div class="seg" id="paceSeg">
+        ${[[0.5, 'ひかえめ'], [1, '標準'], [2, 'おしゃべり'], [4, '大騒ぎ']].map(([v, l]) =>
+          `<button data-v="${v}" ${Number(amb.chatPace) === v ? 'class="active"' : ''}>${l}</button>`).join('')}
+      </div></div>
+      <div class="form-col" style="margin-top:8px">
+        <label class="muted" style="font-size:12px">🤖 カスタムAI名（改行かカンマ区切り・空欄でデフォルトのみ）</label>
+        <textarea id="popNames" rows="3" maxlength="1800" style="width:100%;resize:vertical" placeholder="例: たろう, PixelHero, ざわ子">${escapeHtml((amb.names || []).join('\n'))}</textarea>
+        <label class="muted" style="font-size:12px">💭 カスタムセリフ（改行区切り・チャットに混ざる）</label>
+        <textarea id="popLines" rows="4" maxlength="6000" style="width:100%;resize:vertical" placeholder="例: このゲーム最高！">${escapeHtml((amb.lines || []).join('\n'))}</textarea>
+      </div>
       <div class="modal-buttons" style="margin-top:12px">
-        <button class="btn btn-primary" id="popClose">閉じる</button>
+        <button class="btn btn-ghost" id="popClose">閉じる</button>
+        <button class="btn btn-primary" id="popSave">💾 保存する</button>
       </div>`);
     m.querySelector('#popClose').onclick = closeModal;
+    let pace = Number(amb.chatPace) || 1;
+    m.querySelectorAll('#paceSeg button').forEach(b => {
+      b.onclick = () => {
+        m.querySelectorAll('#paceSeg button').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        pace = Number(b.dataset.v);
+        audio.click();
+      };
+    });
     m.querySelectorAll('#popSeg button').forEach(b => {
       b.onclick = async () => {
         try {
@@ -1129,6 +1182,23 @@ export function bindAdminActions() {
         } catch (err) { toast(err.message, 'err'); }
       };
     });
+    m.querySelector('#popSave').onclick = async () => {
+      const split = s => s.split(/[\n,]/).map(x => x.trim()).filter(Boolean);
+      try {
+        const res = await api('/api/admin/pop', {
+          method: 'POST',
+          body: {
+            chatPace: pace,
+            names: split(m.querySelector('#popNames').value),
+            lines: split(m.querySelector('#popLines').value),
+          },
+        });
+        audio.coin();
+        closeModal();
+        toast(`🎭 保存しました！カスタム名${res.ambient.names.length}件・セリフ${res.ambient.lines.length}件・頻度×${res.ambient.chatPace}`, 'ok', 3000);
+        openAdmin();
+      } catch (err) { toast(err.message, 'err'); }
+    };
   };
 
   $('#btnChatSay').onclick = async () => {

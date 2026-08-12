@@ -13,6 +13,23 @@ export function setLiveScale(x) {
 export function getLiveScale() { return liveScale; }
 export function effectiveScale() { return POP_SCALE * liveScale; }
 
+// Admin-tunable crowd personality: custom AI names, custom chat lines,
+// and how chatty the crowd is (0.25 = quiet … 4 = party).
+const custom = { names: [], lines: [], chatPace: 1 };
+export function setCustom(c = {}) {
+  if (Array.isArray(c.names)) {
+    custom.names = c.names.map(s => String(s).trim().slice(0, 16)).filter(Boolean).slice(0, 100);
+  }
+  if (Array.isArray(c.lines)) {
+    custom.lines = c.lines.map(s => String(s).trim().slice(0, 100)).filter(Boolean).slice(0, 200);
+  }
+  if (c.chatPace !== undefined && Number.isFinite(Number(c.chatPace))) {
+    custom.chatPace = Math.max(0.25, Math.min(4, Number(c.chatPace)));
+  }
+}
+export function getCustom() { return { names: [...custom.names], lines: [...custom.lines], chatPace: custom.chatPace }; }
+export function chatPaceFactor() { return custom.chatPace; }
+
 // ---------------------------------------------------------------------------
 // Personas
 // ---------------------------------------------------------------------------
@@ -48,8 +65,11 @@ export function pickPersona({ used, guestChance = 0.3, rnd = Math.random } = {})
     }
   }
   for (let tries = 0; ; tries++) {
-    let name = NAMES[Math.floor(rnd() * NAMES.length)];
-    if (tries >= 3 || rnd() < 0.25) name += String(Math.floor(rnd() * 90) + 10);
+    // Custom crowd names (admin-set) show up often when configured.
+    const useCustom = custom.names.length > 0 && rnd() < 0.35;
+    const pool = useCustom ? custom.names : NAMES;
+    let name = pool[Math.floor(rnd() * pool.length)];
+    if (tries >= 3 || (!useCustom && rnd() < 0.25)) name += String(Math.floor(rnd() * 90) + 10);
     if (!used || !used.has(name)) { if (used) used.add(name); return { name, registered: true }; }
   }
 }
@@ -129,6 +149,9 @@ const CHAT_LINES = [
 ];
 
 export function randomChatLine() {
+  if (custom.lines.length && Math.random() < 0.45) {
+    return custom.lines[Math.floor(Math.random() * custom.lines.length)];
+  }
   return CHAT_LINES[Math.floor(Math.random() * CHAT_LINES.length)];
 }
 

@@ -80,6 +80,18 @@ export const TITLES = [
   { id: 'onislayer',name: '鬼退治',             color: '#c22f3d', desc: '難易度「鬼」に勝利' },
   { id: 'kamislayer', name: '神殺し',           color: '#fff3b0', desc: '難易度「神」に勝利' },
   { id: 'souzouslayer', name: '創造を超えし者', color: '#b06bff', desc: '難易度「創造神」に勝利' },
+  { id: 'tourneyking', name: '大会王者',        color: '#ffd75e', desc: 'オンライントーナメントで優勝' },
+  { id: 'apex100',  name: '百人の頂点',         color: '#ff5d5d', desc: 'バトルロイヤルで1位' },
+  { id: 'streak5',  name: '連勝街道',           color: '#ffa93d', desc: 'ランクマッチ5連勝' },
+  { id: 'diamond',  name: 'ダイヤの誇り',       color: '#43d9e8', desc: 'レート1500に到達' },
+  { id: 'grandmaster', name: '頂のマスター',    color: '#fff3b0', desc: 'レート1700に到達' },
+  { id: 'veteran',  name: '生粋のブロッカー',   color: '#5ee86e', desc: '200回プレイする' },
+  { id: 'combo15',  name: 'コンボの神域',       color: '#ff6bd4', desc: '15コンボを達成' },
+  { id: 'score300k',name: '三十万の伝説',       color: '#b06bff', desc: 'スコア300,000を達成' },
+  { id: 'liner',    name: 'ライン職人',         color: '#43d9e8', desc: '累計5,000ライン消去' },
+  { id: 'pvp50',    name: '百戦錬磨',           color: '#ff5d5d', desc: 'オンライン対戦で50勝' },
+  { id: 'explorer', name: '塔の探検家',         color: '#ffa93d', desc: 'ダンジョン塔F50到達' },
+  { id: 'towerlord',name: '百塔の覇者',         color: '#ffd75e', desc: 'ダンジョン塔100F制覇' },
 ];
 
 export function earnedTitles(user) {
@@ -100,6 +112,18 @@ export function earnedTitles(user) {
   if (has('oni')) out.push('onislayer');
   if (has('kami')) out.push('kamislayer');
   if (has('souzou')) out.push('souzouslayer');
+  if (has('tourney')) out.push('tourneyking');
+  if (has('royale')) out.push('apex100');
+  if ((s.winStreak || 0) >= 5) out.push('streak5');
+  if (s.rating >= 1500) out.push('diamond');
+  if (s.rating >= 1700) out.push('grandmaster');
+  if (s.gamesPlayed >= 200) out.push('veteran');
+  if (s.maxCombo >= 15) out.push('combo15');
+  if (s.bestScore >= 300000) out.push('score300k');
+  if ((s.totalLines || 0) >= 5000) out.push('liner');
+  if (s.pvpWins >= 50) out.push('pvp50');
+  if ((s.dungeonMax || 0) >= 50) out.push('explorer');
+  if (has('dungeon')) out.push('towerlord');
   return out;
 }
 

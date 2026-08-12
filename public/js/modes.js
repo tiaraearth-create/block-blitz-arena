@@ -74,6 +74,8 @@ export function quitCurrent() {
 function updateRerollHud(engine) {
   const btn = $('#btnReroll');
   btn.classList.remove('hidden');
+  // Admins get bottomless rerolls in every mode.
+  if (session.user && session.user.role === 'admin') engine.infiniteReroll = true;
   if (engine.infiniteReroll) {
     $('#rerollLeft').textContent = '∞';
     btn.classList.remove('off');
@@ -336,8 +338,8 @@ export function toggleAutopilot() {
   if (!autopilot.on) {
     autopilot.on = true;
     autopilot.speed = 1;
-    toast('🤖 オートパイロット起動（再タップで加速）', 'ok', 2000);
-  } else if (autopilot.speed < 4) {
+    toast('🤖 オートパイロット起動 — 創造神ブレイン搭載（再タップで加速 x1→x8）', 'ok', 2400);
+  } else if (autopilot.speed < 8) {
     autopilot.speed *= 2;
     toast(`🤖 速度 x${autopilot.speed}`, '', 1200);
   } else {
@@ -349,13 +351,37 @@ export function toggleAutopilot() {
   runAutopilot();
 }
 
+// Autopilot fires boosters like a pro: cleaner for garbage floods, bomb
+// for clogged boards, fever whenever the board is open enough to combo.
+function autoUseItems(m) {
+  if (Date.now() - (autopilot.itemAt || 0) < 2500) return;
+  if ($('#itemBar').classList.contains('hidden')) return;
+  const e = m.engine;
+  const counts = getItemCounts();
+  const filled = e.grid.reduce((a, x) => a + (x ? 1 : 0), 0);
+  const garbage = e.grid.reduce((a, x) => a + (x === 9 ? 1 : 0), 0);
+  if (garbage >= 8 && (counts.item_cleaner || 0) > 0) {
+    autopilot.itemAt = Date.now();
+    useGameItem('item_cleaner');
+  } else if (filled >= 44 && (counts.item_bomb || 0) > 0) {
+    autopilot.itemAt = Date.now();
+    useGameItem('item_bomb');
+  } else if ((counts.item_fever || 0) > 0 && !(e.feverUntil > Date.now())
+    && filled < 30 && Date.now() - (autopilot.feverAt || 0) > 20000) {
+    autopilot.itemAt = autopilot.feverAt = Date.now();
+    useGameItem('item_fever');
+  }
+}
+
 function runAutopilot() {
   clearTimeout(autopilot.timer);
   if (!autopilot.on) return;
   autopilot.timer = setTimeout(() => {
     const m = currentMode;
     if (m && m.engine && view && view.running && !view.inputLocked && !m.engine.over) {
-      const mv = chooseMove(m.engine, 'oni');
+      autoUseItems(m);
+      // souzou = full-hand beam search, the strongest brain in the game
+      const mv = chooseMove(m.engine, 'souzou');
       if (mv) {
         const r = m.engine.place(mv.index, mv.row, mv.col);
         if (r) view.applyResult(r);   // full effects + mode callbacks
@@ -366,7 +392,7 @@ function runAutopilot() {
       }
     }
     runAutopilot();
-  }, 800 / autopilot.speed);
+  }, 700 / autopilot.speed);
 }
 
 export function stopAutopilot() {
@@ -1235,10 +1261,10 @@ const UNDER_BANDS = [
 
 // Heaven realm (H1–H100): slower but heavier attacks; bosses grant blessings.
 const HEAVEN_BANDS = [
-  { name: '雲の階段',     nameEn: 'Stairway of Clouds', board: 'board_default', track: 'pixel', foes: [['☁️', '雲ひつじ', 'Cloud Sheep'], ['🕊️', '白鳩兵', 'Dove Trooper'], ['🌬️', '風の精', 'Wind Sprite'], ['🎐', '鈴天使', 'Chime Cherub']], boss: ['🦢', '白鳥の守護者', 'Swan Guardian'] },
-  { name: '虹の花園',     nameEn: 'Rainbow Garden',   board: 'board_sakura',  track: 'pixel',  foes: [['🦋', '虹蝶', 'Rainbow Butterfly'], ['🐝', '蜜天蜂', 'Honeybee Cherub'], ['🌷', '花の精', 'Flower Sprite'], ['🐞', '星てんとう', 'Star Ladybug']], boss: ['🧚', '花園の女王', 'Queen of the Garden'] },
-  { name: '星屑の橋',     nameEn: 'Stardust Bridge',  board: 'board_galaxy',  track: 'pixel',  foes: [['⭐', '星の子', 'Starling'], ['🌠', '流星獣', 'Meteor Beast'], ['🪐', '環の精', 'Ring Spirit'], ['✨', '光塵魔', 'Gleam Fiend']], boss: ['🌟', '星織りの賢者', 'Sage of Woven Stars'] },
-  { name: '月光の泉',     nameEn: 'Moonlit Spring',   board: 'board_ocean',   track: 'pixel',  foes: [['🌙', '月ウサギ', 'Moon Rabbit'], ['🫧', '泡天使', 'Bubble Cherub'], ['🐬', '天空イルカ', 'Sky Dolphin'], ['🦚', '月孔雀', 'Moon Peacock']], boss: ['🌕', '月の巫女', 'Priestess of the Moon'] },
+  { name: '雲の階段',     nameEn: 'Stairway of Clouds', board: 'board_default', track: 'solo', foes: [['☁️', '雲ひつじ', 'Cloud Sheep'], ['🕊️', '白鳩兵', 'Dove Trooper'], ['🌬️', '風の精', 'Wind Sprite'], ['🎐', '鈴天使', 'Chime Cherub']], boss: ['🦢', '白鳥の守護者', 'Swan Guardian'] },
+  { name: '虹の花園',     nameEn: 'Rainbow Garden',   board: 'board_sakura',  track: 'solo',   foes: [['🦋', '虹蝶', 'Rainbow Butterfly'], ['🐝', '蜜天蜂', 'Honeybee Cherub'], ['🌷', '花の精', 'Flower Sprite'], ['🐞', '星てんとう', 'Star Ladybug']], boss: ['🧚', '花園の女王', 'Queen of the Garden'] },
+  { name: '星屑の橋',     nameEn: 'Stardust Bridge',  board: 'board_galaxy',  track: 'battle', foes: [['⭐', '星の子', 'Starling'], ['🌠', '流星獣', 'Meteor Beast'], ['🪐', '環の精', 'Ring Spirit'], ['✨', '光塵魔', 'Gleam Fiend']], boss: ['🌟', '星織りの賢者', 'Sage of Woven Stars'] },
+  { name: '月光の泉',     nameEn: 'Moonlit Spring',   board: 'board_ocean',   track: 'solo',   foes: [['🌙', '月ウサギ', 'Moon Rabbit'], ['🫧', '泡天使', 'Bubble Cherub'], ['🐬', '天空イルカ', 'Sky Dolphin'], ['🦚', '月孔雀', 'Moon Peacock']], boss: ['🌕', '月の巫女', 'Priestess of the Moon'] },
   { name: '審判の間',     nameEn: 'Hall of Judgment', board: 'board_kami',    track: 'boss',   foes: [['⚖️', '天秤の番人', 'Scale Keeper'], ['📜', '律法の霊', 'Law Spirit'], ['🗡️', '裁きの剣', 'Judging Blade'], ['👁️', '監視者', 'The Watcher']], boss: ['🦁', '審判者レオン', 'Leon the Adjudicator'] },
   { name: '竪琴の雲海',   nameEn: 'Sea of Harp Clouds', board: 'board_sunset', track: 'kami',  foes: [['🎵', '音符精', 'Note Sprite'], ['🎺', 'ラッパ天使', 'Trumpet Cherub'], ['🪽', '有翼獅子', 'Winged Lion'], ['🕊️', '聖鳩', 'Holy Dove']], boss: ['🎼', '大聖歌長', 'Grand Cantor'] },
   { name: '黄金の大聖堂', nameEn: 'Golden Cathedral', board: 'board_kami',    track: 'kami',   foes: [['⚔️', '聖堂騎士', 'Cathedral Knight'], ['🛡️', '光の衛兵', 'Light Sentinel'], ['🕯️', '聖火の精', 'Sacred Flame'], ['📿', '祈りの霊', 'Prayer Spirit']], boss: ['👼', '大天使ミカエラ', 'Archangel Michaela'] },
@@ -1510,6 +1536,13 @@ class DungeonMode {
     m.querySelectorAll('[data-perk]').forEach(b => {
       b.onclick = () => { this.applyPerk(b.dataset.perk); closeModal(); next(); };
     });
+    // Autopilot keeps climbing on its own — it grabs a perk and moves on.
+    if (autopilot.on) {
+      setTimeout(() => {
+        const b = m.querySelector('[data-perk]');
+        if (b && document.body.contains(b)) b.click();
+      }, 800);
+    }
   }
 
   applyPerk(id) {

@@ -7,7 +7,7 @@ import { chooseMove } from '../public/js/ai.js';
 import { RAID_BOSSES } from './catalog.js';
 import {
   effectiveScale, pickPersona, lobbyPersona,
-  ambientOnline, ambientMatches, randomChatLine, chooseReplies,
+  ambientOnline, ambientMatches, randomChatLine, chooseReplies, chatPaceFactor,
 } from './ambient.js';
 
 const COUNTDOWN = 3;
@@ -77,7 +77,7 @@ export function initBattle(server, deps) {
     setTimeout(() => {
       if (effectiveScale() && clients.size > 0) postAmbient();
       ambientChat();
-    }, 22000 + Math.random() * 53000);
+    }, (22000 + Math.random() * 53000) / chatPaceFactor());
   };
   ambientChat();
 

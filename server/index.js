@@ -19,13 +19,14 @@ import {
   BP_TIERS, BP_XP_PER_TIER, BP_PREMIUM_PRICE_GEMS, BP_SEASON_DAYS,
   BOSSES, TITLES, earnedTitles, GEM_PACKS,
 } from './catalog.js';
-import { ghostRows, setLiveScale, getLiveScale } from './ambient.js';
+import { ghostRows, setLiveScale, getLiveScale, setCustom, getCustom } from './ambient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 
 const db = loadDb();
 setLiveScale(db.meta.popScale === undefined ? 1 : db.meta.popScale);
+if (db.meta.ambient) setCustom(db.meta.ambient);
 const app = express();
 app.set('trust proxy', 1);
 app.use(compression());   // gzip — big win for overseas players on slow links
@@ -106,13 +107,20 @@ function syncBattlePass(user) {
 
 function publicUser(user) {
   if (!user) return null;
-  syncBattlePass(user);
+  const bp = syncBattlePass(user);
+  const isAdmin = user.role === 'admin';
+  // Admins own the whole shop and the fully-unlocked premium pass.
+  const adminBp = isAdmin
+    ? { ...bp, premium: true, xp: BP_TIERS.length * BP_XP_PER_TIER }
+    : bp;
   return {
     id: user.id, username: user.username, role: user.role, banned: user.banned,
     coins: user.coins, gems: user.gems, xp: user.xp, level: levelOf(user.xp),
-    stats: user.stats, owned: user.owned, equipped: user.equipped,
+    stats: user.stats,
+    owned: isAdmin ? SHOP_ITEMS.map(i => i.id) : user.owned,
+    equipped: user.equipped,
     items: user.items || {},
-    battlePass: user.battlePass, badges: user.badges,
+    battlePass: adminBp, badges: user.badges,
     equippedTitle: user.equippedTitle || null,
   };
 }
@@ -540,7 +548,9 @@ app.post('/api/titles/equip', requireAuth, (req, res) => {
 app.get('/api/bosses', (req, res) => {
   res.json({
     bosses: BOSSES,
-    bossMax: req.user ? (req.user.stats.bossMax || 0) : 0,
+    // Admins have everything unlocked, boss rush included.
+    bossMax: req.user && req.user.role === 'admin' ? BOSSES.length
+      : req.user ? (req.user.stats.bossMax || 0) : 0,
   });
 });
 
@@ -683,8 +693,10 @@ app.post('/api/items/buy', requireAuth, maintenanceGuard, (req, res) => {
   const count = Math.max(1, Math.min(10, Math.floor(Number(req.body.count) || 1)));
   const cost = item.price * count;
   const user = req.user;
-  if (user.coins < cost) return res.status(402).json({ error: 'コインが足りません' });
-  user.coins -= cost;
+  if (user.role !== 'admin') {   // admins never pay
+    if (user.coins < cost) return res.status(402).json({ error: 'コインが足りません' });
+    user.coins -= cost;
+  }
   user.items = user.items || {};
   user.items[item.id] = (user.items[item.id] || 0) + count;
   saveDb();
@@ -746,8 +758,10 @@ app.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
   const count = Number(req.body.count) === 10 ? 10 : 1;
   const cost = count === 10 ? GACHA_COST_10 : GACHA_COST_1;
   const user = req.user;
-  if (user.coins < cost) return res.status(402).json({ error: `コインが足りません（${fmtNum(cost)}必要）` });
-  user.coins -= cost;
+  if (user.role !== 'admin') {   // admins pull for free
+    if (user.coins < cost) return res.status(402).json({ error: `コインが足りません（${fmtNum(cost)}必要）` });
+    user.coins -= cost;
+  }
   user.items = user.items || {};
   const results = Array.from({ length: count }, () => gachaPull(user));
   saveDb();
@@ -776,10 +790,10 @@ app.post('/api/equip', requireAuth, (req, res) => {
   if (!['skin', 'board', 'fx'].includes(slot)) return res.status(400).json({ error: '不正なスロットです' });
   const item = SHOP_ITEMS.find(i => i.id === itemId);
   if (!item || item.cat !== slot) return res.status(400).json({ error: '不正なアイテムです' });
-  // Admin-only gear: admins implicitly own it; nobody else can equip it.
+  // Admins implicitly own the entire catalog; admin gear stays admin-only.
   if (item.adminOnly) {
     if (req.user.role !== 'admin') return res.status(403).json({ error: '管理者専用の装備です' });
-  } else if (!req.user.owned.includes(itemId)) {
+  } else if (req.user.role !== 'admin' && !req.user.owned.includes(itemId)) {
     return res.status(403).json({ error: '所持していないアイテムです' });
   }
   req.user.equipped[slot] = itemId;
@@ -1048,14 +1062,24 @@ app.post('/api/admin/grant-all', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true, affected, coins, gems });
 });
 
-// Live crowd (にぎわい) control: scales AI population/chat/ghost rankings.
+// Live crowd (にぎわい) control: scale, chattiness, custom names & lines.
 app.post('/api/admin/pop', requireAuth, requireAdmin, (req, res) => {
-  const scale = Math.max(0, Math.min(10, Number(req.body.scale)));
-  if (!Number.isFinite(scale)) return res.status(400).json({ error: '0〜10の数値で指定してください' });
-  db.meta.popScale = scale;
-  setLiveScale(scale);
+  const b = req.body || {};
+  if (b.scale !== undefined) {
+    const scale = Math.max(0, Math.min(10, Number(b.scale)));
+    if (!Number.isFinite(scale)) return res.status(400).json({ error: '0〜10の数値で指定してください' });
+    db.meta.popScale = scale;
+    setLiveScale(scale);
+  }
+  if (b.chatPace !== undefined || Array.isArray(b.names) || Array.isArray(b.lines)) {
+    setCustom({ chatPace: b.chatPace, names: b.names, lines: b.lines });
+    db.meta.ambient = getCustom();   // persist the sanitized version
+  }
   saveDb();
-  res.json({ scale: getLiveScale(), online: battle.displayOnline(), activeMatches: battle.displayMatches() });
+  res.json({
+    scale: getLiveScale(), ambient: getCustom(),
+    online: battle.displayOnline(), activeMatches: battle.displayMatches(),
+  });
 });
 
 // Wipe the global chat for everyone (history + connected clients).
@@ -1083,6 +1107,7 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     activeMatches: battle.matches.size,
     openRooms: battle.rooms.size,
     popScale: getLiveScale(),
+    ambient: getCustom(),
     maintenance: inMaintenance(),
     season: currentSeason(),
   });
