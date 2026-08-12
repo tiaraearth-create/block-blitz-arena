@@ -33,6 +33,8 @@ const CATALOG_EN = {
   skin_gold: { name: 'Gold', desc: 'Shining golden blocks' },
   skin_shadow: { name: 'Shadow', desc: 'Outlines that glow in the dark' },
   skin_pastel: { name: 'Pastel', desc: 'Soft flat design' },
+  skin_magma: { name: 'Magma', desc: 'Rock blocks with molten cracks' },
+  skin_dot: { name: 'Polka Dot', desc: 'Pop polka-dot blocks' },
   // boards
   board_default: { name: 'Midnight', desc: 'The standard night-sky theme' },
   board_ocean: { name: 'Deep Ocean', desc: 'Deep-sea gradient' },
@@ -41,6 +43,8 @@ const CATALOG_EN = {
   board_galaxy: { name: 'Galaxy', desc: 'Nebulae and sparkling stars' },
   board_sakura: { name: 'Sakura Room', desc: 'Cherry blossoms in full bloom' },
   board_volcano: { name: 'Volcano', desc: 'A scorching stage of embers' },
+  board_snow: { name: 'Snowfield', desc: 'A silver world of falling snow' },
+  board_cyber: { name: 'Cyberspace', desc: 'A neon grid in the digital world' },
   // clear effects
   fx_default: { name: 'Spark', desc: 'The standard spark effect' },
   fx_fireworks: { name: 'Fireworks', desc: 'Fireworks on line clears' },
@@ -48,10 +52,12 @@ const CATALOG_EN = {
   fx_sakura: { name: 'Sakura Storm', desc: 'Petals dance and scatter' },
   fx_bubble: { name: 'Bubble', desc: 'Soap bubbles pop' },
   fx_star: { name: 'Stardust', desc: 'Glittering stardust' },
+  fx_flame: { name: 'Flame', desc: 'Fire roars on every clear' },
   // booster items
   item_bomb: { name: 'Smart Bomb', desc: 'Blows up the densest 3×3' },
   item_cleaner: { name: 'Cleaner', desc: 'Clears all garbage + the bottom row' },
   item_fever: { name: 'Fever', desc: '2× score for 15 seconds' },
+  item_mini: { name: 'Mini Blocks', desc: 'Turns your hand into tiny pieces' },
   // bosses
   slime: { name: 'Slime King' },
   golem: { name: 'Iron Golem' },
@@ -175,6 +181,7 @@ export function applyStaticI18n() {
     '[data-item="item_bomb"]': 'Smart Bomb: blows up the densest 3×3',
     '[data-item="item_cleaner"]': 'Cleaner: clears garbage + the bottom row',
     '[data-item="item_fever"]': 'Fever: 2× score for 15 seconds',
+    '[data-item="item_mini"]': 'Mini Blocks: turns your hand into tiny pieces',
   };
   for (const [sel, tip] of Object.entries(tips)) {
     const el = document.querySelector(sel);

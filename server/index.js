@@ -118,7 +118,7 @@ function publicUser(user) {
 }
 
 // Sanity-check and apply a finished game's rewards. Returns the reward summary.
-function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bossId, floor }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   score = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
   lines = Math.max(0, Math.min(5000, Math.floor(Number(lines) || 0)));
@@ -145,6 +145,20 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bo
   if (maxCombo > s.maxCombo) s.maxCombo = maxCombo;
   let badge = null;
   let gems = 0;
+  // Ranked-duel win streak: bonus coins that grow with the streak.
+  let streakBonus = 0;
+  if (mode === 'pvp') {
+    if (won) {
+      s.winStreak = (s.winStreak || 0) + 1;
+      if (s.winStreak >= 2) {
+        streakBonus = Math.min(200, s.winStreak * 20);
+        coins += streakBonus;
+        user.coins += streakBonus;
+      }
+    } else if (!drew) {
+      s.winStreak = 0;
+    }
+  }
   if (mode.startsWith('ai') && won) s.aiWins += 1;
   if (mode === 'ai_oni' && won && !user.badges.includes('oni')) {
     user.badges.push('oni');
@@ -214,7 +228,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, bo
     }
   }
   saveDb();
-  return { coins, bpXp, accXp, score, badge, gems };
+  return { coins, bpXp, accXp, score, badge, gems, streak: s.winStreak || 0, streakBonus };
 }
 
 // Simple in-memory rate limiter (per key, sliding window).
@@ -829,6 +843,24 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     if (target.role === 'admin' && b.muted) return res.status(400).json({ error: '管理者はミュートできません' });
     target.muted = b.muted;
   }
+  if (typeof b.setPassword === 'string') {
+    if (b.setPassword.length < 6) return res.status(400).json({ error: 'パスワードは6文字以上にしてください' });
+    const { salt, hash } = hashPassword(b.setPassword);
+    target.salt = salt;
+    target.passHash = hash;
+    // force re-login everywhere with the new password
+    for (const [tk, rec] of Object.entries(db.tokens)) {
+      if (rec.userId === target.id) delete db.tokens[tk];
+    }
+  }
+  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney'];
+  if (typeof b.grantBadge === 'string') {
+    if (!KNOWN_BADGES.includes(b.grantBadge)) return res.status(400).json({ error: `バッジIDが不正です（${KNOWN_BADGES.join(' / ')}）` });
+    if (!target.badges.includes(b.grantBadge)) target.badges.push(b.grantBadge);
+  }
+  if (typeof b.revokeBadge === 'string') {
+    target.badges = target.badges.filter(x => x !== b.revokeBadge);
+  }
   if (typeof b.setRating === 'number') target.stats.rating = Math.max(0, Math.min(5000, Math.floor(b.setRating)));
   if (typeof b.setLevel === 'number') {
     // levelOf(xp) = 1 + floor(xp/1000)  →  xp for level L is (L-1)*1000
@@ -932,6 +964,28 @@ app.post('/api/admin/broadcast', requireAuth, requireAdmin, (req, res) => {
   if (!message) return res.status(400).json({ error: 'メッセージが空です' });
   battle.broadcastAll({ type: 'announce', message, from: req.user.username });
   res.json({ ok: true, delivered: battle.clients.size });
+});
+
+// Gift coins/gems to every active (non-banned) account at once.
+app.post('/api/admin/grant-all', requireAuth, requireAdmin, (req, res) => {
+  const coins = Math.max(0, Math.min(1_000_000, Math.floor(Number(req.body.coins) || 0)));
+  const gems = Math.max(0, Math.min(100_000, Math.floor(Number(req.body.gems) || 0)));
+  if (!coins && !gems) return res.status(400).json({ error: 'コインかジェムを指定してください' });
+  let affected = 0;
+  for (const u of Object.values(db.users)) {
+    if (u.banned) continue;
+    u.coins += coins;
+    u.gems += gems;
+    affected++;
+  }
+  saveDb();
+  const parts = [coins ? `${coins}🪙` : '', gems ? `${gems}💎` : ''].filter(Boolean).join(' ');
+  battle.broadcastAll({
+    type: 'announce',
+    message: `🎁 運営から全員に ${parts} をプレゼント！（再ログインまたは画面更新で反映）`,
+    from: req.user.username,
+  });
+  res.json({ ok: true, affected, coins, gems });
 });
 
 // Live crowd (にぎわい) control: scales AI population/chat/ghost rankings.

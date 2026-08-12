@@ -5,7 +5,7 @@ import { GameView, MiniBoard } from './game.js';
 import { chooseMove, AI_LEVELS } from './ai.js';
 import { audio } from './audio.js';
 import { session, api, refreshMe, BattleClient } from './net.js';
-import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst } from './dom.js';
+import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf } from './dom.js';
 import { t, trServer, catName } from './i18n.js';
 
 const MATCH_SECONDS = 120;
@@ -57,6 +57,7 @@ function rewardsRows(rewards) {
   }
   return `
     <div class="rs-row"><span>${t('🪙 コイン', '🪙 Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
+    ${rewards.streakBonus ? `<div class="rs-row"><span>${t(`🔥 ${rewards.streak}連勝ボーナス`, `🔥 ${rewards.streak}-win streak bonus`)}</span><b>+${fmt(rewards.streakBonus)}🪙</b></div>` : ''}
     ${rewards.gems ? `<div class="rs-row"><span>${t('💎 初回討伐ボーナス', '💎 First-clear bonus')}</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
     <div class="rs-row"><span>${t('🎫 パスXP', '🎫 Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
     <div class="rs-row"><span>${t('⭐ アカウントXP', '⭐ Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>`;
@@ -111,6 +112,7 @@ const ITEM_DEFS = {
   item_bomb:    { icon: '💣', name: 'スマートボム', nameEn: 'Smart Bomb' },
   item_cleaner: { icon: '🧹', name: 'クリーナー', nameEn: 'Cleaner' },
   item_fever:   { icon: '⭐', name: 'フィーバー', nameEn: 'Fever' },
+  item_mini:    { icon: '🧩', name: 'ミニブロック', nameEn: 'Mini Blocks' },
 };
 
 function getItemCounts() {
@@ -119,7 +121,7 @@ function getItemCounts() {
     const v = JSON.parse(localStorage.getItem('bba_items'));
     if (v && typeof v === 'object') return v;
   } catch { /* fall through */ }
-  const gift = { item_bomb: 1, item_cleaner: 1, item_fever: 1 };   // guest starter gift
+  const gift = { item_bomb: 1, item_cleaner: 1, item_fever: 1, item_mini: 1 };   // guest starter gift
   localStorage.setItem('bba_items', JSON.stringify(gift));
   return gift;
 }
@@ -205,6 +207,15 @@ export function useGameItem(id) {
       $('#hudScore').classList.remove('fever');
       if (currentMode === m && !m.ended) toast(t('フィーバー終了', 'Fever over'), '', 1200);
     }, 15000);
+  } else if (id === 'item_mini') {
+    // swap the whole hand for tiny 1-3 cell pieces (escape hatch!)
+    const prevMini = e.chaosMini;
+    e.chaosMini = true;
+    e.hand = [e.drawPiece(), e.drawPiece(), e.drawPiece()];
+    e.chaosMini = prevMini;
+    view.reviveFlash();
+    audio.coin();
+    toast(t('🧩 手持ちがミニピースに変化した！', '🧩 Your hand turned into mini pieces!'), 'ok', 1800);
   }
 
   // survivors of a bomb/clean: board changed, over-state may be stale
@@ -1865,6 +1876,8 @@ class OnlineMode extends VersusBase {
       .on('raid_state', msg => this.onRaidState(msg))
       .on('raid_attack', msg => this.onRaidAttack(msg))
       .on('emote', msg => this.showEmote(msg.slot, msg.emoji))
+      .on('tourney_state', msg => this.onTourneyState(msg))
+      .on('tourney_champion', () => confettiBurst(70))
       .on('online', msg => {
         this.onlineCount = msg.online;
         const el = $('#mmOnline');
@@ -1872,7 +1885,7 @@ class OnlineMode extends VersusBase {
       })
       .on('close', () => {
         if (this.ended) return;
-        if (this.inMatch || this.kind === 'custom') {
+        if (this.inMatch || this.kind === 'custom' || this.kind === 'tourney') {
           toast(t('サーバーとの接続が切れました', 'Lost connection to the server'), 'err');
           this.ended = true;
           this.destroy();
@@ -1885,6 +1898,8 @@ class OnlineMode extends VersusBase {
         ? t('チームメンバーを探しています…', 'Looking for teammates…')
         : this.kind === 'raid'
         ? t('レイドパーティを募集しています…', 'Gathering a raid party…')
+        : this.kind === 'tourney'
+        ? t('トーナメント参加者を募集しています…', 'Gathering tournament entrants…')
         : t('対戦相手を探しています…', 'Looking for an opponent…');
       $('#mmSub').innerHTML = t('オンライン: <span id="mmOnline">-</span>人 ・ 対戦相手を検索中…',
         'Online: <span id="mmOnline">-</span> players ・ searching…');
@@ -1962,10 +1977,32 @@ class OnlineMode extends VersusBase {
     }
   }
 
+  // ---- tournament bracket (between rounds) ----
+
+  tourneyRoundName(pairCount) {
+    return pairCount === 4 ? t('準々決勝', 'Quarterfinal')
+      : pairCount === 2 ? t('準決勝', 'Semifinal')
+      : t('決勝', 'Final');
+  }
+
+  onTourneyState(msg) {
+    if (this.ended) return;
+    this.inMatch = false;   // between rounds — ready for the next match_found
+    const mark = e => `${e.you ? '⭐<b>' : ''}${escapeHtml(e.name)}${e.you ? '</b>' : ''}${e.rating != null ? ` <small class="muted">R${e.rating}</small>` : ''}`;
+    const rows = msg.pairs.map(p =>
+      `<div class="rs-row"><span>${mark(p[0])}</span><span style="opacity:.6">⚔️</span><span>${mark(p[1])}</span></div>`).join('');
+    showModal(`
+      <h2>🏆 ${t('トーナメント', 'Tournament')} — ${this.tourneyRoundName(msg.pairs.length)}</h2>
+      <div class="result-stats">${rows}</div>
+      <p class="muted center" style="margin-top:8px">${t('まもなく対戦開始…', 'Match starting soon…')}</p>`, { dismissable: false });
+    audio.click();
+  }
+
   // ---- match ----
 
   onMatchFound(msg) {
     if (this.inMatch || this.ended) return;   // guard against duplicates
+    closeModal();                             // clear the bracket between rounds
     this.inMatch = true;
     this.matchInfo = msg;
     this.you = msg.you;
@@ -1974,7 +2011,7 @@ class OnlineMode extends VersusBase {
 
     const others = msg.players.filter(p => !p.isYou).map(p => ({
       slot: p.slot,
-      name: `${p.name}${p.rating != null ? ` (R${p.rating})` : ''}`,
+      name: `${p.name}${p.rating != null ? ` (${rankOf(p.rating).icon}R${p.rating})` : ''}`,
       isAlly: (this.isTeam && p.team === msg.you.team) || this.isRaid,
     }));
     this.setupHud(msg.duration || MATCH_SECONDS);
@@ -2026,7 +2063,7 @@ class OnlineMode extends VersusBase {
     if (existing) { existing.remove(); return; }
     const picker = document.createElement('div');
     picker.className = 'emote-picker';
-    for (const e of ['👍', '🔥', '😂', '😭', '🎉', '😱']) {
+    for (const e of ['👍', '🔥', '😂', '😭', '🎉', '😱', '💪', '😎', '👏', '🤯']) {
       const b = document.createElement('button');
       b.textContent = e;
       b.onclick = () => {
@@ -2167,6 +2204,28 @@ class OnlineMode extends VersusBase {
 
   onResult(msg) {
     if (this.ended) return;
+
+    // Tournament round won (not the final): stay in — the bracket and the
+    // next match arrive from the server momentarily.
+    if (msg.tourney && !msg.tourney.final && msg.outcome === 'win') {
+      clearTimeout(this.resultTimeout);
+      clearInterval(this.stateInt);
+      this.stopTimer();
+      getView().inputLocked = true;
+      this.inMatch = false;
+      if (msg.user) { session.user = msg.user; updateTopbar(); }
+      audio.victory();
+      const opp = msg.players.find(p => p.slot !== msg.you.slot);
+      showModal(`
+        <div class="result-banner win">${t('勝利！', 'Victory!')}</div>
+        <div class="result-stats">
+          <div class="rs-row"><span>${t('あなた', 'You')}</span><b>${fmt(msg.players.find(p => p.slot === msg.you.slot).score)}</b></div>
+          ${opp ? `<div class="rs-row"><span>${escapeHtml(opp.name)}</span><b>${fmt(opp.score)}</b></div>` : ''}
+        </div>
+        <p class="muted center" style="margin-top:8px">${t('🏆 勝ち上がり！次のラウンドを待っています…', '🏆 Advancing! Waiting for the next round…')}</p>`, { dismissable: false });
+      return;
+    }
+
     this.ended = true;
     clearTimeout(this.resultTimeout);
     clearInterval(this.stateInt);
@@ -2175,12 +2234,18 @@ class OnlineMode extends VersusBase {
     if (msg.user) { session.user = msg.user; updateTopbar(); }
     if (msg.outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
 
-    const banners = msg.mode === 'raid'
+    const banners = msg.tourney
+      ? { win: t('👑 トーナメント優勝！！', '👑 TOURNAMENT CHAMPION!!'), lose: t('敗退…', 'Eliminated…'), draw: 'DRAW' }
+      : msg.mode === 'raid'
       ? { win: t(`${msg.boss ? msg.boss.emoji : '🐲'} レイドボス討伐！`, `${msg.boss ? msg.boss.emoji : '🐲'} Raid boss down!`), lose: t('討伐失敗…', 'Raid failed…'), draw: 'DRAW' }
       : { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
-    const reasonNote =
+    const roundNames = [t('準々決勝', 'the quarterfinal'), t('準決勝', 'the semifinal'), t('決勝', 'the final')];
+    const tourneyNote = msg.tourney && msg.outcome !== 'win'
+      ? `<p class="muted center">${t(`${roundNames[msg.tourney.round] || ''}で敗退しました`, `Knocked out in ${roundNames[msg.tourney.round] || 'the bracket'}`)}</p>`
+      : msg.tourney ? `<p class="muted center">${t('8人トーナメントを制覇！', 'You conquered the 8-player bracket!')}</p>` : '';
+    const reasonNote = tourneyNote + (
       msg.reason === 'forfeit' ? `<p class="muted center">${t('相手が切断しました', 'Your opponent disconnected')}</p>` :
-      msg.reason === 'abandoned' ? `<p class="muted center">${t('対戦が中断されました', 'The match was abandoned')}</p>` : '';
+      msg.reason === 'abandoned' ? `<p class="muted center">${t('対戦が中断されました', 'The match was abandoned')}</p>` : '');
 
     let scoreRows;
     if (msg.mode === 'raid') {
@@ -2204,8 +2269,10 @@ class OnlineMode extends VersusBase {
         .join('');
     }
 
+    const myRating = msg.user && msg.user.stats ? msg.user.stats.rating : null;
+    const tier = myRating != null ? rankOf(myRating) : null;
     const ratingRow = msg.ratingDelta
-      ? `<div class="rs-row"><span>${t('📈 レート変動', '📈 Rating')}</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}</b></div>`
+      ? `<div class="rs-row"><span>${t('📈 レート変動', '📈 Rating')}</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}${tier ? ` <span style="color:${tier.color}">${tier.icon}${t(tier.name, tier.nameEn)}</span>` : ''}</b></div>`
       : '';
 
     const m = showModal(`
@@ -2245,230 +2312,6 @@ class OnlineMode extends VersusBase {
     $('#bossPanel').classList.add('hidden');
     this.client.close();
   }
-}
-
-// ---------------------------------------------------------------------------
-// Tournament: 8-player knockout bracket vs AI players (QF → SF → Final).
-// Opponents get stronger every round; ties go to the human.
-// ---------------------------------------------------------------------------
-
-const TOURNEY_NAMES = [
-  'そらまめ', 'ミサキ', 'Blocky', 'PixelCat', 'ドラゴン太郎', 'NovaStar', 'たける', 'こむぎ',
-  'Waffle', 'ハヤテ', 'ComboQueen', 'ぽんず', 'Sakura99', 'リク', 'Mocha', 'クロネコ',
-  'GridKing', 'いちごみるく', 'Turbo', 'ホシゾラ',
-];
-
-const TOURNEY_ROUNDS = [
-  { ja: '準々決勝', en: 'Quarterfinal', secs: 60, levels: ['easy', 'normal'], board: 'board_default', track: 'battle' },
-  { ja: '準決勝',   en: 'Semifinal',    secs: 60, levels: ['normal', 'hard'], board: 'board_sunset',  track: 'battle' },
-  { ja: '決勝',     en: 'Final',        secs: 90, levels: ['hard', 'oni'],    board: 'board_oni',     track: 'oni' },
-];
-
-function tourneyWins() { return Number(localStorage.getItem('bba_tourney_wins') || 0); }
-
-class TournamentMode extends VersusBase {
-  constructor() {
-    super();
-    this.mode = 'tournament';
-    this.round = 0;
-    this.totalScore = 0;
-    this.playedSecs = 0;
-    const pool = [...TOURNEY_NAMES].sort(() => Math.random() - 0.5);
-    const myName = session.user ? session.user.username
-      : (localStorage.getItem('bba_guest_name') || t('あなた', 'You'));
-    this.alive = [{ name: myName, you: true }, ...pool.slice(0, 7).map(n => ({ name: n }))];
-  }
-
-  start() { this.showBracket(); }
-
-  roundName() { const r = TOURNEY_ROUNDS[this.round]; return t(r.ja, r.en); }
-
-  bracketRows() {
-    const rows = [];
-    for (let i = 0; i < this.alive.length; i += 2) {
-      const a = this.alive[i], b = this.alive[i + 1];
-      const nm = p => p.you ? `⭐<b>${escapeHtml(p.name)}</b>` : escapeHtml(p.name);
-      rows.push(`<div class="rs-row"><span>${nm(a)}</span><span style="opacity:.6">⚔️</span><span>${nm(b)}</span></div>`);
-    }
-    return rows.join('');
-  }
-
-  showBracket() {
-    const wins = tourneyWins();
-    const m = showModal(`
-      <h2>🏆 ${t('トーナメント', 'Tournament')} — ${this.roundName()}</h2>
-      <p class="muted center" style="margin-bottom:10px">${t('8人制ノックアウト！ラウンドごとに相手が強くなる', '8-player knockout! Opponents get stronger every round')}${wins ? `<br>${t('優勝回数', 'Championships')}: <b style="color:var(--yellow)">${wins}</b>` : ''}</p>
-      <div class="result-stats">${this.bracketRows()}</div>
-      <p class="muted center" style="font-size:12px;margin-top:8px">${t(`あなたの相手: `, 'Your opponent: ')}<b>${escapeHtml(this.alive[1].name)}</b> ・ ${TOURNEY_ROUNDS[this.round].secs}${t('秒', 's')}</p>
-      <div class="modal-buttons">
-        <button class="btn btn-ghost" id="tnQuit">${t('やめる', 'Quit')}</button>
-        <button class="btn btn-gold" id="tnFight">⚔️ ${t('対戦開始！', 'Fight!')}</button>
-      </div>`, { dismissable: false });
-    m.querySelector('#tnQuit').onclick = () => { audio.click(); closeModal(); this.destroy(); endToMenu(); };
-    m.querySelector('#tnFight').onclick = () => { audio.click(); closeModal(); this.playMatch(); };
-  }
-
-  playMatch() {
-    const info = TOURNEY_ROUNDS[this.round];
-    this.level = info.levels[(Math.random() * info.levels.length) | 0];
-    this.cfg = AI_LEVELS[this.level];
-    const seed = (Math.random() * 2 ** 31) | 0;
-    this.setupHud(info.secs);
-    showItemBar(false);   // fair bracket: same pieces, no boosters
-    this.opp = this.alive[1];
-    this.buildPanels([{ slot: 1, name: this.opp.name, isAlly: false }]);
-    const v = getView();
-    v.setTheme({ ...equippedTheme(), boardId: info.board });
-    this.engine = new Engine(seed);
-    this.aiEngine = new Engine(seed);
-    v.setEngine(this.engine);
-    v.inputLocked = true;
-    v.onPlace = () => { this.updateMyHud(this.engine); this.updateBars(this.engine.score, this.aiEngine.score); };
-    v.onGameOver = () => this.onTopOut();
-    this.updateMyHud(this.engine);
-    updateRerollHud(this.engine);
-    updateAutoBtn();
-    v.start();
-    audio.playTrack(info.track);
-    countdownOverlay(3, () => {
-      v.inputLocked = false;
-      this.startTimer(() => this.endRound());
-      this.aiLoop();
-    }, audio);
-  }
-
-  aiLoop() {
-    this.aiTimer = setTimeout(() => {
-      if (this.ended || !this.aiEngine) return;
-      if (this.aiEngine.over) this.aiEngine.reviveBoard();
-      const move = chooseMove(this.aiEngine, this.level);
-      let combo = 0;
-      if (move) {
-        const r = this.aiEngine.place(move.index, move.row, move.col);
-        if (r && r.lineCount > 0) combo = r.streak;
-      }
-      this.updateOpp(1, { score: this.aiEngine.score, combo, grid: this.aiEngine.snapshot() });
-      this.updateBars(this.engine.score, this.aiEngine.score);
-      this.aiLoop();
-    }, this.cfg.moveMs * (0.75 + Math.random() * 0.5));
-  }
-
-  onTopOut() {
-    if (this.ended) return;
-    toast(t('ボードリセット！スコアは維持されます', 'Board reset! Your score is kept'), '', 1800);
-    this.engine.reviveBoard();
-    getView().reviveFlash();
-  }
-
-  // Everyone else's matches resolve randomly; winners keep bracket order.
-  simulateOthers() {
-    const next = [this.alive[0]];
-    for (let i = 2; i < this.alive.length; i += 2) {
-      next.push(this.alive[Math.random() < 0.5 ? i : i + 1]);
-    }
-    this.alive = next;
-  }
-
-  async endRound() {
-    if (this.ended) return;
-    this.stopTimer();
-    clearTimeout(this.aiTimer);
-    getView().inputLocked = true;
-    const me = this.engine.score, opp = this.aiEngine.score;
-    this.totalScore += me;
-    this.playedSecs += TOURNEY_ROUNDS[this.round].secs;
-    const won = me >= opp;   // the crowd roots for you — ties advance the human
-
-    if (!won) {
-      audio.gameOver();
-      this.ended = true;
-      const rewards = await submitResult({
-        mode: 'tournament', score: this.totalScore, lines: this.engine.linesCleared,
-        maxCombo: this.engine.maxCombo, duration: this.playedSecs, won: false,
-      });
-      const m = showModal(`
-        <div class="result-banner lose">${t('敗退…', 'Eliminated…')}</div>
-        <p class="muted center">${this.roundName()}${t('で敗退しました', ' — better luck next time')}</p>
-        <div class="result-stats">
-          <div class="rs-row"><span>${t('あなた', 'You')}</span><b>${fmt(me)}</b></div>
-          <div class="rs-row"><span>${escapeHtml(this.opp.name)}</span><b>${fmt(opp)}</b></div>
-          ${rewardsRows(rewards)}
-        </div>
-        <div class="modal-buttons">
-          <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-          <button class="btn btn-gold" id="rAgain">${t('再挑戦', 'Try again')}</button>
-        </div>`, { dismissable: false });
-      m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
-      m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startTournament(); };
-      return;
-    }
-
-    audio.victory();
-    this.simulateOthers();
-    this.round++;
-
-    if (this.round >= TOURNEY_ROUNDS.length) {
-      // CHAMPION!
-      this.ended = true;
-      confettiBurst(70);
-      localStorage.setItem('bba_tourney_wins', String(tourneyWins() + 1));
-      const rewards = await submitResult({
-        mode: 'tournament', score: this.totalScore, lines: this.engine.linesCleared,
-        maxCombo: this.engine.maxCombo, duration: this.playedSecs, won: true,
-      });
-      if (rewards && rewards.badge === 'tourney') {
-        setTimeout(() => toast(t('🏆 バッジ「初優勝」を獲得！+100💎', '🏆 Badge earned: First Champion! +100💎'), 'announce', 4500), 1200);
-      }
-      const m = showModal(`
-        <div class="result-banner win">👑 ${t('優勝！！', 'CHAMPION!!')}</div>
-        <p class="muted center">${t('8人トーナメントを制覇しました！', 'You conquered the 8-player bracket!')}</p>
-        <div class="result-stats">
-          <div class="rs-row"><span>${t('決勝スコア', 'Final score')}</span><b>${fmt(me)}</b></div>
-          <div class="rs-row"><span>${t('大会合計スコア', 'Tournament total')}</span><b>${fmt(this.totalScore)}</b></div>
-          <div class="rs-row"><span>${t('優勝回数', 'Championships')}</span><b>${tourneyWins()}</b></div>
-          ${rewardsRows(rewards)}
-        </div>
-        <div class="modal-buttons">
-          <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-          <button class="btn btn-gold" id="rAgain">${t('もう一度優勝する', 'Win it again')}</button>
-        </div>`, { dismissable: false });
-      m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
-      m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startTournament(); };
-      return;
-    }
-
-    const m = showModal(`
-      <div class="result-banner win">${t('勝利！', 'Victory!')}</div>
-      <div class="result-stats">
-        <div class="rs-row"><span>${t('あなた', 'You')}</span><b>${fmt(me)}</b></div>
-        <div class="rs-row"><span>${escapeHtml(this.opp.name)}</span><b>${fmt(opp)}</b></div>
-      </div>
-      <div class="modal-buttons">
-        <button class="btn btn-gold" id="tnNext">${t('つぎのラウンドへ →', 'Next round →')}</button>
-      </div>`, { dismissable: false });
-    m.querySelector('#tnNext').onclick = () => { audio.click(); closeModal(); this.showBracket(); };
-  }
-
-  quit() {
-    if (this.ended) return;
-    this.ended = true;
-    this.destroy();
-    toast(t('🏆 トーナメントを棄権しました', '🏆 You withdrew from the tournament'), '', 2200);
-    endToMenu();
-  }
-
-  destroy() {
-    this.ended = true;
-    this.stopTimer();
-    clearTimeout(this.aiTimer);
-  }
-}
-
-export function startTournament() {
-  if (currentMode) currentMode.destroy();
-  currentMode = new TournamentMode();
-  window.__bbaMode = currentMode;
-  currentMode.start();
 }
 
 // ---------------------------------------------------------------------------

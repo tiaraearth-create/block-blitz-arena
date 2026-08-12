@@ -10,6 +10,8 @@ export const SHOP_ITEMS = [
   { id: 'skin_gold',     cat: 'skin', name: 'ゴールド',         desc: '輝く黄金ブロック',       price: 250,  currency: 'gems' },
   { id: 'skin_shadow',   cat: 'skin', name: 'シャドウ',         desc: '闇に光る輪郭ブロック',   price: 3000, currency: 'coins' },
   { id: 'skin_pastel',   cat: 'skin', name: 'パステル',         desc: 'やさしいフラットデザイン', price: 2200, currency: 'coins' },
+  { id: 'skin_magma',    cat: 'skin', name: 'マグマ',           desc: '亀裂から灼熱が覗く岩ブロック', price: 3500, currency: 'coins' },
+  { id: 'skin_dot',      cat: 'skin', name: 'みずたま',         desc: 'ポップな水玉もようブロック',   price: 2600, currency: 'coins' },
   // ---- Board themes ----
   { id: 'board_default', cat: 'board', name: 'ミッドナイト',    desc: '標準の夜空テーマ',       price: 0,    currency: 'coins', default: true },
   { id: 'board_ocean',   cat: 'board', name: 'ディープオーシャン', desc: '深海のグラデーション', price: 1000, currency: 'coins' },
@@ -18,6 +20,8 @@ export const SHOP_ITEMS = [
   { id: 'board_galaxy',  cat: 'board', name: 'ギャラクシー',    desc: '星雲ときらめく星々',     price: 150,  currency: 'gems' },
   { id: 'board_sakura',  cat: 'board', name: '桜の間',          desc: '春爛漫の桜色ステージ',   price: 2000, currency: 'coins' },
   { id: 'board_volcano', cat: 'board', name: 'ボルケーノ',      desc: '火の粉舞う灼熱ステージ', price: 200,  currency: 'gems' },
+  { id: 'board_snow',    cat: 'board', name: 'スノーフィールド', desc: '静かに雪が降る銀世界',   price: 1600, currency: 'coins' },
+  { id: 'board_cyber',   cat: 'board', name: 'サイバー空間',    desc: '電脳世界のネオングリッド', price: 180, currency: 'gems' },
   // ---- Clear effects ----
   { id: 'fx_default',    cat: 'fx', name: 'スパーク',           desc: '標準の火花エフェクト',   price: 0,    currency: 'coins', default: true },
   { id: 'fx_fireworks',  cat: 'fx', name: '花火',               desc: 'ライン消去で花火が炸裂', price: 2000, currency: 'coins' },
@@ -25,6 +29,7 @@ export const SHOP_ITEMS = [
   { id: 'fx_sakura',     cat: 'fx', name: '桜吹雪',             desc: '花びらが舞い散る',       price: 180,  currency: 'gems' },
   { id: 'fx_bubble',     cat: 'fx', name: 'バブル',             desc: 'シャボン玉がはじける',   price: 1800, currency: 'coins' },
   { id: 'fx_star',       cat: 'fx', name: 'スターダスト',       desc: '星屑がきらめき散る',     price: 220,  currency: 'gems' },
+  { id: 'fx_flame',      cat: 'fx', name: 'フレイム',           desc: '炎が燃え上がる消去エフェクト', price: 2400, currency: 'coins' },
 ];
 
 export const DEFAULT_OWNED = SHOP_ITEMS.filter(i => i.default).map(i => i.id);
@@ -35,6 +40,7 @@ export const BOOST_ITEMS = [
   { id: 'item_bomb',    icon: '💣', name: 'スマートボム', desc: 'いちばん埋まっている3×3を爆破', price: 300, currency: 'coins' },
   { id: 'item_cleaner', icon: '🧹', name: 'クリーナー',   desc: 'お邪魔ブロック全部＋最下行を掃除', price: 250, currency: 'coins' },
   { id: 'item_fever',   icon: '⭐', name: 'フィーバー',   desc: '15秒間スコア2倍', price: 400, currency: 'coins' },
+  { id: 'item_mini',    icon: '🧩', name: 'ミニブロック', desc: '手持ち3つが極小ピースに変化', price: 350, currency: 'coins' },
 ];
 
 // ---- Boss battles ----

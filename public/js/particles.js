@@ -27,7 +27,25 @@ export class ParticleSystem {
       case 'fx_sakura': this.sakura(x, y, size); break;
       case 'fx_bubble': this.bubbles(x, y, size); break;
       case 'fx_star': this.stars(x, y, size); break;
+      case 'fx_flame': this.flames(x, y, size); break;
       default: this.spark(x, y, size, light, dark);
+    }
+  }
+
+  flames(x, y, size) {
+    const hues = ['#ff8a5c', '#ff5d3d', '#ffb347', '#ffe14d'];
+    for (let i = 0; i < this.n(9); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.2 + Math.random() * 0.5) * size * 3;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp * 0.6, vy: Math.sin(a) * sp - size * (3 + Math.random() * 3),
+        g: -size * 3,   // fire rises
+        drift: size * (0.5 + Math.random()),
+        life: 1, decay: 1.4 + Math.random() * 1.0,
+        size: size * (0.09 + Math.random() * 0.13),
+        color: hues[(Math.random() * hues.length) | 0],
+        kind: 'glow',
+      });
     }
   }
 

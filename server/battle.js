@@ -17,6 +17,14 @@ const duelBotWait = () => 4000 + Math.random() * 5000;
 const teamBotWait = () => 5000 + Math.random() * 5000;
 const DURATIONS = [60, 120, 180];
 
+// Online tournament: 8 entrants, 3 knockout rounds. TOURNEY_SECS env
+// overrides round lengths for testing (e.g. "6,6,8").
+const TOURNEY_ROUND_SECS = (process.env.TOURNEY_SECS || '60,60,90')
+  .split(',').map(n => Math.max(5, Number(n) || 60));
+const TOURNEY_INTERMISSION = 7000;
+// Bot strength rises with the round: QF easy/normal, SF normal/hard, F hard/oni.
+const TOURNEY_BOT_LEVELS = [['easy', 'normal'], ['normal', 'hard'], ['hard', 'oni']];
+
 export function initBattle(server, deps) {
   const { db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, MATCH_DURATION } = deps;
 
@@ -24,7 +32,8 @@ export function initBattle(server, deps) {
   const clients = new Set();
   const matches = new Map();               // matchId -> match
   const rooms = new Map();                 // code -> room
-  const queues = { duel: [], team: [], raid: [] };   // entries: { ws, since }
+  const tourneys = new Map();              // id -> tournament
+  const queues = { duel: [], team: [], raid: [], tourney: [] };   // entries: { ws, since, botAt }
 
   function send(sock, msg) {
     if (sock.isBot) return;
@@ -123,7 +132,7 @@ export function initBattle(server, deps) {
   const BOT_RATING = { easy: [720, 1020], normal: [980, 1300], hard: [1240, 1600], oni: [1520, 1950] };
   const BOT_LVL = { easy: [1, 7], normal: [5, 16], hard: [12, 30], oni: [22, 48] };
   const BOT_MOVE_MS = { easy: 2600, normal: 1700, hard: 1050, oni: 820 };
-  const EMOTE_SET = ['👍', '🔥', '😂', '😭', '🎉', '😱'];
+  const EMOTE_SET = ['👍', '🔥', '😂', '😭', '🎉', '😱', '💪', '😎', '👏', '🤯'];
 
   class Bot {
     constructor(level = 'random', used) {
@@ -191,11 +200,11 @@ export function initBattle(server, deps) {
   // Matches (2 or 4 players, humans and/or bots)
   // -------------------------------------------------------------------------
 
-  function createMatch({ mode, entries, duration, rated = true }) {
+  function createMatch({ mode, entries, duration, rated = true, tourney = null }) {
     const id = crypto.randomUUID();
     const seed = Math.floor(Math.random() * 2 ** 31);
     const match = {
-      id, mode, seed, rated,
+      id, mode, seed, rated, tourney,
       duration: duration || MATCH_DURATION,
       startedAt: Date.now(),
       ended: false,
@@ -218,6 +227,7 @@ export function initBattle(server, deps) {
       send(p.sock, {
         type: 'match_found',
         matchId: id, mode, seed, duration: match.duration, countdown: COUNTDOWN,
+        tourney: tourney ? { round: tourney.round, final: tourney.final } : null,
         boss: match.boss || null,
         you: { slot: p.slot, team: p.team },
         players: match.players.map(q => ({
@@ -344,9 +354,13 @@ export function initBattle(server, deps) {
         }
         if (!p.forfeited) {
           rewards = applyGameResult(me, {
-            mode: match.mode === 'team' ? 'team' : match.mode === 'raid' ? 'raid' : 'pvp',
+            mode: match.tourney ? 'tournament'
+              : match.mode === 'team' ? 'team' : match.mode === 'raid' ? 'raid' : 'pvp',
             score: p.score, lines: p.lines, maxCombo: p.maxCombo,
-            duration: match.duration, won: outcome === 1,
+            duration: match.duration,
+            // Tournament: the badge/bonus fires only on winning the FINAL.
+            won: match.tourney ? (outcome === 1 && !!match.tourney.final) : outcome === 1,
+            drew: outcome === 0.5,
           });
         }
       }
@@ -355,6 +369,7 @@ export function initBattle(server, deps) {
         type: 'result',
         outcome: outcome === 1 ? 'win' : outcome === 0 ? 'lose' : 'draw',
         reason, mode: match.mode,
+        tourney: match.tourney ? { round: match.tourney.round, final: match.tourney.final } : null,
         teamScores: ts,
         boss: match.boss || null,
         bossDead: !!match.bossDead,
@@ -368,6 +383,7 @@ export function initBattle(server, deps) {
       if (!p.sock.isBot && p.sock.matchId === match.id) p.sock.matchId = null;
     }
     saveDb();
+    if (match.tourney) tourneyMatchEnd(match);
   }
 
   // -------------------------------------------------------------------------
@@ -375,7 +391,7 @@ export function initBattle(server, deps) {
   // -------------------------------------------------------------------------
 
   function joinQueue(ws, mode) {
-    if (ws.matchId || ws.roomCode) return;
+    if (ws.matchId || ws.roomCode || ws.tourneyId) return;
     leaveQueues(ws);
     const wait = mode === 'duel' ? duelBotWait() : teamBotWait();
     queues[mode].push({ ws, since: Date.now(), botAt: Date.now() + wait });
@@ -391,8 +407,17 @@ export function initBattle(server, deps) {
   }
 
   function sweepQueues() {
-    for (const mode of ['duel', 'team', 'raid']) {
+    for (const mode of ['duel', 'team', 'raid', 'tourney']) {
       queues[mode] = queues[mode].filter(e => e.ws.readyState === e.ws.OPEN && !e.ws.matchId);
+    }
+    // tournament: start with up to 8 humans once the first entrant has waited
+    while (queues.tourney.length >= 8) {
+      const eight = queues.tourney.splice(0, 8);
+      startTourney(eight.map(e => e.ws));
+    }
+    if (queues.tourney.length > 0 && Date.now() >= queues.tourney[0].botAt) {
+      const humans = queues.tourney.splice(0, queues.tourney.length);
+      startTourney(humans.map(e => e.ws));
     }
     while (queues.duel.length >= 2) {
       const [a, b] = queues.duel.splice(0, 2);
@@ -506,6 +531,135 @@ export function initBattle(server, deps) {
   }
 
   // -------------------------------------------------------------------------
+  // Online tournament: 8 entrants (humans seeded apart, AI players fill),
+  // 3 knockout rounds run as real server matches. Bot-vs-bot pairs resolve
+  // by weighted coin flip so the whole bracket stays believable.
+  // -------------------------------------------------------------------------
+
+  function entrantAlive(s) { return s.isBot || (s.readyState === s.OPEN); }
+
+  function startTourney(humanSocks) {
+    const id = crypto.randomUUID();
+    const used = new Set(humanSocks.map(s => sockName(s)));
+    // Humans at bracket slots 0,2,4,6 first — they can't meet before the SF.
+    const positions = [0, 2, 4, 6, 1, 3, 5, 7];
+    const slots = new Array(8).fill(null);
+    humanSocks.slice(0, 8).forEach((ws, i) => { slots[positions[i]] = ws; });
+    for (let i = 0; i < 8; i++) if (!slots[i]) slots[i] = new Bot('random', used);
+    const t = { id, round: 0, alive: slots, ended: false, pending: 0, results: [], timers: [] };
+    tourneys.set(id, t);
+    for (const ws of humanSocks) ws.tourneyId = id;
+    broadcastTourney(t, { next: 2500 });
+    t.timers.push(setTimeout(() => runTourneyRound(t), 2500));
+  }
+
+  function broadcastTourney(t, extra = {}) {
+    for (const s of t.alive) {
+      if (s.isBot) continue;
+      const pairs = [];
+      for (let i = 0; i < t.alive.length; i += 2) {
+        pairs.push([t.alive[i], t.alive[i + 1]].map(e => ({
+          name: sockName(e), rating: sockRating(e), you: e === s,
+        })));
+      }
+      send(s, {
+        type: 'tourney_state',
+        round: t.round, rounds: TOURNEY_ROUND_SECS.length,
+        roundSecs: TOURNEY_ROUND_SECS[t.round],
+        pairs, ...extra,
+      });
+    }
+  }
+
+  function runTourneyRound(t) {
+    if (t.ended) return;
+    const secs = TOURNEY_ROUND_SECS[t.round];
+    const final = t.alive.length === 2;
+    t.results = new Array(t.alive.length / 2).fill(null);
+    t.pending = 0;
+    for (let p = 0; p < t.alive.length; p += 2) {
+      const a = t.alive[p], b = t.alive[p + 1];
+      // Rising difficulty: an AI player facing a human plays at round strength.
+      const lv = TOURNEY_BOT_LEVELS[Math.min(t.round, TOURNEY_BOT_LEVELS.length - 1)];
+      for (const s of [a, b]) {
+        if (s.isBot) s.level = lv[crypto.randomInt(lv.length)];
+      }
+      const aLive = entrantAlive(a), bLive = entrantAlive(b);
+      if (!aLive || !bLive) {
+        // A disconnected human loses on the spot (bot walks over too).
+        t.results[p / 2] = aLive ? a : bLive ? b : (a.isBot ? a : b);
+        continue;
+      }
+      if (a.isBot && b.isBot) {
+        const rank = { easy: 0, normal: 1, hard: 2, oni: 3 };
+        const pa = 0.5 + 0.18 * ((rank[a.level] || 0) - (rank[b.level] || 0));
+        t.results[p / 2] = Math.random() < pa ? a : b;
+        continue;
+      }
+      t.pending++;
+      createMatch({
+        mode: 'duel', rated: false, duration: secs,
+        entries: [{ sock: a, team: 0 }, { sock: b, team: 1 }],
+        tourney: { id: t.id, pair: p / 2, round: t.round, final },
+      });
+    }
+    if (t.pending === 0) finishTourneyRound(t);
+  }
+
+  function tourneyMatchEnd(match) {
+    const t = tourneys.get(match.tourney.id);
+    if (!t || t.ended) return;
+    const ts = teamScores(match);
+    let winIdx = ts[0] > ts[1] ? 0 : ts[1] > ts[0] ? 1 : null;
+    if (match.players[0].forfeited && !match.players[1].forfeited) winIdx = 1;
+    else if (match.players[1].forfeited && !match.players[0].forfeited) winIdx = 0;
+    if (winIdx === null) {
+      // Tie: a human beats an AI player; human-vs-human ties flip a coin.
+      const aHuman = !match.players[0].sock.isBot, bHuman = !match.players[1].sock.isBot;
+      winIdx = aHuman && !bHuman ? 0 : bHuman && !aHuman ? 1 : (Math.random() < 0.5 ? 0 : 1);
+    }
+    const loser = match.players[1 - winIdx].sock;
+    if (!loser.isBot) loser.tourneyId = null;
+    t.results[match.tourney.pair] = match.players[winIdx].sock;
+    t.pending--;
+    if (t.pending === 0) finishTourneyRound(t);
+  }
+
+  function finishTourneyRound(t) {
+    if (t.ended) return;
+    t.alive = t.results.slice();
+    t.round++;
+    if (t.alive.length === 1) {
+      const champ = t.alive[0];
+      endTourney(t);
+      if (!champ.isBot) {
+        send(champ, { type: 'tourney_champion' });
+        champ.tourneyId = null;
+      }
+      broadcastAll({
+        type: 'announce',
+        message: `🏆 オンライントーナメントで「${sockName(champ)}」が優勝！`,
+        from: '大会運営',
+      });
+      return;
+    }
+    if (!t.alive.some(s => !s.isBot && entrantAlive(s))) {
+      // every human is gone — no point simulating the rest
+      endTourney(t);
+      return;
+    }
+    broadcastTourney(t, { next: TOURNEY_INTERMISSION });
+    t.timers.push(setTimeout(() => runTourneyRound(t), TOURNEY_INTERMISSION));
+  }
+
+  function endTourney(t) {
+    t.ended = true;
+    for (const timer of t.timers) clearTimeout(timer);
+    for (const s of t.alive) if (!s.isBot && s.tourneyId === t.id) s.tourneyId = null;
+    tourneys.delete(t.id);
+  }
+
+  // -------------------------------------------------------------------------
   // Socket lifecycle
   // -------------------------------------------------------------------------
 
@@ -540,7 +694,7 @@ export function initBattle(server, deps) {
           break;
         }
         case 'queue': {
-          const mode = ['team', 'raid'].includes(msg.mode) ? msg.mode : 'duel';
+          const mode = ['team', 'raid', 'tourney'].includes(msg.mode) ? msg.mode : 'duel';
           joinQueue(ws, mode);
           break;
         }
@@ -629,7 +783,7 @@ export function initBattle(server, deps) {
         case 'emote': {
           if (!match || match.ended || !me) return;
           if (!sockRate(ws, 'emoteTimes', 3, 5000)) return;
-          const EMOJIS = ['👍', '🔥', '😂', '😭', '🎉', '😱'];
+          const EMOJIS = ['👍', '🔥', '😂', '😭', '🎉', '😱', '💪', '😎', '👏', '🤯'];
           const emoji = EMOJIS.includes(msg.emoji) ? msg.emoji : '👍';
           for (const p of match.players) {
             if (p.sock !== ws && !p.sock.isBot) {

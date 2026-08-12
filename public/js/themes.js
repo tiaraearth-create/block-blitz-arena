@@ -65,6 +65,20 @@ export const BOARDS = {
     accent: '#ff8a5c',
     embers: true,
   },
+  board_snow: {
+    bg: ['#2e4460', '#0e1826'],
+    cell: 'rgba(220,240,255,0.09)',
+    cellLine: 'rgba(220,240,255,0.11)',
+    accent: '#bfe3ff',
+    snow: true,
+  },
+  board_cyber: {
+    bg: ['#03251a', '#010a07'],
+    cell: 'rgba(94,232,110,0.08)',
+    cellLine: 'rgba(94,232,110,0.13)',
+    accent: '#5ee86e',
+    digital: true,
+  },
   // Special stage themes (not purchasable — used by difficulties / bosses)
   board_oni: {
     bg: ['#4a0d12', '#120306'],
@@ -258,6 +272,61 @@ function drawPastel(ctx, x, y, s, ci, alpha = 1) {
   ctx.globalAlpha = 1;
 }
 
+function drawMagma(ctx, x, y, s, ci, alpha = 1) {
+  const [light] = PALETTE[ci];
+  const pad = s * 0.06, r = s * 0.16;
+  ctx.globalAlpha = alpha;
+  // dark volcanic rock base
+  const g = ctx.createLinearGradient(x, y, x, y + s);
+  g.addColorStop(0, '#3a2724'); g.addColorStop(1, '#17100e');
+  ctx.fillStyle = g;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  // glowing cracks, tinted by the piece color so pieces stay readable
+  ctx.save();
+  ctx.shadowColor = light;
+  ctx.shadowBlur = s * 0.25;
+  ctx.strokeStyle = light;
+  ctx.lineWidth = Math.max(1.2, s * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(x + s * 0.2, y + s * 0.75);
+  ctx.lineTo(x + s * 0.42, y + s * 0.5);
+  ctx.lineTo(x + s * 0.35, y + s * 0.28);
+  ctx.moveTo(x + s * 0.42, y + s * 0.5);
+  ctx.lineTo(x + s * 0.72, y + s * 0.62);
+  ctx.moveTo(x + s * 0.6, y + s * 0.22);
+  ctx.lineTo(x + s * 0.72, y + s * 0.62);
+  ctx.lineTo(x + s * 0.82, y + s * 0.8);
+  ctx.stroke();
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.lineWidth = Math.max(1, s * 0.03);
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function drawDot(ctx, x, y, s, ci, alpha = 1) {
+  const [light, dark] = PALETTE[ci];
+  const pad = s * 0.05, r = s * 0.26;
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = dark;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  // polka dots
+  ctx.fillStyle = light;
+  const dr = s * 0.09;
+  for (const [fx, fy] of [[0.3, 0.3], [0.7, 0.3], [0.5, 0.55], [0.3, 0.78], [0.7, 0.78]]) {
+    ctx.beginPath();
+    ctx.arc(x + s * fx, y + s * fy, dr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  roundRect(ctx, x + pad + s * 0.07, y + pad + s * 0.05, s - pad * 2 - s * 0.14, s * 0.16, r * 0.6);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
 export const SKINS = {
   skin_default: drawClassic,
   skin_neon: drawNeon,
@@ -267,6 +336,8 @@ export const SKINS = {
   skin_gold: drawGold,
   skin_shadow: drawShadow,
   skin_pastel: drawPastel,
+  skin_magma: drawMagma,
+  skin_dot: drawDot,
 };
 
 // fx ids map to particle presets handled in particles.js

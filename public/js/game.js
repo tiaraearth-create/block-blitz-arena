@@ -334,6 +334,18 @@ export class GameView {
         const tw = Math.sin(this.time * d.sp * 1.5 + d.tw);
         alpha = Math.max(0, tw) * 0.8;
         r = d.r * (1 + Math.max(0, tw));
+      } else if (theme.snow) {
+        // gently falling snowflakes with sway
+        y = ((d.y + this.time * 0.018 * d.sp) % 1) * this.H;
+        x += Math.sin(this.time * 1.2 + d.tw) * 12;
+        color = '#eaf4ff';
+        alpha = 0.5 + 0.3 * Math.sin(this.time * 1.5 + d.tw);
+        r = d.r * 1.2;
+      } else if (theme.digital) {
+        // cyber rain: glyphs streaking downward
+        y = ((d.y + this.time * 0.08 * d.sp) % 1) * this.H;
+        color = Math.sin(d.tw) > 0.3 ? '#5ee86e' : '#9effc0';
+        alpha = 0.25 + 0.35 * Math.sin(this.time * 4 + d.tw);
       }
       ctx.globalAlpha = Math.max(0, alpha);
       ctx.fillStyle = color;

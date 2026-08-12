@@ -68,6 +68,17 @@ export function countdownOverlay(n, onDone, audio) {
 
 export function fmt(n) { return Number(n).toLocaleString('ja-JP'); }
 
+// Competitive rank tier for a rating value (shown next to ratings everywhere).
+export function rankOf(rating) {
+  const r = Number(rating) || 0;
+  return r >= 1700 ? { name: 'マスター', nameEn: 'Master', icon: '👑', color: '#ffd75e' }
+    : r >= 1500 ? { name: 'ダイヤ', nameEn: 'Diamond', icon: '💎', color: '#43d9e8' }
+    : r >= 1300 ? { name: 'プラチナ', nameEn: 'Platinum', icon: '💠', color: '#9fd8ff' }
+    : r >= 1100 ? { name: 'ゴールド', nameEn: 'Gold', icon: '🥇', color: '#ffd75e' }
+    : r >= 950 ? { name: 'シルバー', nameEn: 'Silver', icon: '🥈', color: '#c9d2e8' }
+    : { name: 'ブロンズ', nameEn: 'Bronze', icon: '🥉', color: '#d8a05a' };
+}
+
 // Lightweight DOM confetti celebration (used on wins / big unlocks).
 export function confettiBurst(count = 40) {
   const colors = ['#ff5d5d', '#ffa93d', '#ffe14d', '#5ee86e', '#43d9e8', '#5b8bff', '#b06bff', '#ff6bd4'];

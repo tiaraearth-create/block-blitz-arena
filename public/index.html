@@ -100,6 +100,7 @@
         <button class="chip icon-btn" data-item="item_bomb" title="スマートボム：いちばん埋まった3×3を爆破">💣<b>0</b></button>
         <button class="chip icon-btn" data-item="item_cleaner" title="クリーナー：お邪魔＋最下行を掃除">🧹<b>0</b></button>
         <button class="chip icon-btn" data-item="item_fever" title="フィーバー：15秒間スコア2倍">⭐<b>0</b></button>
+        <button class="chip icon-btn" data-item="item_mini" title="ミニブロック：手持ちが極小ピースに変化">🧩<b>0</b></button>
       </div>
       <div id="oppPanel" class="opp-panel hidden">
         <div class="vs-bar"><div id="vsBarMe"></div><div id="vsBarOpp"></div></div>
@@ -225,7 +226,11 @@
       <div class="admin-actions">
         <button class="btn btn-ghost btn-sm" id="btnPop">🎭 にぎわい設定</button>
         <button class="btn btn-ghost btn-sm" id="btnChatSay">💬 AIに発言させる</button>
+        <button class="btn btn-ghost btn-sm" id="btnGrantAll">🎁 全員に配布</button>
         <button class="btn btn-ghost btn-sm" id="btnChatClear" style="color:var(--red)">🧹 チャット全消去</button>
+      </div>
+      <div class="admin-actions">
+        <input id="adminUserSearch" type="text" placeholder="🔍 ユーザー検索…" maxlength="16" style="flex:1;min-width:160px">
       </div>
       <div id="adminUsers" class="admin-users"></div>
     </section>

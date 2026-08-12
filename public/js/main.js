@@ -2,7 +2,7 @@
 import { session, api, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startTournament, startSurvival, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem } from './modes.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
@@ -425,8 +425,8 @@ function showDungeonSelect() {
 
 $('#btnDungeon').onclick = () => { audio.click(); showDungeonSelect(); };
 
-// ---- tournament + survival ----
-$('#btnTourney').onclick = () => { audio.click(); startTournament(); };
+// ---- tournament (online bracket) + survival ----
+$('#btnTourney').onclick = () => { audio.click(); startOnline('tourney'); };
 $('#btnSurvival').onclick = () => { audio.click(); startSurvival(); };
 
 // ---- weekly challenge ----

@@ -1,6 +1,6 @@
 // Sub-screens: auth modal, leaderboard, shop, battle pass, admin panel.
 import { session, api, setToken, refreshMe } from './net.js';
-import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar, confettiBurst } from './dom.js';
+import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar, confettiBurst, rankOf } from './dom.js';
 import { getSkin, BOARDS } from './themes.js';
 import { audio } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
@@ -72,7 +72,7 @@ function showProfileModal() {
     <div class="result-stats">
       <div class="rs-row"><span>${tr('レベル', 'Level')}</span><b>Lv.${u.level}</b></div>
       <div class="rs-row"><span>${tr('ハイスコア', 'High score')}</span><b>${fmt(u.stats.bestScore)}</b></div>
-      <div class="rs-row"><span>${tr('レート', 'Rating')}</span><b>${fmt(u.stats.rating)}</b></div>
+      <div class="rs-row"><span>${tr('レート', 'Rating')}</span><b>${fmt(u.stats.rating)} <span style="color:${rankOf(u.stats.rating).color}">${rankOf(u.stats.rating).icon}${tr(rankOf(u.stats.rating).name, rankOf(u.stats.rating).nameEn)}</span></b></div>
       <div class="rs-row"><span>${tr('オンライン戦績', 'Online record')}</span><b>${tr(`${u.stats.pvpWins}勝 ${u.stats.pvpLosses}敗`, `${u.stats.pvpWins}W ${u.stats.pvpLosses}L`)}</b></div>
       <div class="rs-row"><span>${tr('AI撃破', 'AI wins')}</span><b>${fmt(u.stats.aiWins)}</b></div>
       <div class="rs-row"><span>${tr('プレイ回数', 'Games played')}</span><b>${fmt(u.stats.gamesPlayed)}</b></div>
@@ -393,7 +393,7 @@ export async function openLeaderboard(board = 'score') {
           ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.name)}》</span>` : ''}
           <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}</div>
         </div>
-        <div class="lb-score">${board === 'dungeon' ? `F${fmt(r.dungeonMax || 0)}` : board === 'weekly' ? fmt(r.weeklyBest || 0) : fmt(board === 'rating' ? r.rating : r.bestScore)}</div>
+        <div class="lb-score">${board === 'dungeon' ? `F${fmt(r.dungeonMax || 0)}` : board === 'weekly' ? fmt(r.weeklyBest || 0) : board === 'rating' ? `${rankOf(r.rating).icon}${fmt(r.rating)}` : fmt(r.bestScore)}</div>
       </div>`).join('');
   } catch (err) {
     list.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
@@ -797,6 +797,8 @@ function renderAdminUsers(users) {
         <button class="btn btn-sm btn-ghost" data-a="gems">+💎</button>
         <button class="btn btn-sm btn-ghost" data-a="rating" title="レートを設定">R</button>
         <button class="btn btn-sm btn-ghost" data-a="level" title="レベルを設定">Lv</button>
+        <button class="btn btn-sm btn-ghost" data-a="badge" title="バッジを付与">🎖️</button>
+        <button class="btn btn-sm btn-ghost" data-a="pass" title="パスワードを再設定">🔑</button>
         ${u.role !== 'admin' ? `
           <button class="btn btn-sm btn-ghost" data-a="mute" title="チャット禁止の切替">${u.muted ? '🔈' : '🔇'}</button>
           <button class="btn btn-sm btn-ghost" data-a="ban">${u.banned ? '解除' : '凍結'}</button>
@@ -826,6 +828,17 @@ function renderAdminUsers(users) {
             if (v === null) return;
             await api(`/api/admin/users/${uid}`, { method: 'POST', body: { setLevel: Math.floor(Number(v)) } });
             toast('レベルを設定しました', 'ok');
+          } else if (act === 'badge') {
+            const id = prompt(`${user.username} に付与するバッジID\n(bronze / silver / gold / oni / kami / souzou / maou / rush / dungeon / tourney)\n先頭に - で剥奪 (例: -gold)`, 'gold');
+            if (!id) return;
+            const body = id.startsWith('-') ? { revokeBadge: id.slice(1) } : { grantBadge: id };
+            await api(`/api/admin/users/${uid}`, { method: 'POST', body });
+            toast(id.startsWith('-') ? '🎖️ バッジを剥奪しました' : '🎖️ バッジを付与しました', 'ok');
+          } else if (act === 'pass') {
+            const pw = prompt(`${user.username} の新しいパスワード（6文字以上）\n※本人は全端末で再ログインが必要になります`, '');
+            if (pw === null) return;
+            await api(`/api/admin/users/${uid}`, { method: 'POST', body: { setPassword: pw } });
+            toast('🔑 パスワードを再設定しました', 'ok');
           } else if (act === 'mute') {
             await api(`/api/admin/users/${uid}`, { method: 'POST', body: { muted: !user.muted } });
             toast(user.muted ? '🔈 ミュートを解除しました' : '🔇 チャットを禁止しました', 'ok');
@@ -986,6 +999,43 @@ export function bindAdminActions() {
         await api('/api/admin/event', { method: 'POST', body: { on: false } });
         closeModal();
         toast('イベントを終了しました', 'ok');
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  };
+
+  // ---- user search filter ----
+  $('#adminUserSearch').oninput = () => {
+    const q = $('#adminUserSearch').value.trim().toLowerCase();
+    $$('#adminUsers .admin-user-row').forEach(row => {
+      row.classList.toggle('hidden', q !== '' && !row.querySelector('.au-name').textContent.toLowerCase().includes(q));
+    });
+  };
+
+  // ---- gift to everyone ----
+  $('#btnGrantAll').onclick = () => {
+    const m = showModal(`
+      <h2>🎁 全員に配布</h2>
+      <p class="muted center" style="margin-bottom:10px">凍結中を除く全アカウントに一斉配布します。<br>全員へのお知らせも自動送信されます。</p>
+      <div class="form-col">
+        <div class="settings-row"><label>🪙 コイン</label><input id="gaCoins" type="number" min="0" max="1000000" value="500" style="width:110px;text-align:center"></div>
+        <div class="settings-row"><label>💎 ジェム</label><input id="gaGems" type="number" min="0" max="100000" value="0" style="width:110px;text-align:center"></div>
+        <div class="modal-buttons">
+          <button class="btn btn-ghost" id="gaCancel">やめる</button>
+          <button class="btn btn-gold" id="gaSend">🎁 配布する！</button>
+        </div>
+      </div>`);
+    m.querySelector('#gaCancel').onclick = closeModal;
+    m.querySelector('#gaSend').onclick = async () => {
+      const coins = Math.max(0, Math.floor(Number(m.querySelector('#gaCoins').value) || 0));
+      const gems = Math.max(0, Math.floor(Number(m.querySelector('#gaGems').value) || 0));
+      if (!coins && !gems) { toast('コインかジェムを入力してください', 'err'); return; }
+      if (!confirm(`全員に ${coins ? `${fmt(coins)}🪙 ` : ''}${gems ? `${fmt(gems)}💎` : ''} を配布します。よろしいですか？`)) return;
+      try {
+        const res = await api('/api/admin/grant-all', { method: 'POST', body: { coins, gems } });
+        closeModal();
+        audio.coin();
+        toast(`🎁 ${res.affected}人に配布しました！`, 'ok', 3000);
+        openAdmin();
       } catch (err) { toast(err.message, 'err'); }
     };
   };
