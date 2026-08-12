@@ -79,6 +79,15 @@ export const BOARDS = {
     accent: '#5ee86e',
     digital: true,
   },
+  // Admin-exclusive stage
+  board_admin: {
+    bg: ['#3c2a58', '#120a20'],
+    cell: 'rgba(255,215,94,0.10)',
+    cellLine: 'rgba(255,215,94,0.16)',
+    accent: '#ffd75e',
+    holy: true,
+    stars: true,
+  },
   // Special stage themes (not purchasable — used by difficulties / bosses)
   board_oni: {
     bg: ['#4a0d12', '#120306'],
@@ -327,6 +336,30 @@ function drawDot(ctx, x, y, s, ci, alpha = 1) {
   ctx.globalAlpha = 1;
 }
 
+function drawAdminRainbow(ctx, x, y, s, ci, alpha = 1) {
+  const pad = s * 0.05, r = s * 0.2;
+  ctx.globalAlpha = alpha;
+  // position-shifted rainbow so the board shimmers across cells
+  const hue = Math.round(((x + y) / 2.2) % 360);
+  const g = ctx.createLinearGradient(x, y, x + s, y + s);
+  g.addColorStop(0, `hsl(${hue}, 92%, 62%)`);
+  g.addColorStop(0.5, `hsl(${(hue + 70) % 360}, 92%, 58%)`);
+  g.addColorStop(1, `hsl(${(hue + 140) % 360}, 92%, 60%)`);
+  ctx.fillStyle = g;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  // piece-color ring keeps shapes readable
+  const [light] = PALETTE[ci];
+  ctx.strokeStyle = light;
+  ctx.lineWidth = Math.max(1.5, s * 0.06);
+  roundRect(ctx, x + pad + s * 0.03, y + pad + s * 0.03, s - pad * 2 - s * 0.06, s - pad * 2 - s * 0.06, r * 0.8);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  roundRect(ctx, x + pad + s * 0.08, y + pad + s * 0.06, s - pad * 2 - s * 0.16, s * 0.2, r * 0.6);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
 export const SKINS = {
   skin_default: drawClassic,
   skin_neon: drawNeon,
@@ -338,6 +371,7 @@ export const SKINS = {
   skin_pastel: drawPastel,
   skin_magma: drawMagma,
   skin_dot: drawDot,
+  skin_admin: drawAdminRainbow,
 };
 
 // fx ids map to particle presets handled in particles.js

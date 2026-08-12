@@ -186,6 +186,13 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     gems += 100;
     user.gems += 100;
   }
+  // Battle royale: first #1 finish out of 100 earns a badge + one-time gems.
+  if (mode === 'royale' && won && !user.badges.includes('royale')) {
+    user.badges.push('royale');
+    badge = 'royale';
+    gems += 150;
+    user.gems += 150;
+  }
   // Weekly challenge: per-week personal best.
   if (mode === 'weekly') {
     const w = weekIdOf(currentWeekNum());
@@ -243,6 +250,14 @@ function rateLimit(key, limit, windowMs) {
 }
 
 function inMaintenance() { return !!db.meta.maintenance; }
+
+// Moderators (or admins): chat policing only — no economy/user management.
+function requireMod(req, res, next) {
+  if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'mod')) {
+    return res.status(403).json({ error: 'モデレーター権限が必要です' });
+  }
+  next();
+}
 
 // Blocks gameplay/economy endpoints for non-admins during maintenance.
 function maintenanceGuard(req, res, next) {
@@ -655,7 +670,9 @@ app.get('/api/admin/transactions', requireAuth, requireAdmin, (_req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get('/api/shop', (req, res) => {
-  res.json({ items: SHOP_ITEMS, boosters: BOOST_ITEMS });
+  // Admin-exclusive cosmetics are invisible to everyone else.
+  const isAdmin = req.user && req.user.role === 'admin';
+  res.json({ items: SHOP_ITEMS.filter(i => !i.adminOnly || isAdmin), boosters: BOOST_ITEMS });
 });
 
 // ---- Booster items (consumables) ----
@@ -679,9 +696,12 @@ app.post('/api/items/use', requireAuth, (req, res) => {
   user.items = user.items || {};
   const id = String(req.body.itemId || '');
   if (!BOOST_ITEMS.some(i => i.id === id)) return res.status(404).json({ error: 'アイテムが見つかりません' });
-  if ((user.items[id] || 0) <= 0) return res.status(409).json({ error: 'アイテムを持っていません' });
-  user.items[id] -= 1;
-  saveDb();
+  // Admins have infinite boosters — nothing is consumed.
+  if (user.role !== 'admin') {
+    if ((user.items[id] || 0) <= 0) return res.status(409).json({ error: 'アイテムを持っていません' });
+    user.items[id] -= 1;
+    saveDb();
+  }
   res.json({ user: publicUser(user) });
 });
 
@@ -739,6 +759,7 @@ function fmtNum(n) { return n.toLocaleString('ja-JP'); }
 app.post('/api/shop/buy', requireAuth, maintenanceGuard, (req, res) => {
   const item = SHOP_ITEMS.find(i => i.id === req.body.itemId);
   if (!item) return res.status(404).json({ error: 'アイテムが見つかりません' });
+  if (item.adminOnly) return res.status(403).json({ error: '管理者専用の装備です（非売品）' });
   const user = req.user;
   if (user.owned.includes(item.id)) return res.status(409).json({ error: 'すでに所持しています' });
   if (user[item.currency] < item.price) {
@@ -755,7 +776,12 @@ app.post('/api/equip', requireAuth, (req, res) => {
   if (!['skin', 'board', 'fx'].includes(slot)) return res.status(400).json({ error: '不正なスロットです' });
   const item = SHOP_ITEMS.find(i => i.id === itemId);
   if (!item || item.cat !== slot) return res.status(400).json({ error: '不正なアイテムです' });
-  if (!req.user.owned.includes(itemId)) return res.status(403).json({ error: '所持していないアイテムです' });
+  // Admin-only gear: admins implicitly own it; nobody else can equip it.
+  if (item.adminOnly) {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: '管理者専用の装備です' });
+  } else if (!req.user.owned.includes(itemId)) {
+    return res.status(403).json({ error: '所持していないアイテムです' });
+  }
   req.user.equipped[slot] = itemId;
   saveDb();
   res.json({ user: publicUser(req.user) });
@@ -840,7 +866,9 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     target.banned = b.banned;
   }
   if (typeof b.muted === 'boolean') {
-    if (target.role === 'admin' && b.muted) return res.status(400).json({ error: '管理者はミュートできません' });
+    if ((target.role === 'admin' || target.role === 'mod') && b.muted) {
+      return res.status(400).json({ error: '運営メンバーはミュートできません' });
+    }
     target.muted = b.muted;
   }
   if (typeof b.setPassword === 'string') {
@@ -867,7 +895,12 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     const lv = Math.max(1, Math.min(999, Math.floor(b.setLevel)));
     target.xp = (lv - 1) * 1000;
   }
-  if (b.role === 'admin' || b.role === 'user') target.role = b.role;
+  if (['admin', 'mod', 'user'].includes(b.role)) {
+    if (target.id === req.user.id && b.role !== 'admin') {
+      return res.status(400).json({ error: '自分の権限は下げられません（別の管理者に依頼してください）' });
+    }
+    target.role = b.role;
+  }
   if (b.resetStats === true) {
     target.stats = { gamesPlayed: 0, bestScore: 0, totalScore: 0, totalLines: 0, maxCombo: 0, aiWins: 0, pvpWins: 0, pvpLosses: 0, rating: 1000 };
   }
@@ -966,6 +999,33 @@ app.post('/api/admin/broadcast', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true, delivered: battle.clients.size });
 });
 
+// ---------------------------------------------------------------------------
+// Moderator API (mods + admins): chat policing tools only
+// ---------------------------------------------------------------------------
+
+app.get('/api/mod/users', requireAuth, requireMod, (_req, res) => {
+  const users = Object.values(db.users).map(u => ({
+    id: u.id, username: u.username, role: u.role, muted: !!u.muted, banned: !!u.banned,
+  }));
+  res.json({ users });
+});
+
+app.post('/api/mod/mute', requireAuth, requireMod, (req, res) => {
+  const target = db.users[String(req.body.id || '')];
+  if (!target) return res.status(404).json({ error: 'ユーザーが見つかりません' });
+  if (target.role === 'admin' || target.role === 'mod') {
+    return res.status(400).json({ error: '運営メンバーはミュートできません' });
+  }
+  target.muted = !!req.body.muted;
+  saveDb();
+  res.json({ ok: true, muted: target.muted });
+});
+
+app.post('/api/mod/chat/clear', requireAuth, requireMod, (_req, res) => {
+  battle.chatOps.clear();
+  res.json({ ok: true });
+});
+
 // Gift coins/gems to every active (non-banned) account at once.
 app.post('/api/admin/grant-all', requireAuth, requireAdmin, (req, res) => {
   const coins = Math.max(0, Math.min(1_000_000, Math.floor(Number(req.body.coins) || 0)));
@@ -990,8 +1050,8 @@ app.post('/api/admin/grant-all', requireAuth, requireAdmin, (req, res) => {
 
 // Live crowd (にぎわい) control: scales AI population/chat/ghost rankings.
 app.post('/api/admin/pop', requireAuth, requireAdmin, (req, res) => {
-  const scale = Math.max(0, Math.min(3, Number(req.body.scale)));
-  if (!Number.isFinite(scale)) return res.status(400).json({ error: '0〜3の数値で指定してください' });
+  const scale = Math.max(0, Math.min(10, Number(req.body.scale)));
+  if (!Number.isFinite(scale)) return res.status(400).json({ error: '0〜10の数値で指定してください' });
   db.meta.popScale = scale;
   setLiveScale(scale);
   saveDb();

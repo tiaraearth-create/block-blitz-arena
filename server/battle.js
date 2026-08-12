@@ -33,7 +33,8 @@ export function initBattle(server, deps) {
   const matches = new Map();               // matchId -> match
   const rooms = new Map();                 // code -> room
   const tourneys = new Map();              // id -> tournament
-  const queues = { duel: [], team: [], raid: [], tourney: [] };   // entries: { ws, since, botAt }
+  const royales = new Map();               // id -> battle royale
+  const queues = { duel: [], team: [], raid: [], tourney: [], royale: [] };   // entries: { ws, since, botAt }
 
   function send(sock, msg) {
     if (sock.isBot) return;
@@ -391,7 +392,7 @@ export function initBattle(server, deps) {
   // -------------------------------------------------------------------------
 
   function joinQueue(ws, mode) {
-    if (ws.matchId || ws.roomCode || ws.tourneyId) return;
+    if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId) return;
     leaveQueues(ws);
     const wait = mode === 'duel' ? duelBotWait() : teamBotWait();
     queues[mode].push({ ws, since: Date.now(), botAt: Date.now() + wait });
@@ -407,7 +408,7 @@ export function initBattle(server, deps) {
   }
 
   function sweepQueues() {
-    for (const mode of ['duel', 'team', 'raid', 'tourney']) {
+    for (const mode of ['duel', 'team', 'raid', 'tourney', 'royale']) {
       queues[mode] = queues[mode].filter(e => e.ws.readyState === e.ws.OPEN && !e.ws.matchId);
     }
     // tournament: start with up to 8 humans once the first entrant has waited
@@ -418,6 +419,11 @@ export function initBattle(server, deps) {
     if (queues.tourney.length > 0 && Date.now() >= queues.tourney[0].botAt) {
       const humans = queues.tourney.splice(0, queues.tourney.length);
       startTourney(humans.map(e => e.ws));
+    }
+    // battle royale: everyone waiting boards the same 100-player lobby
+    if (queues.royale.length > 0 && (queues.royale.length >= ROYALE_SIZE - 1 || Date.now() >= queues.royale[0].botAt)) {
+      const humans = queues.royale.splice(0, Math.min(ROYALE_SIZE - 1, queues.royale.length));
+      startRoyale(humans.map(e => e.ws));
     }
     while (queues.duel.length >= 2) {
       const [a, b] = queues.duel.splice(0, 2);
@@ -660,6 +666,135 @@ export function initBattle(server, deps) {
   }
 
   // -------------------------------------------------------------------------
+  // Battle Royale: 100 entrants, humans + lightweight simulated AI players
+  // (score curves only — no engines), periodic cuts until one remains.
+  // -------------------------------------------------------------------------
+
+  const ROYALE_SIZE = 100;
+  const ROYALE_DURATION = Math.max(30, Number(process.env.ROYALE_SECS) || 180);
+  // At these fractions of the match, the field is cut down TO `keep` players.
+  const ROYALE_CUTS = [
+    { at: 1 / 6, keep: 70 }, { at: 2 / 6, keep: 45 }, { at: 3 / 6, keep: 25 },
+    { at: 4 / 6, keep: 12 }, { at: 5 / 6, keep: 5 },
+  ];
+
+  function startRoyale(humanSocks) {
+    const id = crypto.randomUUID();
+    const used = new Set(humanSocks.map(s => sockName(s)));
+    const entrants = humanSocks.map(ws => ({
+      ws, human: true, name: sockName(ws), score: 0, lines: 0, combo: 0, alive: true, placement: null,
+    }));
+    while (entrants.length < ROYALE_SIZE) {
+      const skill = Math.random();
+      entrants.push({
+        human: false, name: pickPersona({ used }).name,
+        score: 0, alive: true, placement: null,
+        rate: 12 + 95 * skill * skill,   // points/sec — few monsters, many mortals
+      });
+    }
+    const r = { id, entrants, startedAt: Date.now(), ended: false, cutIdx: 0, lastState: 0 };
+    royales.set(id, r);
+    for (const e of entrants) {
+      if (!e.human) continue;
+      e.ws.royaleId = id;
+      send(e.ws, {
+        type: 'royale_found',
+        duration: ROYALE_DURATION, countdown: COUNTDOWN, players: ROYALE_SIZE,
+        seed: Math.floor(Math.random() * 2 ** 31),
+      });
+    }
+    r.tick = setInterval(() => tickRoyale(r), 1000);
+  }
+
+  function royaleRanked(r) {
+    return r.entrants.filter(e => e.alive).sort((a, b) => b.score - a.score);
+  }
+
+  function endRoyaleFor(e, r, placement, ranked) {
+    e.alive = false;
+    e.placement = placement;
+    if (!e.human) return;
+    if (e.ws.royaleId === r.id) e.ws.royaleId = null;
+    const me = e.ws.user ? db.users[e.ws.user.id] : null;
+    let rewards = null;
+    if (me && e.ws.readyState === e.ws.OPEN) {
+      rewards = applyGameResult(me, {
+        mode: 'royale', score: e.score, lines: e.lines, maxCombo: e.combo,
+        duration: Math.max(1, (Date.now() - r.startedAt) / 1000), won: placement === 1,
+      });
+    }
+    send(e.ws, {
+      type: 'royale_result',
+      placement, players: ROYALE_SIZE, score: e.score,
+      top: ranked.slice(0, 5).map(x => ({ name: x.name, score: Math.floor(x.score) })),
+      rewards, user: me ? publicUser(me) : null,
+    });
+  }
+
+  function tickRoyale(r) {
+    if (r.ended) return;
+    const elapsed = (Date.now() - r.startedAt) / 1000 - COUNTDOWN;
+    if (elapsed < 0) return;
+    // simulated players grind away
+    for (const e of r.entrants) {
+      if (e.alive && !e.human) e.score += e.rate * (0.6 + Math.random() * 0.8);
+      // disconnected humans freeze and sink on their own
+    }
+    // scheduled cuts
+    const cut = ROYALE_CUTS[r.cutIdx];
+    if (cut && elapsed >= ROYALE_DURATION * cut.at) {
+      r.cutIdx++;
+      const ranked = royaleRanked(r);
+      if (ranked.length > cut.keep) {
+        const dropped = ranked.slice(cut.keep);
+        for (let i = 0; i < dropped.length; i++) {
+          endRoyaleFor(dropped[i], r, cut.keep + 1 + i, ranked);
+        }
+        for (const e of r.entrants) {
+          if (e.alive && e.human) {
+            send(e.ws, { type: 'royale_cut', eliminated: dropped.length, alive: cut.keep });
+          }
+        }
+      }
+    }
+    // finale
+    if (elapsed >= ROYALE_DURATION) {
+      r.ended = true;
+      clearInterval(r.tick);
+      const ranked = royaleRanked(r);
+      for (let i = ranked.length - 1; i >= 0; i--) endRoyaleFor(ranked[i], r, i + 1, ranked);
+      const winner = ranked[0];
+      if (winner) {
+        broadcastAll({
+          type: 'announce',
+          message: `💯 バトルロイヤルで「${winner.name}」が100人の頂点に！`,
+          from: '大会運営',
+        });
+      }
+      royales.delete(r.id);
+      return;
+    }
+    // rank sync every 2s
+    if (Date.now() - r.lastState >= 2000) {
+      r.lastState = Date.now();
+      const ranked = royaleRanked(r);
+      const nextCut = ROYALE_CUTS[r.cutIdx];
+      for (let i = 0; i < ranked.length; i++) {
+        const e = ranked[i];
+        if (!e.human) continue;
+        send(e.ws, {
+          type: 'royale_state',
+          rank: i + 1, alive: ranked.length, score: Math.floor(e.score),
+          remain: Math.max(0, Math.round(ROYALE_DURATION - elapsed)),
+          top: ranked.slice(0, 3).map(x => ({ name: x.name, score: Math.floor(x.score) })),
+          nextCutIn: nextCut ? Math.max(0, Math.round(ROYALE_DURATION * nextCut.at - elapsed)) : null,
+          nextKeep: nextCut ? nextCut.keep : null,
+        });
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Socket lifecycle
   // -------------------------------------------------------------------------
 
@@ -694,7 +829,7 @@ export function initBattle(server, deps) {
           break;
         }
         case 'queue': {
-          const mode = ['team', 'raid', 'tourney'].includes(msg.mode) ? msg.mode : 'duel';
+          const mode = ['team', 'raid', 'tourney', 'royale'].includes(msg.mode) ? msg.mode : 'duel';
           joinQueue(ws, mode);
           break;
         }
@@ -704,6 +839,19 @@ export function initBattle(server, deps) {
           break;
         }
         case 'state': {
+          // Battle royale: no match object — just track the live score.
+          if (ws.royaleId) {
+            const r = royales.get(ws.royaleId);
+            if (r && !r.ended) {
+              const e = r.entrants.find(x => x.ws === ws);
+              if (e && e.alive) {
+                e.score = Math.max(e.score, Math.min(1_000_000, Math.floor(Number(msg.score) || 0)));
+                e.lines = Math.max(e.lines, Math.floor(Number(msg.lines) || 0));
+                e.combo = Math.max(e.combo, Math.floor(Number(msg.combo) || 0));
+              }
+            }
+            return;
+          }
           if (!match || match.ended || !me) return;
           me.score = Math.max(0, Math.min(1_000_000, Math.floor(Number(msg.score) || 0)));
           me.lines = Math.max(me.lines, Math.floor(Number(msg.lines) || 0));
@@ -800,6 +948,16 @@ export function initBattle(server, deps) {
       clients.delete(ws);
       leaveQueues(ws);
       leaveRoom(ws);
+      // Battle royale: leaving = instant elimination at the current rank.
+      if (ws.royaleId) {
+        const r = royales.get(ws.royaleId);
+        if (r && !r.ended) {
+          const ranked = royaleRanked(r);
+          const idx = ranked.findIndex(e => e.ws === ws);
+          if (idx !== -1) endRoyaleFor(ranked[idx], r, idx + 1, ranked);
+        }
+        ws.royaleId = null;
+      }
       const match = ws.matchId ? matches.get(ws.matchId) : null;
       if (match && !match.ended) {
         const p = match.players.find(q => q.sock === ws);

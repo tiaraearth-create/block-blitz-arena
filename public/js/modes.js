@@ -116,6 +116,12 @@ const ITEM_DEFS = {
 };
 
 function getItemCounts() {
+  // Admins carry infinite boosters.
+  if (session.user && session.user.role === 'admin') {
+    const inf = {};
+    for (const id of Object.keys(ITEM_DEFS)) inf[id] = Infinity;
+    return inf;
+  }
   if (session.user) return session.user.items || {};
   try {
     const v = JSON.parse(localStorage.getItem('bba_items'));
@@ -127,6 +133,7 @@ function getItemCounts() {
 }
 
 function spendItem(id) {
+  if (session.user && session.user.role === 'admin') return;   // ∞ — nothing to spend
   if (session.user) {
     session.user.items = session.user.items || {};
     session.user.items[id] = Math.max(0, (session.user.items[id] || 0) - 1);
@@ -150,7 +157,7 @@ export function updateItemBar() {
   document.querySelectorAll('#itemBar [data-item]').forEach(b => {
     const id = b.dataset.item;
     const n = counts[id] || 0;
-    b.querySelector('b').textContent = n;
+    b.querySelector('b').textContent = n === Infinity ? '∞' : n;
     b.classList.toggle('off', n <= 0);
   });
 }
@@ -1212,15 +1219,72 @@ const DUNGEON_BANDS = [
   { name: '天界の門',   nameEn: 'Heavenly Gate',    board: 'board_kami',    track: 'kami',   foes: [['🕊️', '堕天使', 'Fallen Angel'], ['⚔️', '神殿騎士', 'Temple Knight'], ['🌟', '星霊', 'Star Spirit'], ['🔮', '法陣魔', 'Rune Fiend']], boss: ['😈', '魔神ゼルガドス', 'Zelgados the Demon God'] },
 ];
 
-function dungeonFloor(f) {
-  const band = DUNGEON_BANDS[Math.min(DUNGEON_BANDS.length - 1, Math.floor((f - 1) / 10))];
+// Underground realm (B1–B100): tougher, faster, rubble on every floor.
+const UNDER_BANDS = [
+  { name: '苔むす地下道', nameEn: 'Mossy Underpass',  board: 'board_forest',  track: 'battle', foes: [['🐛', '大ミミズ', 'Giant Worm'], ['🦟', '洞窟蚊', 'Cave Gnat'], ['🍄', '毒キノコ', 'Toxic Shroom'], ['🐌', '岩ナメクジ', 'Rock Slug']], boss: ['🐍', '地底大蛇', 'Tunnel Serpent'] },
+  { name: '忘れられた坑道', nameEn: 'Forgotten Mineshaft', board: 'board_default', track: 'battle', foes: [['⛏️', '亡霊坑夫', 'Ghost Miner'], ['🦇', '洞窟コウモリ', 'Cave Bat'], ['🕸️', '坑道グモ', 'Shaft Spider'], ['🧌', 'トロル', 'Troll']], boss: ['🗿', 'ゴーレム親方', 'Golem Foreman'] },
+  { name: '地底湖',       nameEn: 'Sunless Lake',     board: 'board_ocean',   track: 'battle', foes: [['🐟', '盲目魚', 'Blind Fish'], ['🦞', '白ザリガニ', 'Pale Crayfish'], ['🐸', '洞窟ガエル', 'Cave Toad'], ['🪼', '地底クラゲ', 'Deep Jelly']], boss: ['🐊', '地底湖の主', 'Lord of the Sunless Lake'] },
+  { name: '水晶の洞',     nameEn: 'Crystal Hollow',   board: 'board_galaxy',  track: 'hard',   foes: [['💎', 'クリスタル獣', 'Crystal Beast'], ['✨', '光の精', 'Light Wisp'], ['🦂', '水晶サソリ', 'Crystal Scorpion'], ['🗿', '晶石人形', 'Geode Golem']], boss: ['👸', '水晶の女王', 'Crystal Queen'] },
+  { name: '骨の回廊',     nameEn: 'Bone Gallery',     board: 'board_oni',     track: 'boss',   foes: [['💀', '骸骨兵', 'Bone Soldier'], ['🦴', '骨犬', 'Bone Hound'], ['👻', '地縛霊', 'Earthbound Ghost'], ['🧟', '屍鬼', 'Ghoul']], boss: ['☠️', '骸骨王', 'Skeleton King'] },
+  { name: '溶岩脈',       nameEn: 'Lava Vein',        board: 'board_volcano', track: 'hard',   foes: [['🔥', 'マグマ虫', 'Magma Grub'], ['🦎', '火蜥蜴', 'Flame Newt'], ['👹', '炎鬼', 'Flame Oni'], ['🌋', '噴煙魔', 'Smoke Fiend']], boss: ['🐉', '地竜バルガ', 'Balga the Earth Dragon'] },
+  { name: '毒の沼窟',     nameEn: 'Venom Grotto',     board: 'board_forest',  track: 'oni',    foes: [['🐍', '毒蛇', 'Viper'], ['🦠', '猛毒スライム', 'Toxic Ooze'], ['🕷️', '母グモ', 'Brood Spider'], ['🦂', '死のサソリ', 'Death Scorpion']], boss: ['🐲', '毒竜ドクロア', 'Dokuroa the Venom Drake'] },
+  { name: '静寂の墓所',   nameEn: 'Silent Crypt',     board: 'board_oni',     track: 'oni',    foes: [['⚰️', '棺の霊', 'Coffin Wraith'], ['🧛', '血吸い', 'Blood Fiend'], ['👤', '影人', 'Shade'], ['🕯️', '呪い火', 'Curse Flame']], boss: ['👑', '墓所の王', 'Crypt King'] },
+  { name: '奈落への橋',   nameEn: 'Bridge to the Abyss', board: 'board_galaxy', track: 'kami', foes: [['🌑', '闇の使徒', 'Dark Apostle'], ['🦅', '深淵鷲', 'Abyss Eagle'], ['⛓️', '鎖の獄卒', 'Chain Warden'], ['🔮', '虚無魔', 'Void Fiend']], boss: ['😱', '奈落の番人', 'Warden of the Abyss'] },
+  { name: '深淵の玉座',   nameEn: 'Throne of the Abyss', board: 'board_oni',  track: 'kami',   foes: [['👿', '深淵の魔兵', 'Abyssal Soldier'], ['🌑', '無貌のもの', 'The Faceless'], ['🐙', '深淵の触手', 'Abyssal Tendril'], ['💀', '奈落騎士', 'Abyss Knight']], boss: ['👁️', '深淵神アビソス', 'Abysos the Abyss God'] },
+];
+
+// Heaven realm (H1–H100): slower but heavier attacks; bosses grant blessings.
+const HEAVEN_BANDS = [
+  { name: '雲の階段',     nameEn: 'Stairway of Clouds', board: 'board_default', track: 'pixel', foes: [['☁️', '雲ひつじ', 'Cloud Sheep'], ['🕊️', '白鳩兵', 'Dove Trooper'], ['🌬️', '風の精', 'Wind Sprite'], ['🎐', '鈴天使', 'Chime Cherub']], boss: ['🦢', '白鳥の守護者', 'Swan Guardian'] },
+  { name: '虹の花園',     nameEn: 'Rainbow Garden',   board: 'board_sakura',  track: 'pixel',  foes: [['🦋', '虹蝶', 'Rainbow Butterfly'], ['🐝', '蜜天蜂', 'Honeybee Cherub'], ['🌷', '花の精', 'Flower Sprite'], ['🐞', '星てんとう', 'Star Ladybug']], boss: ['🧚', '花園の女王', 'Queen of the Garden'] },
+  { name: '星屑の橋',     nameEn: 'Stardust Bridge',  board: 'board_galaxy',  track: 'pixel',  foes: [['⭐', '星の子', 'Starling'], ['🌠', '流星獣', 'Meteor Beast'], ['🪐', '環の精', 'Ring Spirit'], ['✨', '光塵魔', 'Gleam Fiend']], boss: ['🌟', '星織りの賢者', 'Sage of Woven Stars'] },
+  { name: '月光の泉',     nameEn: 'Moonlit Spring',   board: 'board_ocean',   track: 'pixel',  foes: [['🌙', '月ウサギ', 'Moon Rabbit'], ['🫧', '泡天使', 'Bubble Cherub'], ['🐬', '天空イルカ', 'Sky Dolphin'], ['🦚', '月孔雀', 'Moon Peacock']], boss: ['🌕', '月の巫女', 'Priestess of the Moon'] },
+  { name: '審判の間',     nameEn: 'Hall of Judgment', board: 'board_kami',    track: 'boss',   foes: [['⚖️', '天秤の番人', 'Scale Keeper'], ['📜', '律法の霊', 'Law Spirit'], ['🗡️', '裁きの剣', 'Judging Blade'], ['👁️', '監視者', 'The Watcher']], boss: ['🦁', '審判者レオン', 'Leon the Adjudicator'] },
+  { name: '竪琴の雲海',   nameEn: 'Sea of Harp Clouds', board: 'board_sunset', track: 'kami',  foes: [['🎵', '音符精', 'Note Sprite'], ['🎺', 'ラッパ天使', 'Trumpet Cherub'], ['🪽', '有翼獅子', 'Winged Lion'], ['🕊️', '聖鳩', 'Holy Dove']], boss: ['🎼', '大聖歌長', 'Grand Cantor'] },
+  { name: '黄金の大聖堂', nameEn: 'Golden Cathedral', board: 'board_kami',    track: 'kami',   foes: [['⚔️', '聖堂騎士', 'Cathedral Knight'], ['🛡️', '光の衛兵', 'Light Sentinel'], ['🕯️', '聖火の精', 'Sacred Flame'], ['📿', '祈りの霊', 'Prayer Spirit']], boss: ['👼', '大天使ミカエラ', 'Archangel Michaela'] },
+  { name: '天雷の峰',     nameEn: 'Peak of Holy Thunder', board: 'board_galaxy', track: 'oni', foes: [['⚡', '天雷精', 'Skybolt Sprite'], ['🦅', '神鷲', 'Divine Eagle'], ['🌩️', '雷雲魔', 'Storm Halo'], ['🔱', '雷槍兵', 'Thunder Lancer']], boss: ['🐦‍🔥', '不死鳥フェニクス', 'Phoenix'] },
+  { name: '神々の回廊',   nameEn: 'Corridor of the Gods', board: 'board_kami', track: 'kami',  foes: [['🗿', '神像兵', 'Idol Soldier'], ['🦄', '聖獣ユニコーン', 'Unicorn'], ['🐉', '天竜', 'Sky Dragon'], ['🪽', '熾天使', 'Seraph']], boss: ['🌈', '虹神殿の主', 'Master of the Rainbow Shrine'] },
+  { name: '創造の玉座',   nameEn: 'Throne of Creation', board: 'board_kami',  track: 'kami',   foes: [['🪽', '大熾天使', 'High Seraph'], ['☀️', '太陽の化身', 'Avatar of the Sun'], ['🌌', '星幽体', 'Astral Being'], ['👑', '王冠の霊', 'Crown Spirit']], boss: ['✨', '至高神ルミナス', 'Luminus the Supreme'] },
+];
+
+// Realm definitions: the tower is the classic; the others remix the rules.
+const DUNGEON_REALMS = {
+  tower: {
+    id: 'tower', icon: '🏰', name: 'ダンジョン塔', nameEn: 'Dungeon Tower',
+    prefix: 'F', floors: 100, bands: DUNGEON_BANDS,
+    hpMult: 1, atkSecMult: 1, extraAtkCells: 0,
+    bestKey: 'bba_dungeon_max', resultMode: 'dungeon',
+    desc: '王道の100階。10階ごとにボス＆チェックポイント',
+    descEn: 'The classic 100-floor climb. Boss + checkpoint every 10 floors',
+  },
+  under: {
+    id: 'under', icon: '🕳️', name: '地下ダンジョン', nameEn: 'Underground Depths',
+    prefix: 'B', floors: 100, bands: UNDER_BANDS,
+    hpMult: 1.25, atkSecMult: 0.85, extraAtkCells: 0, startGarbage: true,
+    bestKey: 'bba_dungeon_under_max', resultMode: 'dungeon_under',
+    desc: '上級者向け。敵が硬く攻撃も速い。毎フロア、床にガレキが積もっている…',
+    descEn: 'For veterans: tougher foes, faster attacks, and rubble litters every floor…',
+  },
+  heaven: {
+    id: 'heaven', icon: '☁️', name: '天国ダンジョン', nameEn: 'Heavenly Ascent',
+    prefix: 'H', floors: 100, bands: HEAVEN_BANDS,
+    hpMult: 0.9, atkSecMult: 1.15, extraAtkCells: 1, blessing: true,
+    bestKey: 'bba_dungeon_heaven_max', resultMode: 'dungeon_heaven',
+    desc: '攻撃はゆっくり大ぶり。ボスを倒すたび「天使の祝福」で残機+1',
+    descEn: "Slow but heavy attacks. Every boss grants an angel's blessing: +1 life",
+  },
+};
+
+function dungeonFloor(f, realm = DUNGEON_REALMS.tower) {
+  const bands = realm.bands;
+  const band = bands[Math.min(bands.length - 1, Math.floor((f - 1) / 10))];
   const isBoss = f % 10 === 0;
-  const isFinal = f === 100;
+  const isFinal = f === realm.floors;
   const [emoji, name, nameEn] = isBoss ? band.boss : band.foes[(f - 1) % band.foes.length];
-  let hp = Math.round(260 + f * 95 + f * f * 1.15);
+  let hp = Math.round((260 + f * 95 + f * f * 1.15) * realm.hpMult);
   if (isBoss) hp = Math.round(hp * (isFinal ? 3 : 2.1));
-  const atkSec = Math.max(5.5, 15 - f * 0.09) * (isBoss ? 1.25 : 1);
-  const atkCells = Math.min(7, 1 + Math.floor(f / 12) + (isBoss ? 2 : 0));
+  const atkSec = Math.max(4.5, (15 - f * 0.09) * realm.atkSecMult) * (isBoss ? 1.25 : 1);
+  const atkCells = Math.min(8, 1 + Math.floor(f / 12) + (isBoss ? 2 : 0) + realm.extraAtkCells);
   return { floor: f, band, isBoss, isFinal, emoji, name, nameEn, hp, atkSec, atkCells };
 }
 
@@ -1247,12 +1311,25 @@ function pickPerks(mode) {
 }
 
 class DungeonMode {
-  constructor(startFloor = 1) {
+  constructor(startFloor = 1, realmId = 'tower') {
     this.mode = 'dungeon';
-    this.startFloor = Math.max(1, Math.min(91, startFloor));
+    this.realm = DUNGEON_REALMS[realmId] || DUNGEON_REALMS.tower;
+    this.startFloor = Math.max(1, Math.min(this.realm.floors - 9, startFloor));
     this.floor = this.startFloor;
     this.lives = 1;
     this.atkSlow = 1;   // >1 = slower enemy attacks (perk)
+  }
+
+  best() { return Number(localStorage.getItem(this.realm.bestKey) || 0); }
+  setBest(v) { if (v > this.best()) localStorage.setItem(this.realm.bestKey, String(v)); }
+
+  // Underground floors start half-buried in rubble.
+  realmFloorStart() {
+    if (!this.realm.startGarbage) return;
+    const n = 3 + Math.floor(this.floor / 25);
+    this.engine.addGarbage(n);
+    if (this.engine.over && !this.engine.hasAnyMove()) { this.engine.reviveBoard(); }
+    else this.engine.over = false;
   }
 
   start() {
@@ -1279,10 +1356,14 @@ class DungeonMode {
     v.onPlace = r => this.onPlace(r);
     v.onGameOver = () => this.onTopOut();
     this.loadFloor(this.floor, true);
+    this.realmFloorStart();
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    toast(k > 0 ? t(`🏰 F${this.startFloor} から再開！（強化ボーナス付き）`, `🏰 Resuming from F${this.startFloor}! (bonus perks included)`) : t('🏰 ダンジョン挑戦開始！100Fを目指せ！', '🏰 The climb begins! Reach floor 100!'), 'announce', 2600);
+    const R = this.realm;
+    toast(k > 0
+      ? t(`${R.icon} ${R.prefix}${this.startFloor} から再開！（強化ボーナス付き）`, `${R.icon} Resuming from ${R.prefix}${this.startFloor}! (bonus perks included)`)
+      : t(`${R.icon} ${R.name}に挑戦開始！${R.prefix}${R.floors}を目指せ！`, `${R.icon} ${R.nameEn} begins! Reach ${R.prefix}${R.floors}!`), 'announce', 2600);
     countdownOverlay(3, () => {
       v.inputLocked = false;
       this.armAttack();
@@ -1290,19 +1371,19 @@ class DungeonMode {
   }
 
   loadFloor(f, silent) {
-    this.info = dungeonFloor(f);
+    this.info = dungeonFloor(f, this.realm);
     this.hp = this.info.hp;
     const v = getView();
     v.setTheme({ ...equippedTheme(), boardId: this.info.band.board });
     audio.playTrack(this.info.band.track);
     $('#bossEmoji').textContent = this.info.emoji;
     $('#bossEmoji').className = 'boss-emoji';
-    $('#bossName').textContent = t(`F${f} ${this.info.band.name}：${this.info.name}`, `F${f} ${this.info.band.nameEn}: ${this.info.nameEn}`);
+    $('#bossName').textContent = t(`${this.realm.prefix}${f} ${this.info.band.name}：${this.info.name}`, `${this.realm.prefix}${f} ${this.info.band.nameEn}: ${this.info.nameEn}`);
     this.updateHpBar();
     this.updateHud();
     if (silent) return;
     if (this.info.isFinal) {
-      toast(t(`😈 最上階——魔神ゼルガドスが待ち受ける！！`, `😈 The top floor — Zelgados the Demon God awaits!!`), 'announce', 3000);
+      toast(t(`${this.info.emoji} 最深部——${this.info.name}が待ち受ける！！`, `${this.info.emoji} The last floor — ${this.info.nameEn} awaits!!`), 'announce', 3000);
       audio.bossAttack();
       v.shake = 16;
     } else if (this.info.isBoss) {
@@ -1318,7 +1399,7 @@ class DungeonMode {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = `🏰 F${this.floor}/100 ・ ❤️×${this.lives}${this.engine.scoreMult > 1 ? ` ・ 💪×${this.engine.scoreMult.toFixed(1)}` : ''}`;
+    $('#hudSub').textContent = `${this.realm.icon} ${this.realm.prefix}${this.floor}/${this.realm.floors} ・ ❤️×${this.lives}${this.engine.scoreMult > 1 ? ` ・ 💪×${this.engine.scoreMult.toFixed(1)}` : ''}`;
   }
 
   updateHpBar() {
@@ -1387,14 +1468,15 @@ class DungeonMode {
     audio.bossDefeated();
     $('#bossEmoji').classList.add('boss-dead');
     // Progressive best: floors cleared count even if the run ends later.
-    const cleared = this.floor;
-    if (cleared > Number(localStorage.getItem('bba_dungeon_max') || 0)) {
-      localStorage.setItem('bba_dungeon_max', String(cleared));
-    }
-    if (this.floor >= 100) { this.finish(true); return; }
+    this.setBest(this.floor);
+    if (this.floor >= this.realm.floors) { this.finish(true); return; }
     confettiBurst(this.info.isBoss ? 45 : 12);
     if (this.info.isBoss) {
-      toast(t(`🎉 ボス撃破！チェックポイント到達（次回からF${this.floor + 1}で再開可能）`, `🎉 Boss down! Checkpoint reached (you can restart from F${this.floor + 1})`), 'announce', 3000);
+      toast(t(`🎉 ボス撃破！チェックポイント到達（次回から${this.realm.prefix}${this.floor + 1}で再開可能）`, `🎉 Boss down! Checkpoint reached (you can restart from ${this.realm.prefix}${this.floor + 1})`), 'announce', 3000);
+      if (this.realm.blessing) {
+        this.lives++;
+        setTimeout(() => toast(t('👼 天使の祝福！残機 +1', "👼 An angel's blessing! +1 life"), 'announce', 2400), 1200);
+      }
     }
     view.inputLocked = true;
     this.perkOpen = true;
@@ -1402,11 +1484,13 @@ class DungeonMode {
       this.perkOpen = false;
       this.floor++;
       this.loadFloor(this.floor);
+      this.realmFloorStart();
       const e = this.engine;
       // Mercy: never enter a floor without a legal move.
       if (!e.hasAnyMove()) { e.reviveBoard(); view.reviveFlash(); }
       else e.over = false;
       view.inputLocked = false;
+      this.updateHud();
       this.armAttack();
     });
   }
@@ -1476,10 +1560,9 @@ class DungeonMode {
     this.ended = true;
     clearInterval(this.atkInt);
     getView().inputLocked = true;
-    const cleared = won ? 100 : this.floor - 1;
-    if (cleared > Number(localStorage.getItem('bba_dungeon_max') || 0)) {
-      localStorage.setItem('bba_dungeon_max', String(cleared));
-    }
+    const R = this.realm;
+    const cleared = won ? R.floors : this.floor - 1;
+    this.setBest(cleared);
     if (won) {
       audio.victory();
       confettiBurst(100);
@@ -1489,30 +1572,31 @@ class DungeonMode {
     }
     const e = this.engine;
     const rewards = await submitResult({
-      mode: 'dungeon', floor: cleared, score: e.score, lines: e.linesCleared,
+      mode: R.resultMode, floor: cleared, score: e.score, lines: e.linesCleared,
       maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won,
     });
     if (rewards && rewards.badge === 'dungeon') {
       setTimeout(() => { toast(t('🏰 バッジ「百塔踏破」を獲得！+500💎', '🏰 Badge earned: Hundred-Floor Conqueror! +500💎'), 'announce', 6000); confettiBurst(80); }, 1200);
     }
     const cp = Math.floor(cleared / 10) * 10 + 1;
-    const banner = won ? t('🏆 100F 完全制覇！！', '🏆 Floor 100 conquered!!') : this.aborted ? t(`🚪 リタイア（F${this.floor}）`, `🚪 Retired (F${this.floor})`) : t(`F${this.floor} で力尽きた…`, `Fell on F${this.floor}…`);
+    const P = R.prefix;
+    const banner = won ? t(`🏆 ${R.name} 完全制覇！！`, `🏆 ${R.nameEn} conquered!!`) : this.aborted ? t(`🚪 リタイア（${P}${this.floor}）`, `🚪 Retired (${P}${this.floor})`) : t(`${P}${this.floor} で力尽きた…`, `Fell on ${P}${this.floor}…`);
     const m = showModal(`
       <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
       <div class="result-stats">
-        <div class="rs-row"><span>${t('クリアした階', 'Floors cleared')}</span><b>${won ? t('全100階！', 'All 100!') : `F${fmt(cleared)}`}</b></div>
+        <div class="rs-row"><span>${t('クリアした階', 'Floors cleared')}</span><b>${won ? t(`全${R.floors}階！`, `All ${R.floors}!`) : `${P}${fmt(cleared)}`}</b></div>
         <div class="rs-row"><span>${t('総ダメージ', 'Total damage')}</span><b>${fmt(e.score)}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
-        ${won ? '' : `<div class="rs-row"><span>${t('次回の再開地点', 'Next run resumes at')}</span><b>F${cp}</b></div>`}
+        ${won ? '' : `<div class="rs-row"><span>${t('次回の再開地点', 'Next run resumes at')}</span><b>${P}${cp}</b></div>`}
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        <button class="btn btn-dungeon" id="rAgain">${won ? t('もう一周', 'Run it again') : t(`F${cp}から再挑戦`, `Retry from F${cp}`)}</button>
+        <button class="btn btn-dungeon" id="rAgain">${won ? t('もう一周', 'Run it again') : t(`${P}${cp}から再挑戦`, `Retry from ${P}${cp}`)}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
-    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startDungeon(won ? 1 : cp); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startDungeon(won ? 1 : cp, R.id); };
   }
 
   quit() {
@@ -1540,12 +1624,14 @@ class DungeonMode {
   }
 }
 
-export function startDungeon(startFloor = 1) {
+export function startDungeon(startFloor = 1, realmId = 'tower') {
   if (currentMode) currentMode.destroy();
-  currentMode = new DungeonMode(startFloor);
+  currentMode = new DungeonMode(startFloor, realmId);
   window.__bbaMode = currentMode;
   currentMode.start();
 }
+
+export { DUNGEON_REALMS };
 
 // ---------------------------------------------------------------------------
 // Chaos mode (limited-time event, admin-controlled): the rules mutate on an
@@ -1878,6 +1964,10 @@ class OnlineMode extends VersusBase {
       .on('emote', msg => this.showEmote(msg.slot, msg.emoji))
       .on('tourney_state', msg => this.onTourneyState(msg))
       .on('tourney_champion', () => confettiBurst(70))
+      .on('royale_found', msg => this.onRoyaleFound(msg))
+      .on('royale_state', msg => this.onRoyaleState(msg))
+      .on('royale_cut', msg => this.onRoyaleCut(msg))
+      .on('royale_result', msg => this.onRoyaleResult(msg))
       .on('online', msg => {
         this.onlineCount = msg.online;
         const el = $('#mmOnline');
@@ -1900,6 +1990,8 @@ class OnlineMode extends VersusBase {
         ? t('レイドパーティを募集しています…', 'Gathering a raid party…')
         : this.kind === 'tourney'
         ? t('トーナメント参加者を募集しています…', 'Gathering tournament entrants…')
+        : this.kind === 'royale'
+        ? t('バトルロイヤル参加者を募集しています…', 'Gathering battle-royale contenders…')
         : t('対戦相手を探しています…', 'Looking for an opponent…');
       $('#mmSub').innerHTML = t('オンライン: <span id="mmOnline">-</span>人 ・ 対戦相手を検索中…',
         'Online: <span id="mmOnline">-</span> players ・ searching…');
@@ -1975,6 +2067,97 @@ class OnlineMode extends VersusBase {
       const bf = $('#rsBotFill');
       if (bf) bf.onchange = e => this.client.setRoom({ botFill: e.target.checked });
     }
+  }
+
+  // ---- battle royale (100 players, score race with cuts) ----
+
+  onRoyaleFound(msg) {
+    if (this.inMatch || this.ended) return;
+    closeModal();
+    this.inMatch = true;
+    this.isRoyale = true;
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    showItemBar(false);
+    this.timeLeft = msg.duration;
+    this.updateTimerHud();
+    const v = getView();
+    this.engine = new Engine(msg.seed);
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = () => this.updateRoyaleHud();
+    v.onGameOver = () => this.onTopOut();
+    this.updateRoyaleHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('pixel');
+    toast(t('💯 バトルロイヤル開始！100人の頂点を目指せ！', '💯 Battle Royale! Outscore 99 rivals!'), 'announce', 2600);
+    countdownOverlay(msg.countdown || 3, () => {
+      v.inputLocked = false;
+      this.startTimer(() => { getView().inputLocked = true; });   // the server calls the finish
+      this.stateInt = setInterval(() => this.pushState(), 900);
+    }, audio);
+  }
+
+  updateRoyaleHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = this.royaleRank
+      ? `RANK ${this.royaleRank}/${this.royaleAlive}` : 'SCORE';
+  }
+
+  onRoyaleState(msg) {
+    this.royaleRank = msg.rank;
+    this.royaleAlive = msg.alive;
+    this.updateRoyaleHud();
+    if (msg.nextCutIn != null && msg.nextCutIn <= 5 && msg.alive > msg.nextKeep
+      && (!this.cutWarnedAt || Date.now() - this.cutWarnedAt > 8000)) {
+      this.cutWarnedAt = Date.now();
+      toast(t(`⚠️ まもなく足切り！上位${msg.nextKeep}人だけ生き残れる`, `⚠️ Cut incoming! Only the top ${msg.nextKeep} survive`), 'err', 2000);
+    }
+  }
+
+  onRoyaleCut(msg) {
+    audio.bossAttack();
+    if (view) view.shake = 8;
+    toast(t(`⚔️ 足切り！${msg.eliminated}人脱落 — 残り${msg.alive}人`, `⚔️ The cut! ${msg.eliminated} eliminated — ${msg.alive} remain`), 'announce', 2400);
+  }
+
+  onRoyaleResult(msg) {
+    if (this.ended) return;
+    this.ended = true;
+    clearInterval(this.stateInt);
+    this.stopTimer();
+    getView().inputLocked = true;
+    if (msg.user) { session.user = msg.user; updateTopbar(); }
+    const win = msg.placement === 1;
+    if (win) { audio.victory(); confettiBurst(90); }
+    else if (msg.placement <= 10) audio.victory();
+    else audio.gameOver();
+    if (msg.rewards && msg.rewards.badge === 'royale') {
+      setTimeout(() => toast(t('💯 バッジ「百人の頂点」を獲得！+150💎', '💯 Badge earned: Apex of 100! +150💎'), 'announce', 5000), 1200);
+    }
+    const banner = win ? t('👑 1位！VICTORY!', '👑 #1 VICTORY!') : `#${msg.placement} / ${msg.players}`;
+    const m = showModal(`
+      <div class="result-banner ${win ? 'win' : msg.placement <= 10 ? 'draw' : 'lose'}">${banner}</div>
+      ${msg.placement <= 10 && !win ? `<p class="muted center">${t('TOP10入り！すごい！', 'Top 10 finish — amazing!')}</p>` : ''}
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('最終順位', 'Final placement')}</span><b>#${msg.placement} / ${msg.players}</b></div>
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(msg.score)}</b></div>
+        ${msg.top && msg.top[0] ? `<div class="rs-row"><span>🥇 ${escapeHtml(msg.top[0].name)}</span><b>${fmt(msg.top[0].score)}</b></div>` : ''}
+        ${rewardsRows(msg.rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-oni" id="rAgain">${t('もう一度参戦', 'Drop in again')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline('royale'); };
   }
 
   // ---- tournament bracket (between rounds) ----

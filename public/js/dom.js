@@ -101,11 +101,11 @@ export function confettiBurst(count = 40) {
 export function updateTopbar() {
   const u = session.user;
   $('#userName').textContent = u ? u.username : t('ゲスト', 'Guest');
-  $('#userAvatar').textContent = u ? (u.role === 'admin' ? '🛡️' : '😀') : '👤';
+  $('#userAvatar').textContent = u ? (u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀') : '👤';
   $('#coinsLabel').textContent = fmt(u ? u.coins : 0);
   $('#gemsLabel').textContent = fmt(u ? u.gems : 0);
   const lvl = $('#userLevel');
   if (u) { lvl.classList.remove('hidden'); lvl.textContent = `Lv.${u.level}`; }
   else lvl.classList.add('hidden');
-  $('#btnAdmin').classList.toggle('hidden', !u || u.role !== 'admin');
+  $('#btnAdmin').classList.toggle('hidden', !u || (u.role !== 'admin' && u.role !== 'mod'));
 }

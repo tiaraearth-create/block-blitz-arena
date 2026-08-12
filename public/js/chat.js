@@ -18,12 +18,13 @@ function appendMsg(msg, scroll = true) {
   const el = document.createElement('div');
   const me = session.user && msg.from === session.user.username;
   const isAdmin = msg.role === 'admin';
+  const isMod = msg.role === 'mod';
   el.className = `chat-msg ${me ? 'mine' : ''} ${isAdmin ? 'admin-msg' : ''}`;
   const time = new Date(msg.at || Date.now());
   const hh = String(time.getHours()).padStart(2, '0');
   const mm = String(time.getMinutes()).padStart(2, '0');
   el.innerHTML = `
-    <span class="cm-meta"><span class="${isAdmin ? 'cm-admin' : ''}">${isAdmin ? '🛡️' : ''}${escapeHtml(msg.from)}</span> ・ ${hh}:${mm}</span>
+    <span class="cm-meta"><span class="${isAdmin ? 'cm-admin' : ''}">${isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</span> ・ ${hh}:${mm}</span>
     <span class="cm-bubble">${escapeHtml(msg.text)}</span>`;
   box.appendChild(el);
   while (box.children.length > 80) box.removeChild(box.firstChild);

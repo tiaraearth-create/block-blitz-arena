@@ -65,9 +65,9 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯' };
   const m = showModal(`
-    <h2>${u.role === 'admin' ? '🛡️' : '😀'} ${u.username}</h2>
+    <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
     <div class="result-stats">
       <div class="rs-row"><span>${tr('レベル', 'Level')}</span><b>Lv.${u.level}</b></div>
@@ -384,7 +384,7 @@ export async function openLeaderboard(board = 'score') {
       return;
     }
     const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯' };
     list.innerHTML = data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
@@ -407,6 +407,7 @@ export async function openLeaderboard(board = 'score') {
 let shopItems = null;
 let shopBoosters = null;
 let shopTab = 'skin';
+let shopRole = null;   // admin sees exclusive gear — refetch when the role changes
 
 export async function openShop(tab = shopTab) {
   showScreen('shop');
@@ -415,10 +416,12 @@ export async function openShop(tab = shopTab) {
   const grid = $('#shopGrid');
   grid.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
   try {
-    if (!shopItems) {
+    const role = session.user ? session.user.role : 'guest';
+    if (!shopItems || shopRole !== role) {
       const data = await api('/api/shop');
       shopItems = data.items;
       shopBoosters = data.boosters || [];
+      shopRole = role;
     }
   } catch (err) {
     grid.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
@@ -434,7 +437,9 @@ function renderShop() {
   const items = shopItems.filter(i => i.cat === shopTab);
   grid.innerHTML = '';
   items.forEach((item, idx) => {
-    const owned = u ? u.owned.includes(item.id) : item.price === 0;
+    // Admin gear is implicitly owned by admins (never purchasable).
+    const owned = item.adminOnly ? (u && u.role === 'admin')
+      : u ? u.owned.includes(item.id) : item.price === 0;
     const equipped = u ? u.equipped[item.cat] === item.id : !!item.default;
     const cur = item.currency === 'gems' ? '💎' : '🪙';
     const el = document.createElement('div');
@@ -442,13 +447,15 @@ function renderShop() {
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
     el.innerHTML = `
       <div class="shop-preview" data-pv="${item.id}"></div>
-      <div class="shop-name">${catName(item)}</div>
+      <div class="shop-name">${item.adminOnly ? '👑 ' : ''}${catName(item)}</div>
       <div class="shop-desc">${catDesc(item)}</div>
       ${equipped
         ? `<button class="btn btn-sm btn-ghost" disabled>${tr('✓ 装備中', '✓ Equipped')}</button>`
         : owned
           ? `<button class="btn btn-sm btn-primary" data-act="equip">${tr('装備する', 'Equip')}</button>`
-          : `<button class="btn btn-sm btn-gold" data-act="buy">${cur} ${fmt(item.price)}</button>`}
+          : item.adminOnly
+            ? `<button class="btn btn-sm btn-ghost" disabled>${tr('👑 運営専用', '👑 Staff only')}</button>`
+            : `<button class="btn btn-sm btn-gold" data-act="buy">${cur} ${fmt(item.price)}</button>`}
     `;
     grid.appendChild(el);
     renderPreview(el.querySelector('.shop-preview'), item);
@@ -474,7 +481,7 @@ function renderPreview(el, item) {
     el.textContent = '▦';
     el.style.color = b ? b.accent : '#fff';
   } else {
-    const icons = { fx_default: '✨', fx_fireworks: '🎆', fx_thunder: '⚡', fx_sakura: '🌸', fx_bubble: '🫧', fx_star: '⭐' };
+    const icons = { fx_default: '✨', fx_fireworks: '🎆', fx_thunder: '⚡', fx_sakura: '🌸', fx_bubble: '🫧', fx_star: '⭐', fx_flame: '🔥', fx_admin: '🌈' };
     el.textContent = icons[item.id] || '✨';
   }
 }
@@ -718,8 +725,24 @@ export async function openAdmin() {
   showScreen('admin');
   const statsEl = $('#adminStats');
   const usersEl = $('#adminUsers');
+  const isMod = session.user && session.user.role === 'mod';
+  // Mods see a slim moderation panel — admin sections stay hidden.
+  $$('#screen-admin .admin-actions').forEach(el =>
+    el.classList.toggle('hidden', isMod && !el.querySelector('#adminUserSearch')));
   statsEl.innerHTML = '<p class="muted">読み込み中…</p>';
   usersEl.innerHTML = '';
+  if (isMod) {
+    try {
+      const data = await api('/api/mod/users');
+      statsEl.innerHTML = `
+        <div class="stat-card"><b>🔧</b><span>モデレーター</span></div>
+        <div class="stat-card"><b>${fmt(data.users.length)}</b><span>登録ユーザー</span></div>`;
+      renderModUsers(data.users);
+    } catch (err) {
+      statsEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+    }
+    return;
+  }
   try {
     const [stats, usersData, txData] = await Promise.all([
       api('/api/admin/stats'),
@@ -784,13 +807,45 @@ function showSeasonModal() {
   };
 }
 
+// Moderator view: mute toggles + chat clear, nothing else.
+function renderModUsers(users) {
+  const usersEl = $('#adminUsers');
+  const roleIcon = r => r === 'admin' ? '🛡️' : r === 'mod' ? '🔧' : '👤';
+  usersEl.innerHTML = `
+    <div class="admin-actions">
+      <button class="btn btn-ghost btn-sm" id="modChatClear" style="color:var(--red)">🧹 チャット全消去</button>
+    </div>` + users.map(u => `
+    <div class="admin-user-row ${u.banned ? 'banned' : ''}" data-uid="${u.id}">
+      <span class="au-name">${roleIcon(u.role)} ${escapeHtml(u.username)}</span>
+      <span class="au-meta">${u.banned ? '⛔凍結中 ' : ''}${u.muted ? '🔇ミュート中' : ''}</span>
+      <span class="au-actions">${u.role === 'user' ? `<button class="btn btn-sm btn-ghost" data-a="mute">${u.muted ? '🔈 解除' : '🔇 ミュート'}</button>` : ''}</span>
+    </div>`).join('');
+  $('#modChatClear').onclick = async () => {
+    if (!confirm('全体チャットの履歴を全員分クリアします。よろしいですか？')) return;
+    try {
+      await api('/api/mod/chat/clear', { method: 'POST', body: {} });
+      toast('🧹 チャットをクリアしました', 'ok');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  usersEl.querySelectorAll('[data-a="mute"]').forEach(btn => {
+    btn.onclick = async () => {
+      const u = users.find(x => x.id === btn.closest('.admin-user-row').dataset.uid);
+      try {
+        await api('/api/mod/mute', { method: 'POST', body: { id: u.id, muted: !u.muted } });
+        toast(!u.muted ? '🔇 ミュートしました' : '🔈 ミュートを解除しました', 'ok');
+        openAdmin();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  });
+}
+
 function renderAdminUsers(users) {
   const usersEl = $('#adminUsers');
   usersEl.innerHTML = users
     .sort((a, b) => b.createdAt - a.createdAt)
     .map(u => `
     <div class="admin-user-row ${u.banned ? 'banned' : ''}" data-uid="${u.id}">
-      <span class="au-name">${u.role === 'admin' ? '🛡️' : '👤'} ${escapeHtml(u.username)}</span>
+      <span class="au-name">${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '👤'} ${escapeHtml(u.username)}${u.role === 'mod' ? ' <small style="color:var(--cyan)">MOD</small>' : ''}</span>
       <span class="au-meta">Lv.${u.level} ・ 🪙${fmt(u.coins)} ・ 💎${fmt(u.gems)} ・ 🏆${fmt(u.stats.bestScore)} ・ R${u.stats.rating}${u.banned ? ' ・ ⛔凍結中' : ''}${u.muted ? ' ・ 🔇ミュート中' : ''}</span>
       <span class="au-actions">
         <button class="btn btn-sm btn-ghost" data-a="coins">+🪙</button>
@@ -799,6 +854,7 @@ function renderAdminUsers(users) {
         <button class="btn btn-sm btn-ghost" data-a="level" title="レベルを設定">Lv</button>
         <button class="btn btn-sm btn-ghost" data-a="badge" title="バッジを付与">🎖️</button>
         <button class="btn btn-sm btn-ghost" data-a="pass" title="パスワードを再設定">🔑</button>
+        ${session.user && u.id !== session.user.id ? `<button class="btn btn-sm btn-ghost" data-a="role" title="権限を変更（admin/mod/user）">👤⚙</button>` : ''}
         ${u.role !== 'admin' ? `
           <button class="btn btn-sm btn-ghost" data-a="mute" title="チャット禁止の切替">${u.muted ? '🔈' : '🔇'}</button>
           <button class="btn btn-sm btn-ghost" data-a="ban">${u.banned ? '解除' : '凍結'}</button>
@@ -828,6 +884,15 @@ function renderAdminUsers(users) {
             if (v === null) return;
             await api(`/api/admin/users/${uid}`, { method: 'POST', body: { setLevel: Math.floor(Number(v)) } });
             toast('レベルを設定しました', 'ok');
+          } else if (act === 'role') {
+            const role = prompt(
+              `${user.username} の権限を変更\n・admin = 管理者（全機能）\n・mod = モデレーター（チャット監視・ミュート）\n・user = 一般`,
+              user.role);
+            if (!role) return;
+            if (!['admin', 'mod', 'user'].includes(role)) { toast('admin / mod / user のいずれかで入力してください', 'err'); return; }
+            if (role === 'admin' && !confirm(`${user.username} を管理者にします。全機能（配布・凍結・削除）が使えるようになりますが、よろしいですか？`)) return;
+            await api(`/api/admin/users/${uid}`, { method: 'POST', body: { role } });
+            toast(role === 'admin' ? '🛡️ 管理者に任命しました' : role === 'mod' ? '🔧 モデレーターに任命しました' : '👤 一般ユーザーに戻しました', 'ok');
           } else if (act === 'badge') {
             const id = prompt(`${user.username} に付与するバッジID\n(bronze / silver / gold / oni / kami / souzou / maou / rush / dungeon / tourney)\n先頭に - で剥奪 (例: -gold)`, 'gold');
             if (!id) return;
@@ -1045,9 +1110,9 @@ export function bindAdminActions() {
     const cur = adminStats ? (adminStats.popScale ?? 1) : 1;
     const m = showModal(`
       <h2>🎭 にぎわい設定</h2>
-      <p class="muted center" style="margin-bottom:10px">AIプレイヤーの人口・チャット・ランキングの量を調整します<br>現在: <b>×${cur}</b>（0でオフ / 最大×3）</p>
+      <p class="muted center" style="margin-bottom:10px">AIプレイヤーの人口・チャット・ランキングの量を調整します<br>現在: <b>×${cur}</b>（0でオフ / 最大×10 — ×10で夜は7,000人規模！）</p>
       <div class="seg seg-wrap" id="popSeg" style="justify-content:center">
-        ${[0, 0.5, 1, 1.5, 2, 3].map(v => `<button data-v="${v}" ${v === cur ? 'class="active"' : ''}>×${v}</button>`).join('')}
+        ${[0, 0.5, 1, 1.5, 2, 3, 5, 7, 10].map(v => `<button data-v="${v}" ${v === cur ? 'class="active"' : ''}>×${v}</button>`).join('')}
       </div>
       <div class="modal-buttons" style="margin-top:12px">
         <button class="btn btn-primary" id="popClose">閉じる</button>

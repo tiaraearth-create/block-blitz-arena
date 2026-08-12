@@ -28,7 +28,22 @@ export class ParticleSystem {
       case 'fx_bubble': this.bubbles(x, y, size); break;
       case 'fx_star': this.stars(x, y, size); break;
       case 'fx_flame': this.flames(x, y, size); break;
+      case 'fx_admin': this.rainbow(x, y, size); break;
       default: this.spark(x, y, size, light, dark);
+    }
+  }
+
+  rainbow(x, y, size) {
+    for (let i = 0; i < this.n(12); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.6 + Math.random() * 1.2) * size * 5;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - size,
+        g: size * 5, life: 1, decay: 1.1 + Math.random() * 0.9,
+        size: size * (0.07 + Math.random() * 0.1),
+        color: `hsl(${(Math.random() * 360) | 0}, 95%, 65%)`,
+        kind: 'glow', trail: Math.random() < 0.4,
+      });
     }
   }
 

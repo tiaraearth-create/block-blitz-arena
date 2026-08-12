@@ -58,6 +58,10 @@ const CATALOG_EN = {
   item_cleaner: { name: 'Cleaner', desc: 'Clears all garbage + the bottom row' },
   item_fever: { name: 'Fever', desc: '2× score for 15 seconds' },
   item_mini: { name: 'Mini Blocks', desc: 'Turns your hand into tiny pieces' },
+  // admin-exclusive gear
+  skin_admin: { name: 'Rainbow [Staff]', desc: 'Staff-only blocks shimmering in rainbow' },
+  board_admin: { name: 'Throne Room [Staff]', desc: 'A staff-only stage of royal gold' },
+  fx_admin: { name: 'Rainbow Blessing [Staff]', desc: 'Staff-only rainbow particle burst' },
   // bosses
   slime: { name: 'Slime King' },
   golem: { name: 'Iron Golem' },
@@ -169,7 +173,6 @@ export function applyStaticI18n() {
   set('#btnBoss', '🐲 Boss Battle');
   set('#btnDungeon', '🏰 Dungeon');
   set('#btnWeekly', '🎯 Weekly');
-  set('#btnTourney', '🏆 Tournament');
   set('#btnSurvival', '💀 Survival');
   set('#btnChaos', '🌪️ Chaos Mode');
   set('#btnOnline', '🌐 Online Battle');

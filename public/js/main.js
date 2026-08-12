@@ -2,7 +2,7 @@
 import { session, api, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem, DUNGEON_REALMS } from './modes.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
@@ -150,8 +150,10 @@ $('#btnOnline').onclick = () => {
     <div class="form-col">
       <button class="btn btn-primary btn-big" data-online="duel">${t('⚔️ 1v1 ランクマッチ', '⚔️ 1v1 Ranked')}</button>
       <button class="btn btn-online btn-big" data-online="team">${t('👥 2v2 チーム戦', '👥 2v2 Team Battle')}</button>
+      <button class="btn btn-gold btn-big" data-online="tourney">${t('🏆 トーナメント（8人制）', '🏆 Tournament (8 players)')}</button>
+      <button class="btn btn-oni btn-big" data-online="royale">${t('💯 バトルロイヤル（100人）', '💯 Battle Royale (100 players)')}</button>
       <button class="btn btn-boss btn-big" data-online="raid">${t('🐲 レイドボス戦（協力）', '🐲 Raid Boss (co-op)')}</button>
-      <button class="btn btn-gold btn-big" data-online="custom">${t('🔧 カスタムルーム', '🔧 Custom Room')}</button>
+      <button class="btn btn-online btn-big" data-online="custom">${t('🔧 カスタムルーム', '🔧 Custom Room')}</button>
     </div>`);
   m.querySelectorAll('[data-online]').forEach(btn => {
     btn.onclick = () => { closeModal(); startOnline(btn.dataset.online); };
@@ -389,28 +391,39 @@ $('#btnChaos').onclick = () => {
 };
 
 // ---- dungeon tower: pick a starting checkpoint, then climb ----
-function dungeonBest() {
-  const local = Number(localStorage.getItem('bba_dungeon_max') || 0);
-  const srv = session.user && session.user.stats ? Number(session.user.stats.dungeonMax || 0) : 0;
+function dungeonBest(realm) {
+  const local = Number(localStorage.getItem(realm.bestKey) || 0);
+  // Only the classic tower is tracked server-side.
+  const srv = realm.id === 'tower' && session.user && session.user.stats
+    ? Number(session.user.stats.dungeonMax || 0) : 0;
   return Math.max(local, srv);
 }
 
-function showDungeonSelect() {
-  const best = dungeonBest();
+function showDungeonSelect(realmId = 'tower') {
+  const realm = DUNGEON_REALMS[realmId] || DUNGEON_REALMS.tower;
+  const best = dungeonBest(realm);
+  const P = realm.prefix;
   const cps = [];
-  for (let f = 1; f <= 91; f += 10) if (f === 1 || best >= f - 1) cps.push(f);
+  for (let f = 1; f <= realm.floors - 9; f += 10) if (f === 1 || best >= f - 1) cps.push(f);
   let startF = cps[cps.length - 1];
   const m = showModal(`
-    <h2>${t('🏰 ダンジョン', '🏰 Dungeon')}</h2>
-    <p class="muted center" style="margin-bottom:10px">${t('100階の塔を登れ！階を進むごとに強化を選択。<br>10階ごとにボス＆チェックポイント', 'Climb the 100-floor tower! Pick a perk after every floor.<br>Boss + checkpoint every 10 floors')}${best ? `<br>${t('最高記録', 'Best')}: <b style="color:var(--yellow)">F${best}</b>${t(' クリア', ' cleared')}` : ''}</p>
+    <h2>${realm.icon} ${t(realm.name, realm.nameEn)}</h2>
+    <div class="seg" style="justify-content:center;margin-bottom:10px" data-dr>
+      ${Object.values(DUNGEON_REALMS).map(r =>
+        `<button data-r="${r.id}" ${r.id === realm.id ? 'class="active"' : ''}>${r.icon}${t(r.name.replace('ダンジョン', ''), r.nameEn.split(' ')[0])}</button>`).join('')}
+    </div>
+    <p class="muted center" style="margin-bottom:10px">${t(realm.desc, realm.descEn)}${best ? `<br>${t('最高記録', 'Best')}: <b style="color:var(--yellow)">${P}${best}</b>${t(' クリア', ' cleared')}` : ''}</p>
     <div class="settings-row"><label>${t('開始階', 'Start floor')}</label><div class="seg seg-wrap" data-ds>
-      ${cps.map(f => `<button data-v="${f}" ${f === startF ? 'class="active"' : ''}>F${f}</button>`).join('')}
+      ${cps.map(f => `<button data-v="${f}" ${f === startF ? 'class="active"' : ''}>${P}${f}</button>`).join('')}
     </div></div>
     ${cps.length > 1 ? `<p class="muted center" style="font-size:11px">${t('チェックポイントから始めると強化ボーナス付き', 'Starting from a checkpoint grants bonus perks')}</p>` : ''}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="dgCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-dungeon" id="dgStart">${t('🏰 挑戦する！', '🏰 Climb!')}</button>
+      <button class="btn btn-dungeon" id="dgStart">${realm.icon} ${t('挑戦する！', 'Enter!')}</button>
     </div>`);
+  m.querySelectorAll('[data-dr] button').forEach(b => {
+    b.onclick = () => { audio.click(); closeModal(); showDungeonSelect(b.dataset.r); };
+  });
   m.querySelectorAll('[data-ds] button').forEach(b => {
     b.onclick = () => {
       audio.click();
@@ -420,13 +433,12 @@ function showDungeonSelect() {
     };
   });
   m.querySelector('#dgCancel').onclick = () => { audio.click(); closeModal(); };
-  m.querySelector('#dgStart').onclick = () => { audio.click(); closeModal(); startDungeon(startF); };
+  m.querySelector('#dgStart').onclick = () => { audio.click(); closeModal(); startDungeon(startF, realm.id); };
 }
 
 $('#btnDungeon').onclick = () => { audio.click(); showDungeonSelect(); };
 
-// ---- tournament (online bracket) + survival ----
-$('#btnTourney').onclick = () => { audio.click(); startOnline('tourney'); };
+// ---- survival ----
 $('#btnSurvival').onclick = () => { audio.click(); startSurvival(); };
 
 // ---- weekly challenge ----

@@ -7,7 +7,7 @@ export const POP_SCALE = process.env.POP_SCALE === undefined ? 1 : Math.max(0, N
 
 let liveScale = 1;
 export function setLiveScale(x) {
-  liveScale = Math.max(0, Math.min(3, Number(x)));
+  liveScale = Math.max(0, Math.min(10, Number(x)));
   if (!Number.isFinite(liveScale)) liveScale = 1;
 }
 export function getLiveScale() { return liveScale; }
@@ -31,6 +31,11 @@ const NAMES = [
   'Blocky', 'PuzzleFox', 'NovaStar', 'PixelCat', 'MrCombo', 'Sakura99', 'BlockMaster',
   'Zenith', 'Comet', 'Mocha', 'Waffle', 'Prism', 'Lucky7', 'IceWolf', 'StarDust',
   'GridKing', 'Nebula', 'ComboQueen', 'Turbo', 'Panda88',
+  'ゆず茶', 'こたつ猫', 'ソーダフロート', 'わたあめ', 'ちゃちゃまる', 'ふわもこ', 'キウイ',
+  'レモンサワー', 'プリンアラモード', 'ミルフィーユ', '深夜のブロッカー', 'つよつよ勢',
+  'エンジョイ勢', 'ぴよぴよ', 'ホットケーキ', 'グミベア', 'ラテアート', 'おでんくん',
+  'BlockNinja', 'CosmicRay', 'PuzzleWiz', 'NightOwl', 'Cherry', 'Maple', 'Frosty',
+  'Echo', 'Rocket', 'Pudding', 'Biscuit', 'Shadow7',
 ];
 
 // Pick a human-looking persona. `used` prevents duplicates inside one match.
@@ -108,10 +113,19 @@ const CHAT_LINES = [
   'テスト勉強しなきゃなのに…', 'あと1戦だけ…', 'コンボ切れた瞬間の絶望感', '2連続全消しキタ━━━',
   'ボスラッシュ2体目で死んだ', 'ウィークリー3位まで来た！', 'マイナス街道から復帰した', 'エモート煽りやめてw',
   'みんなレートいくつ？', '初心者におすすめの立ち回りある？', '縦消し派？横消し派？', '効率いいコイン稼ぎ教えて',
+  // new modes & features
+  'トーナメント優勝したった！！', 'トーナメント決勝で負けた…悔しい', 'サバイバルWAVE12まで行った',
+  'サバイバルの加速えぐいw', 'ランク帯ダイヤになった！', 'ブロンズから抜け出せない…', '連勝ボーナスおいしい',
+  'ミニブロック神アイテムすぎる', 'マグマスキンかっこいい', 'サイバー空間のボード買った', '雪のステージ癒される',
+  '地下ダンジョン怖すぎw', '天国ダンジョン綺麗すぎて泣いた', 'エモート増えてるじゃん', '新スキンどれがおすすめ？',
+  'ガチャでフレイム当てた🔥', '優勝アナウンス見た？すごくない？', '深夜組いる？', 'おはようございます！',
+  '今日のウィークリー終わらせた', 'レートまた溶けた', '今週こそランキング入る',
   // English lines — international crowd
   'hi everyone!', 'gg', 'ggwp', 'anyone up for 1v1?', 'this game is addicting lol',
   'just got a 10 combo!', 'new best score 🎉', 'the dungeon boss is brutal', 'good night all',
   'greetings from overseas!', 'love the music in this game', 'how do I get more coins?', 'nice',
+  'won my first tournament!! 🏆', 'survival mode is chaos lol', 'finally hit Gold rank',
+  'the new magma skin looks sick', 'heaven dungeon is beautiful', 'anyone in the tourney queue?',
 ];
 
 export function randomChatLine() {
