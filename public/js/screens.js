@@ -1337,13 +1337,12 @@ function fmtBytes(n) {
   return n > 1024 * 1024 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
 }
 
-async function showRestoreModal() {
-  let snaps = [];
-  try { snaps = (await api('/api/admin/snapshots')).snapshots; } catch { /* none yet */ }
+export async function showRestoreModal() {
+  const isAdmin = !!session.user && session.user.role === 'admin';
 
   const m = showModal(`
     <h2>♻️ データ復元</h2>
-    <p class="muted center" style="margin-bottom:12px;font-size:12px">
+    <p class="muted center" style="margin-bottom:10px;font-size:12px">
       バックアップJSONを読み込んでプレイヤーデータを復旧します。<br>
       <b style="color:var(--green)">マージ</b>＝復元後に登録した人も残す（推奨）／
       <b style="color:var(--red)">置き換え</b>＝現在のデータを破棄してファイルの内容にする
@@ -1353,38 +1352,32 @@ async function showRestoreModal() {
         <button data-v="merge" class="active">マージ（安全）</button>
         <button data-v="replace">置き換え</button>
       </div></div>
-      <input type="file" id="rsFile" accept="application/json,.json">
-      <div id="rsInfo" class="muted center" style="font-size:12px;min-height:34px"></div>
+      <div class="settings-row"><label>読み込み方法</label><div class="seg" id="rsSrc">
+        <button data-v="file" class="active">📁 ファイル</button>
+        <button data-v="paste">📋 貼り付け</button>
+      </div></div>
+      <input type="file" id="rsFile">
+      <textarea id="rsPaste" rows="4" class="hidden" placeholder="バックアップJSONの中身をここに貼り付け"></textarea>
+      ${isAdmin ? '' : `
+      <input id="rsPass" type="password" placeholder="バックアップ時点の管理者パスワード" autocomplete="current-password">
+      <p class="muted" style="font-size:11px;margin-top:-4px">ログインしていなくてもOK：ファイル内の管理者アカウントのパスワードで本人確認します。復元後はそのアカウントで自動ログインします</p>`}
+      <div id="rsInfo" class="center" style="font-size:12px;min-height:34px;color:var(--muted)">① まずバックアップを読み込んでください</div>
       <div class="form-error" id="rsError"></div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rsClose">やめる</button>
         <button class="btn btn-primary" id="rsApply" disabled>♻️ 復元する</button>
       </div>
     </div>
-    ${snaps.length ? `
-      <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
-      <p class="muted center" style="font-size:12px;margin-bottom:8px">
-        📸 このサーバーのスナップショット（起動時・復元前に自動保存／再デプロイで消えます）
-      </p>
-      <div class="ms-list" style="max-height:190px;overflow-y:auto">
-        ${snaps.map(s => `
-          <div class="ms-row">
-            <div class="ms-info">
-              <div class="ms-name" style="font-size:12px">${escapeHtml(s.name)}</div>
-              <div class="ms-prog">${new Date(s.at).toLocaleString('ja-JP')} ・ ${fmtBytes(s.size)}</div>
-            </div>
-            <button class="btn btn-sm btn-ghost" data-snap="${escapeHtml(s.name)}">巻き戻す</button>
-          </div>`).join('')}
-      </div>` : ''}
-    <div class="modal-buttons" style="margin-top:12px">
-      <button class="btn btn-sm btn-ghost" id="rsSnapNow">📸 いまスナップショットを作る</button>
-    </div>`);
+    <div id="rsSnaps"></div>`);
 
   let mode = 'merge';
   let payload = null;
+  let armed = false;
+  let armTimer = null;
   const err = m.querySelector('#rsError');
   const info = m.querySelector('#rsInfo');
   const apply = m.querySelector('#rsApply');
+  const fail = msg => { err.textContent = msg; toast(msg, 'err', 3500); audio.error(); };
 
   m.querySelectorAll('#rsMode button').forEach(b => {
     b.onclick = () => {
@@ -1393,82 +1386,165 @@ async function showRestoreModal() {
       mode = b.dataset.v;
     };
   });
+  m.querySelectorAll('#rsSrc button').forEach(b => {
+    b.onclick = () => {
+      m.querySelectorAll('#rsSrc button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      m.querySelector('#rsFile').classList.toggle('hidden', b.dataset.v !== 'file');
+      m.querySelector('#rsPaste').classList.toggle('hidden', b.dataset.v !== 'paste');
+    };
+  });
   m.querySelector('#rsClose').onclick = closeModal;
 
-  m.querySelector('#rsFile').onchange = async ev => {
+  // Accept a parsed backup from either source; validate locally first so the
+  // button comes alive immediately, then ask the server for a preview.
+  const loaded = async (obj, label) => {
     err.textContent = '';
-    apply.disabled = true;
     payload = null;
-    const file = ev.target.files && ev.target.files[0];
-    if (!file) return;
-    info.textContent = '読み込み中…';
-    try {
-      payload = JSON.parse(await file.text());
-    } catch {
-      info.textContent = '';
-      err.textContent = 'JSONとして読み取れませんでした';
+    if (!obj || typeof obj !== 'object' || !obj.users || typeof obj.users !== 'object') {
+      apply.disabled = true;
+      fail('バックアップの形式ではありません（users が見つかりません）');
       return;
     }
-    // Ask the server to validate before anything is written.
+    const n = Object.keys(obj.users).length;
+    if (!n) { apply.disabled = true; fail('ユーザーが0件のファイルです'); return; }
+    payload = obj;
+    payloadLabel = `<b>${fmt(n)}人</b>のアカウント（${escapeHtml(label)}）`;
+    apply.disabled = false;
+    verify();
+  };
+  const passValue = () => { const el = m.querySelector('#rsPass'); return el ? el.value : undefined; };
+  let payloadLabel = '';
+
+  // Ask the server to check the file (and, when logged out, the password).
+  const verify = async () => {
+    if (!payload) return;
+    if (!isAdmin && !passValue()) {
+      info.innerHTML = `② 読み込みOK：${payloadLabel}<br>③ 管理者パスワードを入力して「♻️ 復元する」を押してください`;
+      return;
+    }
+    info.innerHTML = `② 読み込みOK：${payloadLabel}<br><span class="muted">サーバーで検証中…</span>`;
     try {
-      const res = await api('/api/admin/restore', { method: 'POST', body: { data: payload, mode, dryRun: true } });
+      const res = await api('/api/admin/restore', { method: 'POST', body: { data: payload, mode, dryRun: true, password: passValue() } });
       const p = res.preview;
-      info.innerHTML = `✅ <b>${fmt(p.users)}人</b>のアカウント（管理者${p.admins}人）・取引${fmt(p.transactions)}件<br>
-        ${p.savedAt ? `取得日時: ${new Date(p.savedAt).toLocaleString('ja-JP')}` : 'ファイル: ' + escapeHtml(file.name)} ・ ${fmtBytes(file.size)}`;
-      apply.disabled = false;
+      info.innerHTML = `✅ 検証OK：<b>${fmt(p.users)}人</b>（管理者${p.admins}人）・取引${fmt(p.transactions)}件${p.savedAt ? `<br>取得日時: ${new Date(p.savedAt).toLocaleString('ja-JP')}` : ''}<br>③「♻️ 復元する」を押してください`;
     } catch (e) {
-      info.textContent = '';
-      err.textContent = e.message;
+      // Server-side validation failed (wrong password, bad file): say so, but
+      // the button stays enabled — the real request will report the same error.
+      info.innerHTML = `② 読み込みOK：${payloadLabel}<br><span style="color:var(--red)">サーバー検証: ${escapeHtml(e.message)}</span>`;
     }
   };
+  const passEl = m.querySelector('#rsPass');
+  if (passEl) passEl.onchange = verify;
 
+  m.querySelector('#rsFile').onchange = async ev => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    info.textContent = 'ファイルを読み込み中…';
+    let text;
+    try {
+      text = await (file.text ? file.text() : new Promise((ok, ng) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = ng; r.readAsText(file); }));
+    } catch { fail('ファイルを読み取れませんでした。「📋 貼り付け」をお試しください'); return; }
+    let obj;
+    try { obj = JSON.parse(text); } catch { fail('JSONとして読み取れませんでした'); return; }
+    loaded(obj, `${file.name} ・ ${fmtBytes(file.size)}`);
+  };
+  m.querySelector('#rsPaste').oninput = ev => {
+    const text = ev.target.value.trim();
+    if (!text) return;
+    let obj;
+    try { obj = JSON.parse(text); } catch { info.textContent = '貼り付け中…（JSONの途中）'; return; }
+    loaded(obj, `貼り付け ・ ${fmtBytes(text.length)}`);
+  };
+
+  // Two-press confirmation — no browser dialogs, which some browsers block.
   apply.onclick = async () => {
-    const warn = mode === 'replace'
-      ? '【置き換え】現在のデータをすべて破棄してファイルの内容にします。本当に実行しますか？'
-      : 'バックアップをマージして復元します。実行しますか？';
-    if (!confirm(warn)) return;
+    if (!payload) { fail('先にバックアップを読み込んでください'); return; }
+    if (!isAdmin && !passValue()) { fail('管理者パスワードを入力してください'); return; }
+    if (!armed) {
+      armed = true;
+      apply.textContent = mode === 'replace' ? '⚠️ もう一度押すと置き換えます' : '✅ もう一度押すと復元します';
+      apply.classList.add('btn-gold');
+      clearTimeout(armTimer);
+      armTimer = setTimeout(() => { armed = false; apply.textContent = '♻️ 復元する'; apply.classList.remove('btn-gold'); }, 6000);
+      return;
+    }
+    armed = false;
+    clearTimeout(armTimer);
     apply.disabled = true;
+    apply.textContent = '復元中…';
     info.textContent = '復元中…（大きいファイルは少し時間がかかります）';
     try {
-      const res = await api('/api/admin/restore', { method: 'POST', body: { data: payload, mode } });
+      const res = await api('/api/admin/restore', { method: 'POST', body: { data: payload, mode, password: passValue() } });
       const r = res.report;
+      if (res.token) {
+        setToken(res.token);
+        session.user = res.user;
+        updateTopbar();
+        reconnectChat();
+      }
       closeModal();
       audio.coin();
       confettiBurst(40);
       toast(`♻️ 復元完了！ 追加${r.added}人 / 更新${r.updated}人 / 維持${r.kept}人 → 合計${fmt(r.after)}人`, 'ok', 6000);
       await refreshMe().catch(() => {});
       updateTopbar();
-      openAdmin();
+      if (session.user && session.user.role === 'admin') openAdmin();
     } catch (e) {
       apply.disabled = false;
+      apply.textContent = '♻️ 復元する';
+      apply.classList.remove('btn-gold');
       info.textContent = '';
-      err.textContent = e.message;
-      audio.error();
+      fail(e.message || '復元に失敗しました');
     }
   };
 
-  m.querySelectorAll('[data-snap]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm(`スナップショット「${b.dataset.snap}」の状態に巻き戻します。現在のデータは自動保存された上で置き換えられます。実行しますか？`)) return;
-      try {
-        const res = await api('/api/admin/snapshots/restore', { method: 'POST', body: { name: b.dataset.snap } });
-        closeModal();
-        toast(`♻️ 巻き戻しました（${fmt(res.report.after)}人）`, 'ok', 5000);
-        await refreshMe().catch(() => {});
-        updateTopbar();
-        openAdmin();
-      } catch (e) { toast(e.message, 'err'); }
-    };
-  });
-
-  m.querySelector('#rsSnapNow').onclick = async () => {
-    try {
-      await api('/api/admin/snapshots/create', { method: 'POST', body: {} });
-      toast('📸 スナップショットを作成しました', 'ok');
-      closeModal();
-      showRestoreModal();
-    } catch (e) { toast(e.message, 'err'); }
-  };
+  // Snapshots are an admin-only extra; load them after the modal is up so a
+  // slow request can never keep the dialog from opening.
+  if (isAdmin) {
+    api('/api/admin/snapshots').then(({ snapshots }) => {
+      if (!snapshots.length || !m.isConnected) return;
+      const box = m.querySelector('#rsSnaps');
+      box.innerHTML = `
+        <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+        <p class="muted center" style="font-size:12px;margin-bottom:8px">📸 このサーバーのスナップショット（起動時・復元前に自動保存／再デプロイで消えます）</p>
+        <div class="ms-list" style="max-height:190px;overflow-y:auto">
+          ${snapshots.map(s => `
+            <div class="ms-row">
+              <div class="ms-info">
+                <div class="ms-name" style="font-size:12px">${escapeHtml(s.name)}</div>
+                <div class="ms-prog">${new Date(s.at).toLocaleString('ja-JP')} ・ ${fmtBytes(s.size)}</div>
+              </div>
+              <button class="btn btn-sm btn-ghost" data-snap="${escapeHtml(s.name)}">巻き戻す</button>
+            </div>`).join('')}
+        </div>
+        <div class="modal-buttons" style="margin-top:12px">
+          <button class="btn btn-sm btn-ghost" id="rsSnapNow">📸 いまスナップショットを作る</button>
+        </div>`;
+      box.querySelectorAll('[data-snap]').forEach(b => {
+        let armedSnap = false;
+        b.onclick = async () => {
+          if (!armedSnap) { armedSnap = true; b.textContent = 'もう一度押す'; setTimeout(() => { armedSnap = false; b.textContent = '巻き戻す'; }, 6000); return; }
+          try {
+            const res = await api('/api/admin/snapshots/restore', { method: 'POST', body: { name: b.dataset.snap } });
+            closeModal();
+            toast(`♻️ 巻き戻しました（${fmt(res.report.after)}人）`, 'ok', 5000);
+            await refreshMe().catch(() => {});
+            updateTopbar();
+            openAdmin();
+          } catch (e) { fail(e.message); }
+        };
+      });
+      box.querySelector('#rsSnapNow').onclick = async () => {
+        try {
+          await api('/api/admin/snapshots/create', { method: 'POST', body: {} });
+          toast('📸 スナップショットを作成しました', 'ok');
+          closeModal();
+          showRestoreModal();
+        } catch (e) { fail(e.message); }
+      };
+    }).catch(() => { /* no snapshots yet */ });
+  }
 }
 
 export function bindAdminActions() {

@@ -3,7 +3,7 @@ import { session, api, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, staffExtras } from './dom.js';
 import { audio } from './audio.js';
 import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem, fireUltCurrent, DUNGEON_REALMS } from './modes.js';
-import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner } from './screens.js';
+import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
@@ -571,6 +571,18 @@ loadTitles();
 // Menu badge for unclaimed mission / achievement rewards.
 window.__bbaRefreshMissionDot = refreshMissionDot;
 setInterval(() => { if (session.user) refreshMissionDot(); }, 120000);
+
+// ---- Recovery entry point: /?restore=1 opens the backup-restore dialog even
+// when nobody can log in yet (it authenticates with the backup's own admin
+// password). Used right after a redeploy wiped the data directory.
+if (location.search.includes('restore=1')) {
+  history.replaceState(null, '', '/');
+  setTimeout(() => {
+    const splash = $('#tapStart');
+    if (!splash.classList.contains('hidden')) { splash.classList.add('hidden'); audio.ensure(); }
+    showRestoreModal();
+  }, 900);
+}
 
 // ---- Stripe checkout return ----
 if (location.search.includes('purchase=success')) {

@@ -1424,15 +1424,35 @@ app.get('/api/admin/backup', requireAuth, requireAdmin, (_req, res) => {
 
 // Restore a backup file. Defaults to a merge so players who signed up after a
 // data loss are not thrown away; the live DB is snapshotted first either way.
-app.post('/api/admin/restore', requireAuth, requireAdmin, (req, res) => {
+// Two ways in: a logged-in admin, OR anyone holding the backup file who can
+// prove they know the admin password *inside that backup*. The second path is
+// what makes a post-wipe restore painless — after a redeploy the fresh
+// instance has a brand-new admin password nobody knows yet.
+app.post('/api/admin/restore', (req, res) => {
   const body = req.body || {};
   const data = body.data || body;          // accept a bare dump or { data, mode }
   const mode = body.mode === 'replace' ? 'replace' : 'merge';
   const check = validateBackup(data);
   if (!check.ok) return res.status(400).json({ error: check.error });
 
+  let actor = req.user && req.user.role === 'admin' ? { username: req.user.username } : null;
+  if (!actor) {
+    if (!rateLimit(`restore:${req.ip}`, 10, 10 * 60 * 1000)) {
+      return res.status(429).json({ error: '試行回数が多すぎます。しばらく待ってください' });
+    }
+    const pw = String(body.password || '');
+    const admins = Object.values(data.users).filter(u => u.role === 'admin');
+    const match = pw ? admins.find(u => verifyPassword(pw, u.salt, u.passHash)) : null;
+    if (!match) {
+      return res.status(401).json({ error: admins.length
+        ? 'バックアップ内の管理者パスワードが違います（バックアップを取った時点のパスワードを入力してください）'
+        : 'このバックアップに管理者アカウントが含まれていません' });
+    }
+    actor = { username: match.username, fromBackup: true };
+  }
+
   // Dry run: let the admin see what would happen before committing.
-  if (body.dryRun) return res.json({ preview: check.stats, mode });
+  if (body.dryRun) return res.json({ preview: check.stats, mode, actor: actor.username });
 
   const snap = snapshot(db, 'pre-restore');
   let report;
@@ -1445,13 +1465,19 @@ app.post('/api/admin/restore', requireAuth, requireAdmin, (req, res) => {
   // Every restored account is brought up to the current schema right away.
   for (const u of Object.values(db.users)) migrateUser(u);
   flushDb();
-  console.log(`[restore] ${mode}: +${report.added} 更新${report.updated} 維持${report.kept} → 合計${report.after}人`);
+  console.log(`[restore] ${mode} by ${actor.username}${actor.fromBackup ? ' (backup password)' : ''}: +${report.added} 更新${report.updated} 維持${report.kept} → 合計${report.after}人`);
   battle.broadcastAll({
     type: 'announce',
     message: '💾 データを復元しました。ページを再読み込みすると反映されます',
-    from: req.user.username,
+    from: actor.username,
   });
-  res.json({ report, snapshot: snap, source: check.stats });
+  // Backup-password restores log the admin straight in with the restored account.
+  let token = null, user = null;
+  if (actor.fromBackup) {
+    const u = Object.values(db.users).find(x => x.username === actor.username && x.role === 'admin');
+    if (u) { token = issueToken(u.id); user = publicUser(u); }
+  }
+  res.json({ report, snapshot: snap, source: check.stats, token, user });
 });
 
 // Local snapshots (same instance only — they die with the filesystem too).
