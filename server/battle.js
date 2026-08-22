@@ -11,6 +11,8 @@ import {
   toggles, isQuietNow, popFactor, worldCtx,
 } from './ambient.js';
 import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
+import { translateChat, translateLocal, detectLang } from './translate.js';
+import { isOpen as pollIsOpen, vote as pollVote, residentChoice } from './polls.js';
 
 const COUNTDOWN = 3;
 // ms alone in queue before an AI player fills the seat (randomized per entry
@@ -72,8 +74,19 @@ export function initBattle(server, deps) {
   // Names of real people online — residents may greet them.
   const humanNames = () => [...clients].filter(c => !c.isBot).map(sockName).filter(Boolean);
 
-  function postChat(name, text) {
-    const entry = { type: 'chat', from: name, role: 'user', text, at: Date.now() };
+  // Guild tag shown next to a name in chat ([TAG]); residents carry their
+  // ghost guild's tag so the crowd looks like it belongs to guilds too.
+  const tagOf = (name, user) => {
+    if (deps.guildTagOf) return deps.guildTagOf(name, user) || null;
+    return null;
+  };
+
+  function postChat(name, text, extra = {}) {
+    const entry = { type: 'chat', from: name, role: 'user', text, at: Date.now(), tag: tagOf(name, null), ...extra };
+    // Residents' lines come from ja/en templates — the table translates them
+    // almost verbatim, so every crowd message ships with its translation.
+    const tr = translateLocal(text, detectLang(text) === 'ja' ? 'en' : 'ja');
+    if (tr) entry.tr = tr;
     chatHistory.push(entry);
     if (chatHistory.length > 60) chatHistory.shift();
     broadcastAll(entry);
@@ -161,6 +174,37 @@ export function initBattle(server, deps) {
       if (item) feedHistory.push({ type: 'feed', ...item, at: Math.min(t, Date.now() - 20000) });
     }
   }
+
+  // Residents vote in open polls, a few at a time, with tastes that follow
+  // their archetype (gacha addicts love Lucky Day…). Admins see the AI/real
+  // split; the menu just shows a lively poll.
+  const directVotes = () => {
+    setTimeout(() => {
+      try {
+        const poll = deps.db.meta.poll;
+        if (crowdOn('votes') && poll && pollIsOpen(poll)) {
+          const ctx = worldCtx();
+          const fresh = ctx.active.filter(r => !poll.voters[`r:${r.id}`]);
+          // Votes trickle in over the first ~70% of the poll, faster when busy.
+          const elapsed = (Date.now() - poll.createdAt) / Math.max(1, poll.endsAt - poll.createdAt);
+          if (fresh.length && elapsed < 0.72 && Math.random() < 0.45 * Math.min(2, popFactor())) {
+            const r = fresh[Math.floor(Math.random() * fresh.length)];
+            const optionId = residentChoice(poll, r);
+            if (optionId && pollVote(poll, `r:${r.id}`, optionId).ok) {
+              deps.saveDb();
+              // Sometimes they say so.
+              if (Math.random() < 0.18) {
+                const opt = poll.options.find(o => o.id === optionId);
+                performScript(composeReaction('poll_open', ctx, { opt: opt ? opt.text : '', only: [r.id] }, 1), 'chat');
+              }
+            }
+          }
+        }
+      } catch (err) { console.error('[crowd] vote tick failed:', err.message); }
+      directVotes();
+    }, 15000 + Math.random() * 25000);
+  };
+  directVotes();
 
   // Residents answer real messages (rate-limited so they never spam).
   let replyCooldownUntil = 0;
@@ -739,14 +783,21 @@ export function initBattle(server, deps) {
 
   function roomOf(ws) { return ws.roomCode ? rooms.get(ws.roomCode) : null; }
 
+  // mode: 'duel' (1v1) | 'team' (2v2) | 'coop' (two players, one board).
+  // `team` is kept in sync for older clients that only know the boolean.
   function cleanSettings(s = {}) {
+    let mode = ['duel', 'team', 'coop'].includes(s.mode) ? s.mode : (s.team ? 'team' : 'duel');
+    if (s.team === true && s.mode === undefined) mode = 'team';
+    if (s.team === false && s.mode === undefined) mode = 'duel';
     return {
       duration: DURATIONS.includes(Number(s.duration)) ? Number(s.duration) : MATCH_DURATION,
-      team: !!s.team,
+      mode,
+      team: mode === 'team',
       botFill: s.botFill !== false,
       botLevel: ['random', 'easy', 'normal', 'hard', 'oni'].includes(s.botLevel) ? s.botLevel : 'random',
     };
   }
+  const roomSeats = room => room.settings.mode === 'team' ? 4 : 2;
 
   function broadcastRoom(room) {
     for (const ws of room.players) {
@@ -776,7 +827,8 @@ export function initBattle(server, deps) {
     const room = roomOf(ws);
     if (!room) return;
     if (room.players[0] !== ws) { send(ws, { type: 'room_error', error: 'ホストのみ開始できます' }); return; }
-    const need = room.settings.team ? 4 : 2;
+    const need = roomSeats(room);
+    const coop = room.settings.mode === 'coop';
     if (room.players.length > need) {
       send(ws, { type: 'room_error', error: `この設定では最大${need}人です（チーム戦に変更してください）` });
       return;
@@ -785,8 +837,9 @@ export function initBattle(server, deps) {
       send(ws, { type: 'room_error', error: `あと${need - room.players.length}人必要です（ボット補充をONにもできます）` });
       return;
     }
-    // Humans keep join order: in team mode the first two are team A.
-    const teamOf = i => room.settings.team ? (i < 2 ? 0 : 1) : i % 2;
+    // Humans keep join order: in team mode the first two are team A. Co-op
+    // puts everyone on one side of one board.
+    const teamOf = i => coop ? 0 : room.settings.team ? (i < 2 ? 0 : 1) : i % 2;
     const entries = room.players.map((p, i) => ({ sock: p, team: teamOf(i) }));
     const used = new Set(room.players.map(p => sockName(p)));
     while (entries.length < need) entries.push({ sock: new Bot(room.settings.botLevel, used), team: teamOf(entries.length) });
@@ -794,9 +847,9 @@ export function initBattle(server, deps) {
     rooms.delete(room.code);
     for (const p of players) p.roomCode = null;
     createMatch({
-      mode: room.settings.team ? 'team' : 'duel',
+      mode: coop ? 'coop' : room.settings.team ? 'team' : 'duel',
       entries,
-      duration: room.settings.duration,
+      duration: coop ? COOP_MAX_SECS : room.settings.duration,
       rated: false,
     });
   }
@@ -1163,7 +1216,7 @@ export function initBattle(server, deps) {
           const code = String(msg.code || '').trim().toUpperCase();
           const room = rooms.get(code);
           if (!room) { send(ws, { type: 'room_error', error: 'ルームが見つかりません' }); return; }
-          if (room.players.length >= 4) { send(ws, { type: 'room_error', error: 'ルームが満員です' }); return; }
+          if (room.players.length >= roomSeats(room)) { send(ws, { type: 'room_error', error: 'ルームが満員です' }); return; }
           leaveQueues(ws);
           leaveRoom(ws);
           room.players.push(ws);
@@ -1200,11 +1253,17 @@ export function initBattle(server, deps) {
             return;
           }
           const role = u ? u.role : 'guest';
-          const entry = { type: 'chat', from: sockName(ws), role, text, at: Date.now() };
-          chatHistory.push(entry);
-          if (chatHistory.length > 60) chatHistory.shift();
-          broadcastAll(entry);
-          maybeAmbientReply(text);
+          const entry = { type: 'chat', from: sockName(ws), role, text, at: Date.now(), tag: tagOf(sockName(ws), u) };
+          // Real messages get the best translation available (external engine
+          // when configured, phrase table otherwise) before they go out.
+          translateChat(text).then(tr => {
+            if (tr) entry.tr = tr;
+          }).catch(() => {}).finally(() => {
+            chatHistory.push(entry);
+            if (chatHistory.length > 60) chatHistory.shift();
+            broadcastAll(entry);
+            maybeAmbientReply(text);
+          });
           break;
         }
         case 'emote': {

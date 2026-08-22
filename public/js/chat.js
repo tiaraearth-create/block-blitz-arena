@@ -3,6 +3,7 @@ import { session } from './net.js';
 import { $, toast, showModal, closeModal } from './dom.js';
 import { audio } from './audio.js';
 import { t, trServer, LANG } from './i18n.js';
+import { getSettings } from './settings.js';
 
 let ws = null;
 let open = false;
@@ -79,6 +80,11 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 
+// Auto-translation: messages arrive with `tr` = { lang, text, engine } when the
+// server could translate them. Show the version in the player's language and
+// keep the original one tap away.
+const msgLang = text => (/[ぁ-んァ-ヶ一-龠ー]/.test(text) ? 'ja' : 'en');
+
 function appendMsg(msg, scroll = true) {
   const box = $('#chatMsgs');
   const el = document.createElement('div');
@@ -89,12 +95,37 @@ function appendMsg(msg, scroll = true) {
   const time = new Date(msg.at || Date.now());
   const hh = String(time.getHours()).padStart(2, '0');
   const mm = String(time.getMinutes()).padStart(2, '0');
+  const useTr = getSettings().chatTranslate && msg.tr && msg.tr.lang === LANG && msgLang(msg.text) !== LANG && !me;
+  const tag = msg.tag ? `<span class="cm-tag">[${escapeHtml(msg.tag)}]</span>` : '';
   el.innerHTML = `
-    <span class="cm-meta"><span class="${isAdmin ? 'cm-admin' : ''}">${isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</span> ・ ${hh}:${mm}</span>
-    <span class="cm-bubble">${escapeHtml(msg.text)}</span>`;
+    <span class="cm-meta">${tag}<span class="${isAdmin ? 'cm-admin' : ''}">${isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</span> ・ ${hh}:${mm}</span>
+    <span class="cm-bubble">${escapeHtml(useTr ? msg.tr.text : msg.text)}</span>
+    ${useTr ? `<button class="cm-tr" title="${t('原文を表示', 'Show original')}">🌐 ${msg.tr.engine === 'api' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}</button>` : ''}`;
+  if (useTr) {
+    const btn = el.querySelector('.cm-tr');
+    const bubble = el.querySelector('.cm-bubble');
+    let showingOriginal = false;
+    btn.onclick = () => {
+      showingOriginal = !showingOriginal;
+      bubble.textContent = showingOriginal ? msg.text : msg.tr.text;
+      btn.textContent = showingOriginal ? `🌐 ${t('翻訳を表示', 'Show translation')}` : `🌐 ${t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}`;
+    };
+  }
   box.appendChild(el);
   while (box.children.length > 80) box.removeChild(box.firstChild);
   if (scroll) box.scrollTop = box.scrollHeight;
+}
+
+// News: the server pings when an announcement is posted; the menu badge
+// lights up until the player opens the news screen.
+const NEWS_SEEN_KEY = 'bba_news_seen';
+export function markNewsSeen(at) { localStorage.setItem(NEWS_SEEN_KEY, String(at || Date.now())); updateNewsDot(0); }
+export function updateNewsDot(latestAt) {
+  const dot = $('#newsDot');
+  if (!dot) return;
+  const seen = Number(localStorage.getItem(NEWS_SEEN_KEY) || 0);
+  dot.classList.toggle('hidden', !(latestAt && latestAt > seen));
+  dot.textContent = '';
 }
 
 function setUnread(n) {
@@ -141,6 +172,8 @@ function connect() {
       setMood(msg.mood);
     } else if (msg.type === 'feed') {
       pushFeed(msg, true);
+    } else if (msg.type === 'news') {
+      updateNewsDot(msg.latestAt);
     } else if (msg.type === 'chat_clear') {
       $('#chatMsgs').innerHTML = '';
       setUnread(0);

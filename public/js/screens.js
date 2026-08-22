@@ -4,7 +4,7 @@ import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar, con
 import { getSkin, BOARDS } from './themes.js';
 import { audio } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
-import { reconnectChat } from './chat.js';
+import { reconnectChat, markNewsSeen } from './chat.js';
 import { t as tr, setLang, LANG, catName, catDesc } from './i18n.js';
 import { equippedUlt, setGuestUlt } from './modes.js';
 import { ultIcon, ultColor } from './skills.js';
@@ -71,9 +71,9 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑' };
   const m = showModal(`
-    <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.username}</h2>
+    <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
     <div class="result-stats">
       <div class="rs-row"><span>${tr('レベル', 'Level')}</span><b>Lv.${u.level}</b></div>
@@ -83,6 +83,7 @@ function showProfileModal() {
       <div class="rs-row"><span>${tr('AI撃破', 'AI wins')}</span><b>${fmt(u.stats.aiWins)}</b></div>
       <div class="rs-row"><span>${tr('プレイ回数', 'Games played')}</span><b>${fmt(u.stats.gamesPlayed)}</b></div>
       <div class="rs-row"><span>${tr('バッジ', 'Badges')}</span><b>${u.badges.length ? u.badges.map(b => badgeIcons[b] || '🎖️').join(' ') : tr('なし', 'None')}</b></div>
+      ${u.guild ? `<div class="rs-row"><span>${tr('ギルド', 'Guild')}</span><b>${u.guild.icon} [${escapeHtml(u.guild.tag)}] ${escapeHtml(u.guild.name)}${u.guild.owner ? ' 👑' : ''}</b></div>` : ''}
     </div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="pLogout">${tr('ログアウト', 'Log out')}</button>
@@ -387,9 +388,13 @@ export function showSettingsModal() {
         <label>${tr('📳 画面シェイク', '📳 Screen shake')}</label>
         <input type="checkbox" id="setShake" ${s.shake ? 'checked' : ''}>
       </div>
+      <div class="settings-row">
+        <label>${tr('🌐 チャット自動翻訳', '🌐 Auto-translate chat')}<br><small class="muted" style="font-weight:600">${tr('日本語⇄英語。原文はタップで表示', 'JA ⇄ EN, tap to see the original')}</small></label>
+        <input type="checkbox" id="setChatTr" ${s.chatTranslate !== false ? 'checked' : ''}>
+      </div>
       ${session.user && session.user.role === 'admin' ? `
       <div class="settings-row">
-        <label>🛡️ 管理者専用ボタンを表示<br><small class="muted" style="font-weight:600">カオス／オートパイロット／コマンドパレット</small></label>
+        <label>🛡️ 管理者専用ボタンを表示<br><small class="muted" style="font-weight:600">カオス／オートパイロット／コマンドパレット／全モードでアイテム</small></label>
         <input type="checkbox" id="setStaffUi" ${staffUiOn() ? 'checked' : ''}>
       </div>` : ''}
       <div class="settings-row">
@@ -452,6 +457,10 @@ export function showSettingsModal() {
   m.querySelector('#setSfxOn').onchange = e => { updateSettings({ sfxOn: e.target.checked }); audio.click(); };
   m.querySelector('#setMusicOn').onchange = e => updateSettings({ musicOn: e.target.checked });
   m.querySelector('#setShake').onchange = e => updateSettings({ shake: e.target.checked });
+  m.querySelector('#setChatTr').onchange = e => {
+    updateSettings({ chatTranslate: e.target.checked });
+    toast(e.target.checked ? tr('🌐 チャットを自動翻訳します', '🌐 Chat will be auto-translated') : tr('🌐 自動翻訳をオフにしました', '🌐 Auto-translation off'), 'ok');
+  };
   const staffToggle = m.querySelector('#setStaffUi');
   if (staffToggle) staffToggle.onchange = e => {
     setStaffUi(e.target.checked);
@@ -535,10 +544,10 @@ export async function openLeaderboard(board = 'score') {
     list.innerHTML = data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
-        <div class="lb-name">${escapeHtml(r.username)}
+        <div class="lb-name">${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
           <span class="lb-badges">${(r.badges || []).map(b => badgeIcons[b] || '').join('')}</span>
           ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.name)}》</span>` : ''}
-          <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}${board === 'sprint' && r.sprint180 ? ` ・ ${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}</div>
+          <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}${board === 'sprint' && r.sprint180 ? ` ・ ${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? ` ・ 🌑A${fmt(r.abyssMax)}` : ''}</div>
         </div>
         <div class="lb-score">${board === 'dungeon' ? `F${fmt(r.dungeonMax || 0)}`
           : board === 'weekly' ? fmt(r.weeklyBest || 0)
@@ -1954,13 +1963,13 @@ export async function showPollAdminModal() {
     const m = showModal(`
       <h2>🗳️ 投票の管理</h2>
       <p class="center" style="margin-bottom:10px"><b>${escapeHtml(poll.question)}</b><br>
-        <small class="muted">${poll.closed ? '終了済み' : `受付中 ・ 残り${pollRemainText(poll.endsAt - Date.now())}`} ・ ${poll.voterCount}人が投票</small></p>
+        <small class="muted">${poll.closed ? '終了済み' : `受付中 ・ 残り${pollRemainText(poll.endsAt - Date.now())}`} ・ ${poll.voterCount}人が投票${poll.aiVoters !== undefined ? `（👤実人 ${poll.realVoters} ／ 🤖AI住人 ${poll.aiVoters}）` : ''}</small></p>
       <div class="poll-options">
         ${poll.options.map(o => `
           <div class="poll-option revealed" style="cursor:default">
             <span class="poll-fill" style="width:${o.pct || 0}%"></span>
             <span class="poll-text">${escapeHtml(o.text)}</span>
-            <span class="poll-pct">${o.pct || 0}% <small>(${fmt(o.votes || 0)})</small></span>
+            <span class="poll-pct">${o.pct || 0}% <small>(${fmt(o.votes || 0)}${o.ai !== undefined ? ` = 👤${o.real}+🤖${o.ai}` : ''})</small></span>
           </div>`).join('')}
       </div>
       ${poll.kind === 'event' ? `<p class="muted center" style="font-size:12px;margin-top:10px">🎪 イベント投票：1位のイベントをそのまま開催できます${poll.applied ? '<br><b style="color:var(--green)">開催済み</b>' : ''}</p>` : ''}
@@ -2294,4 +2303,278 @@ async function showCrowdModal(tab = 'basic') {
       };
     });
   }
+}
+// ---------------------------------------------------------------------------
+// Guilds (ギルド)
+// ---------------------------------------------------------------------------
+
+let guildTab = 'mine';
+let guildData = null;
+
+export async function openGuild(tab = guildTab) {
+  showScreen('guild');
+  guildTab = tab;
+  $$('[data-gd]').forEach(x => x.classList.toggle('active', x.dataset.gd === tab));
+  const body = $('#guildBody');
+  body.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
+  try {
+    guildData = await api('/api/guilds');
+  } catch (err) {
+    body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  if (tab === 'mine') renderMyGuild();
+  else if (tab === 'rank') renderGuildRank();
+  else renderGuildFind();
+}
+
+function guildCard(g, { rank = null, clickable = true } = {}) {
+  return `
+    <div class="guild-card ${g.ghost ? '' : 'real'}" ${clickable ? `data-guild="${escapeHtml(g.id)}"` : ''}>
+      ${rank ? `<div class="guild-rank">${rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : rank}</div>` : ''}
+      <div class="guild-icon">${g.icon}</div>
+      <div class="guild-info">
+        <div class="guild-name"><span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)} <small class="muted">Lv.${g.level}</small></div>
+        <div class="guild-meta">${escapeHtml(g.desc || '')}</div>
+        <div class="guild-meta">👥 ${g.memberCount}/${g.maxMembers} ・ ${g.open ? tr('🔓 公開', '🔓 Open') : tr('🔒 招待制', '🔒 Invite only')} ・ 🪙+${g.bonusPct}%</div>
+      </div>
+      <div class="guild-pts"><b>${fmt(g.weeklyPoints)}</b><small>${tr('週間pt', 'weekly pts')}</small></div>
+    </div>`;
+}
+
+function renderMyGuild() {
+  const body = $('#guildBody');
+  const d = guildData;
+  if (!session.user) {
+    body.innerHTML = `<div class="ms-empty"><p>${tr('ギルドはアカウント登録で参加できます', 'Create an account to join a guild')}</p><button class="btn btn-primary" id="gdLogin">${tr('ログイン / 新規登録', 'Log in / Sign up')}</button></div>`;
+    body.querySelector('#gdLogin').onclick = () => showAuthModal();
+    return;
+  }
+  const g = d.mine;
+  if (!g) {
+    body.innerHTML = `
+      <div class="ms-head"><div><b>${tr('ギルド未所属', 'No guild yet')}</b><div class="muted" style="font-size:12px">${tr('ギルドに入ると毎試合のスコアが週間ポイントになり、ギルドレベルに応じてコインボーナス（最大+20%）がつきます', 'Every game feeds your guild\'s weekly points, and the guild level pays a coin bonus (up to +20%)')}</div></div></div>
+      <div class="modal-buttons" style="justify-content:center;margin:14px 0">
+        <button class="btn btn-gold" id="gdCreate">${tr(`🏰 ギルドを設立（🪙${fmt(d.createCost)}）`, `🏰 Found a guild (🪙${fmt(d.createCost)})`)}</button>
+        <button class="btn btn-online" id="gdFind">${tr('🔍 ギルドをさがす', '🔍 Find a guild')}</button>
+      </div>
+      <div class="settings-row" style="justify-content:center"><label>${tr('招待コードで参加', 'Join with a code')}</label>
+        <input id="gdCode" type="text" maxlength="6" placeholder="ABC123" style="width:110px;text-transform:uppercase"><button class="btn btn-sm btn-primary" id="gdJoinCode">${tr('参加', 'Join')}</button></div>`;
+    body.querySelector('#gdCreate').onclick = () => showGuildCreateModal(d);
+    body.querySelector('#gdFind').onclick = () => openGuild('find');
+    body.querySelector('#gdJoinCode').onclick = () => joinGuildBy({ code: body.querySelector('#gdCode').value.trim() });
+    return;
+  }
+  const me = session.user.id;
+  const isOwner = g.ownerId === me;
+  body.innerHTML = `
+    <div class="guild-hero">
+      <div class="guild-hero-icon">${g.icon}</div>
+      <div>
+        <div class="guild-hero-name"><span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)}</div>
+        <div class="muted" style="font-size:12px">${escapeHtml(g.desc || tr('（説明なし）', '(no description)'))}</div>
+        <div class="guild-hero-stats">
+          <span>Lv.<b>${g.level}</b></span><span>${tr('週間', 'Weekly')} <b>${fmt(g.weeklyPoints)}</b>pt</span><span>${tr('順位', 'Rank')} <b>${g.rank ? `#${g.rank}` : '-'}</b></span><span>🪙<b>+${g.bonusPct}%</b></span><span>👥 <b>${g.memberCount}</b>/${g.maxMembers}</span>
+        </div>
+      </div>
+    </div>
+    ${isOwner ? `<div class="settings-row" style="justify-content:center"><label>${tr('🔑 招待コード', '🔑 Invite code')}</label><b style="font-size:18px;letter-spacing:.12em">${escapeHtml(g.code || '')}</b><span class="muted" style="font-size:11px">${tr('（フレンドに教えると参加できます）', '(share it with friends)')}</span></div>` : ''}
+    <div class="ms-list">
+      ${g.members.map(mb => `
+        <div class="ms-row">
+          <div class="ms-info"><div class="ms-name">${mb.role === 'owner' ? '👑 ' : ''}${escapeHtml(mb.username)}${mb.id === me ? tr('（あなた）', ' (you)') : ''}</div>
+            <div class="ms-prog">Lv.${mb.level} ・ R${fmt(mb.rating)} ・ ${tr('今週', 'this week')} ${fmt(mb.weeklyPts)}pt</div></div>
+          ${isOwner && mb.role !== 'owner' ? `<button class="btn btn-sm btn-ghost" data-kick="${escapeHtml(mb.id)}" style="color:var(--red)">${tr('除名', 'Kick')}</button>` : ''}
+        </div>`).join('')}
+    </div>
+    <div class="modal-buttons" style="margin-top:12px">
+      ${isOwner ? `<button class="btn btn-sm btn-ghost" id="gdSettings">${tr('⚙️ ギルド設定', '⚙️ Guild settings')}</button>` : ''}
+      <button class="btn btn-sm btn-ghost" id="gdLeave" style="color:var(--red)">${tr('脱退する', 'Leave guild')}</button>
+    </div>`;
+  body.querySelectorAll('[data-kick]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm(tr('このメンバーを除名しますか？', 'Kick this member?'))) return;
+      try { await api('/api/guild/kick', { method: 'POST', body: { userId: b.dataset.kick } }); toast(tr('除名しました', 'Member kicked'), 'ok'); openGuild('mine'); }
+      catch (err) { toast(err.message, 'err'); }
+    };
+  });
+  const st = body.querySelector('#gdSettings');
+  if (st) st.onclick = () => showGuildSettingsModal(g, d);
+  body.querySelector('#gdLeave').onclick = async () => {
+    if (!confirm(tr(isOwner ? 'リーダーを離れるとメンバーの最古参に引き継がれます。脱退しますか？' : 'ギルドを脱退しますか？（1時間は再加入できません）', 'Leave the guild? (you cannot rejoin for an hour)'))) return;
+    try {
+      const res = await api('/api/guilds/leave', { method: 'POST', body: {} });
+      session.user = res.user; updateTopbar();
+      toast(res.disbanded ? tr('ギルドを解散しました', 'Guild disbanded') : tr('ギルドを脱退しました', 'Left the guild'), 'ok');
+      openGuild('mine');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
+function renderGuildRank() {
+  const body = $('#guildBody');
+  const rows = guildData.guilds;
+  body.innerHTML = `
+    <p class="muted center" style="font-size:12px;margin-bottom:8px">${tr('週間ポイント順（毎週月曜リセット）。メンバーの全試合のスコアが加算されます', 'Ranked by weekly points (resets Monday). Every member game counts')}</p>
+    <div class="ms-list">${rows.map(g => guildCard(g, { rank: g.rank })).join('') || `<p class="muted center">${tr('まだギルドがありません', 'No guilds yet')}</p>`}</div>`;
+  body.querySelectorAll('[data-guild]').forEach(el => { el.onclick = () => showGuildModal(el.dataset.guild); });
+}
+
+function renderGuildFind() {
+  const body = $('#guildBody');
+  const rows = guildData.guilds.filter(g => g.open && g.memberCount < g.maxMembers);
+  body.innerHTML = `
+    <div class="settings-row" style="justify-content:center;margin-bottom:10px"><label>${tr('招待コードで参加', 'Join with a code')}</label>
+      <input id="gdCode2" type="text" maxlength="6" placeholder="ABC123" style="width:110px;text-transform:uppercase"><button class="btn btn-sm btn-primary" id="gdJoinCode2">${tr('参加', 'Join')}</button></div>
+    <p class="muted center" style="font-size:12px;margin-bottom:8px">${tr('公開ギルド（空きあり）', 'Open guilds with room')}</p>
+    <div class="ms-list">${rows.map(g => guildCard(g)).join('') || `<p class="muted center">${tr('いま募集中の公開ギルドはありません', 'No open guilds right now')}</p>`}</div>
+    ${session.user && !guildData.mine ? `<div class="modal-buttons" style="margin-top:12px"><button class="btn btn-gold" id="gdCreate2">${tr(`🏰 自分でギルドを設立（🪙${fmt(guildData.createCost)}）`, `🏰 Found your own (🪙${fmt(guildData.createCost)})`)}</button></div>` : ''}`;
+  body.querySelector('#gdJoinCode2').onclick = () => joinGuildBy({ code: body.querySelector('#gdCode2').value.trim() });
+  body.querySelectorAll('[data-guild]').forEach(el => { el.onclick = () => showGuildModal(el.dataset.guild); });
+  const c = body.querySelector('#gdCreate2');
+  if (c) c.onclick = () => showGuildCreateModal(guildData);
+}
+
+async function showGuildModal(id) {
+  let g;
+  try { g = (await api(`/api/guilds/${encodeURIComponent(id)}`)).guild; } catch (err) { toast(err.message, 'err'); return; }
+  const canJoin = session.user && !(guildData && guildData.mine) && !g.ghost && g.open && g.memberCount < g.maxMembers;
+  const m = showModal(`
+    <h2>${g.icon} <span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)}</h2>
+    <p class="muted center" style="margin-bottom:8px">${escapeHtml(g.desc || '')}</p>
+    <div class="guild-hero-stats" style="justify-content:center;margin-bottom:10px"><span>Lv.<b>${g.level}</b></span><span>${tr('週間', 'Weekly')} <b>${fmt(g.weeklyPoints)}</b>pt</span><span>👥 <b>${g.memberCount}</b>/${g.maxMembers}</span><span>🪙<b>+${g.bonusPct}%</b></span></div>
+    <div class="ms-list" style="max-height:40vh;overflow-y:auto">
+      ${(g.members || []).map(mb => `<div class="ms-row"><div class="ms-info"><div class="ms-name">${mb.role === 'owner' ? '👑 ' : ''}${escapeHtml(mb.username)}</div><div class="ms-prog">Lv.${mb.level} ・ R${fmt(mb.rating)} ・ ${fmt(mb.weeklyPts)}pt</div></div></div>`).join('')}
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="gmClose">${tr('閉じる', 'Close')}</button>
+      ${canJoin ? `<button class="btn btn-primary" id="gmJoin">${tr('参加する', 'Join')}</button>` : ''}
+      ${g.ghost ? `<span class="muted" style="font-size:11px;align-self:center">${tr('（AI住人のギルドには参加できません）', '(resident guilds cannot be joined)')}</span>` : ''}
+    </div>`);
+  m.querySelector('#gmClose').onclick = closeModal;
+  const j = m.querySelector('#gmJoin');
+  if (j) j.onclick = () => { closeModal(); joinGuildBy({ id: g.id }); };
+}
+
+async function joinGuildBy(body) {
+  if (!session.user) { showAuthModal(); return; }
+  if (body.code !== undefined && body.code.length < 6) { toast(tr('6文字の招待コードを入力してください', 'Enter the 6-character code'), 'err'); return; }
+  try {
+    const res = await api('/api/guilds/join', { method: 'POST', body });
+    session.user = res.user; updateTopbar();
+    audio.coin(); confettiBurst(30);
+    toast(tr(`${res.guild.icon} 「${res.guild.name}」に参加しました！`, `${res.guild.icon} Joined "${res.guild.name}"!`), 'ok', 3000);
+    openGuild('mine');
+  } catch (err) { audio.error(); toast(err.message, 'err'); }
+}
+
+function showGuildCreateModal(d) {
+  if (!session.user) { showAuthModal(); return; }
+  const m = showModal(`
+    <h2>🏰 ${tr('ギルドを設立', 'Found a guild')}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">${tr(`設立費用 🪙${fmt(d.createCost)}（所持 🪙${fmt(session.user.coins)}）`, `Cost 🪙${fmt(d.createCost)} (you have 🪙${fmt(session.user.coins)})`)}</p>
+    <div class="form-col">
+      <input id="gcName" type="text" maxlength="16" placeholder="${tr('ギルド名（2〜16文字）', 'Guild name (2–16 chars)')}">
+      <input id="gcTag" type="text" maxlength="4" placeholder="${tr('タグ（1〜4文字・例 BLZ）', 'Tag (1–4 chars, e.g. BLZ)')}" style="text-transform:uppercase">
+      <input id="gcDesc" type="text" maxlength="60" placeholder="${tr('ひとこと説明（任意）', 'Short description (optional)')}">
+      <div class="settings-row"><label>${tr('アイコン', 'Icon')}</label><div class="seg seg-wrap" id="gcIcon">${d.icons.map((ic, i) => `<button data-v="${ic}" ${i === 0 ? 'class="active"' : ''}>${ic}</button>`).join('')}</div></div>
+      <div class="settings-row"><label>${tr('🔓 誰でも参加OK', '🔓 Anyone can join')}</label><input type="checkbox" id="gcOpen" checked></div>
+      <div class="form-error" id="gcErr"></div>
+      <div class="modal-buttons"><button class="btn btn-ghost" id="gcCancel">${tr('やめる', 'Cancel')}</button><button class="btn btn-gold" id="gcGo">🏰 ${tr('設立する', 'Found it')}</button></div>
+    </div>`);
+  let icon = d.icons[0];
+  m.querySelectorAll('#gcIcon button').forEach(b => { b.onclick = () => { m.querySelectorAll('#gcIcon button').forEach(x => x.classList.remove('active')); b.classList.add('active'); icon = b.dataset.v; }; });
+  m.querySelector('#gcCancel').onclick = closeModal;
+  m.querySelector('#gcGo').onclick = async () => {
+    try {
+      const res = await api('/api/guilds/create', { method: 'POST', body: { name: m.querySelector('#gcName').value, tag: m.querySelector('#gcTag').value, desc: m.querySelector('#gcDesc').value, icon, open: m.querySelector('#gcOpen').checked } });
+      session.user = res.user; updateTopbar();
+      closeModal(); audio.coin(); confettiBurst(50);
+      toast(tr(`${res.guild.icon} ギルド「${res.guild.name}」を設立しました！`, `${res.guild.icon} Founded "${res.guild.name}"!`), 'ok', 3500);
+      openGuild('mine');
+    } catch (err) { m.querySelector('#gcErr').textContent = err.message; audio.error(); }
+  };
+}
+
+function showGuildSettingsModal(g, d) {
+  const m = showModal(`
+    <h2>⚙️ ${tr('ギルド設定', 'Guild settings')}</h2>
+    <div class="form-col">
+      <input id="gsName" type="text" maxlength="16" value="${escapeHtml(g.name)}">
+      <input id="gsTag" type="text" maxlength="4" value="${escapeHtml(g.tag)}" style="text-transform:uppercase">
+      <input id="gsDesc" type="text" maxlength="60" value="${escapeHtml(g.desc || '')}" placeholder="${tr('ひとこと説明', 'Description')}">
+      <div class="settings-row"><label>${tr('アイコン', 'Icon')}</label><div class="seg seg-wrap" id="gsIcon">${d.icons.map(ic => `<button data-v="${ic}" ${ic === g.icon ? 'class="active"' : ''}>${ic}</button>`).join('')}</div></div>
+      <div class="settings-row"><label>${tr('🔓 誰でも参加OK', '🔓 Anyone can join')}</label><input type="checkbox" id="gsOpen" ${g.open ? 'checked' : ''}></div>
+      <div class="form-error" id="gsErr"></div>
+      <div class="modal-buttons"><button class="btn btn-ghost" id="gsCancel">${tr('やめる', 'Cancel')}</button><button class="btn btn-primary" id="gsSave">${tr('保存', 'Save')}</button></div>
+    </div>`);
+  let icon = g.icon;
+  m.querySelectorAll('#gsIcon button').forEach(b => { b.onclick = () => { m.querySelectorAll('#gsIcon button').forEach(x => x.classList.remove('active')); b.classList.add('active'); icon = b.dataset.v; }; });
+  m.querySelector('#gsCancel').onclick = closeModal;
+  m.querySelector('#gsSave').onclick = async () => {
+    try {
+      await api('/api/guild/settings', { method: 'POST', body: { name: m.querySelector('#gsName').value, tag: m.querySelector('#gsTag').value, desc: m.querySelector('#gsDesc').value, icon, open: m.querySelector('#gsOpen').checked } });
+      await refreshMe().catch(() => {}); updateTopbar();
+      closeModal(); toast(tr('保存しました', 'Saved'), 'ok'); openGuild('mine');
+    } catch (err) { m.querySelector('#gsErr').textContent = err.message; }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// News (お知らせ)
+// ---------------------------------------------------------------------------
+
+export async function openNews() {
+  showScreen('news');
+  const body = $('#newsBody');
+  body.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
+  $('#btnNewsPost').classList.toggle('hidden', !(session.user && session.user.role === 'admin'));
+  $('#btnNewsPost').onclick = () => showNewsPostModal();
+  let data;
+  try { data = await api('/api/news'); } catch (err) { body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`; return; }
+  markNewsSeen(data.latestAt);
+  const isAdmin = session.user && session.user.role === 'admin';
+  body.innerHTML = data.news.length ? data.news.map(n => `
+    <article class="news-card ${n.pinned ? 'pinned' : ''}">
+      <div class="news-head">
+        <h3>${n.pinned ? '📌 ' : ''}${escapeHtml(n.title)}</h3>
+        <span class="news-date">${new Date(n.at).toLocaleDateString(LANG === 'en' ? 'en-US' : 'ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })}</span>
+      </div>
+      <p class="news-body">${escapeHtml(n.body).replace(/\n/g, '<br>')}</p>
+      <div class="news-foot"><span class="muted">— ${escapeHtml(n.by || '運営')}</span>
+        ${isAdmin ? `<span><button class="btn btn-sm btn-ghost" data-pin="${escapeHtml(n.id)}">${n.pinned ? '📌解除' : '📌固定'}</button> <button class="btn btn-sm btn-ghost" data-del="${escapeHtml(n.id)}" style="color:var(--red)">削除</button></span>` : ''}
+      </div>
+    </article>`).join('') : `<p class="muted center">${tr('お知らせはまだありません', 'No news yet')}</p>`;
+  body.querySelectorAll('[data-pin]').forEach(b => {
+    b.onclick = async () => {
+      const n = data.news.find(x => x.id === b.dataset.pin);
+      try { await api(`/api/admin/news/${b.dataset.pin}`, { method: 'POST', body: { pinned: !n.pinned } }); openNews(); } catch (err) { toast(err.message, 'err'); }
+    };
+  });
+  body.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('このお知らせを削除しますか？')) return;
+      try { await api(`/api/admin/news/${b.dataset.del}`, { method: 'DELETE' }); openNews(); } catch (err) { toast(err.message, 'err'); }
+    };
+  });
+}
+
+function showNewsPostModal() {
+  const m = showModal(`
+    <h2>✍️ お知らせを投稿</h2>
+    <div class="form-col">
+      <input id="npTitle" type="text" maxlength="60" placeholder="タイトル">
+      <textarea id="npBody" rows="6" maxlength="2000" placeholder="本文（改行OK）"></textarea>
+      <div class="settings-row"><label>📌 上部に固定</label><input type="checkbox" id="npPin"></div>
+      <div class="settings-row"><label>📢 全員にアナウンス＋フィードに流す</label><input type="checkbox" id="npAnn" checked></div>
+      <div class="form-error" id="npErr"></div>
+      <div class="modal-buttons"><button class="btn btn-ghost" id="npCancel">やめる</button><button class="btn btn-primary" id="npGo">投稿する</button></div>
+    </div>`);
+  m.querySelector('#npCancel').onclick = closeModal;
+  m.querySelector('#npGo').onclick = async () => {
+    try {
+      await api('/api/admin/news', { method: 'POST', body: { title: m.querySelector('#npTitle').value, body: m.querySelector('#npBody').value, pinned: m.querySelector('#npPin').checked, announce: m.querySelector('#npAnn').checked } });
+      closeModal(); audio.coin(); toast('📰 投稿しました', 'ok'); openNews();
+    } catch (err) { m.querySelector('#npErr').textContent = err.message; }
+  };
 }

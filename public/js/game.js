@@ -229,6 +229,13 @@ export class GameView {
 
     if (this.onPlace) this.onPlace(result);
     if (result.over) {
+      // Staff "invincible" switch / 絶対防御 item: the board resets instead.
+      if (this.godInvincible || this.godInvincibleUntil > Date.now()) {
+        this.engine.reviveBoard();
+        this.reviveFlash();
+        this.addFloatText(this.boardX + this.boardSize / 2, this.boardY + this.boardSize / 2, 'INVINCIBLE!', '#ffd75e', 1.6);
+        return;
+      }
       audio.gameOver();
       if (this.onGameOver) this.onGameOver();
     }

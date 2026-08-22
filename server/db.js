@@ -13,6 +13,8 @@ const DEFAULT_DB = {
   tokens: {},       // legacy token -> { userId, createdAt }
   revoked: {},      // signed token -> revokedAt (single-device logouts)
   deleted: {},      // userId -> deletedAt (so a stale session knows the account is gone)
+  guilds: {},       // guildId -> guild
+  news: [],         // announcements [{ id, title, body, at, pinned, by }]
   season: null,     // { id, name, number, endsAt }
   transactions: [], // gem purchases (demo)
   meta: { createdAt: Date.now() },

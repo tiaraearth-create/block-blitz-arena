@@ -82,6 +82,12 @@ export const ACHIEVEMENTS = [
   a('ach_coop10',   '🤝', 'explore', 10,    1600, 13, '名コンビ',     'Great Duo',        '協力プレイを10回',      'Play 10 co-op runs',      u => S(u).coopPlays || 0),
   a('ach_coop20k',  '💞', 'explore', 20000, 2600, 22, '以心伝心',     'In Perfect Sync',  '協力で20,000点',       'Reach 20,000 in co-op',   u => S(u).coopBest || 0),
 
+  a('ach_abyss10',  '🌑', 'explore', 10,    1500, 12, '深淵の入口',   'Edge of the Abyss', '深淵 A10到達',          'Reach Abyss A10',         u => S(u).abyssMax || 0),
+  a('ach_abyss50',  '🌑', 'explore', 50,    5000, 45, '深淵を覗きし者', 'Abyss Walker',    '深淵 A50到達',          'Reach Abyss A50',         u => S(u).abyssMax || 0),
+  a('ach_abyss100', '🕳️', 'explore', 100,   20000, 200, '深淵の支配者', 'Lord of the Abyss', '深淵 A100制覇',       'Conquer Abyss A100',      u => S(u).abyssMax || 0),
+  a('ach_guild',    '🏰', 'collect', 1,     500,  4,  'ギルド加入',   'Guild Member',     'ギルドに加入する',      'Join a guild',            u => u.guildId ? 1 : 0),
+  a('ach_guild2k',  '🏰', 'collect', 2000,  2000, 16, 'ギルドのエース', 'Guild Ace',      'ギルドに週2,000pt貢献', 'Contribute 2,000 pts in a week', u => S(u).guildBestWeek || 0),
+
   // ---- 伝説（アルティメット & ミッション） ----
   a('ach_ult1',     '⚡', 'legend', 1,    300,  2,  '奥義開眼',     'Awakening',        'アルティメット初発動',  'Use your first ultimate', u => S(u).ultsUsed || 0),
   a('ach_ult100',   '⚡', 'legend', 100,  2500, 20, '極意の継承者', 'Heir of Mastery',  'アルティメット100回',   'Use 100 ultimates',       u => S(u).ultsUsed || 0),

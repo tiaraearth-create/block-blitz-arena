@@ -11,18 +11,41 @@
 // issued before that moment is refused. Legacy random tokens (db.tokens, from
 // older builds and restored backups) keep working as before.
 import crypto from 'crypto';
-import { loadDb, saveDb } from './db.js';
+import fs from 'fs';
+import path from 'path';
+import { loadDb, saveDb, DATA_DIR } from './db.js';
 
 const LEGACY_TTL = 1000 * 60 * 60 * 24 * 180;  // 180 days (sliding — refreshed on use)
 const LEGACY_REFRESH_AFTER = 1000 * 60 * 60 * 24; // bump createdAt at most daily
 const V2_TTL = 1000 * 60 * 60 * 24 * 365;       // a year; players re-login yearly
 
-const ENV_SECRET = String(process.env.SESSION_SECRET || '');
-export const SESSIONS_PERSIST = ENV_SECRET.length >= 16;
-const SECRET = SESSIONS_PERSIST ? ENV_SECRET : crypto.randomBytes(32).toString('hex');
-if (!SESSIONS_PERSIST) {
-  console.warn('[auth] SESSION_SECRET が未設定（または16文字未満）です: ログイン状態は再起動・再デプロイで失われます。'
-    + ' 環境変数 SESSION_SECRET に長いランダム文字列を設定すると維持されます');
+// Secret source, in order: SESSION_SECRET env (survives everything) → a file
+// in the data directory (survives restarts; dies with an ephemeral disk) →
+// a per-boot random value (sessions die on restart).
+function loadSecret() {
+  const env = String(process.env.SESSION_SECRET || '');
+  if (env.length >= 16) return { secret: env, source: 'env' };
+  const file = path.join(DATA_DIR, 'session-secret.txt');
+  try {
+    const s = fs.readFileSync(file, 'utf8').trim();
+    if (s.length >= 32) return { secret: s, source: 'file' };
+  } catch { /* not yet */ }
+  const s = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(file, s + '\n');
+    return { secret: s, source: 'file' };
+  } catch {
+    return { secret: s, source: 'boot' };
+  }
+}
+const { secret: SECRET, source: SECRET_SOURCE } = loadSecret();
+export const SESSIONS_PERSIST = SECRET_SOURCE === 'env';
+if (SECRET_SOURCE === 'file') {
+  console.warn('[auth] SESSION_SECRET 未設定のため server/data/session-secret.txt の鍵を使用中（再起動では維持、永続ディスクのないホストでは再デプロイで消えます）。'
+    + ' 環境変数 SESSION_SECRET を設定すると再デプロイ後もログイン状態が維持されます');
+} else if (SECRET_SOURCE === 'boot') {
+  console.warn('[auth] セッション鍵を保存できません: ログイン状態は再起動で失われます。環境変数 SESSION_SECRET を設定してください');
 }
 
 export function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {

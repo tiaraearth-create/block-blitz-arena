@@ -116,6 +116,10 @@ export function applyRestore(db, data, mode = 'merge') {
     db.tokens = data.tokens && typeof data.tokens === 'object' ? data.tokens : {};
     if (data.season) db.season = data.season;
     if (Array.isArray(data.transactions)) db.transactions = data.transactions;
+    if (data.guilds && typeof data.guilds === 'object') db.guilds = data.guilds;
+    if (Array.isArray(data.news)) db.news = data.news;
+    if (data.revoked && typeof data.revoked === 'object') db.revoked = data.revoked;
+    if (data.deleted && typeof data.deleted === 'object') db.deleted = data.deleted;
     if (data.meta && typeof data.meta === 'object') db.meta = { ...db.meta, ...data.meta };
     report.added = Object.keys(db.users).length;
     report.tokens = Object.keys(db.tokens).length;
@@ -167,10 +171,25 @@ export function applyRestore(db, data, mode = 'merge') {
   report.tokens = Object.keys(db.tokens).length;
 
   // Session bookkeeping: logged-out tokens stay logged out, deleted accounts
-  // stay deleted, even across a wipe.
-  for (const key of ['revoked', 'deleted']) {
-    if (data[key] && typeof data[key] === 'object') {
+  // stay deleted, even across a wipe. Guilds come back by id (live wins a
+  // clash); news is unioned by id.
+  for (const key of ['revoked', 'deleted', 'guilds']) {
+    if (data[key] && typeof data[key] === 'object' && !Array.isArray(data[key])) {
       db[key] = { ...(data[key]), ...(db[key] || {}) };
+    }
+  }
+  if (Array.isArray(data.news)) {
+    db.news = db.news || [];
+    const seen = new Set(db.news.map(n => n && n.id));
+    for (const n of data.news) if (n && n.id && !seen.has(n.id)) db.news.push(n);
+  }
+  // Members' guild pointers must agree with the guild roster after a merge.
+  if (db.guilds) {
+    const memberOf = {};
+    for (const g of Object.values(db.guilds)) for (const id of g.members || []) memberOf[id] = g.id;
+    for (const u of Object.values(db.users)) {
+      if (u.guildId && !db.guilds[u.guildId]) u.guildId = memberOf[u.id] || null;
+      else if (!u.guildId && memberOf[u.id]) u.guildId = memberOf[u.id];
     }
   }
 

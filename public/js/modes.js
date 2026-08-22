@@ -209,11 +209,34 @@ export function fireUltCurrent() {
 // ---------------------------------------------------------------------------
 
 const ITEM_DEFS = {
-  item_bomb:    { icon: '💣', name: 'スマートボム', nameEn: 'Smart Bomb' },
-  item_cleaner: { icon: '🧹', name: 'クリーナー', nameEn: 'Cleaner' },
-  item_fever:   { icon: '⭐', name: 'フィーバー', nameEn: 'Fever' },
-  item_mini:    { icon: '🧩', name: 'ミニブロック', nameEn: 'Mini Blocks' },
+  item_bomb:    { icon: '💣', name: 'スマートボム', nameEn: 'Smart Bomb', tip: 'スマートボム：いちばん埋まった3×3を爆破', tipEn: 'Smart Bomb: blows up the densest 3×3' },
+  item_cleaner: { icon: '🧹', name: 'クリーナー', nameEn: 'Cleaner', tip: 'クリーナー：お邪魔＋最下行を掃除', tipEn: 'Cleaner: clears garbage + the bottom row' },
+  item_fever:   { icon: '⭐', name: 'フィーバー', nameEn: 'Fever', tip: 'フィーバー：15秒間スコア2倍', tipEn: 'Fever: 2× score for 15 seconds' },
+  item_mini:    { icon: '🧩', name: 'ミニブロック', nameEn: 'Mini Blocks', tip: 'ミニブロック：手持ちが極小ピースに変化', tipEn: 'Mini Blocks: turns your hand into tiny pieces' },
+  // ---- staff only (infinite, every mode) ----
+  item_god_wipe:   { icon: '💥', name: '神の一撃', nameEn: 'Divine Strike', admin: true, tip: '神の一撃：盤面消滅＋50,000点', tipEn: 'Divine Strike: wipe the board, +50,000' },
+  item_god_time:   { icon: '⌛', name: '時の支配', nameEn: 'Chrono Rule', admin: true, tip: '時の支配：+120秒／敵の攻撃を60秒封印', tipEn: 'Chrono Rule: +120s / freeze enemies 60s' },
+  item_god_hand:   { icon: '🎴', name: '創造の手札', nameEn: 'Creator\'s Hand', admin: true, tip: '創造の手札：最適手札＋12手は大型ピース', tipEn: 'Creator\'s Hand: perfect hand + 12 big draws' },
+  item_god_mult:   { icon: '🔱', name: '神威', nameEn: 'Divine Might', admin: true, tip: '神威：30秒間スコア10倍', tipEn: 'Divine Might: 10× score for 30s' },
+  item_god_shield: { icon: '🛡️', name: '絶対防御', nameEn: 'Absolute Guard', admin: true, tip: '絶対防御：60秒間 無敵・お邪魔無効・コンボ永続', tipEn: 'Absolute Guard: 60s invincible, no garbage, combo lock' },
+  item_god_nuke:   { icon: '☄️', name: '天変地異', nameEn: 'Cataclysm', admin: true, tip: '天変地異：敵HPを99%削る（敵なしなら+100,000点）', tipEn: 'Cataclysm: 99% enemy HP (or +100,000)' },
 };
+
+// Build the HUD item buttons for the current player (staff see their gear).
+function renderItemBar() {
+  const bar = $('#itemBar');
+  const admin = session.user && session.user.role === 'admin' && staffExtras();
+  const ids = Object.keys(ITEM_DEFS).filter(id => !ITEM_DEFS[id].admin || admin);
+  const key = ids.join(',');
+  if (bar.dataset.key === key) return;
+  bar.dataset.key = key;
+  bar.innerHTML = ids.map(id => {
+    const d = ITEM_DEFS[id];
+    return `<button class="chip icon-btn ${d.admin ? 'admin-item' : ''}" data-item="${id}" title="${t(d.tip, d.tipEn)}">${d.icon}<b>0</b></button>`;
+  }).join('');
+  bar.querySelectorAll('[data-item]').forEach(b => { b.onclick = () => useGameItem(b.dataset.item); });
+}
+
 
 function getItemCounts() {
   // Admins carry infinite boosters.
@@ -250,9 +273,13 @@ function spendItem(id) {
 // Boosters and ultimates share the same "PvE only" rule, so one switch drives
 // both bars — they can never drift apart.
 export function showItemBar(on) {
-  $('#itemBar').classList.toggle('hidden', !on);
-  if (on) updateItemBar();
-  showUltBar(on);
+  // Staff see their gear in every mode (toggle in settings).
+  const force = !!session.user && session.user.role === 'admin' && staffExtras();
+  const show = on || force;
+  renderItemBar();
+  $('#itemBar').classList.toggle('hidden', !show);
+  if (show) updateItemBar();
+  showUltBar(show);
 }
 
 export function updateItemBar() {
@@ -269,6 +296,7 @@ export function useGameItem(id) {
   const m = currentMode;
   if (!m || !m.engine || !view || view.inputLocked || m.ended) return;
   if (!ITEM_DEFS[id]) return;
+  if (ITEM_DEFS[id].admin && !(session.user && session.user.role === 'admin')) return;
   const counts = getItemCounts();
   if ((counts[id] || 0) <= 0) {
     audio.error();
@@ -327,6 +355,56 @@ export function useGameItem(id) {
     view.reviveFlash();
     audio.coin();
     toast(t('🧩 手持ちがミニピースに変化した！', '🧩 Your hand turned into mini pieces!'), 'ok', 1800);
+  } else if (id === 'item_god_wipe') {
+    const filled = [];
+    for (let i = 0; i < 64; i++) if (e.grid[i]) { filled.push(i); e.grid[i] = 0; }
+    for (const i of filled) view.particles.burstCell(view.boardX + ((i % 8) + 0.5) * view.cell, view.boardY + (Math.floor(i / 8) + 0.5) * view.cell, view.cell, 14, 'fx_default');
+    const gained = Math.round(50000 * (e.scoreMult || 1) * (e.feverUntil > Date.now() ? (e.feverMult || 2) : 1));
+    e.score += gained;
+    if (m.onPlace) m.onPlace({ placedCells: [[0, 0]], color: 1, fullRows: [], fullCols: [], clearedCells: [], lineCount: 0, gained, streak: e.streak, over: false });
+    view.shake = 22; view.screenFlash = 0.7; audio.bossDefeated();
+    toast(t(`💥 神の一撃！ +${fmt(gained)}`, `💥 Divine Strike! +${fmt(gained)}`), 'announce', 2000);
+  } else if (id === 'item_god_time') {
+    if (m.endAt !== undefined && m.timerInt) { m.endAt += 120000; m.timeLeft += 120; if (m.updateTimerHud) m.updateTimerHud(); }
+    if (m.nextAtk) m.nextAtk += 60000;
+    if (m.nextAt) m.nextAt += 60000;
+    if (m.endAt === undefined && !m.nextAtk && !m.nextAt) e.rerolls += 10;
+    view.screenFlash = 0.4; audio.combo(7);
+    toast(t('⌛ 時の支配！時間+120秒／敵を60秒封印', '⌛ Chrono Rule! +120s / enemies frozen 60s'), 'announce', 2000);
+  } else if (id === 'item_god_hand') {
+    const out = fireUlt('ult_rainbow', { engine: e, view, mode: m });
+    e.godDraws = 12;
+    if (out.error) toast(out.error, 'err', 1500);
+    else toast(t('🎴 創造の手札！次の12手は大型ピース', '🎴 Creator\'s Hand! 12 big draws incoming'), 'announce', 2000);
+  } else if (id === 'item_god_mult') {
+    e.feverUntil = Date.now() + 30000;
+    e.feverMult = 10;
+    $('#hudScore').classList.add('fever');
+    view.screenFlash = 0.5; audio.combo(9);
+    toast(t('🔱 神威！30秒間スコア10倍！！', '🔱 Divine Might! 10× score for 30s!!'), 'announce', 2400);
+    setTimeout(() => { if (e.feverMult === 10) { e.feverMult = 2; $('#hudScore').classList.remove('fever'); } }, 30000);
+  } else if (id === 'item_god_shield') {
+    view.godInvincibleUntil = Date.now() + 60000;
+    e.fortressUntil = Math.max(e.fortressUntil || 0, Date.now() + 60000);
+    e.streakShield = true;
+    view.reviveFlash(); view.screenFlash = 0.4; audio.combo(6);
+    toast(t('🛡️ 絶対防御！60秒間 無敵・お邪魔無効・コンボ永続', '🛡️ Absolute Guard! 60s invincible, no garbage, combo lock'), 'announce', 2400);
+  } else if (id === 'item_god_nuke') {
+    if (typeof m.hp === 'number' && (m.mode === 'boss' || m.mode === 'dungeon' || m.raidBoss)) {
+      const dmg = Math.max(0, m.hp - Math.ceil(m.hp * 0.01));
+      m.hp -= dmg;
+      e.score += dmg;
+      if (m.updateHpBar) m.updateHpBar();
+      if (m.updateRaidHp) m.updateRaidHp();
+      if (m.damageFloat) m.damageFloat(dmg, true);
+      view.shake = 24; view.screenFlash = 0.8; audio.bossAttack();
+      toast(t(`☄️ 天変地異！ -${fmt(dmg)}`, `☄️ Cataclysm! -${fmt(dmg)}`), 'announce', 2000);
+    } else {
+      e.score += 100000;
+      if (m.updateHud) m.updateHud(); else if (m.updateMyHud) m.updateMyHud(e);
+      view.shake = 24; view.screenFlash = 0.8; audio.bossDefeated();
+      toast(t('☄️ 天変地異！ +100,000', '☄️ Cataclysm! +100,000'), 'announce', 2000);
+    }
   }
 
   // survivors of a bomb/clean: board changed, over-state may be stale
@@ -340,9 +418,17 @@ export function useGameItem(id) {
 // Autopilot (admin only): the strongest AI plays your board, any mode.
 // ---------------------------------------------------------------------------
 
-const autopilot = { on: false, speed: 1, timer: null };
+export const autopilot = {
+  on: false, speed: 1, timer: null,
+  brain: 'souzou', style: 'normal',
+  autoItems: true, autoUlt: true, autoContinue: false, autoPerks: true, targetScore: 0,
+  stats: { moves: 0, clears: 0, started: 0 },
+};
 
 function isAdmin() { return !!session.user && session.user.role === 'admin'; }
+
+export function getCurrentMode() { return currentMode; }
+export function getViewRef() { return view; }
 
 function updateAutoBtn() {
   const btn = $('#btnAuto');
@@ -353,120 +439,37 @@ function updateAutoBtn() {
   $('#btnAdminCmd').classList.toggle('hidden', !show);
 }
 
-// ---------------------------------------------------------------------------
-// In-game admin command palette
-// ---------------------------------------------------------------------------
-
-export function showAdminPalette() {
-  if (!isAdmin()) return;
-  const m = showModal(`
-    <h2>🛡️ 管理者コマンド</h2>
-    <div class="form-col admin-cmds">
-      <button class="btn btn-ghost btn-sm" data-cmd="score">✨ スコア +1,000</button>
-      <button class="btn btn-ghost btn-sm" data-cmd="clear">🧹 ボード全消し</button>
-      <button class="btn btn-ghost btn-sm" data-cmd="reroll">🔄 リロール +5回</button>
-      <button class="btn btn-ghost btn-sm" data-cmd="time">⏱ 残り時間 +60秒</button>
-      <button class="btn btn-ghost btn-sm" data-cmd="bosshalf">👹 敵HP 半減</button>
-      <button class="btn btn-ghost btn-sm" data-cmd="floorclear">🏰 フロア即クリア</button>
-      <button class="btn btn-ghost btn-sm" data-cmd="fever">⭐ フィーバー付与（15秒）</button>
-    </div>
-    <p class="muted center" style="font-size:11px;margin-top:8px">通貨付与や隠し解放はホームの「🛡️管理」から</p>
-    <div class="modal-buttons"><button class="btn btn-primary" id="acClose">閉じる</button></div>`);
-  m.querySelector('#acClose').onclick = closeModal;
-  m.querySelectorAll('[data-cmd]').forEach(b => {
-    b.onclick = () => { adminCmd(b.dataset.cmd); };
-  });
-}
-
-async function adminCmd(cmd) {
-  const mode = currentMode;
-  const eng = mode && mode.engine;
-  audio.click();
-  switch (cmd) {
-    case 'score':
-      if (!eng) return toast('ゲーム中のみ使えます', 'err');
-      eng.score += 1000;
-      if (mode.updateHud) mode.updateHud();
-      else if (mode.updateMyHud) mode.updateMyHud(eng);
-      if (view) view.addFloatText(view.boardX + view.boardSize / 2, view.boardY + view.boardSize / 2, '+1000 (admin)', '#43d9e8', 1.3);
-      break;
-    case 'clear':
-      if (!eng) return toast('ゲーム中のみ使えます', 'err');
-      eng.grid.fill(0);
-      if (view) view.reviveFlash();
-      toast('🧹 ボードを全消ししました', 'ok', 1400);
-      break;
-    case 'reroll':
-      if (!eng) return toast('ゲーム中のみ使えます', 'err');
-      eng.rerolls += 5;
-      updateRerollHud(eng);
-      toast('🔄 リロール+5', 'ok', 1400);
-      break;
-    case 'time':
-      if (!mode || mode.endAt === undefined) return toast('タイマーのあるモードのみ', 'err');
-      mode.endAt += 60000;
-      mode.timeLeft += 60;
-      toast('⏱ +60秒', 'ok', 1400);
-      break;
-    case 'bosshalf':
-      if (!mode || (mode.mode !== 'boss' && mode.mode !== 'dungeon')) return toast('ボス戦・ダンジョンのみ使えます', 'err');
-      mode.hp = Math.ceil(mode.hp / 2);
-      mode.updateHpBar();
-      toast('👹 敵HPを半減しました', 'ok', 1400);
-      if (mode.hp <= 0) {
-        if (mode.mode === 'dungeon') mode.floorCleared();
-        else mode.finish(true);
-      }
-      break;
-    case 'floorclear':
-      if (!mode || mode.mode !== 'dungeon') return toast('ダンジョンのみ使えます', 'err');
-      if (mode.perkOpen) return;
-      mode.engine.score += Math.max(0, mode.hp);
-      mode.hp = 0;
-      mode.updateHpBar();
-      mode.floorCleared();
-      break;
-    case 'fever':
-      if (!eng) return toast('ゲーム中のみ使えます', 'err');
-      eng.feverUntil = Date.now() + 15000;
-      $('#hudScore').classList.add('fever');
-      setTimeout(() => $('#hudScore').classList.remove('fever'), 15000);
-      toast('⭐ フィーバー付与！15秒間スコア2倍', 'ok', 1800);
-      break;
-  }
-}
-
+// Kept for older callers: tap cycles on → faster → off.
 export function toggleAutopilot() {
   if (!isAdmin()) return;
   audio.click();
   if (!autopilot.on) {
     autopilot.on = true;
-    autopilot.speed = 1;
-    toast('🤖 オートパイロット起動 — 創造神ブレイン搭載（再タップで加速 x1→x8）', 'ok', 2400);
-  } else if (autopilot.speed < 8) {
+    toast(t('🤖 オートパイロット起動（長押しで設定）', '🤖 Autopilot on (hold for settings)'), 'ok', 2000);
+  } else if (autopilot.speed < 32) {
     autopilot.speed *= 2;
-    toast(`🤖 速度 x${autopilot.speed}`, '', 1200);
+    toast(`🤖 x${autopilot.speed}`, '', 1000);
   } else {
     stopAutopilot();
-    toast('🤖 オートパイロット停止', '', 1500);
     return;
   }
   updateAutoBtn();
   runAutopilot();
 }
 
-// Autopilot fires boosters like a pro: cleaner for garbage floods, bomb
-// for clogged boards, fever whenever the board is open enough to combo.
+// Autopilot fires boosters like a pro: cleaner for garbage floods, bomb for
+// clogged boards, fever whenever the board is open enough to combo.
 function autoUseItems(m) {
   if (Date.now() - (autopilot.itemAt || 0) < 2500) return;
   if ($('#itemBar').classList.contains('hidden')) return;
   const e = m.engine;
   // Ultimates first: a charged gauge is always the strongest button available.
-  if (e.ult >= 100 && Date.now() - (autopilot.ultAt || 0) > 3000) {
+  if (autopilot.autoUlt !== false && e.ult >= 100 && Date.now() - (autopilot.ultAt || 0) > 3000) {
     autopilot.itemAt = autopilot.ultAt = Date.now();
     fireUltCurrent();
     return;
   }
+  if (autopilot.autoItems === false) return;
   const counts = getItemCounts();
   const filled = e.grid.reduce((a, x) => a + (x ? 1 : 0), 0);
   const garbage = e.grid.reduce((a, x) => a + (x === 9 ? 1 : 0), 0);
@@ -483,30 +486,87 @@ function autoUseItems(m) {
   }
 }
 
-function runAutopilot() {
+// Try a move on a scratch engine; returns { lineCount, filled, mobility }.
+function simMove(engine, index, row, col) {
+  const s = new Engine(1);
+  s.grid = engine.grid.slice();
+  s.hand = engine.hand.map(p => (p ? { ...p } : null));
+  s.streakShield = true;
+  const r = s.place(index, row, col);
+  if (!r) return null;
+  const filled = s.grid.reduce((a, x) => a + (x ? 1 : 0), 0);
+  let mobility = 0;
+  for (const p of s.hand) if (p) mobility += s.placements(p).length;
+  return { lineCount: r.lineCount, filled, mobility };
+}
+
+// Style layer on top of the brain: bias the chosen move toward the goal.
+function pickAutoMove(engine) {
+  const base = chooseMove(engine, autopilot.brain || 'souzou');
+  const style = autopilot.style || 'normal';
+  if (style === 'normal' || !base) return base;
+  let best = base, bestScore = -Infinity;
+  for (let i = 0; i < engine.hand.length; i++) {
+    const p = engine.hand[i];
+    if (!p) continue;
+    for (const [r, c] of engine.placements(p)) {
+      const sim = simMove(engine, i, r, c);
+      if (!sim) continue;
+      const score = style === 'clear' ? -sim.filled * 10 + sim.lineCount * 5
+        : style === 'combo' ? sim.lineCount * 1000 + sim.mobility
+        : /* safe */ sim.mobility * 10 - sim.filled + sim.lineCount * 50;
+      if (score > bestScore) { bestScore = score; best = { index: i, row: r, col: c }; }
+    }
+  }
+  // Never let a style pick a move the brain thinks is a blunder when a clear
+  // was available: combo/clear styles only override on a real gain.
+  if (style === 'combo') {
+    const b = simMove(engine, base.index, base.row, base.col);
+    const s = simMove(engine, best.index, best.row, best.col);
+    if (b && s && s.lineCount <= b.lineCount) return base;
+  }
+  return best;
+}
+
+export function runAutopilot() {
   clearTimeout(autopilot.timer);
   if (!autopilot.on) return;
+  if (!autopilot.stats.started) autopilot.stats.started = Date.now();
   autopilot.timer = setTimeout(() => {
     const m = currentMode;
-    if (m && m.engine && view && view.running && !view.inputLocked && !m.engine.over) {
+    if (m && m.engine && view && view.running && !view.inputLocked && !m.engine.over && !m.ended) {
+      if (autopilot.targetScore && m.engine.score >= autopilot.targetScore) {
+        stopAutopilot();
+        toast(t(`🤖 目標スコア ${fmt(autopilot.targetScore)} に到達したので停止`, `🤖 Target score ${fmt(autopilot.targetScore)} reached — stopped`), 'ok', 2600);
+        return;
+      }
       autoUseItems(m);
-      // souzou = full-hand beam search, the strongest brain in the game
-      const mv = chooseMove(m.engine, 'souzou');
+      const mv = pickAutoMove(m.engine);
       if (mv) {
-        const r = m.engine.place(mv.index, mv.row, mv.col);
-        if (r) view.applyResult(r);   // full effects + mode callbacks
+        if (m.isCoop && view.onIntentPlace) {
+          view.onIntentPlace(mv.index, mv.row, mv.col);   // server-authoritative board
+        } else {
+          const r = m.engine.place(mv.index, mv.row, mv.col);
+          if (r) { view.applyResult(r); autopilot.stats.moves++; autopilot.stats.clears += r.lineCount; }
+        }
       } else if (m.engine.rerolls > 0 || m.engine.infiniteReroll) {
         m.engine.reroll();
         updateRerollHud(m.engine);
         if (m.engine.over) handleEngineOver();
       }
+    } else if (autopilot.autoContinue && m && m.ended) {
+      // Keep going: "play again" / "next floor" / "revenge" on the result modal.
+      const again = document.querySelector('#modal-root #rAgain');
+      if (again) again.click();
     }
     runAutopilot();
-  }, 700 / autopilot.speed);
+  }, autopilot.speed >= 32 ? 15 : 700 / autopilot.speed);
 }
 
 export function stopAutopilot() {
   autopilot.on = false;
+  autopilot.speed = 1;
+  autopilot.stats = { moves: 0, clears: 0, started: 0 };
   clearTimeout(autopilot.timer);
   updateAutoBtn();
 }
@@ -1383,6 +1443,42 @@ const HEAVEN_BANDS = [
   { name: '創造の玉座',   nameEn: 'Throne of Creation', board: 'board_kami',  track: 'kami',   foes: [['🪽', '大熾天使', 'High Seraph'], ['☀️', '太陽の化身', 'Avatar of the Sun'], ['🌌', '星幽体', 'Astral Being'], ['👑', '王冠の霊', 'Crown Spirit']], boss: ['✨', '至高神ルミナス', 'Luminus the Supreme'] },
 ];
 
+// 🌑 The Abyss — the hardest realm. Unlocked by conquering the tower.
+const ABYSS_BANDS = [
+  { name: '忘却の入口',   nameEn: 'Gate of Oblivion',   board: 'board_oni',     track: 'oni',  foes: [['🕯️', '消えかけの灯', 'Dying Light'], ['🦇', '影蝙蝠', 'Shade Bat'], ['🪦', '墓守', 'Gravekeeper'], ['🐍', '黒蛇', 'Black Serpent']], boss: ['🧟', '忘却の番人', 'Warden of Oblivion'] },
+  { name: '嘆きの回廊',   nameEn: 'Corridor of Lament', board: 'board_oni',     track: 'oni',  foes: [['👻', '嘆きの霊', 'Lamenting Spirit'], ['🕷️', '毒蜘蛛', 'Venom Spider'], ['🗝️', '錆びた鍵守', 'Rusted Keyholder'], ['🌫️', '瘴気', 'Miasma']], boss: ['💀', '嘆きの王', 'King of Lament'] },
+  { name: '血の沼',       nameEn: 'Blood Marsh',        board: 'board_volcano', track: 'oni',  foes: [['🩸', '血の滴', 'Blood Drop'], ['🐊', '沼の顎', 'Marsh Jaw'], ['🧛', '吸血鬼', 'Vampire'], ['🦟', '吸血蚊の群れ', 'Mosquito Swarm']], boss: ['🐲', '血竜ヴァルグ', 'Valg the Blood Dragon'] },
+  { name: '虚無の階段',   nameEn: 'Stairs of the Void', board: 'board_cyber',   track: 'kami', foes: [['⬛', '虚無の欠片', 'Void Shard'], ['🌀', '歪み', 'Distortion'], ['👁️', '無の眼', 'Eye of Nothing'], ['🕳️', '落とし穴', 'Pitfall']], boss: ['🌀', '虚無の支配者', 'Master of the Void'] },
+  { name: '狂気の鏡殿',   nameEn: 'Hall of Mad Mirrors', board: 'board_cyber',  track: 'oni',  foes: [['🪞', '鏡像', 'Mirror Image'], ['🤡', '狂道化', 'Mad Jester'], ['🎭', '二面鬼', 'Two-Faced Oni'], ['🔮', '惑わしの珠', 'Orb of Delusion']], boss: ['🃏', '狂王ジョーカー', 'The Mad Joker'] },
+  { name: '氷獄',         nameEn: 'Frozen Hell',        board: 'board_snow',    track: 'oni',  foes: [['🧊', '氷の亡者', 'Frozen Wraith'], ['🐺', '氷狼', 'Ice Wolf'], ['❄️', '吹雪の精', 'Blizzard Sprite'], ['🗿', '凍てつく像', 'Frozen Idol']], boss: ['🧙', '氷獄の魔女', 'Witch of Frozen Hell'] },
+  { name: '灼熱の底',     nameEn: 'Scorched Depths',    board: 'board_volcano', track: 'oni',  foes: [['🔥', '溶岩魔', 'Lava Fiend'], ['🌋', '噴火獣', 'Eruption Beast'], ['🐉', '火蜥蜴', 'Fire Lizard'], ['💥', '爆炎の精', 'Blast Sprite']], boss: ['👹', '灼熱鬼イフリート', 'Ifrit the Scorching'] },
+  { name: '星喰いの巣',   nameEn: 'Nest of the Star-Eater', board: 'board_galaxy', track: 'kami', foes: [['🕸️', '星の糸', 'Star Silk'], ['🦑', '宇宙蛸', 'Cosmic Squid'], ['☄️', '落星', 'Fallen Star'], ['🌑', '暗黒球', 'Dark Sphere']], boss: ['🐙', '星喰いヨグ', 'Yog the Star-Eater'] },
+  { name: '神殺しの祭壇', nameEn: 'Altar of Godslaying', board: 'board_kami',   track: 'kami', foes: [['⚔️', '堕天騎士', 'Fallen Knight'], ['🗡️', '弑逆の刃', 'Regicide Blade'], ['📿', '異端僧', 'Heretic Monk'], ['🪽', '黒翼', 'Black Wing']], boss: ['😈', '堕神ルシファル', 'Lucifal the Fallen'] },
+  { name: '深淵の玉座',   nameEn: 'Throne of the Abyss', board: 'board_oni',    track: 'kami', foes: [['👁️‍🗨️', '深淵の視線', 'Gaze of the Abyss'], ['🌌', '終焉の兆し', 'Omen of the End'], ['🕳️', '奈落', 'Naraka'], ['🖤', '無慈悲', 'Mercilessness']], boss: ['🩻', '深淵王アビスゼロ', 'Abyss Zero, King of the Deep'] },
+];
+
+// One curse per Abyss floor (deterministic, so a floor feels like "that floor").
+const ABYSS_CURSES = [
+  { id: 'none', w: 3 },
+  { id: 'noreroll', name: '封印の呪い', nameEn: 'Curse of Sealing',    desc: 'このフロアはリロール不可', descEn: 'No rerolls on this floor', w: 2 },
+  { id: 'mini',     name: '矮小の呪い', nameEn: 'Curse of Dwindling',  desc: '極小ピースしか来ない', descEn: 'Only tiny pieces', w: 2 },
+  { id: 'big',      name: '巨大の呪い', nameEn: 'Curse of Bulk',       desc: '大型ピースしか来ない', descEn: 'Only big pieces', w: 2 },
+  { id: 'rain',     name: '瓦礫の雨',   nameEn: 'Rubble Rain',         desc: '8秒ごとにお邪魔が2個降る', descEn: '2 garbage cells every 8s', w: 2 },
+  { id: 'haste',    name: '加速の呪い', nameEn: 'Curse of Haste',      desc: '敵の攻撃が30%速い', descEn: 'Attacks 30% faster', w: 2 },
+  { id: 'blind',    name: '盲目の呪い', nameEn: 'Curse of Blindness',  desc: '敵のHPが見えない', descEn: 'Enemy HP is hidden', w: 1 },
+  { id: 'greed',    name: '強欲の呪い', nameEn: 'Curse of Greed',      desc: '与ダメージ半減', descEn: 'Half damage dealt', w: 1 },
+];
+
+function abyssCurse(f, isBoss) {
+  let h = (f * 2654435761) >>> 0;
+  h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995); h ^= h >>> 15;
+  const pool = ABYSS_CURSES.filter(c => !(isBoss && c.id === 'greed'));
+  const total = pool.reduce((a, c) => a + c.w, 0);
+  let x = (h >>> 0) % total;
+  for (const c of pool) { x -= c.w; if (x < 0) return c; }
+  return pool[0];
+}
+
 // Realm definitions: the tower is the classic; the others remix the rules.
 const DUNGEON_REALMS = {
   tower: {
@@ -1409,16 +1505,25 @@ const DUNGEON_REALMS = {
     desc: '攻撃はゆっくり大ぶり。ボスを倒すたび「天使の祝福」で残機+1',
     descEn: "Slow but heavy attacks. Every boss grants an angel's blessing: +1 life",
   },
+  abyss: {
+    id: 'abyss', icon: '🌑', name: '深淵ダンジョン', nameEn: 'The Abyss',
+    prefix: 'A', floors: 100, bands: ABYSS_BANDS,
+    hpMult: 1.7, atkSecMult: 0.6, extraAtkCells: 2, startGarbage: true, garbageBase: 5, garbageDiv: 15,
+    bossEvery: 5, finalMult: 4, curses: true, phases: true, unlock: 'tower100',
+    bestKey: 'bba_dungeon_abyss_max', resultMode: 'dungeon_abyss',
+    desc: '過去最難関。5階ごとにボス、毎フロアに呪い、最深部には三段階の魔神。塔100F制覇者のみ挑める',
+    descEn: 'The hardest realm: a boss every 5 floors, a curse on every floor, a three-phase demon at the bottom. Tower conquerors only',
+  },
 };
 
 function dungeonFloor(f, realm = DUNGEON_REALMS.tower) {
   const bands = realm.bands;
   const band = bands[Math.min(bands.length - 1, Math.floor((f - 1) / 10))];
-  const isBoss = f % 10 === 0;
+  const isBoss = f % (realm.bossEvery || 10) === 0;
   const isFinal = f === realm.floors;
   const [emoji, name, nameEn] = isBoss ? band.boss : band.foes[(f - 1) % band.foes.length];
   let hp = Math.round((260 + f * 95 + f * f * 1.15) * realm.hpMult);
-  if (isBoss) hp = Math.round(hp * (isFinal ? 3 : 2.1));
+  if (isBoss) hp = Math.round(hp * (isFinal ? (realm.finalMult || 3) : 2.1));
   const atkSec = Math.max(4.5, (15 - f * 0.09) * realm.atkSecMult) * (isBoss ? 1.25 : 1);
   const atkCells = Math.min(8, 1 + Math.floor(f / 12) + (isBoss ? 2 : 0) + realm.extraAtkCells);
   return { floor: f, band, isBoss, isFinal, emoji, name, nameEn, hp, atkSec, atkCells };
@@ -1462,7 +1567,7 @@ class DungeonMode {
   // Underground floors start half-buried in rubble.
   realmFloorStart() {
     if (!this.realm.startGarbage) return;
-    const n = 3 + Math.floor(this.floor / 25);
+    const n = (this.realm.garbageBase || 3) + Math.floor(this.floor / (this.realm.garbageDiv || 25));
     this.engine.addGarbage(n);
     if (this.engine.over && !this.engine.hasAnyMove()) { this.engine.reviveBoard(); }
     else this.engine.over = false;
@@ -1515,6 +1620,8 @@ class DungeonMode {
     $('#bossEmoji').textContent = this.info.emoji;
     $('#bossEmoji').className = 'boss-emoji';
     $('#bossName').textContent = t(`${this.realm.prefix}${f} ${this.info.band.name}：${this.info.name}`, `${this.realm.prefix}${f} ${this.info.band.nameEn}: ${this.info.nameEn}`);
+    this.phase = 1;
+    this.applyCurse(f);
     this.updateHpBar();
     this.updateHud();
     if (silent) return;
@@ -1535,13 +1642,13 @@ class DungeonMode {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = `${this.realm.icon} ${this.realm.prefix}${this.floor}/${this.realm.floors} ・ ❤️×${this.lives}${this.engine.scoreMult > 1 ? ` ・ 💪×${this.engine.scoreMult.toFixed(1)}` : ''}`;
+    $('#hudSub').textContent = `${this.realm.icon} ${this.realm.prefix}${this.floor}/${this.realm.floors} ・ ❤️×${this.lives}${this.engine.scoreMult > 1 ? ` ・ 💪×${this.engine.scoreMult.toFixed(1)}` : ''}${this.curse ? ' ・ ☠️' + (ABYSS_CURSES.find(c => c.id === this.curse) || {}).name : ''}`;
   }
 
   updateHpBar() {
     const pct = Math.max(0, (this.hp / this.info.hp) * 100);
     $('#bossHp').style.width = `${pct}%`;
-    $('#bossHpText').textContent = `${fmt(Math.max(0, this.hp))} / ${fmt(this.info.hp)}`;
+    $('#bossHpText').textContent = this.curse === 'blind' ? '？？？ / ？？？' : `${fmt(Math.max(0, this.hp))} / ${fmt(this.info.hp)}`;
   }
 
   damageFloat(dmg, big) {
@@ -1559,7 +1666,7 @@ class DungeonMode {
     this.atkInt = setInterval(() => this.tickAttack(), 100);
   }
 
-  atkMs() { return this.info.atkSec * 1000 * this.atkSlow; }
+  atkMs() { return this.info.atkSec * 1000 * this.atkSlow * (this.curseHaste || 1); }
 
   tickAttack() {
     if (this.ended || this.perkOpen) return;
@@ -1589,14 +1696,68 @@ class DungeonMode {
 
   onPlace(result) {
     this.updateHud();
-    this.hp -= result.gained;
+    const dmg = this.curseGreed ? Math.ceil(result.gained / 2) : result.gained;
+    this.hp -= dmg;
     this.updateHpBar();
-    this.damageFloat(result.gained, result.lineCount > 0);
+    this.damageFloat(dmg, result.lineCount > 0);
+    this.checkPhases();
     if (result.lineCount > 0) {
       const em = $('#bossEmoji');
       em.classList.remove('boss-hit'); void em.offsetWidth; em.classList.add('boss-hit');
     }
     if (this.hp <= 0 && !this.ended) this.floorCleared();
+  }
+
+  // ---- Abyss: a curse on every floor + a three-phase final boss ----
+  applyCurse(f) {
+    clearInterval(this.rainInt);
+    const e = this.engine;
+    if (this.curse === 'noreroll') e.rerolls = Math.max(e.rerolls, this.savedRerolls || 0);
+    this.curse = null; this.curseHaste = 1; this.curseGreed = false;
+    e.chaosMini = false; e.chaosBig = false;
+    if (!this.realm.curses) return;
+    const pick = abyssCurse(f, this.info.isBoss);
+    if (!pick || pick.id === 'none') { $('#hudSub').classList.remove('cursed'); return; }
+    this.curse = pick.id;
+    switch (pick.id) {
+      case 'noreroll': this.savedRerolls = e.rerolls; e.rerolls = 0; updateRerollHud(e); break;
+      case 'mini': e.chaosMini = true; break;
+      case 'big': e.chaosBig = true; break;
+      case 'haste': this.curseHaste = 0.7; break;
+      case 'greed': this.curseGreed = true; break;
+      case 'rain':
+        this.rainInt = setInterval(() => {
+          if (this.ended || this.perkOpen || getView().inputLocked) return;
+          const cells = e.addGarbage(2);
+          const v = getView();
+          for (const [r, c] of cells) { v.spawnAnim.set(r * 8 + c, v.time); v.particles.burstCell(v.boardX + (c + 0.5) * v.cell, v.boardY + (r + 0.5) * v.cell, v.cell, 9, 'fx_default'); }
+          if (e.over) this.onTopOut();
+        }, 8000);
+        break;
+      default: break;
+    }
+    toast(t(`☠️ ${pick.name}：${pick.desc}`, `☠️ ${pick.nameEn}: ${pick.descEn}`), 'err', 2400);
+    this.updateHpBar();
+  }
+
+  checkPhases() {
+    if (!this.realm.phases || !this.info.isFinal || this.hp <= 0) return;
+    const pct = this.hp / this.info.hp;
+    const phase = pct < 0.33 ? 3 : pct < 0.66 ? 2 : 1;
+    if (phase > (this.phase || 1)) {
+      this.phase = phase;
+      this.atkSlow *= 0.72;
+      const cells = this.engine.addGarbage(phase === 3 ? 6 : 4);
+      const v = getView();
+      for (const [r, c] of cells) v.spawnAnim.set(r * 8 + c, v.time);
+      v.shake = 18; v.screenFlash = 0.5; audio.bossAttack();
+      $('#bossEmoji').classList.add('boss-atk');
+      toast(phase === 3
+        ? t(`${this.info.emoji} ${this.info.name}が真の姿に…！！攻撃がさらに加速！`, `${this.info.emoji} ${this.info.nameEn} reveals its true form!! Even faster attacks!`)
+        : t(`${this.info.emoji} ${this.info.name}が第二形態に！攻撃が加速する！`, `${this.info.emoji} ${this.info.nameEn} enters phase 2! Attacks speed up!`), 'announce', 2800);
+      this.armAttack();
+      if (this.engine.over) this.onTopOut();
+    }
   }
 
   floorCleared() {
@@ -1647,7 +1808,7 @@ class DungeonMode {
       b.onclick = () => { this.applyPerk(b.dataset.perk); closeModal(); next(); };
     });
     // Autopilot keeps climbing on its own — it grabs a perk and moves on.
-    if (autopilot.on) {
+    if (autopilot.on && autopilot.autoPerks !== false) {
       setTimeout(() => {
         const b = m.querySelector('[data-perk]');
         if (b && document.body.contains(b)) b.click();
@@ -1702,6 +1863,7 @@ class DungeonMode {
     if (this.ended) return;
     this.ended = true;
     clearInterval(this.atkInt);
+    clearInterval(this.rainInt);
     getView().inputLocked = true;
     const R = this.realm;
     const cleared = won ? R.floors : this.floor - 1;
@@ -1765,6 +1927,7 @@ class DungeonMode {
   destroy() {
     this.ended = true;
     clearInterval(this.atkInt);
+    clearInterval(this.rainInt);
     $('#bossPanel').classList.add('hidden');
   }
 }
@@ -2190,22 +2353,24 @@ class OnlineMode extends VersusBase {
 
     $('#roomPlayers').innerHTML = msg.players.map((p, i) => `
       <div class="room-player ${p.isYou ? 'me' : ''}">
-        <span class="rp-team">${msg.settings.team ? (i < 2 ? '🟦' : '🟥') : '⚔️'}</span>
+        <span class="rp-team">${(msg.settings.mode || (msg.settings.team ? 'team' : 'duel')) === 'coop' ? '🤝' : msg.settings.team ? (i < 2 ? '🟦' : '🟥') : '⚔️'}</span>
         <span class="rp-name">${escapeHtml(p.name)}${p.isYou ? t('（あなた）', ' (you)') : ''}</span>
         ${p.isHost ? `<span class="rp-host">${t('👑 ホスト', '👑 Host')}</span>` : ''}
       </div>`).join('');
 
     const host = msg.youAreHost;
     const s = msg.settings;
+    const mode = s.mode || (s.team ? 'team' : 'duel');
     const dis = host ? '' : 'disabled';
     $('#roomSettings').innerHTML = `
-      <div class="settings-row"><label>${t('⏱️ 試合時間', '⏱️ Match time')}</label><div class="seg" data-rs="duration">
+      <div class="settings-row ${mode === 'coop' ? 'hidden' : ''}"><label>${t('⏱️ 試合時間', '⏱️ Match time')}</label><div class="seg" data-rs="duration">
         ${[60, 120, 180].map(d => `<button data-v="${d}" ${s.duration === d ? 'class="active"' : ''} ${dis}>${d / 60}${t('分', 'min')}</button>`).join('')}
       </div></div>
-      <div class="settings-row"><label>${t('👥 モード', '👥 Mode')}</label><div class="seg" data-rs="team">
-        <button data-v="false" ${!s.team ? 'class="active"' : ''} ${dis}>1v1</button>
-        <button data-v="true" ${s.team ? 'class="active"' : ''} ${dis}>${t('2v2チーム', '2v2 Team')}</button>
+      <div class="settings-row"><label>${t('👥 モード', '👥 Mode')}</label><div class="seg" data-rs="mode">
+        ${[['duel', '1v1'], ['team', t('2v2チーム', '2v2 Team')], ['coop', t('🤝 協力', '🤝 Co-op')]].map(([v, l]) =>
+          `<button data-v="${v}" ${mode === v ? 'class="active"' : ''} ${dis}>${l}</button>`).join('')}
       </div></div>
+      ${mode === 'coop' ? `<p class="muted center" style="font-size:11px">${t('🤝 2人で1つの盤面を交互に操作。ボット補充ONなら1人でも遊べます', '🤝 Two players share one board, taking turns. Bot fill lets you play solo')}</p>` : ''}
       <div class="settings-row"><label>${t('🤖 ボット補充', '🤖 Fill with bots')}</label><input type="checkbox" id="rsBotFill" ${s.botFill ? 'checked' : ''} ${dis}></div>
       <div class="settings-row"><label>${t('💪 ボットの強さ', '💪 Bot strength')}</label><div class="seg" data-rs="botLevel">
         ${[['random', '🎲'], ['easy', t('弱', 'Easy')], ['normal', t('中', 'Mid')], ['hard', t('強', 'Hard')], ['oni', t('鬼', 'Oni')]].map(([v, l]) =>
@@ -2219,7 +2384,6 @@ class OnlineMode extends VersusBase {
           const key = b.parentElement.dataset.rs;
           let v = b.dataset.v;
           if (key === 'duration') v = Number(v);
-          if (key === 'team') v = v === 'true';
           audio.click();
           this.client.setRoom({ [key]: v });
         };
@@ -3128,3 +3292,5 @@ export function cancelMatchmaking() {
 }
 
 export { endToMenu };
+
+export { updateRerollHud, handleEngineOver, updateAutoBtn };

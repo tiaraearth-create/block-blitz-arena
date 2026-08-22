@@ -241,7 +241,7 @@ export function applyStaticI18n() {
   }
 
   // nav (each is <span>icon</span> + text node)
-  const nav = { btnMissions: 'Missions', btnLeaderboard: 'Ranking', btnShop: 'Shop', btnGacha: 'Gacha', btnGemShop: 'Gems', btnBattlePass: 'Pass', btnAdmin: 'Admin' };
+  const nav = { btnMissions: 'Missions', btnGuild: 'Guild', btnNews: 'News', btnLeaderboard: 'Ranking', btnShop: 'Shop', btnGacha: 'Gacha', btnGemShop: 'Gems', btnBattlePass: 'Pass', btnAdmin: 'Admin' };
   for (const [id, label] of Object.entries(nav)) {
     const el = document.getElementById(id);
     if (!el) continue;
@@ -271,6 +271,12 @@ export function applyStaticI18n() {
   set('[data-shop="ult"]', '⚡Ultimates');
   set('[data-shop="item"]', 'Items');
   set('#screen-missions .sub-header h2', '📋 Missions');
+  set('#screen-guild .sub-header h2', '🏰 Guild');
+  set('[data-gd="mine"]', 'My Guild');
+  set('[data-gd="rank"]', 'Ranking');
+  set('[data-gd="find"]', 'Find');
+  set('#screen-news .sub-header h2', '📰 News');
+  set('#btnNewsPost', '✍️ Post');
   set('[data-ms="daily"]', 'Daily');
   set('[data-ms="weekly"]', 'Weekly');
   set('[data-ms="ach"]', '🏅 Achievements');

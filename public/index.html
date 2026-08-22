@@ -67,6 +67,8 @@
         </div>
         <nav class="menu-nav">
           <button class="nav-btn" id="btnMissions"><span>📋</span>ミッション<i id="missionDot" class="nav-dot hidden"></i></button>
+          <button class="nav-btn" id="btnGuild"><span>🏰</span>ギルド</button>
+          <button class="nav-btn" id="btnNews"><span>📰</span>ニュース<i id="newsDot" class="nav-dot hidden"></i></button>
           <button class="nav-btn" id="btnLeaderboard"><span>🏆</span>ランキング</button>
           <button class="nav-btn" id="btnShop"><span>🛍️</span>ショップ</button>
           <button class="nav-btn" id="btnGacha"><span>🎰</span>ガチャ</button>
@@ -102,12 +104,7 @@
         <div id="hudTimer" class="hud-timer hidden">2:00</div>
       </div>
       <div id="chaosBar" class="chaos-bar hidden" title="つぎのルール変化まで"><div id="chaosBarFill"></div></div>
-      <div id="itemBar" class="item-bar hidden">
-        <button class="chip icon-btn" data-item="item_bomb" title="スマートボム：いちばん埋まった3×3を爆破">💣<b>0</b></button>
-        <button class="chip icon-btn" data-item="item_cleaner" title="クリーナー：お邪魔＋最下行を掃除">🧹<b>0</b></button>
-        <button class="chip icon-btn" data-item="item_fever" title="フィーバー：15秒間スコア2倍">⭐<b>0</b></button>
-        <button class="chip icon-btn" data-item="item_mini" title="ミニブロック：手持ちが極小ピースに変化">🧩<b>0</b></button>
-      </div>
+      <div id="itemBar" class="item-bar hidden"></div>
       <div id="coopBar" class="coop-bar hidden">
         <div id="coopTurnLabel" class="coop-turn-label">🤝</div>
         <div class="coop-turnbar"><div id="coopTurnFill"></div></div>
@@ -221,6 +218,30 @@
       </div>
       <div id="bpHeader" class="bp-header"></div>
       <div id="bpTiers" class="bp-tiers"></div>
+    </section>
+
+    <!-- ===================== Guild ===================== -->
+    <section id="screen-guild" class="screen sub-screen hidden">
+      <div class="sub-header">
+        <button class="chip icon-btn back-btn" data-back>←</button>
+        <h2>🏰 ギルド</h2>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-gd="mine">マイギルド</button>
+        <button class="tab" data-gd="rank">ランキング</button>
+        <button class="tab" data-gd="find">さがす</button>
+      </div>
+      <div id="guildBody" class="ms-body"></div>
+    </section>
+
+    <!-- ===================== News ===================== -->
+    <section id="screen-news" class="screen sub-screen hidden">
+      <div class="sub-header">
+        <button class="chip icon-btn back-btn" data-back>←</button>
+        <h2>📰 ニュース</h2>
+        <button class="btn btn-sm btn-primary hidden" id="btnNewsPost" style="margin-left:auto">✍️ 投稿</button>
+      </div>
+      <div id="newsBody" class="ms-body"></div>
     </section>
 
     <!-- ===================== Admin ===================== -->

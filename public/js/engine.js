@@ -124,6 +124,14 @@ export class Engine {
   }
 
   drawPiece() {
+    // 創造の手札 (staff item): the next draws are all big line-clearing shapes.
+    if (this.godDraws > 0) {
+      this.godDraws--;
+      const bigs = [];
+      for (let i = 0; i < SHAPES.length; i++) if (SHAPES[i].cells.length >= 5) bigs.push(i);
+      const i = bigs[this.rng.int(bigs.length)];
+      return { shape: i, cells: SHAPES[i].cells, color: SHAPES[i].color };
+    }
     if (this.chaosMini) {
       const minis = [];
       for (let i = 0; i < SHAPES.length; i++) if (SHAPES[i].cells.length <= 3) minis.push(i);

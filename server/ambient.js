@@ -29,7 +29,7 @@ export function effectiveScale() { return POP_SCALE * liveScale; }
 // Admin-tunable configuration (persisted in db.meta.ambient)
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_TOGGLES = { chat: true, dialogues: true, feed: true, greetings: true, reactions: true, ghosts: true, bots: true };
+export const DEFAULT_TOGGLES = { chat: true, dialogues: true, feed: true, greetings: true, reactions: true, ghosts: true, bots: true, votes: true, guilds: true };
 
 const custom = {
   names: [],            // extra persona names mixed into guests/bots

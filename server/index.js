@@ -29,6 +29,11 @@ import {
 } from './ambient.js';
 import { BADGE_NAMES } from './crowd.js';
 import {
+  GUILD_CREATE_COST, GUILD_ICONS, createGuild, findGuild, joinGuild, leaveGuild, kickMember,
+  addGuildPoints, guildView, guildLevel, guildCoinBonus, ghostGuildViews, tagOfName, validateGuildInput,
+} from './guilds.js';
+import { TRANSLATE_ENGINE } from './translate.js';
+import {
   validateBackup, applyRestore, snapshot, listSnapshots, readSnapshot, BACKUP_VERSION,
 } from './backup.js';
 import { EVENT_TYPES, makeEvent, eventBonus } from './events.js';
@@ -124,8 +129,9 @@ function migrateUser(user) {
   for (const [k, v] of Object.entries({
     ultsUsed: 0, itemsUsed: 0, missionsDone: 0, piecesPlaced: 0,
     survivalWave: 0, winStreakBest: 0, loginStreak: 1, loginStreakBest: 1,
-    sprintPlays: 0, coopPlays: 0, coopBest: 0,
+    sprintPlays: 0, coopPlays: 0, coopBest: 0, abyssMax: 0, guildBestWeek: 0,
   })) if (s[k] === undefined) s[k] = v;
+  if (user.guildId && !(db.guilds && db.guilds[user.guildId])) user.guildId = null;
   if (!s.sprint || typeof s.sprint !== 'object') s.sprint = {};
   if (!Array.isArray(s.history)) s.history = [];
   if (!Array.isArray(user.achievements)) user.achievements = [];
@@ -183,6 +189,9 @@ function publicUser(user) {
     battlePass: adminBp, badges: user.badges,
     equippedTitle: user.equippedTitle || null,
     achievements: user.achievements,
+    guild: user.guildId && db.guilds[user.guildId]
+      ? { id: user.guildId, name: db.guilds[user.guildId].name, tag: db.guilds[user.guildId].tag, icon: db.guilds[user.guildId].icon, owner: db.guilds[user.guildId].ownerId === user.id }
+      : null,
   };
 }
 
@@ -229,6 +238,19 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   if (bonus.gemDrop > 0) {
     eventGems = Math.floor(bonus.gemDrop);
     user.gems += eventGems;
+  }
+
+  // Guild: every game feeds the weekly race, and the guild's level pays a
+  // coin bonus back to its members.
+  let guildPts = 0, guildBonus = 0;
+  const guild = user.guildId ? db.guilds[user.guildId] : null;
+  if (guild) {
+    const wk = weekIdOf(currentWeekNum());
+    guildPts = addGuildPoints(db, user, Math.floor(score / 400) + (won ? 25 : 0) + Math.floor(lines / 2), wk);
+    guildBonus = Math.floor(coins * guildCoinBonus(guildLevel(guild.lifetime || 0)));
+    coins += guildBonus;
+    const mine = (guild.weekly[wk] && guild.weekly[wk].byMember[user.id]) || 0;
+    if (mine > (user.stats.guildBestWeek || 0)) user.stats.guildBestWeek = mine;
   }
 
   user.coins += coins;
@@ -321,6 +343,26 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   }
   // Dungeon tower: track highest floor cleared; gems for each newly reached
   // checkpoint decade, badge + big gem bonus for conquering all 100 floors.
+  // The Abyss: the hardest realm — double gems per decade, a badge and a big
+  // bonus for the bottom.
+  if (mode === 'dungeon_abyss') {
+    const fl = Math.max(0, Math.min(100, Math.floor(Number(floor) || 0)));
+    const prevMax = s.abyssMax || 0;
+    if (fl > prevMax) {
+      const decades = Math.floor(fl / 10) - Math.floor(prevMax / 10);
+      if (decades > 0) {
+        gems += decades * 40;
+        user.gems += decades * 40;
+      }
+      s.abyssMax = fl;
+    }
+    if (fl >= 100 && !user.badges.includes('abyss')) {
+      user.badges.push('abyss');
+      badge = 'abyss';
+      gems += 1000;
+      user.gems += 1000;
+    }
+  }
   if (mode === 'dungeon') {
     const fl = Math.max(0, Math.min(100, Math.floor(Number(floor) || 0)));
     const prevMax = s.dungeonMax || 0;
@@ -406,6 +448,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     streak: s.winStreak || 0, streakBonus,
     missionsCompleted,
     eventCoins, eventGems,
+    guildPts, guildBonus,
   };
 }
 
@@ -658,7 +701,7 @@ function syncPoll() {
 
 app.get('/api/poll', (req, res) => {
   const poll = syncPoll();
-  res.json({ poll: pollView(poll, req.user && req.user.id) });
+  res.json({ poll: pollView(poll, req.user && req.user.id, !!req.user && req.user.role === 'admin') });
 });
 
 app.post('/api/poll/vote', requireAuth, maintenanceGuard, (req, res) => {
@@ -685,7 +728,7 @@ app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
     });
     if (w) battle.crowd.react('poll_close', { winner: w.text });
     saveDb();
-    return res.json({ poll: pollView(db.meta.poll, req.user.id) });
+    return res.json({ poll: pollView(db.meta.poll, req.user.id, true) });
   }
 
   if (action === 'delete') {
@@ -714,7 +757,7 @@ app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
     battle.crowd.react('poll_close', { winner: w.text });
     setTimeout(() => battle.crowd.react('event_start'), 25000);
     saveDb();
-    return res.json({ event: currentEvent(), poll: pollView(poll, req.user.id) });
+    return res.json({ event: currentEvent(), poll: pollView(poll, req.user.id, true) });
   }
 
   // create
@@ -737,12 +780,169 @@ app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
   });
   battle.crowd.react('poll_open');
   saveDb();
-  res.json({ poll: pollView(out.poll, req.user.id) });
+  res.json({ poll: pollView(out.poll, req.user.id, true) });
 });
 
 // Suggested event options for the admin's poll builder.
 app.get('/api/admin/poll/suggest', requireAuth, requireAdmin, (_req, res) => {
   res.json({ options: eventPollOptions(EVENT_TYPES.length), types: EVENT_TYPES });
+});
+
+// ---------------------------------------------------------------------------
+// Guilds (ギルド)
+// ---------------------------------------------------------------------------
+
+const curWeek = () => weekIdOf(currentWeekNum());
+
+app.get('/api/guilds', (req, res) => {
+  const week = curWeek();
+  const real = Object.values(db.guilds).map(g => guildView(db, g, week));
+  const ghosts = getCustom().toggles.guilds ? ghostGuildViews(week).filter(g => !real.some(r => r.name === g.name || r.tag === g.tag)) : [];
+  const rows = real.concat(ghosts).sort((a, b) => b.weeklyPoints - a.weeklyPoints).slice(0, 50).map((g, i) => ({ ...g, rank: i + 1 }));
+  const mine = req.user && req.user.guildId && db.guilds[req.user.guildId]
+    ? guildView(db, db.guilds[req.user.guildId], week, { detailed: true, viewerId: req.user.id, levelOf })
+    : null;
+  if (mine) mine.rank = rows.findIndex(r => r.id === mine.id) + 1 || null;
+  res.json({ week, guilds: rows, mine, createCost: GUILD_CREATE_COST, icons: GUILD_ICONS });
+});
+
+app.get('/api/guilds/:id', (req, res) => {
+  const g = db.guilds[req.params.id];
+  if (g) return res.json({ guild: guildView(db, g, curWeek(), { detailed: true, viewerId: req.user && req.user.id, levelOf }) });
+  const ghost = ghostGuildViews(curWeek()).find(x => x.id === req.params.id);
+  if (ghost) return res.json({ guild: ghost });
+  res.status(404).json({ error: 'ギルドが見つかりません' });
+});
+
+app.post('/api/guilds/create', requireAuth, maintenanceGuard, (req, res) => {
+  const user = req.user;
+  if (user.role !== 'admin' && user.coins < GUILD_CREATE_COST) {
+    return res.status(402).json({ error: `ギルド設立には🪙${GUILD_CREATE_COST}必要です` });
+  }
+  const out = createGuild(db, user, req.body || {});
+  if (out.error) return res.status(400).json({ error: out.error });
+  if (user.role !== 'admin') user.coins -= GUILD_CREATE_COST;
+  user.guildFounded = true;
+  saveDb();
+  battle.crowd.feed({ icon: out.guild.icon, real: true, who: user.username,
+    text: `${user.username} がギルド「${out.guild.name}」を設立！`, textEn: `${user.username} founded the guild "${out.guild.name}"!` });
+  res.json({ guild: guildView(db, out.guild, curWeek(), { detailed: true, viewerId: user.id, levelOf }), user: publicUser(user) });
+});
+
+app.post('/api/guilds/join', requireAuth, maintenanceGuard, (req, res) => {
+  const b = req.body || {};
+  const guild = findGuild(db, { id: b.id, code: b.code });
+  if (!guild) return res.status(404).json({ error: b.code ? 'そのコードのギルドは見つかりません' : 'ギルドが見つかりません' });
+  const out = joinGuild(db, req.user, guild, { viaCode: !!b.code });
+  if (out.error) return res.status(409).json({ error: out.error });
+  saveDb();
+  res.json({ guild: guildView(db, guild, curWeek(), { detailed: true, viewerId: req.user.id, levelOf }), user: publicUser(req.user) });
+});
+
+app.post('/api/guilds/leave', requireAuth, (req, res) => {
+  const out = leaveGuild(db, req.user);
+  saveDb();
+  res.json({ ok: true, disbanded: !!out.disbanded, user: publicUser(req.user) });
+});
+
+app.post('/api/guild/kick', requireAuth, (req, res) => {
+  const guild = req.user.guildId ? db.guilds[req.user.guildId] : null;
+  if (!guild) return res.status(404).json({ error: 'ギルドに所属していません' });
+  const out = kickMember(db, guild, req.user, String(req.body.userId || ''));
+  if (out.error) return res.status(403).json({ error: out.error });
+  saveDb();
+  res.json({ guild: guildView(db, guild, curWeek(), { detailed: true, viewerId: req.user.id, levelOf }) });
+});
+
+app.post('/api/guild/settings', requireAuth, (req, res) => {
+  const guild = req.user.guildId ? db.guilds[req.user.guildId] : null;
+  if (!guild) return res.status(404).json({ error: 'ギルドに所属していません' });
+  if (guild.ownerId !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'ギルドリーダーのみ変更できます' });
+  const v = validateGuildInput(req.body || {}, { partial: true });
+  if (v.error) return res.status(400).json({ error: v.error });
+  if (v.name && Object.values(db.guilds).some(g => g.id !== guild.id && g.name.toLowerCase() === v.name.toLowerCase())) {
+    return res.status(409).json({ error: 'そのギルド名は使われています' });
+  }
+  if (v.tag && Object.values(db.guilds).some(g => g.id !== guild.id && g.tag === v.tag)) {
+    return res.status(409).json({ error: 'そのタグは使われています' });
+  }
+  Object.assign(guild, v);
+  saveDb();
+  res.json({ guild: guildView(db, guild, curWeek(), { detailed: true, viewerId: req.user.id, levelOf }) });
+});
+
+app.delete('/api/admin/guilds/:id', requireAuth, requireAdmin, (req, res) => {
+  const g = db.guilds[req.params.id];
+  if (!g) return res.status(404).json({ error: 'ギルドが見つかりません' });
+  for (const id of g.members) { const u = db.users[id]; if (u) u.guildId = null; }
+  delete db.guilds[g.id];
+  saveDb();
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// News (お知らせ)
+// ---------------------------------------------------------------------------
+
+function seedNews() {
+  if (db.news.length) return;
+  const mk = (title, body, daysAgo, pinned = false) => ({
+    id: crypto.randomUUID(), title, body, pinned, by: 'るみまき',
+    at: Date.now() - daysAgo * 86400000,
+  });
+  db.news.push(
+    mk('🎉 v2.0 超進化アップデート！', '⚡アルティメットスキル（9種・ショップの「奥義」タブ）／📋デイリー・ウィークリーミッション／🏅実績58種／📊戦績ダッシュボード／⏱️タイムアタック／🤝協力プレイ（2人で1盤面）を追加しました。ラインを消して⚡ゲージを溜め、必殺技を撃とう！', 0, true),
+    mk('🎪 イベント＆🗳️投票スタート', '期間限定イベントが8種類に！コイン祭り・経験値ブースト・ジェムラッシュ・ボス襲来・奥義祭・ラッキーデー…開催中はメニューにバナーが出ます。投票機能では次のイベントをみんなで決められます（投票するまで結果は秘密）。', 0),
+    mk('🏰 ギルド機能・🌑 深淵ダンジョン・📰 ニュース', 'ギルドを作って週間ポイントを競おう（ギルドレベルでコインボーナス）。塔を制覇した猛者には過去最難関「深淵」が待っています。このニュース欄には運営からのお知らせが届きます。', 0),
+    mk('🎭 にぎわい2.0 ＆ チャット自動翻訳', 'ロビーの住人たちが性格を持ちました。イベントや投票に反応し、対戦した相手はあとでチャットで話しかけてくることも。チャットは日本語⇄英語を自動翻訳します（設定でOFFにできます）。', 0),
+  );
+}
+
+function newsView() {
+  return db.news
+    .slice()
+    .sort((a, b) => (b.pinned - a.pinned) || (b.at - a.at))
+    .slice(0, 40)
+    .map(n => ({ id: n.id, title: n.title, body: n.body, pinned: !!n.pinned, at: n.at, by: n.by }));
+}
+
+app.get('/api/news', (_req, res) => {
+  const list = newsView();
+  res.json({ news: list, latestAt: list.reduce((a, n) => Math.max(a, n.at), 0) });
+});
+
+app.post('/api/admin/news', requireAuth, requireAdmin, (req, res) => {
+  const title = String(req.body.title || '').trim().replace(/[<>]/g, '').slice(0, 60);
+  const body = String(req.body.body || '').trim().replace(/[<>]/g, '').slice(0, 2000);
+  if (!title || !body) return res.status(400).json({ error: 'タイトルと本文を入力してください' });
+  const n = { id: crypto.randomUUID(), title, body, pinned: !!req.body.pinned, by: req.user.username, at: Date.now() };
+  db.news.push(n);
+  if (db.news.length > 200) db.news.shift();
+  saveDb();
+  if (req.body.announce !== false) {
+    battle.broadcastAll({ type: 'announce', message: `📰 お知らせ「${title}」を公開しました。メニューの「ニュース」から読めます`, from: req.user.username });
+    battle.crowd.feed({ icon: '📰', real: true, who: '運営', text: `お知らせ「${title}」が公開された`, textEn: `News posted: "${title}"` });
+  }
+  battle.broadcastAll({ type: 'news', latestAt: n.at });
+  res.json({ news: newsView() });
+});
+
+app.post('/api/admin/news/:id', requireAuth, requireAdmin, (req, res) => {
+  const n = db.news.find(x => x.id === req.params.id);
+  if (!n) return res.status(404).json({ error: 'お知らせが見つかりません' });
+  if (typeof req.body.title === 'string') n.title = req.body.title.trim().replace(/[<>]/g, '').slice(0, 60) || n.title;
+  if (typeof req.body.body === 'string') n.body = req.body.body.trim().replace(/[<>]/g, '').slice(0, 2000) || n.body;
+  if (typeof req.body.pinned === 'boolean') n.pinned = req.body.pinned;
+  saveDb();
+  res.json({ news: newsView() });
+});
+
+app.delete('/api/admin/news/:id', requireAuth, requireAdmin, (req, res) => {
+  const i = db.news.findIndex(x => x.id === req.params.id);
+  if (i === -1) return res.status(404).json({ error: 'お知らせが見つかりません' });
+  db.news.splice(i, 1);
+  saveDb();
+  res.json({ news: newsView() });
 });
 
 // Catalogue of event types (admin picker).
@@ -854,6 +1054,8 @@ app.get('/api/leaderboard', (req, res) => {
   };
   const realRows = users.map(u => ({
     username: u.username,
+    guildTag: u.guildId && db.guilds[u.guildId] ? db.guilds[u.guildId].tag : null,
+    abyssMax: u.stats.abyssMax || 0,
     level: levelOf(u.xp),
     bestScore: u.stats.bestScore,
     rating: u.stats.rating,
@@ -869,7 +1071,7 @@ app.get('/api/leaderboard', (req, res) => {
   // Ghost players pad the boards so rankings feel populated (weekly reshuffle).
   const taken = new Set(Object.values(db.users).map(u => u.username));
   const rows = realRows
-    .concat(ghostRows(board, week, taken))
+    .concat(ghostRows(board, week, taken).map(r => ({ ...r, guildTag: tagOfName(db, r.username, null) })))
     .sort((a, b) => board === 'rating' ? b.rating - a.rating
       : board === 'dungeon' ? b.dungeonMax - a.dungeonMax
       : board === 'weekly' ? b.weeklyBest - a.weeklyBest
@@ -1045,7 +1247,7 @@ app.get('/api/admin/transactions', requireAuth, requireAdmin, (_req, res) => {
 app.get('/api/shop', (req, res) => {
   // Admin-exclusive cosmetics are invisible to everyone else.
   const isAdmin = req.user && req.user.role === 'admin';
-  res.json({ items: SHOP_ITEMS.filter(i => !i.adminOnly || isAdmin), boosters: BOOST_ITEMS });
+  res.json({ items: SHOP_ITEMS.filter(i => !i.adminOnly || isAdmin), boosters: BOOST_ITEMS.filter(i => !i.adminOnly || isAdmin) });
 });
 
 // ---- Booster items (consumables) ----
@@ -1053,6 +1255,7 @@ app.get('/api/shop', (req, res) => {
 app.post('/api/items/buy', requireAuth, maintenanceGuard, (req, res) => {
   const item = BOOST_ITEMS.find(i => i.id === req.body.itemId);
   if (!item) return res.status(404).json({ error: 'アイテムが見つかりません' });
+  if (item.adminOnly) return res.status(403).json({ error: '管理者専用のアイテムです（非売品）' });
   const count = Math.max(1, Math.min(10, Math.floor(Number(req.body.count) || 1)));
   const cost = item.price * count;
   const user = req.user;
@@ -1070,7 +1273,9 @@ app.post('/api/items/use', requireAuth, (req, res) => {
   const user = req.user;
   user.items = user.items || {};
   const id = String(req.body.itemId || '');
-  if (!BOOST_ITEMS.some(i => i.id === id)) return res.status(404).json({ error: 'アイテムが見つかりません' });
+  const def = BOOST_ITEMS.find(i => i.id === id);
+  if (!def) return res.status(404).json({ error: 'アイテムが見つかりません' });
+  if (def.adminOnly && user.role !== 'admin') return res.status(403).json({ error: '管理者専用のアイテムです' });
   // Admins have infinite boosters — nothing is consumed.
   if (user.role !== 'admin') {
     if ((user.items[id] || 0) <= 0) return res.status(409).json({ error: 'アイテムを持っていません' });
@@ -1330,7 +1535,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     // force re-login everywhere with the new password
     revokeAllTokens(target.id);
   }
-  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale'];
+  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'abyss'];
   if (typeof b.grantBadge === 'string') {
     if (!KNOWN_BADGES.includes(b.grantBadge)) return res.status(400).json({ error: `バッジIDが不正です（${KNOWN_BADGES.join(' / ')}）` });
     if (!target.badges.includes(b.grantBadge)) target.badges.push(b.grantBadge);
@@ -1716,6 +1921,9 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
       mood: crowdMood(), activeResidents: battle.crowd.activeCount(),
       queueing: ambientQueue(), feedCount: battle.crowd.feedHistory().length, quietNow: isQuietNow(),
     },
+    guilds: Object.keys(db.guilds).length,
+    news: db.news.length,
+    translate: TRANSLATE_ENGINE,
     maintenance: inMaintenance(),
     season: currentSeason(),
     sessionsPersist: SESSIONS_PERSIST,
@@ -1733,6 +1941,7 @@ const battle = initBattle(server, {
   db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, userFromToken,
   MATCH_DURATION,
   isMaintenance: inMaintenance,
+  guildTagOf: (name, user) => tagOfName(db, name, user),
 });
 
 // The crowd reads the live event / open poll through this (no import cycle).
@@ -1793,6 +2002,8 @@ function seedAdmin() {
 currentSeason();
 seedAdmin();
 pinAdminPassword();
+seedNews();
+console.log(`[chat] 自動翻訳エンジン: ${TRANSLATE_ENGINE === 'api' ? '外部API (TRANSLATE_URL)' : '内蔵フレーズ辞書'}`);
 
 // A boot snapshot means a bad restore is always one click away from undo.
 if (Object.keys(db.users).length > 0) snapshot(db, 'boot');

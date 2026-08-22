@@ -9,6 +9,7 @@ const DEFAULTS = {
   musicVol: 0.6,
   shake: true,
   particles: 'normal',   // 'low' | 'normal' | 'high'
+  chatTranslate: true,   // show foreign-language chat in your language
 };
 
 let settings = { ...DEFAULTS };

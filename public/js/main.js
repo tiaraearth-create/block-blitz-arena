@@ -2,12 +2,13 @@
 import { session, api, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, staffExtras } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem, fireUltCurrent, DUNGEON_REALMS } from './modes.js';
-import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal } from './screens.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS } from './modes.js';
+import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
+import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
-import { initChat, reconnectChat, showFeedModal, setMood } from './chat.js';
+import { initChat, reconnectChat, showFeedModal, setMood, updateNewsDot } from './chat.js';
 import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
 
 applyStaticI18n();
@@ -217,9 +218,20 @@ window.addEventListener('keydown', e => {
   fireUltCurrent();
 });
 
-// autopilot + command palette (admin only)
-$('#btnAuto').onclick = () => toggleAutopilot();
+// autopilot + command palette (admin only): tap = on/faster/off, hold = settings
+{
+  const auto = $('#btnAuto');
+  let holdTimer = null, held = false;
+  auto.addEventListener('pointerdown', () => { held = false; holdTimer = setTimeout(() => { held = true; showAutopilotPanel(); }, 550); });
+  const release = () => clearTimeout(holdTimer);
+  auto.addEventListener('pointerup', release);
+  auto.addEventListener('pointerleave', release);
+  auto.addEventListener('pointercancel', release);
+  auto.onclick = () => { if (!held) quickAutopilot(); };
+  auto.oncontextmenu = e => { e.preventDefault(); showAutopilotPanel(); };
+}
 $('#btnAdminCmd').onclick = () => showAdminPalette();
+startGodLoop();
 
 // ---- audio boot: autoplay if allowed, otherwise tap-to-start splash ----
 function startAudioNow() {
@@ -443,8 +455,14 @@ function dungeonBest(realm) {
   return Math.max(local, srv);
 }
 
+function realmLocked(realm) {
+  if (realm.unlock !== 'tower100' || isAdminUser()) return false;
+  return dungeonBest(DUNGEON_REALMS.tower) < DUNGEON_REALMS.tower.floors;
+}
+
 function showDungeonSelect(realmId = 'tower') {
   const realm = DUNGEON_REALMS[realmId] || DUNGEON_REALMS.tower;
+  const locked = realmLocked(realm);
   const best = isAdminUser() ? realm.floors : dungeonBest(realm);
   const P = realm.prefix;
   const cps = [];
@@ -454,9 +472,9 @@ function showDungeonSelect(realmId = 'tower') {
     <h2>${realm.icon} ${t(realm.name, realm.nameEn)}</h2>
     <div class="seg" style="justify-content:center;margin-bottom:10px" data-dr>
       ${Object.values(DUNGEON_REALMS).map(r =>
-        `<button data-r="${r.id}" ${r.id === realm.id ? 'class="active"' : ''}>${r.icon}${t(r.name.replace('ダンジョン', ''), r.nameEn.split(' ')[0])}</button>`).join('')}
+        `<button data-r="${r.id}" ${r.id === realm.id ? 'class="active"' : ''}>${realmLocked(r) ? '🔒' : r.icon}${t(r.name.replace('ダンジョン', ''), r.nameEn.split(' ')[0])}</button>`).join('')}
     </div>
-    <p class="muted center" style="margin-bottom:10px">${t(realm.desc, realm.descEn)}${best ? `<br>${t('最高記録', 'Best')}: <b style="color:var(--yellow)">${P}${best}</b>${t(' クリア', ' cleared')}` : ''}</p>
+    <p class="muted center" style="margin-bottom:10px">${t(realm.desc, realm.descEn)}${best ? `<br>${t('最高記録', 'Best')}: <b style="color:var(--yellow)">${P}${best}</b>${t(' クリア', ' cleared')}` : ''}${locked ? `<br><b style="color:var(--red)">🔒 ${t('ダンジョン塔 F100 を制覇すると解放', 'Conquer Tower F100 to unlock')}</b>` : ''}</p>
     <div class="settings-row"><label>${t('開始階', 'Start floor')}</label><div class="seg seg-wrap" data-ds>
       ${cps.map(f => `<button data-v="${f}" ${f === startF ? 'class="active"' : ''}>${P}${f}</button>`).join('')}
     </div></div>
@@ -477,7 +495,9 @@ function showDungeonSelect(realmId = 'tower') {
     };
   });
   m.querySelector('#dgCancel').onclick = () => { audio.click(); closeModal(); };
-  m.querySelector('#dgStart').onclick = () => { audio.click(); closeModal(); startDungeon(startF, realm.id); };
+  const startBtn = m.querySelector('#dgStart');
+  if (locked) { startBtn.disabled = true; startBtn.textContent = `🔒 ${t('未解放', 'Locked')}`; }
+  startBtn.onclick = () => { if (locked) return; audio.click(); closeModal(); startDungeon(startF, realm.id); };
 }
 
 $('#btnDungeon').onclick = () => { audio.click(); showDungeonSelect(); };
@@ -559,11 +579,14 @@ $('#btnWeekly').onclick = async () => {
   m.querySelector('#wkStart').onclick = () => { audio.click(); closeModal(); startWeekly({ ...info, best }); };
 };
 
-// ---- gacha + in-game items ----
+// ---- gacha (in-game item buttons are built by modes.js) ----
 $('#btnGacha').onclick = () => openGacha();
-$$('#itemBar [data-item]').forEach(b => {
-  b.onclick = () => useGameItem(b.dataset.item);
-});
+
+// ---- guilds + news ----
+$('#btnGuild').onclick = () => { audio.click(); openGuild(); };
+$('#btnNews').onclick = () => { audio.click(); openNews(); };
+$$('[data-gd]').forEach(b => { b.onclick = () => { audio.click(); openGuild(b.dataset.gd); }; });
+fetch('/api/news').then(r => r.json()).then(d => updateNewsDot(d.latestAt)).catch(() => {});
 
 bindAdminActions();
 loadTitles();

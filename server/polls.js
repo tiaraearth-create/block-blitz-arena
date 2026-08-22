@@ -90,8 +90,50 @@ export function vote(poll, userId, optionId) {
   return { ok: true, changed: !!prev };
 }
 
-// Public shape — never leaks the voter map.
-export function pollView(poll, userId) {
+// AI residents vote too (voter keys are prefixed "r:"). Their tastes follow
+// their archetype; plain polls get a mild bandwagon effect.
+const EVENT_TASTE = {
+  newbie:   { coinfes: 3, xpboost: 3, gemrush: 2, lucky: 1 },
+  tryhard:  { ultfes: 3, xpboost: 2, doubletrouble: 2, bossraid: 1 },
+  casual:   { coinfes: 3, chaos: 2, doubletrouble: 2, lucky: 1 },
+  nightowl: { chaos: 2, ultfes: 2, doubletrouble: 2 },
+  morning:  { xpboost: 2, coinfes: 2 },
+  global:   { doubletrouble: 2, coinfes: 2, ultfes: 1 },
+  gacha:    { lucky: 5, gemrush: 3, coinfes: 1 },
+  explorer: { bossraid: 4, ultfes: 1, gemrush: 1 },
+  senpai:   { xpboost: 2, bossraid: 2, coinfes: 1 },
+  kid:      { chaos: 3, doubletrouble: 2, coinfes: 2 },
+  streamer: { chaos: 3, doubletrouble: 3 },
+  lurker:   { coinfes: 2, xpboost: 2 },
+};
+
+export function residentChoice(poll, resident) {
+  if (!poll || !poll.options.length) return null;
+  const taste = EVENT_TASTE[resident.arch] || {};
+  const total = poll.options.reduce((a, o) => a + o.votes, 0);
+  const weights = poll.options.map(o => {
+    let w = 1;
+    if (poll.kind === 'event' && o.eventType) w += taste[o.eventType] || 0;
+    if (total > 0) w += (o.votes / total) * 1.5;   // bandwagon
+    return w;
+  });
+  let x = Math.random() * weights.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < poll.options.length; i++) { x -= weights[i]; if (x <= 0) return poll.options[i].id; }
+  return poll.options[poll.options.length - 1].id;
+}
+
+function voteSplit(poll) {
+  const per = {};
+  for (const o of poll.options) per[o.id] = { ai: 0, real: 0 };
+  for (const [voter, opt] of Object.entries(poll.voters)) {
+    if (!per[opt]) continue;
+    if (voter.startsWith('r:')) per[opt].ai++; else per[opt].real++;
+  }
+  return per;
+}
+
+// Public shape — never leaks the voter map. `admin` adds the AI/real split.
+export function pollView(poll, userId, admin = false) {
   if (!poll) return null;
   const total = poll.options.reduce((a, o) => a + o.votes, 0);
   const myVote = userId ? poll.voters[userId] || null : null;
@@ -99,6 +141,8 @@ export function pollView(poll, userId) {
   // Tallies stay hidden until you have voted (or the poll has closed), so the
   // running order can't sway people who haven't picked yet.
   const reveal = !open || !!myVote;
+  const split = admin ? voteSplit(poll) : null;
+  const voters = Object.keys(poll.voters);
   return {
     id: poll.id,
     kind: poll.kind,
@@ -107,9 +151,11 @@ export function pollView(poll, userId) {
       id: o.id, text: o.text, eventType: o.eventType,
       votes: reveal ? o.votes : null,
       pct: reveal && total ? Math.round((o.votes / total) * 100) : null,
+      ...(split ? { ai: split[o.id].ai, real: split[o.id].real } : {}),
     })),
     total: reveal ? total : null,
-    voterCount: Object.keys(poll.voters).length,
+    voterCount: voters.length,
+    ...(admin ? { aiVoters: voters.filter(v => v.startsWith('r:')).length, realVoters: voters.filter(v => !v.startsWith('r:')).length } : {}),
     endsAt: poll.endsAt,
     closed: !open,
     reveal,

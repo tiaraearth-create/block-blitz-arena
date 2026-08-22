@@ -59,6 +59,13 @@ export const BOOST_ITEMS = [
   { id: 'item_cleaner', icon: '🧹', name: 'クリーナー',   desc: 'お邪魔ブロック全部＋最下行を掃除', price: 250, currency: 'coins' },
   { id: 'item_fever',   icon: '⭐', name: 'フィーバー',   desc: '15秒間スコア2倍', price: 400, currency: 'coins' },
   { id: 'item_mini',    icon: '🧩', name: 'ミニブロック', desc: '手持ち3つが極小ピースに変化', price: 350, currency: 'coins' },
+  // ---- Staff-only gear (adminOnly: never sold, never shown to players, infinite for admins) ----
+  { id: 'item_god_wipe',   icon: '💥', name: '神の一撃【管理者】',   desc: '盤面を消滅させ +50,000点（倍率適用）',        price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_time',   icon: '⌛', name: '時の支配【管理者】',   desc: '制限時間+120秒／敵の攻撃を60秒封印',          price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_hand',   icon: '🎴', name: '創造の手札【管理者】', desc: '最適な3ピース＋次の12手がライン消し向けの大型ピース', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_mult',   icon: '🔱', name: '神威【管理者】',       desc: '30秒間スコア10倍',                            price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_shield', icon: '🛡️', name: '絶対防御【管理者】',   desc: '60秒間ゲームオーバー無効・お邪魔無効・コンボ永続', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_nuke',   icon: '☄️', name: '天変地異【管理者】',   desc: '敵のHPを99%削る（敵がいなければ +100,000点）',   price: 0, currency: 'coins', adminOnly: true },
 ];
 
 // ---- Boss battles ----
@@ -119,6 +126,10 @@ export const TITLES = [
   { id: 'sprinter', name: '疾風のブロッカー', color: '#ffa93d', desc: 'タイムアタック60秒で20,000点' },
   { id: 'buddy',    name: '名コンビ',         color: '#5ee86e', desc: '協力プレイを10回遊ぶ' },
   { id: 'soulmate', name: '以心伝心',         color: '#ff6bd4', desc: '協力プレイで20,000点' },
+  { id: 'abysswalker', name: '深淵を覗きし者', color: '#7c3aed', desc: '深淵ダンジョン A50到達' },
+  { id: 'abysslord', name: '深淵の支配者',     color: '#c026d3', desc: '深淵ダンジョン A100制覇' },
+  { id: 'guildfounder', name: 'ギルド創設者', color: '#f59e0b', desc: 'ギルドを設立する' },
+  { id: 'guildace', name: 'ギルドのエース',   color: '#22d3ee', desc: 'ギルドに週2,000ポイント貢献' },
 ];
 
 export function earnedTitles(user) {
@@ -164,6 +175,10 @@ export function earnedTitles(user) {
   if (((s.sprint && s.sprint.s60) || 0) >= 20000) out.push('sprinter');
   if ((s.coopPlays || 0) >= 10) out.push('buddy');
   if ((s.coopBest || 0) >= 20000) out.push('soulmate');
+  if ((s.abyssMax || 0) >= 50) out.push('abysswalker');
+  if (has('abyss')) out.push('abysslord');
+  if (user.guildFounded) out.push('guildfounder');
+  if ((s.guildBestWeek || 0) >= 2000) out.push('guildace');
   return out;
 }
 

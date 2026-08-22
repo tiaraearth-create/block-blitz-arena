@@ -1245,3 +1245,49 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
   .cast-name { min-width: 80px; }
   .cast-meta { display: none; }
 }
+
+/* ============ v2.3: chat translation, guilds, news, admin tools ============ */
+.cm-tag { color: var(--gold); font-weight: 900; margin-right: 3px; font-size: 11px; }
+.cm-tr {
+  display: inline-block; margin-top: 2px; background: none; border: none; color: var(--muted);
+  font-size: 10px; font-weight: 700; cursor: pointer; padding: 0;
+}
+.cm-tr:hover { color: var(--cyan); }
+.lb-tag { color: var(--gold); font-weight: 900; font-size: 12px; margin-right: 4px; }
+
+.guild-card {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+  cursor: pointer; animation: screenIn .3s ease;
+}
+.guild-card:hover { background: var(--panel2); transform: translateY(-1px); }
+.guild-card.real { border-color: rgba(255,215,94,0.35); }
+.guild-rank { font-weight: 900; font-size: 16px; width: 30px; text-align: center; }
+.guild-icon { font-size: 28px; }
+.guild-info { flex: 1; min-width: 0; }
+.guild-name { font-weight: 800; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.guild-meta { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.guild-pts { text-align: right; }
+.guild-pts b { display: block; color: var(--gold); font-size: 16px; font-variant-numeric: tabular-nums; }
+.guild-pts small { font-size: 10px; color: var(--muted); }
+.guild-hero {
+  display: flex; align-items: center; gap: 14px;
+  background: linear-gradient(135deg, rgba(255,215,94,0.12), rgba(176,107,255,0.10));
+  border: 1px solid rgba(255,215,94,0.35); border-radius: 16px; padding: 14px 16px; margin-bottom: 12px;
+}
+.guild-hero-icon { font-size: 44px; }
+.guild-hero-name { font-size: 20px; font-weight: 900; }
+.guild-hero-stats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); font-weight: 700; margin-top: 6px; }
+.guild-hero-stats b { color: var(--cyan); }
+
+.news-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; animation: screenIn .3s ease; }
+.news-card.pinned { border-color: var(--gold); background: rgba(255,215,94,0.07); }
+.news-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.news-head h3 { font-size: 16px; }
+.news-date { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.news-body { font-size: 13px; line-height: 1.6; }
+.news-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 11px; }
+
+.admin-cmd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.admin-cmd-grid .btn { white-space: normal; }
+.item-bar .chip.admin-item { border-color: var(--gold); box-shadow: 0 0 10px -2px var(--gold); }
