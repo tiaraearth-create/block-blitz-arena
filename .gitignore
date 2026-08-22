@@ -4,3 +4,4 @@ server/data/*.txt
 .DS_Store
 *.log
 server/data/snapshots/
+block-blitz-backup-*.json
