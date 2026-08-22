@@ -15,11 +15,26 @@ import {
   authMiddleware, requireAuth, requireAdmin, userFromToken,
 } from './auth.js';
 import {
-  SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED, BOOST_ITEMS,
+  SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED, BOOST_ITEMS, EQUIP_SLOTS,
   BP_TIERS, BP_XP_PER_TIER, BP_PREMIUM_PRICE_GEMS, BP_SEASON_DAYS,
   BOSSES, TITLES, earnedTitles, GEM_PACKS,
 } from './catalog.js';
-import { ghostRows, setLiveScale, getLiveScale, setCustom, getCustom } from './ambient.js';
+import {
+  syncMissions, trackMissions, missionsView, claimMission, claimMissionBonus,
+} from './missions.js';
+import { achievementsView, claimAchievement, ACHIEVEMENTS } from './achievements.js';
+import {
+  ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider,
+  rosterView, retiredResidents, crowdMood, ambientQueue, isQuietNow, DEFAULT_TOGGLES, ARCHETYPES,
+} from './ambient.js';
+import { BADGE_NAMES } from './crowd.js';
+import {
+  validateBackup, applyRestore, snapshot, listSnapshots, readSnapshot, BACKUP_VERSION,
+} from './backup.js';
+import { EVENT_TYPES, makeEvent, eventBonus } from './events.js';
+import {
+  createPoll, eventPollOptions, vote as castVote, pollView, tickPoll, winnerOf, isOpen as pollOpen,
+} from './polls.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -30,11 +45,25 @@ if (db.meta.ambient) setCustom(db.meta.ambient);
 const app = express();
 app.set('trust proxy', 1);
 app.use(compression());   // gzip — big win for overseas players on slow links
-app.use(express.json({
+// Restore uploads a whole database dump, so it gets its own generous parser;
+// every other route stays on the tight limit.
+const jsonParser = express.json({
   limit: '64kb',
   // Keep the raw body for Stripe webhook signature verification.
   verify: (req, _res, buf) => { req.rawBody = buf; },
-}));
+});
+const restoreParser = express.json({ limit: '64mb' });
+app.use((req, res, next) => {
+  if (req.path === '/api/admin/restore') return restoreParser(req, res, next);
+  return jsonParser(req, res, next);
+});
+// Body-parser failures must still answer JSON — the client shows `error`.
+app.use((err, _req, res, next) => {
+  if (!err) return next();
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'ファイルが大きすぎます（最大64MB）' });
+  if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'JSONとして読み取れませんでした' });
+  return next(err);
+});
 app.use(authMiddleware);
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -64,17 +93,47 @@ function newUser(username, password, role = 'user') {
     id, username, salt, passHash: hash, role,
     banned: false, createdAt: Date.now(),
     coins: 500, gems: 50, xp: 0,
-    stats: { gamesPlayed: 0, bestScore: 0, totalScore: 0, totalLines: 0, maxCombo: 0, aiWins: 0, pvpWins: 0, pvpLosses: 0, rating: 1000, bossMax: 0 },
+    stats: {
+      gamesPlayed: 0, bestScore: 0, totalScore: 0, totalLines: 0, maxCombo: 0,
+      aiWins: 0, pvpWins: 0, pvpLosses: 0, rating: 1000, bossMax: 0,
+      ultsUsed: 0, itemsUsed: 0, missionsDone: 0, piecesPlaced: 0,
+      survivalWave: 0, winStreakBest: 0, loginStreak: 1, loginStreakBest: 1,
+      sprintPlays: 0, coopPlays: 0, coopBest: 0, sprint: {},
+      history: [],
+    },
     owned: [...DEFAULT_OWNED],
     items: { item_bomb: 1, item_cleaner: 1, item_fever: 1 },   // starter boosters
     equipped: { ...DEFAULT_EQUIPPED },
     equippedTitle: null,
     battlePass: { season: currentSeason().id, xp: 0, premium: false, claimed: [] },
     badges: [],
+    achievements: [],
+    missions: null,   // generated on first access (syncMissions)
     lastDaily: new Date().toISOString().slice(0, 10),
   };
   db.users[id] = user;
   saveDb();
+  return user;
+}
+
+// Bring accounts created before a feature shipped up to the current shape.
+// Cheap and idempotent — called from publicUser + every progression path.
+function migrateUser(user) {
+  if (!user) return user;
+  const s = user.stats || (user.stats = {});
+  for (const [k, v] of Object.entries({
+    ultsUsed: 0, itemsUsed: 0, missionsDone: 0, piecesPlaced: 0,
+    survivalWave: 0, winStreakBest: 0, loginStreak: 1, loginStreakBest: 1,
+    sprintPlays: 0, coopPlays: 0, coopBest: 0,
+  })) if (s[k] === undefined) s[k] = v;
+  if (!s.sprint || typeof s.sprint !== 'object') s.sprint = {};
+  if (!Array.isArray(s.history)) s.history = [];
+  if (!Array.isArray(user.achievements)) user.achievements = [];
+  if (!user.equipped) user.equipped = { ...DEFAULT_EQUIPPED };
+  // Ultimate-skill slot (v2.0): everyone starts with the free 破壊の衝撃波.
+  if (!user.equipped.ult) user.equipped.ult = DEFAULT_EQUIPPED.ult;
+  if (!Array.isArray(user.owned)) user.owned = [...DEFAULT_OWNED];
+  for (const id of DEFAULT_OWNED) if (!user.owned.includes(id)) user.owned.push(id);
   return user;
 }
 
@@ -107,6 +166,7 @@ function syncBattlePass(user) {
 
 function publicUser(user) {
   if (!user) return null;
+  migrateUser(user);
   const bp = syncBattlePass(user);
   const isAdmin = user.role === 'admin';
   // Admins own the whole shop and the fully-unlocked premium pass.
@@ -122,23 +182,54 @@ function publicUser(user) {
     items: user.items || {},
     battlePass: adminBp, badges: user.badges,
     equippedTitle: user.equippedTitle || null,
+    achievements: user.achievements,
   };
 }
 
 // Sanity-check and apply a finished game's rewards. Returns the reward summary.
-function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
+  mode = String(mode || 'solo');
+  migrateUser(user);
+  // v2.0 telemetry from the client — clamped like everything else.
+  const clamp = (v, max) => Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
+  wave = clamp(wave, 999);
+  ults = clamp(ults, 200);
+  items = clamp(items, 200);
+  pieces = clamp(pieces, 20000);
+  floors = clamp(floors, 100);
   score = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
   lines = Math.max(0, Math.min(5000, Math.floor(Number(lines) || 0)));
   maxCombo = Math.max(0, Math.min(200, Math.floor(Number(maxCombo) || 0)));
   duration = Math.max(1, Math.min(7200, Number(duration) || 1));
-  // Cheat guard: cap plausible score rate.
-  if (score > duration * 500) score = Math.floor(duration * 500);
+  // Cheat guard: cap plausible score rate. Time attack is *about* scoring
+  // fast, so it gets a looser ceiling than the endless modes.
+  const rateCap = mode === 'sprint' ? 1000 : 500;
+  if (score > duration * rateCap) score = Math.floor(duration * rateCap);
 
   let coins = Math.min(1000, 20 + Math.floor(score / 100) + (won ? 50 : 0));
-  if (mode === 'chaos') coins = Math.min(1500, Math.round(coins * 1.5));   // event bonus
-  const bpXp = Math.min(800, 30 + Math.floor(score / 60) + lines * 5 + (won ? 100 : 0));
-  const accXp = Math.min(600, 20 + Math.floor(score / 100) + (won ? 80 : 0));
+  if (mode === 'chaos') coins = Math.min(1500, Math.round(coins * 1.5));   // chaos-mode bonus
+  let bpXp = Math.min(800, 30 + Math.floor(score / 60) + lines * 5 + (won ? 100 : 0));
+  let accXp = Math.min(600, 20 + Math.floor(score / 100) + (won ? 80 : 0));
+
+  // Limited-time event multipliers.
+  const bonus = eventBonus(currentEvent());
+  const isBossMode = mode === 'boss' || mode === 'boss_rush' || mode === 'raid';
+  let eventCoins = 0, eventGems = 0;
+  const coinMult = (bonus.coin || 1) * (isBossMode && bonus.bossCoin ? bonus.bossCoin : 1);
+  if (coinMult > 1) {
+    const boosted = Math.round(coins * coinMult);
+    eventCoins = boosted - coins;
+    coins = boosted;
+  }
+  if (bonus.xp > 1) {
+    bpXp = Math.round(bpXp * bonus.xp);
+    accXp = Math.round(accXp * bonus.xp);
+  }
+  if (bonus.gemDrop > 0) {
+    eventGems = Math.floor(bonus.gemDrop);
+    user.gems += eventGems;
+  }
 
   user.coins += coins;
   user.xp += accXp;
@@ -149,8 +240,21 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   s.gamesPlayed += 1;
   s.totalScore += score;
   s.totalLines += lines;
+  const prevBest = s.bestScore;
+  const prevCombo = s.maxCombo;
   if (score > s.bestScore) s.bestScore = score;
   if (maxCombo > s.maxCombo) s.maxCombo = maxCombo;
+  s.ultsUsed = (s.ultsUsed || 0) + ults;
+  s.itemsUsed = (s.itemsUsed || 0) + items;
+  s.piecesPlaced = (s.piecesPlaced || 0) + pieces;
+  const newWaveBest = mode === 'survival' && wave > (s.survivalWave || 0);
+  if (newWaveBest) s.survivalWave = wave;
+  if (mode === 'sprint') s.sprintPlays = (s.sprintPlays || 0) + 1;
+  if (mode === 'coop') s.coopPlays = (s.coopPlays || 0) + 1;
+  // Rolling score history powers the profile dashboard chart.
+  if (!Array.isArray(s.history)) s.history = [];
+  s.history.push({ t: Date.now(), m: String(mode).slice(0, 16), s: score, w: won ? 1 : 0 });
+  if (s.history.length > 40) s.history = s.history.slice(-40);
   let badge = null;
   let gems = 0;
   // Ranked-duel win streak: bonus coins that grow with the streak.
@@ -158,6 +262,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   if (mode === 'pvp') {
     if (won) {
       s.winStreak = (s.winStreak || 0) + 1;
+      if (s.winStreak > (s.winStreakBest || 0)) s.winStreakBest = s.winStreak;
       if (s.winStreak >= 2) {
         streakBonus = Math.min(200, s.winStreak * 20);
         coins += streakBonus;
@@ -201,6 +306,13 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     gems += 150;
     user.gems += 150;
   }
+  // Time attack: one personal best per duration.
+  if (mode === 'sprint') {
+    const dur = [60, 180].includes(Number(sprintDur)) ? Number(sprintDur) : 60;
+    s.sprint = s.sprint || {};
+    const key = `s${dur}`;
+    if (score > (s.sprint[key] || 0)) s.sprint[key] = score;
+  }
   // Weekly challenge: per-week personal best.
   if (mode === 'weekly') {
     const w = weekIdOf(currentWeekNum());
@@ -242,8 +354,80 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
       }
     }
   }
+  // ---- Live feed + crowd reactions for notable real moments ----
+  const feedNotes = [];
+  const nm = user.username;
+  if (score > prevBest && prevBest > 0 && score >= 8000) {
+    feedNotes.push({ icon: '⭐', ja: `${nm} が自己ベスト ${fmtNum(score)} 点を更新！`, en: `${nm} set a new best: ${score.toLocaleString('en-US')}!`,
+      react: score >= 30000 ? ['record', { you: nm, score: fmtNum(score) }] : null });
+  }
+  if (maxCombo >= 10 && maxCombo > prevCombo) {
+    feedNotes.push({ icon: '🔥', ja: `${nm} が ${maxCombo} コンボを達成！`, en: `${nm} landed a ${maxCombo} combo!` });
+  }
+  if (mode === 'tournament' && won) {
+    feedNotes.push({ icon: '🏆', ja: `${nm} がトーナメントで優勝！`, en: `${nm} won the tournament!`, react: ['champion', { you: nm }] });
+  } else if (mode === 'royale' && won) {
+    feedNotes.push({ icon: '💯', ja: `${nm} がバトルロイヤルで1位！`, en: `${nm} took #1 in battle royale!`, react: ['royale_win', { you: nm }] });
+  } else if (mode === 'ai_souzou' && won) {
+    feedNotes.push({ icon: '🌌', ja: `${nm} が 創造神 を超えた！！！`, en: `${nm} surpassed the Creator God!!!` });
+  } else if (mode === 'ai_kami' && won) {
+    feedNotes.push({ icon: '🔱', ja: `${nm} が 神 を討伐！！`, en: `${nm} slew the Kami AI!!` });
+  } else if (mode === 'ai_oni' && won) {
+    feedNotes.push({ icon: '👹', ja: `${nm} が 鬼AI を撃破！`, en: `${nm} crushed the Oni AI!` });
+  }
+  if (badge && mode !== 'tournament' && mode !== 'royale') {
+    const bn = BADGE_NAMES[badge] || badge;
+    feedNotes.push({ icon: BADGE_ICONS[badge] || '🎖️', ja: `${nm} が「${bn}」を獲得！`, en: `${nm} earned "${BADGE_NAMES_EN[badge] || badge}"!`,
+      react: ['badge', { you: nm, badge: bn }] });
+  }
+  if (mode === 'boss' && won && gems > 0 && extraBossId) {
+    const b = BOSSES.find(x => x.id === extraBossId);
+    if (b) feedNotes.push({ icon: '🐲', ja: `${nm} が ${b.name} を初討伐！`, en: `${nm} defeated ${b.name} for the first time!` });
+  }
+  if (mode.startsWith('dungeon') && floor >= 10 && Math.floor(floor / 10) > Math.floor((s.dungeonPrev || 0) / 10)) {
+    feedNotes.push({ icon: '🏰', ja: `${nm} がダンジョン F${Math.floor(Number(floor) || 0)} に到達`, en: `${nm} reached dungeon F${Math.floor(Number(floor) || 0)}` });
+  }
+  if (newWaveBest && wave >= 10) feedNotes.push({ icon: '💀', ja: `${nm} がサバイバル WAVE ${wave} に到達`, en: `${nm} survived to wave ${wave}` });
+  if (mode === 'sprint' && score >= 8000 && s.sprint && score >= (s.sprint[`s${[60, 180].includes(Number(sprintDur)) ? sprintDur : 60}`] || 0)) {
+    feedNotes.push({ icon: '⏱️', ja: `${nm} がタイムアタック${sprintDur === 180 ? '3分' : '60秒'}で ${fmtNum(score)} 点！`, en: `${nm} scored ${score.toLocaleString('en-US')} in the ${sprintDur === 180 ? '3 min' : '60s'} time attack!` });
+  }
+  s.dungeonPrev = Math.max(s.dungeonPrev || 0, mode.startsWith('dungeon') ? Math.floor(Number(floor) || 0) : 0);
+  postRealFeed(user, feedNotes);
+
+  // Daily / weekly missions advance off the same event.
+  const missionsCompleted = trackMissions(user, currentWeekNum(), {
+    mode, score, lines, maxCombo, won: !!won,
+    floors: mode.startsWith('dungeon') ? floors : 0,
+    wave, ults, items, pieces,
+  });
   saveDb();
-  return { coins, bpXp, accXp, score, badge, gems, streak: s.winStreak || 0, streakBonus };
+  return {
+    coins, bpXp, accXp, score, badge, gems: gems + eventGems,
+    streak: s.winStreak || 0, streakBonus,
+    missionsCompleted,
+    eventCoins, eventGems,
+  };
+}
+
+// Real players' notable moments go on the live feed (starred), and the crowd
+// may react. Capped per user so a hot streak doesn't flood the ticker.
+const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯' };
+const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1' };
+const feedAt = new Map();   // userId -> last feed timestamp
+function postRealFeed(user, notes) {
+  if (!notes.length) return;
+  const last = feedAt.get(user.id) || 0;
+  // Always let the rarest moments through; throttle the ordinary ones.
+  const big = notes.filter(n => n.react);
+  const now = Date.now();
+  const allowed = big.length ? big.concat(notes.filter(n => !n.react)).slice(0, 2)
+    : now - last < 45000 ? [] : notes.slice(0, 1);
+  if (!allowed.length) return;
+  feedAt.set(user.id, now);
+  for (const n of allowed) {
+    battle.crowd.feed({ icon: n.icon, real: true, who: user.username, text: n.ja, textEn: n.en });
+    if (n.react) battle.crowd.react(n.react[0], n.react[1]);
+  }
 }
 
 // Simple in-memory rate limiter (per key, sliding window).
@@ -279,14 +463,24 @@ const DAILY_COINS = 100;
 const DAILY_GEMS = 5;
 
 // Grant the once-per-day login bonus. Returns the bonus or null.
+// Daily login bonus. Consecutive days build a streak that scales the reward
+// (day 7 and beyond pay roughly triple day 1) — missing a day resets it.
 function grantDaily(user) {
   const today = new Date().toISOString().slice(0, 10);
   if (user.lastDaily === today) return null;
+  migrateUser(user);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const s = user.stats;
+  s.loginStreak = user.lastDaily === yesterday ? (s.loginStreak || 0) + 1 : 1;
+  if (s.loginStreak > (s.loginStreakBest || 0)) s.loginStreakBest = s.loginStreak;
   user.lastDaily = today;
-  user.coins += DAILY_COINS;
-  user.gems += DAILY_GEMS;
+  const mult = Math.min(3, 1 + (s.loginStreak - 1) * 0.35);
+  const coins = Math.round(DAILY_COINS * mult);
+  const gems = Math.round(DAILY_GEMS * mult);
+  user.coins += coins;
+  user.gems += gems;
   saveDb();
-  return { coins: DAILY_COINS, gems: DAILY_GEMS };
+  return { coins, gems, streak: s.loginStreak };
 }
 
 function sanitizeName(name) {
@@ -315,7 +509,15 @@ app.post('/api/register', (req, res) => {
 
   const user = newUser(username, password);
   const token = issueToken(user.id);
+  // New arrivals show up on the live feed (real players are starred).
+  battle.crowd.feed({ icon: '👋', real: true, who: user.username,
+    text: `${user.username} が新しく参加しました！ようこそ！`, textEn: `${user.username} just joined — welcome!` });
   res.json({ token, user: publicUser(user) });
+});
+
+// Live feed snapshot (the menu ticker also receives pushes over the chat socket).
+app.get('/api/feed', (_req, res) => {
+  res.json({ feed: battle.crowd.feedHistory().slice(-30) });
 });
 
 app.post('/api/login', (req, res) => {
@@ -400,8 +602,15 @@ app.get('/api/status', (_req, res) => {
   res.json({
     online: battle.displayOnline(),
     activeMatches: battle.displayMatches(),
+    queueing: ambientQueue() + battle.queueSize(),
+    mood: crowdMood().id,
     maintenance: inMaintenance(),
     event: currentEvent(),
+    // Menu badge only — the full poll (and the caller's own vote) comes from
+    // /api/poll, which needs auth to know who is asking.
+    poll: db.meta.poll && pollOpen(db.meta.poll)
+      ? { id: db.meta.poll.id, question: db.meta.poll.question, endsAt: db.meta.poll.endsAt, voterCount: Object.keys(db.meta.poll.voters).length }
+      : null,
   });
 });
 
@@ -415,26 +624,162 @@ app.post('/api/admin/weekly/reset', requireAuth, requireAdmin, (req, res) => {
   res.json({ affected });
 });
 
-// Start / stop a limited-time event.
+// ---------------------------------------------------------------------------
+// Polls (投票)
+// ---------------------------------------------------------------------------
+
+// Close an expired poll and announce the result exactly once.
+function syncPoll() {
+  const poll = db.meta.poll;
+  if (tickPoll(poll)) {
+    const w = winnerOf(poll);
+    battle.broadcastAll({
+      type: 'announce',
+      message: w
+        ? `🗳️ 投票「${poll.question}」終了！ 1位は「${w.text}」（${w.votes}票）${w.tied ? '…同率でした！' : ''}`
+        : `🗳️ 投票「${poll.question}」は投票ゼロで終了しました`,
+      from: '大会運営',
+    });
+    if (w) battle.crowd.react('poll_close', { winner: w.text });
+    saveDb();
+  }
+  return poll;
+}
+
+app.get('/api/poll', (req, res) => {
+  const poll = syncPoll();
+  res.json({ poll: pollView(poll, req.user && req.user.id) });
+});
+
+app.post('/api/poll/vote', requireAuth, maintenanceGuard, (req, res) => {
+  const poll = syncPoll();
+  if (!poll) return res.status(404).json({ error: '投票は開催されていません' });
+  const out = castVote(poll, req.user.id, String(req.body.optionId || ''));
+  if (out.error) return res.status(409).json({ error: out.error });
+  saveDb();
+  res.json({ poll: pollView(poll, req.user.id), changed: out.changed });
+});
+
+// Admin: create / close / delete a poll, or launch the winning event.
+app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
+  const action = String(req.body.action || 'create');
+
+  if (action === 'close') {
+    if (!db.meta.poll) return res.status(404).json({ error: '投票がありません' });
+    db.meta.poll.closed = true;
+    const w = winnerOf(db.meta.poll);
+    battle.broadcastAll({
+      type: 'announce',
+      message: w ? `🗳️ 投票終了！ 1位は「${w.text}」（${w.votes}票）` : '🗳️ 投票を締め切りました',
+      from: req.user.username,
+    });
+    if (w) battle.crowd.react('poll_close', { winner: w.text });
+    saveDb();
+    return res.json({ poll: pollView(db.meta.poll, req.user.id) });
+  }
+
+  if (action === 'delete') {
+    db.meta.poll = null;
+    saveDb();
+    return res.json({ poll: null });
+  }
+
+  if (action === 'applyWinner') {
+    const poll = db.meta.poll;
+    if (!poll) return res.status(404).json({ error: '投票がありません' });
+    if (poll.kind !== 'event') return res.status(400).json({ error: 'イベント投票ではありません' });
+    const w = winnerOf(poll);
+    if (!w || !w.eventType) return res.status(409).json({ error: '有効な勝者がいません（投票ゼロ？）' });
+    const minutes = Math.max(1, Math.min(14 * 24 * 60, Math.floor(Number(req.body.minutes) || 1440)));
+    db.meta.event = makeEvent(w.eventType, '', minutes, req.user.username);
+    poll.applied = true;
+    poll.closed = true;
+    const ev = db.meta.event;
+    battle.broadcastAll({
+      type: 'announce',
+      message: `🗳️→${ev.icon} 投票で選ばれた「${ev.name}」を開催します！ ${ev.desc}`,
+      from: req.user.username,
+    });
+    battle.crowd.feed({ icon: ev.icon, real: true, who: '運営', text: `投票で選ばれたイベント「${ev.name}」が開幕！`, textEn: `The voted event "${ev.name}" has begun!` });
+    battle.crowd.react('poll_close', { winner: w.text });
+    setTimeout(() => battle.crowd.react('event_start'), 25000);
+    saveDb();
+    return res.json({ event: currentEvent(), poll: pollView(poll, req.user.id) });
+  }
+
+  // create
+  const options = req.body.kind === 'event' && !Array.isArray(req.body.options)
+    ? eventPollOptions(Number(req.body.optionCount) || 4)
+    : req.body.options;
+  const out = createPoll({
+    question: req.body.question,
+    options,
+    minutes: req.body.minutes,
+    kind: req.body.kind,
+    createdBy: req.user.username,
+  });
+  if (out.error) return res.status(400).json({ error: out.error });
+  db.meta.poll = out.poll;
+  battle.broadcastAll({
+    type: 'announce',
+    message: `🗳️ 投票受付中：「${out.poll.question}」 メニューの「🗳️ 投票」から参加しよう！`,
+    from: req.user.username,
+  });
+  battle.crowd.react('poll_open');
+  saveDb();
+  res.json({ poll: pollView(out.poll, req.user.id) });
+});
+
+// Suggested event options for the admin's poll builder.
+app.get('/api/admin/poll/suggest', requireAuth, requireAdmin, (_req, res) => {
+  res.json({ options: eventPollOptions(EVENT_TYPES.length), types: EVENT_TYPES });
+});
+
+// Catalogue of event types (admin picker).
+app.get('/api/admin/event/types', requireAuth, requireAdmin, (_req, res) => {
+  res.json({ types: EVENT_TYPES, event: currentEvent() });
+});
+
+// Start / extend / stop a limited-time event.
 app.post('/api/admin/event', requireAuth, requireAdmin, (req, res) => {
+  const clampMinutes = v => Math.max(1, Math.min(24 * 14 * 60, Math.floor(v)));
+
+  // Extend the running event without restarting it.
+  if (req.body.extend) {
+    const ev = currentEvent();
+    if (!ev) return res.status(409).json({ error: '開催中のイベントがありません' });
+    ev.endsAt += clampMinutes(Number(req.body.extend) || 60) * 60 * 1000;
+    saveDb();
+    return res.json({ event: currentEvent() });
+  }
+
   if (req.body.on) {
     // Duration in minutes (1 min .. 14 days). Legacy clients may still send hours.
     const rawMinutes = Number(req.body.minutes);
     const legacyHours = Number(req.body.hours);
-    const minutes = Math.max(1, Math.min(24 * 14 * 60, Math.floor(
+    const minutes = clampMinutes(
       Number.isFinite(rawMinutes) && rawMinutes > 0 ? rawMinutes
         : Number.isFinite(legacyHours) && legacyHours > 0 ? legacyHours * 60
-        : 24 * 60)));
-    db.meta.event = {
-      id: 'chaos',
-      name: sanitizeName(req.body.name) || 'カオスタイム',
-      startedAt: Date.now(),
-      endsAt: Date.now() + minutes * 60 * 1000,
-    };
-    battle.broadcastAll({ type: 'announce', message: `🌪️ 期間限定イベント「${db.meta.event.name}」開催中！メニューから参加しよう！`, from: req.user.username });
+        : 24 * 60);
+    // Legacy clients send no type at all — they always meant chaos.
+    db.meta.event = makeEvent(String(req.body.type || 'chaos'), sanitizeName(req.body.name), minutes, req.user.username);
+    const ev = db.meta.event;
+    battle.broadcastAll({
+      type: 'announce',
+      message: `${ev.icon} 期間限定イベント「${ev.name}」開催！ ${ev.desc}`,
+      from: req.user.username,
+    });
+    battle.crowd.feed({ icon: ev.icon, real: true, who: '運営', text: `イベント「${ev.name}」が始まった！ ${ev.desc}`, textEn: `Event "${ev.name}" is live! ${ev.descEn}` });
+    battle.crowd.react('event_start');
   } else {
+    const was = db.meta.event;
     db.meta.event = null;
-    battle.broadcastAll({ type: 'announce', message: '🌪️ 期間限定イベントは終了しました。また次回！', from: req.user.username });
+    battle.broadcastAll({
+      type: 'announce',
+      message: `${was ? was.icon : '🌪️'} 期間限定イベントは終了しました。また次回！`,
+      from: req.user.username,
+    });
+    battle.crowd.react('event_end');
   }
   saveDb();
   res.json({ event: currentEvent() });
@@ -483,13 +828,16 @@ app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
 });
 
 app.get('/api/leaderboard', (req, res) => {
-  const board = ['rating', 'dungeon', 'weekly'].includes(req.query.board) ? req.query.board : 'score';
+  const board = ['rating', 'dungeon', 'weekly', 'sprint'].includes(req.query.board) ? req.query.board : 'score';
   const week = weekIdOf(currentWeekNum());
   const weeklyBestOf = u => (u.stats.weekly && u.stats.weekly.week === week ? u.stats.weekly.best : 0);
+  // Time attack ranks on the headline 60-second board.
+  const sprintBestOf = u => (u.stats.sprint && u.stats.sprint.s60) || 0;
   // Admins are excluded from public rankings.
   let users = Object.values(db.users).filter(u => !u.banned && u.role !== 'admin' && u.stats.gamesPlayed > 0);
   if (board === 'dungeon') users = users.filter(u => (u.stats.dungeonMax || 0) > 0);
   if (board === 'weekly') users = users.filter(u => weeklyBestOf(u) > 0);
+  if (board === 'sprint') users = users.filter(u => sprintBestOf(u) > 0);
   const titleOf = u => {
     const t = TITLES.find(x => x.id === u.equippedTitle);
     return t ? { name: t.name, color: t.color } : null;
@@ -503,6 +851,8 @@ app.get('/api/leaderboard', (req, res) => {
     pvpLosses: u.stats.pvpLosses,
     dungeonMax: u.stats.dungeonMax || 0,
     weeklyBest: weeklyBestOf(u),
+    sprintBest: sprintBestOf(u),
+    sprint180: (u.stats.sprint && u.stats.sprint.s180) || 0,
     badges: u.badges,
     title: titleOf(u),
   }));
@@ -513,6 +863,7 @@ app.get('/api/leaderboard', (req, res) => {
     .sort((a, b) => board === 'rating' ? b.rating - a.rating
       : board === 'dungeon' ? b.dungeonMax - a.dungeonMax
       : board === 'weekly' ? b.weeklyBest - a.weeklyBest
+      : board === 'sprint' ? (b.sprintBest || 0) - (a.sprintBest || 0)
       : b.bestScore - a.bestScore)
     .slice(0, 100);
   res.json({ board, rows });
@@ -546,8 +897,10 @@ app.post('/api/titles/equip', requireAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get('/api/bosses', (req, res) => {
+  // 🐲 Boss Invasion softens every boss while it runs.
+  const hpMult = eventBonus(currentEvent()).bossHp || 1;
   res.json({
-    bosses: BOSSES,
+    bosses: hpMult === 1 ? BOSSES : BOSSES.map(b => ({ ...b, hp: Math.round(b.hp * hpMult), weakened: true })),
     // Admins have everything unlocked, boss rush included.
     bossMax: req.user && req.user.role === 'admin' ? BOSSES.length
       : req.user ? (req.user.stats.bossMax || 0) : 0,
@@ -722,8 +1075,10 @@ app.post('/api/items/use', requireAuth, (req, res) => {
 const GACHA_COST_1 = 500;
 const GACHA_COST_10 = 4500;
 
-function gachaPull(user) {
-  const roll = Math.random() * 100;
+function gachaPull(user, lucky = false) {
+  // 🍀 Lucky Day skews every roll upward (exponent < 1), so the rare tiers at
+  // the top of the range come up more often: N 50%→37%, SSR+ 13%→18%.
+  const roll = (lucky ? Math.pow(Math.random(), 0.7) : Math.random()) * 100;
   if (roll < 50) {   // N: coins
     const amount = 150 + Math.floor(Math.random() * 6) * 50;
     user.coins += amount;
@@ -756,16 +1111,36 @@ function gachaPull(user) {
 
 app.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
   const count = Number(req.body.count) === 10 ? 10 : 1;
-  const cost = count === 10 ? GACHA_COST_10 : GACHA_COST_1;
+  const bonus = eventBonus(currentEvent());
+  const base = count === 10 ? GACHA_COST_10 : GACHA_COST_1;
+  const cost = Math.round(base * (bonus.gachaDiscount || 1));
   const user = req.user;
   if (user.role !== 'admin') {   // admins pull for free
     if (user.coins < cost) return res.status(402).json({ error: `コインが足りません（${fmtNum(cost)}必要）` });
     user.coins -= cost;
   }
   user.items = user.items || {};
-  const results = Array.from({ length: count }, () => gachaPull(user));
+  const results = Array.from({ length: count }, () => gachaPull(user, !!bonus.gachaLuck));
   saveDb();
-  res.json({ results, user: publicUser(user) });
+  // Big pulls make the live feed.
+  const ur = results.find(r => r.rarity === 'UR');
+  const ssr = results.find(r => r.rarity === 'SSR' && r.type === 'cosmetic');
+  if (ur) postRealFeed(user, [{ icon: '🌟', ja: `${user.username} が UR を引き当てた！！`, en: `${user.username} hit the UR jackpot!!`, react: null }]);
+  else if (ssr) postRealFeed(user, [{ icon: '🎰', ja: `${user.username} がガチャで SSR「${ssr.name}」を引いた！`, en: `${user.username} pulled SSR "${ssr.name}"!` }]);
+  res.json({ results, user: publicUser(user), cost, lucky: !!bonus.gachaLuck });
+});
+
+// Public gacha pricing so the UI can show the discounted cost.
+app.get('/api/gacha/info', (_req, res) => {
+  const bonus = eventBonus(currentEvent());
+  const mult = bonus.gachaDiscount || 1;
+  res.json({
+    cost1: Math.round(GACHA_COST_1 * mult),
+    cost10: Math.round(GACHA_COST_10 * mult),
+    base1: GACHA_COST_1, base10: GACHA_COST_10,
+    lucky: !!bonus.gachaLuck,
+    discounted: mult !== 1,
+  });
 });
 
 function fmtNum(n) { return n.toLocaleString('ja-JP'); }
@@ -787,7 +1162,7 @@ app.post('/api/shop/buy', requireAuth, maintenanceGuard, (req, res) => {
 
 app.post('/api/equip', requireAuth, (req, res) => {
   const { slot, itemId } = req.body;
-  if (!['skin', 'board', 'fx'].includes(slot)) return res.status(400).json({ error: '不正なスロットです' });
+  if (!EQUIP_SLOTS.includes(slot)) return res.status(400).json({ error: '不正なスロットです' });
   const item = SHOP_ITEMS.find(i => i.id === itemId);
   if (!item || item.cat !== slot) return res.status(400).json({ error: '不正なアイテムです' });
   // Admins implicitly own the entire catalog; admin gear stays admin-only.
@@ -799,6 +1174,58 @@ app.post('/api/equip', requireAuth, (req, res) => {
   req.user.equipped[slot] = itemId;
   saveDb();
   res.json({ user: publicUser(req.user) });
+});
+
+// ---------------------------------------------------------------------------
+// Missions (daily / weekly)
+// ---------------------------------------------------------------------------
+
+app.get('/api/missions', requireAuth, (req, res) => {
+  migrateUser(req.user);
+  syncMissions(req.user, currentWeekNum());
+  saveDb();
+  res.json({ missions: missionsView(req.user, currentWeekNum()) });
+});
+
+app.post('/api/missions/claim', requireAuth, maintenanceGuard, (req, res) => {
+  migrateUser(req.user);
+  const id = String(req.body.id || '');
+  const out = id === 'daily_bonus' || id === 'weekly_bonus'
+    ? claimMissionBonus(req.user, currentWeekNum(), id === 'daily_bonus' ? 'daily' : 'weekly')
+    : claimMission(req.user, currentWeekNum(), id);
+  if (out.error) return res.status(409).json({ error: out.error });
+  saveDb();
+  res.json({
+    reward: out,
+    missions: missionsView(req.user, currentWeekNum()),
+    user: publicUser(req.user),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Achievements (実績)
+// ---------------------------------------------------------------------------
+
+app.get('/api/achievements', (req, res) => {
+  if (!req.user) {
+    // Guests still get to browse the list (progress reads as zero).
+    return res.json({ achievements: achievementsView({ stats: {}, badges: [], owned: [], achievements: [], coins: 0, xp: 0 }) });
+  }
+  migrateUser(req.user);
+  res.json({ achievements: achievementsView(req.user) });
+});
+
+app.post('/api/achievements/claim', requireAuth, maintenanceGuard, (req, res) => {
+  migrateUser(req.user);
+  const out = claimAchievement(req.user, String(req.body.id || ''));
+  if (out.error) return res.status(409).json({ error: out.error });
+  saveDb();
+  // The rarest achievements are worth a line on the feed.
+  const top = ACHIEVEMENTS.filter(a => out.ids.includes(a.id)).sort((a, b) => b.gems - a.gems)[0];
+  if (top && top.gems >= 15) {
+    postRealFeed(req.user, [{ icon: top.icon, ja: `${req.user.username} が実績「${top.name}」を解除！`, en: `${req.user.username} unlocked "${top.nameEn}"!` }]);
+  }
+  res.json({ reward: out, achievements: achievementsView(req.user), user: publicUser(req.user) });
 });
 
 // ---------------------------------------------------------------------------
@@ -895,7 +1322,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
       if (rec.userId === target.id) delete db.tokens[tk];
     }
   }
-  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney'];
+  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale'];
   if (typeof b.grantBadge === 'string') {
     if (!KNOWN_BADGES.includes(b.grantBadge)) return res.status(400).json({ error: `バッジIDが不正です（${KNOWN_BADGES.join(' / ')}）` });
     if (!target.badges.includes(b.grantBadge)) target.badges.push(b.grantBadge);
@@ -989,9 +1416,65 @@ app.post('/api/admin/leaderboard/reset', requireAuth, requireAdmin, (_req, res) 
 
 // Full database backup download.
 app.get('/api/admin/backup', requireAuth, requireAdmin, (_req, res) => {
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   res.setHeader('Content-Disposition', `attachment; filename="block-blitz-backup-${stamp}.json"`);
-  res.json(db);
+  // Stamp the dump so the restore dialog can show when it was taken.
+  res.json({ ...db, meta: { ...db.meta, backupAt: Date.now(), backupVersion: BACKUP_VERSION } });
+});
+
+// Restore a backup file. Defaults to a merge so players who signed up after a
+// data loss are not thrown away; the live DB is snapshotted first either way.
+app.post('/api/admin/restore', requireAuth, requireAdmin, (req, res) => {
+  const body = req.body || {};
+  const data = body.data || body;          // accept a bare dump or { data, mode }
+  const mode = body.mode === 'replace' ? 'replace' : 'merge';
+  const check = validateBackup(data);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+
+  // Dry run: let the admin see what would happen before committing.
+  if (body.dryRun) return res.json({ preview: check.stats, mode });
+
+  const snap = snapshot(db, 'pre-restore');
+  let report;
+  try {
+    report = applyRestore(db, data, mode);
+  } catch (err) {
+    console.error('[restore] failed:', err);
+    return res.status(500).json({ error: '復元中にエラーが発生しました。変更は保存されていません' });
+  }
+  // Every restored account is brought up to the current schema right away.
+  for (const u of Object.values(db.users)) migrateUser(u);
+  flushDb();
+  console.log(`[restore] ${mode}: +${report.added} 更新${report.updated} 維持${report.kept} → 合計${report.after}人`);
+  battle.broadcastAll({
+    type: 'announce',
+    message: '💾 データを復元しました。ページを再読み込みすると反映されます',
+    from: req.user.username,
+  });
+  res.json({ report, snapshot: snap, source: check.stats });
+});
+
+// Local snapshots (same instance only — they die with the filesystem too).
+app.get('/api/admin/snapshots', requireAuth, requireAdmin, (_req, res) => {
+  res.json({ snapshots: listSnapshots() });
+});
+
+app.post('/api/admin/snapshots/restore', requireAuth, requireAdmin, (req, res) => {
+  const data = readSnapshot(String(req.body.name || ''));
+  if (!data) return res.status(404).json({ error: 'スナップショットが見つかりません' });
+  const check = validateBackup(data);
+  if (!check.ok) return res.status(400).json({ error: check.error });
+  snapshot(db, 'pre-rollback');
+  const report = applyRestore(db, data, 'replace');
+  for (const u of Object.values(db.users)) migrateUser(u);
+  flushDb();
+  res.json({ report });
+});
+
+app.post('/api/admin/snapshots/create', requireAuth, requireAdmin, (_req, res) => {
+  const name = snapshot(db, 'manual');
+  if (!name) return res.status(500).json({ error: 'スナップショットの作成に失敗しました' });
+  res.json({ name, snapshots: listSnapshots() });
 });
 
 // Maintenance mode: blocks play/shop/login for non-admins.
@@ -1063,23 +1546,95 @@ app.post('/api/admin/grant-all', requireAuth, requireAdmin, (req, res) => {
 });
 
 // Live crowd (にぎわい) control: scale, chattiness, custom names & lines.
+// One-click crowd moods.
+const CROWD_PRESETS = {
+  off:    { scale: 0 },
+  quiet:  { scale: 0.5, chatPace: 0.5, toggles: { ...DEFAULT_TOGGLES, dialogues: false, greetings: false }, quiet: null },
+  normal: { scale: 1,   chatPace: 1,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  party:  { scale: 3,   chatPace: 2.5, toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  night:  { scale: 0.7, chatPace: 0.75, toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  silent: { scale: 1,   chatPace: 1,   toggles: { ...DEFAULT_TOGGLES, chat: false, dialogues: false, feed: false, greetings: false, reactions: false }, quiet: null },
+};
+
+function crowdStatus() {
+  return {
+    scale: getLiveScale(), ambient: getCustom(),
+    online: battle.displayOnline(), activeMatches: battle.displayMatches(),
+    mood: crowdMood(), activeResidents: battle.crowd.activeCount(), quietNow: isQuietNow(),
+  };
+}
+
 app.post('/api/admin/pop', requireAuth, requireAdmin, (req, res) => {
   const b = req.body || {};
+  const patch = {};
+  if (b.preset && CROWD_PRESETS[b.preset]) {
+    const p = CROWD_PRESETS[b.preset];
+    b.scale = p.scale;
+    if (p.chatPace !== undefined) patch.chatPace = p.chatPace;
+    if (p.toggles) patch.toggles = p.toggles;
+    if (p.quiet !== undefined) patch.quiet = p.quiet;
+  }
   if (b.scale !== undefined) {
     const scale = Math.max(0, Math.min(10, Number(b.scale)));
     if (!Number.isFinite(scale)) return res.status(400).json({ error: '0〜10の数値で指定してください' });
     db.meta.popScale = scale;
     setLiveScale(scale);
   }
-  if (b.chatPace !== undefined || Array.isArray(b.names) || Array.isArray(b.lines)) {
-    setCustom({ chatPace: b.chatPace, names: b.names, lines: b.lines });
+  if (b.chatPace !== undefined) patch.chatPace = b.chatPace;
+  if (Array.isArray(b.names)) patch.names = b.names;
+  if (Array.isArray(b.lines)) patch.lines = b.lines;
+  if (b.toggles && typeof b.toggles === 'object') patch.toggles = b.toggles;
+  if (b.quiet !== undefined) patch.quiet = b.quiet;
+
+  // Cast management.
+  const cur = getCustom();
+  if (typeof b.removeResident === 'string' && b.removeResident) {
+    patch.removed = [...new Set([...cur.removed, b.removeResident])];
+  }
+  if (typeof b.restoreResident === 'string' && b.restoreResident) {
+    patch.removed = (patch.removed || cur.removed).filter(id => id !== b.restoreResident);
+  }
+  if (b.addResident && typeof b.addResident.name === 'string') {
+    const name = sanitizeName(b.addResident.name);
+    if (name.length < 2) return res.status(400).json({ error: '住人の名前は2文字以上にしてください' });
+    if (Object.values(db.users).some(u => u.username.toLowerCase() === name.toLowerCase())) {
+      return res.status(409).json({ error: '実在するプレイヤーと同じ名前は使えません' });
+    }
+    if (cur.extra.some(x => x.name === name)) return res.status(409).json({ error: 'その住人はすでにいます' });
+    patch.extra = [...cur.extra, { name, arch: String(b.addResident.arch || 'casual'), lang: b.addResident.lang === 'en' ? 'en' : 'ja' }];
+  }
+  if (typeof b.removeExtra === 'string' && b.removeExtra) {
+    patch.extra = (patch.extra || cur.extra).filter(x => x.name !== b.removeExtra);
+  }
+  if (b.reseed) {
+    patch.rosterSeed = `v${Date.now().toString(36)}`;
+    patch.removed = [];   // ids change meaning with a new roster
+  }
+
+  if (Object.keys(patch).length) {
+    setCustom(patch);
     db.meta.ambient = getCustom();   // persist the sanitized version
   }
   saveDb();
+  res.json(crowdStatus());
+});
+
+// The cast, with live stats, for the admin roster editor.
+app.get('/api/admin/residents', requireAuth, requireAdmin, (_req, res) => {
   res.json({
-    scale: getLiveScale(), ambient: getCustom(),
-    online: battle.displayOnline(), activeMatches: battle.displayMatches(),
+    residents: rosterView(),
+    retired: retiredResidents(),
+    archetypes: ARCHETYPES.map(a => ({ id: a.id, label: a.label, labelEn: a.labelEn })),
+    status: crowdStatus(),
   });
+});
+
+// Fire one crowd action right now (admin preview).
+app.post('/api/admin/crowd/test', requireAuth, requireAdmin, (req, res) => {
+  const what = String(req.body.what || 'line');
+  const out = battle.crowd.test(what);
+  if (out.error) return res.status(409).json({ error: out.error });
+  res.json(out);
 });
 
 // Wipe the global chat for everyone (history + connected clients).
@@ -1095,6 +1650,22 @@ app.post('/api/admin/chat/say', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true, from: entry.from, text: entry.text });
 });
 
+// Test tools: instantly finish the caller's own mission board / achievements.
+app.post('/api/admin/missions/complete', requireAuth, requireAdmin, (req, res) => {
+  migrateUser(req.user);
+  const ms = syncMissions(req.user, currentWeekNum());
+  for (const row of [...ms.daily, ...ms.weekly]) row.p = Number.MAX_SAFE_INTEGER;
+  saveDb();
+  res.json({ missions: missionsView(req.user, currentWeekNum()), user: publicUser(req.user) });
+});
+
+app.post('/api/admin/achievements/reset', requireAuth, requireAdmin, (req, res) => {
+  migrateUser(req.user);
+  req.user.achievements = [];
+  saveDb();
+  res.json({ achievements: achievementsView(req.user), user: publicUser(req.user) });
+});
+
 app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
   const users = Object.values(db.users);
   res.json({
@@ -1108,6 +1679,10 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     openRooms: battle.rooms.size,
     popScale: getLiveScale(),
     ambient: getCustom(),
+    crowd: {
+      mood: crowdMood(), activeResidents: battle.crowd.activeCount(),
+      queueing: ambientQueue(), feedCount: battle.crowd.feedHistory().length, quietNow: isQuietNow(),
+    },
     maintenance: inMaintenance(),
     season: currentSeason(),
   });
@@ -1125,6 +1700,12 @@ const battle = initBattle(server, {
   MATCH_DURATION,
   isMaintenance: inMaintenance,
 });
+
+// The crowd reads the live event / open poll through this (no import cycle).
+setWorldProvider(() => ({
+  event: currentEvent(),
+  poll: db.meta.poll && pollOpen(db.meta.poll) ? db.meta.poll : null,
+}));
 
 // ---------------------------------------------------------------------------
 // Bootstrap: seed admin account, start server
@@ -1178,6 +1759,9 @@ function seedAdmin() {
 currentSeason();
 seedAdmin();
 pinAdminPassword();
+
+// A boot snapshot means a bad restore is always one click away from undo.
+if (Object.keys(db.users).length > 0) snapshot(db, 'boot');
 
 // Unknown paths (shared links, typos) land on the game instead of an error.
 app.use((req, res) => {

@@ -1,13 +1,79 @@
 // Global chat: persistent WebSocket + drawer UI on the menu screen.
 import { session } from './net.js';
-import { $, toast } from './dom.js';
+import { $, toast, showModal, closeModal } from './dom.js';
 import { audio } from './audio.js';
-import { t, trServer } from './i18n.js';
+import { t, trServer, LANG } from './i18n.js';
 
 let ws = null;
 let open = false;
 let unread = 0;
 let retryMs = 3000;
+
+// ---------------------------------------------------------------------------
+// Live feed: a ticker on the menu showing what is happening around the arena
+// (simulated residents + real players' notable moments, starred).
+// ---------------------------------------------------------------------------
+
+let feed = [];          // newest last
+let tickerIdx = 0;
+let tickerTimer = null;
+
+const feedText = item => (LANG === 'en' && item.textEn ? item.textEn : item.text);
+
+function fmtAgo(at) {
+  const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
+  if (s < 60) return t('たった今', 'just now');
+  if (s < 3600) return t(`${Math.floor(s / 60)}分前`, `${Math.floor(s / 60)}m ago`);
+  return t(`${Math.floor(s / 3600)}時間前`, `${Math.floor(s / 3600)}h ago`);
+}
+
+function showTicker(item, fresh = false) {
+  const el = $('#liveFeed');
+  const txt = $('#liveFeedText');
+  if (!el || !txt || !item) return;
+  el.classList.remove('hidden');
+  txt.classList.remove('lf-swap'); void txt.offsetWidth; txt.classList.add('lf-swap');
+  txt.textContent = `${item.real ? '⭐' : ''}${item.icon} ${feedText(item)}`;
+  el.classList.toggle('real', !!item.real);
+  if (fresh) { el.classList.remove('lf-new'); void el.offsetWidth; el.classList.add('lf-new'); }
+}
+
+function cycleTicker() {
+  clearInterval(tickerTimer);
+  tickerTimer = setInterval(() => {
+    if (document.body.dataset.screen !== 'menu' || !feed.length) return;
+    const recent = feed.slice(-8);
+    tickerIdx = (tickerIdx + 1) % recent.length;
+    showTicker(recent[tickerIdx]);
+  }, 4500);
+}
+
+function pushFeed(item, fresh) {
+  feed.push(item);
+  if (feed.length > 40) feed.shift();
+  tickerIdx = Math.min(7, feed.slice(-8).length - 1);
+  showTicker(item, fresh);
+}
+
+export function getFeed() { return feed.slice(); }
+
+export function showFeedModal() {
+  audio.click();
+  const items = feed.slice().reverse();
+  const m = showModal(`
+    <h2>📡 ${t('ライブフィード', 'Live Feed')}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">${t('アリーナで今起きていること。⭐は本物のプレイヤーの快挙！', 'What is happening around the arena right now. ⭐ marks real players!')}</p>
+    <div class="feed-list">
+      ${items.length ? items.map(it => `
+        <div class="feed-row ${it.real ? 'real' : ''}">
+          <span class="feed-icon">${it.icon || '📡'}</span>
+          <span class="feed-text">${it.real ? '⭐ ' : ''}${escapeHtml(feedText(it))}</span>
+          <span class="feed-ago">${fmtAgo(it.at)}</span>
+        </div>`).join('') : `<p class="muted center">${t('まだ何も起きていません', 'Nothing has happened yet')}</p>`}
+    </div>
+    <div class="modal-buttons"><button class="btn btn-primary" id="fdClose">${t('閉じる', 'Close')}</button></div>`);
+  m.querySelector('#fdClose').onclick = closeModal;
+}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -60,11 +126,21 @@ function connect() {
       (msg.chat || []).forEach(m => appendMsg(m, false));
       $('#chatMsgs').scrollTop = $('#chatMsgs').scrollHeight;
       if (typeof msg.online === 'number') setOnlineCount(msg.online);
+      if (Array.isArray(msg.feed) && msg.feed.length) {
+        feed = msg.feed.slice(-40);
+        tickerIdx = Math.max(0, feed.slice(-8).length - 1);
+        showTicker(feed[feed.length - 1]);
+        cycleTicker();
+      }
+      setMood(msg.mood);
     } else if (msg.type === 'online') {
       // Server pushes the live count so every counter stays in sync.
       setOnlineCount(msg.online);
       const mm = $('#mmOnline');
       if (mm) mm.textContent = msg.online;
+      setMood(msg.mood);
+    } else if (msg.type === 'feed') {
+      pushFeed(msg, true);
     } else if (msg.type === 'chat_clear') {
       $('#chatMsgs').innerHTML = '';
       setUnread(0);
@@ -85,6 +161,15 @@ function setOnlineCount(n) {
   $('#chatOnline').textContent = t(`🟢 ${n}人`, `🟢 ${n} online`);
   $('#onlineCount').textContent = n;
   $('#onlineBadge').classList.remove('hidden');
+}
+
+// How lively the arena is right now (from the crowd simulation).
+export function setMood(mood) {
+  const el = $('#moodTag');
+  if (!el || !mood) return;
+  const tag = { party: ['🔥 大盛況', '🔥 packed'], busy: ['', ''], calm: ['🌙 まったり', '🌙 chill'], off: ['', ''] }[mood] || ['', ''];
+  el.textContent = t(tag[0], tag[1]) ? ` ・ ${t(tag[0], tag[1])}` : '';
+  el.dataset.mood = mood;
 }
 
 function scheduleReconnect() {

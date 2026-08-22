@@ -5,8 +5,9 @@ import { GameView, MiniBoard } from './game.js';
 import { chooseMove, AI_LEVELS } from './ai.js';
 import { audio } from './audio.js';
 import { session, api, refreshMe, BattleClient } from './net.js';
-import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf } from './dom.js';
+import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf, staffExtras } from './dom.js';
 import { t, trServer, catName } from './i18n.js';
+import { fireUlt, ultIcon, ultColor, ultExists, DEFAULT_ULT } from './skills.js';
 
 const MATCH_SECONDS = 120;
 
@@ -41,14 +42,32 @@ function escapeHtml(s) {
 
 async function submitResult(payload) {
   if (!session.user) return null;
+  // Per-run telemetry the mission system feeds on — filled in centrally so
+  // every mode reports it without repeating itself.
+  const e = currentMode && currentMode.engine;
+  const body = e
+    ? { ults: e.ultUses || 0, items: e.itemUses || 0, pieces: e.piecesPlaced || 0, ...payload }
+    : payload;
   try {
-    const data = await api('/api/game/result', { method: 'POST', body: payload });
+    const data = await api('/api/game/result', { method: 'POST', body });
     updateTopbar();
+    if (data.rewards && data.rewards.missionsCompleted && data.rewards.missionsCompleted.length) {
+      announceMissions(data.rewards.missionsCompleted.length);
+    }
     return data.rewards;
   } catch (err) {
     console.warn('result submit failed:', err.message);
     return null;
   }
+}
+
+function announceMissions(n) {
+  setTimeout(() => {
+    audio.coin();
+    toast(t(`📋 ミッションを${n}個達成！メニューの「ミッション」から報酬を受け取ろう`,
+      `📋 ${n} mission(s) complete! Claim the rewards from the Missions menu`), 'announce', 4500);
+    if (window.__bbaRefreshMissionDot) window.__bbaRefreshMissionDot();
+  }, 1400);
 }
 
 function rewardsRows(rewards) {
@@ -106,6 +125,85 @@ export function rerollCurrent() {
 }
 
 // ---------------------------------------------------------------------------
+// Ultimate skills: one equipped skill, fired when the gauge hits 100.
+// Available wherever booster items are (PvE + chaos) — never in the fair-seed
+// modes (AI / online / weekly), where only one side would have them.
+// ---------------------------------------------------------------------------
+
+const ULT_KEY = 'bba_ult';
+
+export function equippedUlt() {
+  const eq = session.user && session.user.equipped;
+  const id = (eq && eq.ult) || localStorage.getItem(ULT_KEY) || DEFAULT_ULT;
+  return ultExists(id) ? id : DEFAULT_ULT;
+}
+
+// Guests keep their choice locally; logged-in players use the server slot.
+export function setGuestUlt(id) { localStorage.setItem(ULT_KEY, id); }
+
+let ultTicker = null;
+
+export function showUltBar(on) {
+  const btn = $('#btnUlt');
+  btn.classList.toggle('hidden', !on);
+  clearInterval(ultTicker);
+  ultTicker = null;
+  if (!on) return;
+  $('#ultIcon').textContent = ultIcon(equippedUlt());
+  btn.style.setProperty('--ult-color', ultColor(equippedUlt()));
+  updateUltHud();
+  // Cheap poll: catches gauge changes from placements, items and timed effects
+  // without threading a callback through all ten mode controllers.
+  ultTicker = setInterval(updateUltHud, 120);
+}
+
+function updateUltHud() {
+  const e = currentMode && currentMode.engine;
+  const btn = $('#btnUlt');
+  if (!e || btn.classList.contains('hidden')) return;
+  // ⚡奥義祭 event: pick the charge rate up live, even mid-game.
+  const ev = window.__bbaEvent;
+  e.ultRate = (ev && ev.bonus && ev.bonus.ultRate) || 1;
+  btn.classList.toggle('ult-boosted', e.ultRate > 1);
+  // Admins run a permanently charged gauge.
+  if (session.user && session.user.role === 'admin' && staffExtras()) e.ult = 100;
+  const pct = Math.max(0, Math.min(100, Math.round(e.ult)));
+  btn.style.setProperty('--ult-p', `${pct}%`);
+  $('#ultPct').textContent = pct >= 100 ? 'MAX' : pct;
+  btn.classList.toggle('ult-ready', pct >= 100);
+  btn.classList.toggle('off', pct < 100);
+}
+
+export function fireUltCurrent() {
+  const m = currentMode;
+  if (!m || !m.engine || !view || view.inputLocked || m.ended) return;
+  if ($('#btnUlt').classList.contains('hidden')) return;
+  const e = m.engine;
+  if (e.ult < 100) {
+    audio.error();
+    toast(t(`⚡ ゲージが足りません（${Math.round(e.ult)}%）ラインを消して溜めよう！`,
+      `⚡ Gauge not full yet (${Math.round(e.ult)}%) — clear lines to charge it!`), 'err', 1800);
+    return;
+  }
+  const id = equippedUlt();
+  const out = fireUlt(id, { engine: e, view, mode: m });
+  if (out.error) {
+    audio.error();
+    toast(out.error, 'err', 1600);
+    return;   // nothing happened — keep the gauge
+  }
+  e.consumeUlt();
+  // Board changed: a stale game-over flag would end the run unfairly.
+  if (e.over && e.hasAnyMove()) e.over = false;
+  $('#btnUlt').classList.remove('ult-fire');
+  void $('#btnUlt').offsetWidth;
+  $('#btnUlt').classList.add('ult-fire');
+  toast(out.msg, 'announce', 2600);
+  updateUltHud();
+  if (e.over) handleEngineOver();
+}
+
+// ---------------------------------------------------------------------------
 // Booster items (consumables): usable in solo / boss / rush / dungeon / chaos.
 // Logged-in inventories live on the server; guests use localStorage.
 // ---------------------------------------------------------------------------
@@ -149,9 +247,12 @@ function spendItem(id) {
   }
 }
 
+// Boosters and ultimates share the same "PvE only" rule, so one switch drives
+// both bars — they can never drift apart.
 export function showItemBar(on) {
   $('#itemBar').classList.toggle('hidden', !on);
   if (on) updateItemBar();
+  showUltBar(on);
 }
 
 export function updateItemBar() {
@@ -208,6 +309,7 @@ export function useGameItem(id) {
     toast(t(`🧹 ${n}マスを掃除しました！`, `🧹 Cleaned up ${n} cells!`), 'ok', 1500);
   } else if (id === 'item_fever') {
     e.feverUntil = Date.now() + 15000;
+    e.feverMult = 2;
     view.screenFlash = 0.35;
     $('#hudScore').classList.add('fever');
     audio.combo(6);
@@ -229,6 +331,7 @@ export function useGameItem(id) {
 
   // survivors of a bomb/clean: board changed, over-state may be stale
   if (e.over && e.hasAnyMove()) e.over = false;
+  e.itemUses = (e.itemUses || 0) + 1;
   spendItem(id);
   updateItemBar();
 }
@@ -243,10 +346,11 @@ function isAdmin() { return !!session.user && session.user.role === 'admin'; }
 
 function updateAutoBtn() {
   const btn = $('#btnAuto');
-  btn.classList.toggle('hidden', !isAdmin());
+  const show = staffExtras();
+  btn.classList.toggle('hidden', !show);
   $('#autoState').textContent = autopilot.on ? `x${autopilot.speed}` : 'OFF';
   btn.classList.toggle('auto-on', autopilot.on);
-  $('#btnAdminCmd').classList.toggle('hidden', !isAdmin());
+  $('#btnAdminCmd').classList.toggle('hidden', !show);
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +461,12 @@ function autoUseItems(m) {
   if (Date.now() - (autopilot.itemAt || 0) < 2500) return;
   if ($('#itemBar').classList.contains('hidden')) return;
   const e = m.engine;
+  // Ultimates first: a charged gauge is always the strongest button available.
+  if (e.ult >= 100 && Date.now() - (autopilot.ultAt || 0) > 3000) {
+    autopilot.itemAt = autopilot.ultAt = Date.now();
+    fireUltCurrent();
+    return;
+  }
   const counts = getItemCounts();
   const filled = e.grid.reduce((a, x) => a + (x ? 1 : 0), 0);
   const garbage = e.grid.reduce((a, x) => a + (x === 9 ? 1 : 0), 0);
@@ -1607,6 +1717,8 @@ class DungeonMode {
     const rewards = await submitResult({
       mode: R.resultMode, floor: cleared, score: e.score, lines: e.linesCleared,
       maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won,
+      // Floors beaten in THIS run (missions count progress, not absolute depth).
+      floors: Math.max(0, cleared - this.startFloor + 1),
     });
     if (rewards && rewards.badge === 'dungeon') {
       setTimeout(() => { toast(t('🏰 バッジ「百塔踏破」を獲得！+500💎', '🏰 Badge earned: Hundred-Floor Conqueror! +500💎'), 'announce', 6000); confettiBurst(80); }, 1200);
@@ -1978,6 +2090,7 @@ class OnlineMode extends VersusBase {
       const hello = await this.client.connect(localStorage.getItem('bba_guest_name') || undefined);
       this.onlineCount = hello.online;
       $('#mmOnline').textContent = hello.online;
+      this.showQueueCount(hello.queueing);
       if (!session.user) localStorage.setItem('bba_guest_name', hello.name);
     } catch (err) {
       toast(err.message, 'err');
@@ -1994,6 +2107,9 @@ class OnlineMode extends VersusBase {
       .on('room_error', msg => { audio.error(); toast(trServer(msg.error), 'err'); })
       .on('raid_state', msg => this.onRaidState(msg))
       .on('raid_attack', msg => this.onRaidAttack(msg))
+      .on('coop_state', msg => this.onCoopState(msg))
+      .on('coop_reject', msg => this.onCoopReject(msg))
+      .on('coop_partner_left', () => toast(t('相棒が離脱しました。残りはサーバーが代打します！', 'Your partner left — the server will play their turns!'), 'err', 4000))
       .on('emote', msg => this.showEmote(msg.slot, msg.emoji))
       .on('tourney_state', msg => this.onTourneyState(msg))
       .on('tourney_champion', () => confettiBurst(70))
@@ -2005,6 +2121,7 @@ class OnlineMode extends VersusBase {
         this.onlineCount = msg.online;
         const el = $('#mmOnline');
         if (el) el.textContent = msg.online;
+        this.showQueueCount(msg.queueing);
       })
       .on('close', () => {
         if (this.ended) return;
@@ -2025,12 +2142,22 @@ class OnlineMode extends VersusBase {
         ? t('トーナメント参加者を募集しています…', 'Gathering tournament entrants…')
         : this.kind === 'royale'
         ? t('バトルロイヤル参加者を募集しています…', 'Gathering battle-royale contenders…')
+        : this.kind === 'coop'
+        ? t('いっしょに遊ぶ相棒を探しています…', 'Looking for a co-op partner…')
         : t('対戦相手を探しています…', 'Looking for an opponent…');
       $('#mmSub').innerHTML = t('オンライン: <span id="mmOnline">-</span>人 ・ 対戦相手を検索中…',
         'Online: <span id="mmOnline">-</span> players ・ searching…');
       $('#mmOnline').textContent = this.onlineCount ?? '-';
       this.client.queue(this.kind);
     }
+  }
+
+  // People waiting in matchmaking right now (crowd simulation + real queues).
+  showQueueCount(n) {
+    const el = $('#mmQueue');
+    if (!el) return;
+    if (typeof n !== 'number') { el.textContent = ''; return; }
+    el.textContent = t(`🧑‍🤝‍🧑 いま ${n} 人がマッチング待ち`, `🧑‍🤝‍🧑 ${n} players queueing right now`);
   }
 
   // ---- custom room lobby ----
@@ -2216,6 +2343,140 @@ class OnlineMode extends VersusBase {
 
   // ---- match ----
 
+  // ---- 🤝 Co-op: two players, one board, alternating turns -----------------
+  //
+  // The server owns the board. We keep a mirror Engine on the same seed and
+  // replay each confirmed move, so placements animate exactly like solo ones
+  // while staying byte-identical on both clients.
+
+  setupCoop(msg) {
+    this.isCoop = true;
+    const me = msg.players.find(p => p.isYou);
+    const partner = msg.players.find(p => !p.isYou);
+    this.mySlot = msg.you.slot;
+    this.partnerName = partner ? partner.name : '???';
+    this.coopTurn = 0;
+    this.coopTurnRemain = 0;
+    this.coopTurnMs = 15000;
+
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#hudTimer').classList.add('hidden');
+    $('#coopBar').classList.remove('hidden');
+    showItemBar(false);   // shared board: no boosters, no ultimates
+
+    const v = getView();
+    v.setTheme(equippedTheme());
+    this.engine = new Engine(msg.seed);
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onGameOver = () => { /* the server decides when a co-op run is over */ };
+    v.onPlace = () => this.updateCoopHud();
+    // Hand every drop to the server instead of applying it locally.
+    v.onIntentPlace = (index, row, col) => {
+      if (this.coopTurn !== this.mySlot || this.ended) {
+        audio.error();
+        toast(t(`いまは${this.partnerName}さんの番です`, `It's ${this.partnerName}'s turn`), 'err', 1200);
+        return true;
+      }
+      this.client.send({ type: 'coop_place', index, row, col });
+      v.inputLocked = true;          // lock until the server confirms
+      return true;
+    };
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('solo');
+    this.updateCoopHud();
+
+    const emoteBtn = $('#btnEmote');
+    emoteBtn.classList.remove('hidden');
+    emoteBtn.onclick = () => this.toggleEmotePicker();
+
+    toast(t(`🤝 ${this.partnerName}さんと協力プレイ！交互にピースを置いて高得点を狙おう`,
+      `🤝 Co-op with ${this.partnerName}! Take turns placing pieces for a shared high score`), 'announce', 4000);
+
+    countdownOverlay(msg.countdown || 3, () => {
+      if (this.ended) return;
+      this.coopStarted = true;
+      this.applyCoopTurn();
+      this.coopInt = setInterval(() => this.tickCoopBar(), 120);
+    }, audio);
+  }
+
+  onCoopState(msg) {
+    if (this.ended || !this.engine) return;
+    // Replay the confirmed move on the mirror board.
+    if (msg.move) {
+      const result = this.engine.place(msg.move.index, msg.move.row, msg.move.col);
+      if (result) {
+        getView().applyResult(result);
+        if (msg.move.slot !== this.mySlot) {
+          const el = $('#hudSub');
+          el.classList.remove('coop-flash'); void el.offsetWidth; el.classList.add('coop-flash');
+        }
+      }
+    }
+    // Authoritative resync — cheap insurance against any drift.
+    if (Array.isArray(msg.grid)) {
+      const mine = this.engine.snapshot();
+      if (msg.grid.some((v, i) => v !== mine[i])) {
+        for (let i = 0; i < msg.grid.length; i++) this.engine.grid[i] = msg.grid[i];
+        console.warn('[coop] board resynced from server');
+      }
+    }
+    if (typeof msg.score === 'number') this.engine.score = msg.score;
+    this.coopTurn = msg.turn;
+    this.coopTurnRemain = msg.turnRemain || 0;
+    this.coopTurnMs = msg.turnMs || 15000;
+    this.coopTurnAt = Date.now();
+    this.coopMoves = msg.moves || 0;
+    this.applyCoopTurn();
+    this.updateCoopHud();
+  }
+
+  onCoopReject(msg) {
+    if (!this.engine) return;
+    if (Array.isArray(msg.grid)) {
+      for (let i = 0; i < msg.grid.length; i++) this.engine.grid[i] = msg.grid[i];
+    }
+    this.coopTurn = msg.turn;
+    this.applyCoopTurn();
+    audio.putback();
+  }
+
+  applyCoopTurn() {
+    if (!this.coopStarted || this.ended) return;
+    getView().inputLocked = this.coopTurn !== this.mySlot;
+  }
+
+  updateCoopHud() {
+    if (!this.engine) return;
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    const mine = this.coopTurn === this.mySlot;
+    $('#hudSub').textContent = this.engine.streak >= 2
+      ? t(`${this.engine.streak} コンボ！`, `${this.engine.streak} COMBO!`)
+      : t('🤝 きょうりょくスコア', '🤝 SHARED SCORE');
+    const label = $('#coopTurnLabel');
+    label.textContent = mine
+      ? t('🎯 あなたの番！', '🎯 Your turn!')
+      : t(`⏳ ${this.partnerName}さんの番…`, `⏳ ${this.partnerName} is thinking…`);
+    label.classList.toggle('mine', mine);
+  }
+
+  tickCoopBar() {
+    if (this.ended) return;
+    const total = this.coopTurnMs || 15000;
+    const elapsed = Date.now() - (this.coopTurnAt || Date.now());
+    const remain = Math.max(0, (this.coopTurnRemain || 0) - elapsed);
+    const fill = $('#coopTurnFill');
+    fill.style.width = `${Math.max(0, Math.min(100, (remain / total) * 100))}%`;
+    fill.classList.toggle('urgent', remain < 4000 && this.coopTurn === this.mySlot);
+  }
+
   onMatchFound(msg) {
     if (this.inMatch || this.ended) return;   // guard against duplicates
     closeModal();                             // clear the bracket between rounds
@@ -2224,6 +2485,7 @@ class OnlineMode extends VersusBase {
     this.you = msg.you;
     this.isTeam = msg.mode === 'team';
     this.isRaid = msg.mode === 'raid';
+    if (msg.mode === 'coop') { this.setupCoop(msg); return; }
 
     const others = msg.players.filter(p => !p.isYou).map(p => ({
       slot: p.slot,
@@ -2418,6 +2680,41 @@ class OnlineMode extends VersusBase {
     }, 20000);
   }
 
+  onCoopResult(msg) {
+    this.ended = true;
+    clearTimeout(this.resultTimeout);
+    clearInterval(this.stateInt);
+    clearInterval(this.coopInt);
+    this.stopTimer();
+    getView().inputLocked = true;
+    $('#coopBar').classList.add('hidden');
+    if (msg.user) { session.user = msg.user; updateTopbar(); }
+    const c = msg.coop;
+    const isBest = c.score >= (c.best || 0) && c.score > 0;
+    const localBest = Number(localStorage.getItem('bba_coop_best') || 0);
+    if (c.score > localBest) localStorage.setItem('bba_coop_best', String(c.score));
+    if (isBest) { audio.victory(); confettiBurst(70); } else audio.gameOver();
+    const mine = msg.players.find(p => p.slot === msg.you.slot);
+    const partner = msg.players.find(p => p.slot !== msg.you.slot);
+    const m = showModal(`
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? t('🤝 新記録！', '🤝 NEW RECORD!') : t('🤝 おつかれさま！', '🤝 GOOD GAME!')}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('きょうりょくスコア', 'Shared score')}</span><b>${fmt(c.score)}</b></div>
+        <div class="rs-row"><span>${t('自己ベスト', 'Personal best')}</span><b>${fmt(Math.max(c.best || 0, localBest, c.score))}</b></div>
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(c.lines)}</b></div>
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(c.combo)}</b></div>
+        <div class="rs-row"><span>${t('置いたピース', 'Pieces placed')}</span><b>${t(`あなた ${mine ? mine.moves : 0} ・ ${partner ? escapeHtml(partner.name) : '?'} ${partner ? partner.moves : 0}`,
+          `You ${mine ? mine.moves : 0} ・ ${partner ? escapeHtml(partner.name) : '?'} ${partner ? partner.moves : 0}`)}</b></div>
+        ${rewardsRows(msg.rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-online" id="rAgain">${t('🤝 もう一度組む', '🤝 Team up again')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline('coop'); };
+  }
+
   onResult(msg) {
     if (this.ended) return;
 
@@ -2441,6 +2738,9 @@ class OnlineMode extends VersusBase {
         <p class="muted center" style="margin-top:8px">${t('🏆 勝ち上がり！次のラウンドを待っています…', '🏆 Advancing! Waiting for the next round…')}</p>`, { dismissable: false });
       return;
     }
+
+    // Co-op: no winner, just a shared score and a shared personal best.
+    if (msg.coop) { this.onCoopResult(msg); return; }
 
     this.ended = true;
     clearTimeout(this.resultTimeout);
@@ -2511,7 +2811,9 @@ class OnlineMode extends VersusBase {
     if (this.inMatch && !this.ended) {
       this.ended = true;
       this.destroy();
-      toast(t('🏳️ 対戦から離脱しました（敗北扱い・相手の不戦勝）', '🏳️ You left the match (counts as a loss)'), 'err', 2600);
+      toast(this.isCoop
+        ? t('🤝 協力プレイから離脱しました（敗北にはなりません）', '🤝 You left the co-op run (no loss recorded)')
+        : t('🏳️ 対戦から離脱しました（敗北扱い・相手の不戦勝）', '🏳️ You left the match (counts as a loss)'), 'err', 2600);
       endToMenu();
     } else {
       this.client.cancelQueue();
@@ -2524,8 +2826,11 @@ class OnlineMode extends VersusBase {
   destroy() {
     this.stopTimer();
     clearInterval(this.stateInt);
+    clearInterval(this.coopInt);
     clearTimeout(this.resultTimeout);
     $('#bossPanel').classList.add('hidden');
+    $('#coopBar').classList.add('hidden');
+    if (view) view.onIntentPlace = null;
     this.client.close();
   }
 }
@@ -2617,7 +2922,7 @@ class SurvivalMode {
     audio.gameOver();
     const rewards = await submitResult({
       mode: 'survival', score: e.score, lines: e.linesCleared,
-      maxCombo: e.maxCombo, duration: survived, won: false,
+      maxCombo: e.maxCombo, duration: survived, won: false, wave: this.wave,
     });
     const m = showModal(`
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : t('生存終了…', 'You were buried…')}</div>
@@ -2640,6 +2945,137 @@ class SurvivalMode {
   destroy() { this.ended = true; clearInterval(this.int); }
 }
 
+// ---------------------------------------------------------------------------
+// ⏱️ Time Attack (sprint): a fixed clock, pure scoring.
+//
+// Boosters and ultimates are OFF here on purpose — this mode has its own
+// leaderboard, and paid consumables would decide it.
+// ---------------------------------------------------------------------------
+
+export const SPRINT_DURATIONS = [60, 180];
+
+function sprintKey(dur) { return `bba_sprint_${dur}`; }
+
+export function sprintBest(dur) {
+  const local = Number(localStorage.getItem(sprintKey(dur)) || 0);
+  const srv = session.user && session.user.stats && session.user.stats.sprint
+    ? Number(session.user.stats.sprint[`s${dur}`] || 0) : 0;
+  return Math.max(local, srv);
+}
+
+class SprintMode {
+  constructor(duration) {
+    this.mode = 'sprint';
+    this.duration = SPRINT_DURATIONS.includes(duration) ? duration : 60;
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    showItemBar(false);            // fair leaderboard: no boosters, no ultimates
+    this.ended = false;
+    this.startedAt = Date.now();
+    const v = getView();
+    v.setTheme(equippedTheme());
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = () => this.onPlace();
+    v.onGameOver = () => this.finish('topout');
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('hard');
+
+    countdownOverlay(3, () => {
+      if (this.ended) return;
+      v.inputLocked = false;
+      this.endAt = Date.now() + this.duration * 1000;
+      this.tickInt = setInterval(() => this.tick(), 200);
+      this.tick();
+    }, audio);
+  }
+
+  tick() {
+    if (this.ended) return;
+    const remain = Math.max(0, this.endAt - Date.now());
+    const s = Math.ceil(remain / 1000);
+    const el = $('#hudTimer');
+    el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    el.classList.toggle('urgent', s <= 10);
+    if (remain <= 0) this.finish('time');
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    const best = sprintBest(this.duration);
+    const rate = Math.round(this.engine.score / Math.max(1, (Date.now() - this.startedAt) / 1000));
+    $('#hudSub').textContent = t(`${this.duration}秒 ・ BEST ${fmt(best)} ・ ${fmt(rate)}/秒`,
+      `${this.duration}s ・ BEST ${fmt(best)} ・ ${fmt(rate)}/s`);
+  }
+
+  onPlace() { this.updateHud(); }
+
+  async finish(reason) {
+    if (this.ended) return;
+    this.ended = true;
+    clearInterval(this.tickInt);
+    getView().inputLocked = true;
+    $('#hudTimer').classList.add('hidden');
+    const e = this.engine;
+    const prevBest = sprintBest(this.duration);
+    const isBest = e.score > prevBest;
+    if (isBest) localStorage.setItem(sprintKey(this.duration), String(e.score));
+    if (isBest && e.score > 0) { confettiBurst(60); audio.victory(); }
+    else audio.gameOver();
+
+    const rewards = await submitResult({
+      mode: 'sprint', score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
+      duration: Math.max(1, (Date.now() - this.startedAt) / 1000), won: false,
+      sprintDur: this.duration,
+    });
+    const banner = isBest ? 'NEW RECORD!' : reason === 'topout' ? t('盤面が埋まった…', 'Board filled up…') : 'TIME UP!';
+    const m = showModal(`
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${banner}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        <div class="rs-row"><span>${t('自己ベスト', 'Personal best')}</span><b>${fmt(Math.max(prevBest, e.score))}</b></div>
+        <div class="rs-row"><span>${t('毎秒スコア', 'Score per second')}</span><b>${fmt(Math.round(e.score / this.duration))}</b></div>
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-ghost" id="rRank">${t('🏆 順位', '🏆 Ranking')}</button>
+        <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rRank').onclick = () => {
+      closeModal();
+      endToMenu();
+      if (window.__bbaOpenLeaderboard) window.__bbaOpenLeaderboard('sprint');
+    };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startSprint(this.duration); };
+  }
+
+  quit() { this.finish('quit'); }
+  destroy() { this.ended = true; clearInterval(this.tickInt); $('#hudTimer').classList.add('hidden'); }
+}
+
+export function startSprint(duration = 60) {
+  if (currentMode) currentMode.destroy();
+  currentMode = new SprintMode(duration);
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
 export function startSurvival() {
   if (currentMode) currentMode.destroy();
   currentMode = new SurvivalMode();
@@ -2653,6 +3089,8 @@ export function startSurvival() {
 
 function endToMenu() {
   if (currentMode) { currentMode.destroy(); currentMode = null; }
+  // Only co-op installs this; make sure it never leaks into the next mode.
+  if (view) view.onIntentPlace = null;
   if (view) view.stop();
   stopAutopilot();
   const picker = document.querySelector('.emote-picker');

@@ -30,14 +30,28 @@ export const SHOP_ITEMS = [
   { id: 'fx_bubble',     cat: 'fx', name: 'バブル',             desc: 'シャボン玉がはじける',   price: 1800, currency: 'coins' },
   { id: 'fx_star',       cat: 'fx', name: 'スターダスト',       desc: '星屑がきらめき散る',     price: 220,  currency: 'gems' },
   { id: 'fx_flame',      cat: 'fx', name: 'フレイム',           desc: '炎が燃え上がる消去エフェクト', price: 2400, currency: 'coins' },
+  // ---- Ultimate skills (装備スロット: ult) ----
+  // ゲージが満タンになると発動できる必殺技。1つだけ装備できる。
+  { id: 'ult_blast',     cat: 'ult', icon: '💥', name: '破壊の衝撃波',   desc: 'いちばん埋まった2行2列を強制消去', price: 0,    currency: 'coins', default: true },
+  { id: 'ult_purify',    cat: 'ult', icon: '🌊', name: '浄化の波動',     desc: 'お邪魔ブロック全消し＋下2行を消去', price: 2500, currency: 'coins' },
+  { id: 'ult_overdrive', cat: 'ult', icon: '🔥', name: 'オーバードライブ', desc: '15秒間スコア3倍！',              price: 3500, currency: 'coins' },
+  { id: 'ult_meteor',    cat: 'ult', icon: '☄️', name: 'メテオストライク', desc: 'ランダムな14マスを大爆発で粉砕',  price: 4200, currency: 'coins' },
+  { id: 'ult_rainbow',   cat: 'ult', icon: '🌈', name: 'レインボーハンド', desc: '手持ちが必ず置ける最適ピースに変化', price: 150, currency: 'gems' },
+  { id: 'ult_fortress',  cat: 'ult', icon: '🛡️', name: '不落の城塞',     desc: '30秒間コンボが途切れず妨害も無効',   price: 200, currency: 'gems' },
+  { id: 'ult_timestop',  cat: 'ult', icon: '⏳', name: '時間停止',        desc: '制限時間+12秒／ボスの攻撃を20秒封印', price: 260, currency: 'gems' },
+  { id: 'ult_judgement', cat: 'ult', icon: '⚡', name: '神の裁き',        desc: '盤面を完全消滅させ超特大スコア',     price: 400, currency: 'gems' },
   // ---- Admin-exclusive gear (adminOnly: hidden from everyone else, unbuyable) ----
   { id: 'skin_admin',    cat: 'skin',  name: 'レインボー【管理者】', desc: '虹色に輝く運営専用ブロック', price: 0, currency: 'coins', adminOnly: true },
   { id: 'board_admin',   cat: 'board', name: '王の間【管理者】',     desc: '黄金に輝く運営専用ステージ', price: 0, currency: 'coins', adminOnly: true },
   { id: 'fx_admin',      cat: 'fx',    name: '虹の祝福【管理者】',   desc: '虹の粒子が舞う運営専用エフェクト', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'ult_admin',     cat: 'ult',   icon: '👑', name: '全能【管理者】', desc: '盤面消滅＋ゲージ即再充填の運営専用奥義', price: 0, currency: 'coins', adminOnly: true },
 ];
 
+// 装備スロット一覧（/api/equip が受け付けるスロット）
+export const EQUIP_SLOTS = ['skin', 'board', 'fx', 'ult'];
+
 export const DEFAULT_OWNED = SHOP_ITEMS.filter(i => i.default).map(i => i.id);
-export const DEFAULT_EQUIPPED = { skin: 'skin_default', board: 'board_default', fx: 'fx_default' };
+export const DEFAULT_EQUIPPED = { skin: 'skin_default', board: 'board_default', fx: 'fx_default', ult: 'ult_blast' };
 
 // ---- Booster items (consumables) — usable in solo / boss / dungeon / chaos ----
 export const BOOST_ITEMS = [
@@ -92,6 +106,19 @@ export const TITLES = [
   { id: 'pvp50',    name: '百戦錬磨',           color: '#ff5d5d', desc: 'オンライン対戦で50勝' },
   { id: 'explorer', name: '塔の探検家',         color: '#ffa93d', desc: 'ダンジョン塔F50到達' },
   { id: 'towerlord',name: '百塔の覇者',         color: '#ffd75e', desc: 'ダンジョン塔100F制覇' },
+  { id: 'ultimate', name: '極意の継承者',     color: '#43d9e8', desc: 'アルティメットを100回発動' },
+  { id: 'ultgod',   name: '奥義を極めし者',   color: '#b06bff', desc: 'アルティメットを500回発動' },
+  { id: 'missionman', name: '任務遂行者',     color: '#5ee86e', desc: 'ミッションを50個クリア' },
+  { id: 'missiongod', name: 'ミッションの鬼', color: '#ff6bd4', desc: 'ミッションを300個クリア' },
+  { id: 'achiever', name: 'トロフィーハンター', color: '#ffa93d', desc: '実績を20個解除' },
+  { id: 'completionist', name: '完全主義者',  color: '#fff3b0', desc: '実績を40個解除' },
+  { id: 'loyal7',   name: '皆勤賞',           color: '#43d9e8', desc: '7日連続ログイン' },
+  { id: 'loyal30',  name: '不動の常連',       color: '#ffd75e', desc: '30日連続ログイン' },
+  { id: 'survivor', name: '生存本能',         color: '#c22f3d', desc: 'サバイバルでウェーブ20到達' },
+  { id: 'millionaire', name: '億万長者',      color: '#ffd75e', desc: '累計スコア1,000,000達成' },
+  { id: 'sprinter', name: '疾風のブロッカー', color: '#ffa93d', desc: 'タイムアタック60秒で20,000点' },
+  { id: 'buddy',    name: '名コンビ',         color: '#5ee86e', desc: '協力プレイを10回遊ぶ' },
+  { id: 'soulmate', name: '以心伝心',         color: '#ff6bd4', desc: '協力プレイで20,000点' },
 ];
 
 export function earnedTitles(user) {
@@ -124,6 +151,19 @@ export function earnedTitles(user) {
   if (s.pvpWins >= 50) out.push('pvp50');
   if ((s.dungeonMax || 0) >= 50) out.push('explorer');
   if (has('dungeon')) out.push('towerlord');
+  if ((s.ultsUsed || 0) >= 100) out.push('ultimate');
+  if ((s.ultsUsed || 0) >= 500) out.push('ultgod');
+  if ((s.missionsDone || 0) >= 50) out.push('missionman');
+  if ((s.missionsDone || 0) >= 300) out.push('missiongod');
+  if ((user.achievements || []).length >= 20) out.push('achiever');
+  if ((user.achievements || []).length >= 40) out.push('completionist');
+  if ((s.loginStreakBest || 0) >= 7) out.push('loyal7');
+  if ((s.loginStreakBest || 0) >= 30) out.push('loyal30');
+  if ((s.survivalWave || 0) >= 20) out.push('survivor');
+  if ((s.totalScore || 0) >= 1000000) out.push('millionaire');
+  if (((s.sprint && s.sprint.s60) || 0) >= 20000) out.push('sprinter');
+  if ((s.coopPlays || 0) >= 10) out.push('buddy');
+  if ((s.coopBest || 0) >= 20000) out.push('soulmate');
   return out;
 }
 

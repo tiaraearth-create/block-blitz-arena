@@ -1,13 +1,13 @@
 // App bootstrap: wire menu, session restore, global buttons.
 import { session, api, refreshMe, setToken } from './net.js';
-import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt } from './dom.js';
+import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, staffExtras } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem, DUNGEON_REALMS } from './modes.js';
-import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha } from './screens.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, toggleAutopilot, showAdminPalette, useGameItem, fireUltCurrent, DUNGEON_REALMS } from './modes.js';
+import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
-import { initChat } from './chat.js';
+import { initChat, showFeedModal, setMood } from './chat.js';
 import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
 
 applyStaticI18n();
@@ -156,6 +156,7 @@ $('#btnOnline').onclick = () => {
       <button class="btn btn-gold btn-big" data-online="tourney">${t('🏆 トーナメント（8人制）', '🏆 Tournament (8 players)')}</button>
       <button class="btn btn-oni btn-big" data-online="royale">${t('💯 バトルロイヤル（100人）', '💯 Battle Royale (100 players)')}</button>
       <button class="btn btn-boss btn-big" data-online="raid">${t('🐲 レイドボス戦（協力）', '🐲 Raid Boss (co-op)')}</button>
+      <button class="btn btn-coop btn-big" data-online="coop">${t('🤝 協力プレイ（2人で1盤面）', '🤝 Co-op (2 players, 1 board)')}</button>
       <button class="btn btn-online btn-big" data-online="custom">${t('🔧 カスタムルーム', '🔧 Custom Room')}</button>
     </div>`);
   m.querySelectorAll('[data-online]').forEach(btn => {
@@ -164,6 +165,7 @@ $('#btnOnline').onclick = () => {
 };
 $('#btnCancelQueue').onclick = () => { audio.click(); cancelMatchmaking(); };
 
+$('#btnMissions').onclick = () => { audio.click(); openMissions(); };
 $('#btnLeaderboard').onclick = () => { audio.click(); openLeaderboard(); };
 $('#btnShop').onclick = () => { audio.click(); openShop(); };
 $('#btnGemShop').onclick = () => { audio.click(); showGemShop(); };
@@ -176,6 +178,7 @@ document.querySelector('.gem-chip').onclick = () => { audio.click(); showGemShop
 // tabs
 $$('[data-lb]').forEach(t => { t.onclick = () => openLeaderboard(t.dataset.lb); });
 $$('[data-shop]').forEach(t => { t.onclick = () => openShop(t.dataset.shop); });
+$$('[data-ms]').forEach(t => { t.onclick = () => { audio.click(); openMissions(t.dataset.ms); }; });
 
 // back buttons
 $$('[data-back]').forEach(b => { b.onclick = () => { audio.click(); showScreen('menu'); }; });
@@ -202,6 +205,17 @@ applySettings();
 
 // reroll power-up
 $('#btnReroll').onclick = () => rerollCurrent();
+
+// ultimate skill: HUD button + spacebar
+$('#btnUlt').onclick = () => fireUltCurrent();
+window.addEventListener('keydown', e => {
+  if (e.code !== 'Space' && e.key !== 'q') return;
+  if (document.body.dataset.screen !== 'game') return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea') return;
+  e.preventDefault();
+  fireUltCurrent();
+});
 
 // autopilot + command palette (admin only)
 $('#btnAuto').onclick = () => toggleAutopilot();
@@ -297,15 +311,21 @@ function updateEventBanner() {
   const btn = $('#btnChaos');
   const ev = window.__bbaEvent;
   if (ev && ev.endsAt > Date.now()) {
-    banner.textContent = t(`🌪️ 期間限定「${ev.name}」開催中！ — 残り${fmtRemain(ev.endsAt - Date.now())}`,
-      `🌪️ Limited event "${ev.name}" is live! — ${fmtRemain(ev.endsAt - Date.now())} left`);
+    const icon = ev.icon || '🌪️';
+    banner.textContent = t(`${icon} 期間限定「${ev.name}」開催中！ — 残り${fmtRemain(ev.endsAt - Date.now())}`,
+      `${icon} Limited event "${ev.name}" is live! — ${fmtRemain(ev.endsAt - Date.now())} left`);
     banner.classList.remove('hidden');
-    btn.classList.remove('hidden');
+    // Only the chaos event opens the chaos button for everyone.
+    const chaosLive = ev.type === 'chaos';
+    btn.classList.toggle('hidden', !chaosLive && !staffExtras());
+    btn.classList.toggle('staff-only', !chaosLive);
   } else {
     if (ev) window.__bbaEvent = null;   // expired locally — hide until next poll
     banner.classList.add('hidden');
-    // Admins can play Chaos any time, event or not.
-    btn.classList.toggle('hidden', !isAdminUser());
+    // Outside an event only staff can reach chaos, and it is badged as such
+    // so it never looks like a live event that refuses to end.
+    btn.classList.toggle('hidden', !staffExtras());
+    btn.classList.toggle('staff-only', true);
   }
 }
 
@@ -317,13 +337,32 @@ async function pollStatus() {
     $('#onlineCount').textContent = data.online;
     $('#chatOnline').textContent = t(`🟢 ${data.online}人`, `🟢 ${data.online} online`);
     $('#onlineBadge').classList.remove('hidden');
+    setMood(data.mood);
     window.__bbaEvent = data.event || null;
     updateEventBanner();
+    const prevPoll = window.__bbaPoll && window.__bbaPoll.id;
+    window.__bbaPoll = data.poll || null;
+    if (!data.poll || prevPoll !== data.poll.id) refreshPollBanner();
+    else updatePollBannerClock();
   } catch { /* server unreachable — keep hidden */ }
 }
+
+// Keep the poll countdown ticking between status polls.
+function updatePollBannerClock() {
+  const el = $('#pollBanner');
+  const p = window.__bbaPoll;
+  if (!el || !p) return;
+  if (p.endsAt <= Date.now()) { window.__bbaPoll = null; el.classList.add('hidden'); return; }
+  const small = el.querySelector('small');
+  if (small) small.textContent = `(${t(`残り${fmtRemain(p.endsAt - Date.now())}`, `${fmtRemain(p.endsAt - Date.now())} left`)})`;
+}
+
+$('#pollBanner').onclick = () => openPoll();
+$('#liveFeed').onclick = () => showFeedModal();
 pollStatus();
 setInterval(pollStatus, 30000);
 setInterval(updateEventBanner, 1000);   // live countdown between polls
+setInterval(updatePollBannerClock, 1000);
 
 // ---- chaos setup: pick duration (presets or free min/sec) + mutation interval ----
 function showChaosSetup() {
@@ -389,7 +428,8 @@ function showChaosSetup() {
 }
 
 $('#btnChaos').onclick = () => {
-  if (!window.__bbaEvent && !isAdminUser()) { toast(t('イベントは開催されていません', 'No event is live right now'), 'err'); return; }
+  const chaosLive = window.__bbaEvent && window.__bbaEvent.type === 'chaos';
+  if (!chaosLive && !staffExtras()) { toast(t('カオスモードはイベント開催中のみ遊べます', 'Chaos Mode is only playable during a chaos event'), 'err'); return; }
   audio.click();
   showChaosSetup();
 };
@@ -445,6 +485,35 @@ $('#btnDungeon').onclick = () => { audio.click(); showDungeonSelect(); };
 // ---- survival ----
 $('#btnSurvival').onclick = () => { audio.click(); startSurvival(); };
 
+// ---- time attack ----
+$('#btnSprint').onclick = () => {
+  audio.click();
+  const m = showModal(`
+    <h2>${t('⏱️ タイムアタック', '⏱️ Time Attack')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('制限時間内にどれだけ稼げる？<br><small>専用ランキングあり。公平性のためアイテム・アルティメットは使えません</small>',
+          'How much can you score against the clock?<br><small>Has its own ranking — items and ultimates are disabled for fairness</small>')}
+    </p>
+    <div class="form-col">
+      ${SPRINT_DURATIONS.map(d => {
+        const best = sprintBest(d);
+        return `<button class="btn btn-sprint btn-big" data-sp="${d}">
+          ${d < 60 ? `${d}${t('秒', 's')}` : `${d / 60}${t('分', ' min')}`} ${t('スプリント', 'Sprint')}
+          <small style="display:block;font-size:12px;opacity:.85;font-weight:700">${best ? t(`自己ベスト ${fmt(best)}`, `Best ${fmt(best)}`) : t('記録なし', 'No record yet')}</small>
+        </button>`;
+      }).join('')}
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="spCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-ghost" id="spRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
+    </div>`);
+  m.querySelector('#spCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#spRank').onclick = () => { audio.click(); closeModal(); openLeaderboard('sprint'); };
+  m.querySelectorAll('[data-sp]').forEach(b => {
+    b.onclick = () => { audio.click(); closeModal(); startSprint(Number(b.dataset.sp)); };
+  });
+};
+
 // ---- weekly challenge ----
 window.__bbaOpenLeaderboard = openLeaderboard;
 
@@ -499,6 +568,10 @@ $$('#itemBar [data-item]').forEach(b => {
 bindAdminActions();
 loadTitles();
 
+// Menu badge for unclaimed mission / achievement rewards.
+window.__bbaRefreshMissionDot = refreshMissionDot;
+setInterval(() => { if (session.user) refreshMissionDot(); }, 120000);
+
 // ---- Stripe checkout return ----
 if (location.search.includes('purchase=success')) {
   history.replaceState(null, '', '/');
@@ -525,9 +598,15 @@ initChat();
       try {
         const data = await refreshMe();
         updateTopbar();
+        refreshMissionDot();
+        // The first status poll usually lands before the session is restored,
+        // so the banner still says "not voted" — re-check now that we know who
+        // is logged in.
+        refreshPollBanner();
         if (data.dailyBonus) {
-          toast(t(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`,
-            `🎁 Daily bonus +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎`), 'ok', 3500);
+          const st = data.dailyBonus.streak || 1;
+          toast(t(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? `（🔥${st}日連続！）` : ''}`,
+            `🎁 Daily bonus +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? ` (🔥${st}-day streak!)` : ''}`), 'ok', 3500);
           audio.coin();
         }
         break;

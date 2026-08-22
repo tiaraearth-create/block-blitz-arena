@@ -78,13 +78,38 @@ export class Engine {
     this.rerolls = 1;         // hand rerolls left this game
     this.infiniteReroll = false; // chaos-event: rerolls cost nothing while active
     this.scoreMult = 1;       // chaos-event score multiplier
-    this.feverUntil = 0;      // booster: timestamp until which score is doubled
+    this.feverUntil = 0;      // booster: timestamp until which score is multiplied
+    this.feverMult = 2;       // 2 for the fever item, 3 for the overdrive ultimate
     this.chaosBig = false;    // chaos-event: draw only big pieces
     this.chaosMini = false;   // chaos-event: draw only tiny pieces
     this.streakShield = false; // chaos-event: combo never breaks
+    this.ult = 0;             // ultimate gauge, 0..100 (100 = ready)
+    this.ultRate = 1;         // ⚡奥義祭 event: charge multiplier
+    this.ultUses = 0;         // ultimates fired this game (reported to the server)
+    this.fortressUntil = 0;   // ult_fortress: combo shield + garbage immunity
     this.over = false;
     this.refillHand();
   }
+
+  // ---- Ultimate gauge ----------------------------------------------------
+  // Fills from clears (and slowly from raw placements) so every mode can
+  // reach it, but big combos get there dramatically faster.
+  chargeUlt(n) {
+    this.ult = Math.max(0, Math.min(100, this.ult + n * (this.ultRate || 1)));
+    return this.ult;
+  }
+
+  get ultReady() { return this.ult >= 100; }
+
+  // Spend a full gauge. Returns false when it isn't charged yet.
+  consumeUlt() {
+    if (this.ult < 100) return false;
+    this.ult = 0;
+    this.ultUses++;
+    return true;
+  }
+
+  fortressActive() { return this.fortressUntil > Date.now(); }
 
   // Replace the whole hand with fresh pieces (once per game power-up).
   reroll() {
@@ -200,11 +225,13 @@ export class Engine {
       gained += Math.round(lineCount * lineCount * 100 * comboMult);
       this.linesCleared += lineCount;
       if (this.streak > this.maxCombo) this.maxCombo = this.streak;
-    } else if (!this.streakShield) {
+      this.chargeUlt(lineCount * 13 + (this.streak - 1) * 4);
+    } else if (!this.streakShield && !this.fortressActive()) {
       this.streak = 0;
     }
+    this.chargeUlt(1.2);   // slow trickle so quiet boards still build toward it
     if (this.scoreMult !== 1) gained = Math.round(gained * this.scoreMult);
-    if (this.feverUntil && Date.now() < this.feverUntil) gained *= 2;
+    if (this.feverUntil && Date.now() < this.feverUntil) gained = Math.round(gained * (this.feverMult || 2));
     this.score += gained;
 
     this.refillHand();
@@ -220,6 +247,7 @@ export class Engine {
 
   // Fill n random empty cells with garbage (boss attacks). Returns the cells.
   addGarbage(n) {
+    if (this.fortressActive()) return [];   // ult_fortress: interference is void
     const empties = [];
     for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {
       if (this.grid[r * SIZE + c] === 0) empties.push([r, c]);

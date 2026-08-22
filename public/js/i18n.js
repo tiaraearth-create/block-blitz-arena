@@ -58,6 +58,16 @@ const CATALOG_EN = {
   item_cleaner: { name: 'Cleaner', desc: 'Clears all garbage + the bottom row' },
   item_fever: { name: 'Fever', desc: '2× score for 15 seconds' },
   item_mini: { name: 'Mini Blocks', desc: 'Turns your hand into tiny pieces' },
+  // ultimate skills
+  ult_blast: { name: 'Destruction Shockwave', desc: 'Force-clears the two fullest rows and columns' },
+  ult_purify: { name: 'Purifying Wave', desc: 'Erases all garbage + the bottom two rows' },
+  ult_overdrive: { name: 'Overdrive', desc: 'Triple score for 15 seconds' },
+  ult_meteor: { name: 'Meteor Strike', desc: 'Obliterates 14 random cells' },
+  ult_rainbow: { name: 'Rainbow Hand', desc: 'Your hand becomes the best-fitting pieces' },
+  ult_fortress: { name: 'Impregnable Fortress', desc: '30s of combo shield and garbage immunity' },
+  ult_timestop: { name: 'Time Stop', desc: '+12s on the clock / freezes bosses for 20s' },
+  ult_judgement: { name: 'Divine Judgement', desc: 'Annihilates the board for a colossal score' },
+  ult_admin: { name: 'Omnipotence [Staff]', desc: 'Staff-only: board wipe + instant gauge refill' },
   // admin-exclusive gear
   skin_admin: { name: 'Rainbow [Staff]', desc: 'Staff-only blocks shimmering in rainbow' },
   board_admin: { name: 'Throne Room [Staff]', desc: 'A staff-only stage of royal gold' },
@@ -97,6 +107,19 @@ const CATALOG_EN = {
   pvp50: { name: 'Hundred Battles', desc: 'Win 50 online battles' },
   explorer: { name: 'Tower Explorer', desc: 'Reach F50 in the Dungeon Tower' },
   towerlord: { name: 'Lord of 100 Floors', desc: 'Conquer all 100 tower floors' },
+  ultimate: { name: 'Heir of Mastery', desc: 'Use 100 ultimate skills' },
+  ultgod: { name: 'Grand Master of Arts', desc: 'Use 500 ultimate skills' },
+  missionman: { name: 'Mission Runner', desc: 'Complete 50 missions' },
+  missiongod: { name: 'Mission Demon', desc: 'Complete 300 missions' },
+  achiever: { name: 'Trophy Hunter', desc: 'Unlock 20 achievements' },
+  completionist: { name: 'Completionist', desc: 'Unlock 40 achievements' },
+  loyal7: { name: 'Perfect Attendance', desc: 'Log in 7 days in a row' },
+  loyal30: { name: 'Immovable Regular', desc: 'Log in 30 days in a row' },
+  survivor: { name: 'Survival Instinct', desc: 'Reach wave 20 in Survival' },
+  millionaire: { name: 'Millionaire', desc: 'Reach 1,000,000 total score' },
+  sprinter: { name: 'Gale-Force Blocker', desc: 'Score 20,000 in a 60s Time Attack' },
+  buddy: { name: 'Great Duo', desc: 'Play 10 co-op runs' },
+  soulmate: { name: 'In Perfect Sync', desc: 'Reach 20,000 in co-op' },
 };
 
 // Name/description for a catalog object ({id, name, desc}) in the UI language.
@@ -114,6 +137,18 @@ export function catDesc(obj) {
 // ---------------------------------------------------------------------------
 
 const SERVER_MSG_EN = {
+  '投票は開催されていません': 'No poll is running',
+  'この投票は終了しています': 'This poll has closed',
+  '選択肢が見つかりません': 'That option no longer exists',
+  'すでにその選択肢に投票済みです': 'You already voted for that option',
+  '選択肢は2つ以上必要です': 'A poll needs at least 2 options',
+  '質問を入力してください': 'Enter a question',
+  'ミッションが見つかりません': 'Mission not found',
+  'まだ達成していません': 'Not completed yet',
+  'すでに受け取り済みです': 'Already claimed',
+  'まだ全て達成していません': 'Not every mission is claimed yet',
+  '受け取れる実績がありません': 'No achievements ready to claim',
+  'まだ達成していないか、受け取り済みです': 'Not unlocked yet, or already claimed',
   'サーバーに接続できません': 'Cannot reach the server',
   'ログインが必要です': 'Please log in first',
   'このアカウントは凍結されています': 'This account is suspended',
@@ -184,6 +219,7 @@ export function applyStaticI18n() {
   set('#btnVsAi', '🤖 VS AI');
   set('#btnBoss', '🐲 Boss Battle');
   set('#btnDungeon', '🏰 Dungeon');
+  set('#btnSprint', '⏱️ Time Attack');
   set('#btnWeekly', '🎯 Weekly');
   set('#btnSurvival', '💀 Survival');
   set('#btnChaos', '🌪️ Chaos Mode');
@@ -192,6 +228,7 @@ export function applyStaticI18n() {
   // in-game HUD tooltips
   const tips = {
     '#btnReroll': 'Redraw your pieces (once per game)',
+    '#btnUlt': 'Ultimate: fire it once the gauge is full!',
     '#btnEmote': 'Send an emote',
     '[data-item="item_bomb"]': 'Smart Bomb: blows up the densest 3×3',
     '[data-item="item_cleaner"]': 'Cleaner: clears garbage + the bottom row',
@@ -204,30 +241,39 @@ export function applyStaticI18n() {
   }
 
   // nav (each is <span>icon</span> + text node)
-  const nav = { btnLeaderboard: 'Ranking', btnShop: 'Shop', btnGacha: 'Gacha', btnGemShop: 'Gems', btnBattlePass: 'Pass', btnAdmin: 'Admin' };
+  const nav = { btnMissions: 'Missions', btnLeaderboard: 'Ranking', btnShop: 'Shop', btnGacha: 'Gacha', btnGemShop: 'Gems', btnBattlePass: 'Pass', btnAdmin: 'Admin' };
   for (const [id, label] of Object.entries(nav)) {
     const el = document.getElementById(id);
-    if (el) el.innerHTML = `${el.querySelector('span') ? el.querySelector('span').outerHTML : ''}${label}`;
+    if (!el) continue;
+    const icon = el.querySelector('span') ? el.querySelector('span').outerHTML : '';
+    const dot = el.querySelector('.nav-dot') ? el.querySelector('.nav-dot').outerHTML : '';
+    el.innerHTML = `${icon}${label}${dot}`;
   }
 
   // online badge (keep the counter element)
   const badge = document.getElementById('onlineBadge');
   if (badge) {
     const n = document.getElementById('onlineCount')?.textContent || '0';
-    badge.innerHTML = `🟢 Online: <b id="onlineCount">${n}</b>`;
+    badge.innerHTML = `🟢 Online: <b id="onlineCount">${n}</b><span id="moodTag" class="mood-tag"></span>`;
   }
 
   // sub-screen headers + tabs
   set('#screen-leaderboard .sub-header h2', '🏆 Ranking');
   set('[data-lb="score"]', 'High Score');
   set('[data-lb="rating"]', 'Rating');
+  set('[data-lb="sprint"]', '⏱️Time Attack');
   set('[data-lb="dungeon"]', 'Dungeon');
   set('[data-lb="weekly"]', 'Weekly');
   set('#screen-shop .sub-header h2', '🛍️ Shop');
   set('[data-shop="skin"]', 'Blocks');
   set('[data-shop="board"]', 'Boards');
   set('[data-shop="fx"]', 'Effects');
+  set('[data-shop="ult"]', '⚡Ultimates');
   set('[data-shop="item"]', 'Items');
+  set('#screen-missions .sub-header h2', '📋 Missions');
+  set('[data-ms="daily"]', 'Daily');
+  set('[data-ms="weekly"]', 'Weekly');
+  set('[data-ms="ach"]', '🏅 Achievements');
   set('#screen-battlepass .sub-header h2', '🎫 Battle Pass');
   set('#screen-room .sub-header h2', '🔧 Custom Room');
 

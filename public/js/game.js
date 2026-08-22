@@ -28,6 +28,7 @@ export class GameView {
     this.drag = null;               // {index, piece, px, py}
     this.inputLocked = false;
     this.onPlace = null;            // callback(result)
+    this.onIntentPlace = null;      // callback(index,row,col) -> true to take over the move
     this.onGameOver = null;
     this.onIllegal = null;
 
@@ -137,6 +138,9 @@ export class GameView {
       const { index } = this.drag;
       this.drag = null;
       if (anchor && this.engine.canPlace(this.engine.hand[index], anchor.r, anchor.c)) {
+        // Co-op runs on a server-authoritative board: the hook forwards the
+        // move and returns true, and the real placement arrives as a broadcast.
+        if (this.onIntentPlace && this.onIntentPlace(index, anchor.r, anchor.c)) return;
         const result = this.engine.place(index, anchor.r, anchor.c);
         if (result) this.applyResult(result);
       } else {

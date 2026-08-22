@@ -3,3 +3,4 @@ server/data/*.json
 server/data/*.txt
 .DS_Store
 *.log
+server/data/snapshots/

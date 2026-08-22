@@ -1,7 +1,17 @@
 # Render Blueprint — deploy with "New +" → "Blueprint" on render.com
-# Free plan note: the free tier has no persistent disk, so server/data
-# (accounts / scores) resets on each deploy or restart. For permanent data,
-# switch plan to "starter" and uncomment the disk section below.
+#
+# ⚠️ DATA PERSISTENCE ⚠️
+# The FREE plan has NO persistent disk: server/data (accounts, scores, gems)
+# is wiped on every deploy AND whenever the instance restarts.
+#
+#   Free plan  → before each deploy: 管理者パネル → 💾 バックアップDL
+#                after the deploy:   管理者パネル → ♻️ データ復元（マージ）
+#   Paid disk  → switch `plan` to `starter` and uncomment the disk block below.
+#                Data then survives deploys with nothing to do by hand.
+#
+# The uncommented free setup below is safe to run as long as you keep taking
+# backups; the restore flow merges, so players who signed up after a wipe are
+# never thrown away.
 services:
   - type: web
     name: block-blitz-arena
@@ -10,6 +20,8 @@ services:
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /api/status
+    # --- permanent data (requires the paid "starter" plan) ---
+    # plan: starter
     # disk:
     #   name: game-data
     #   mountPath: /opt/render/project/src/server/data

@@ -59,12 +59,14 @@
           <button class="btn btn-ai btn-big" id="btnVsAi">🤖 AI対戦</button>
           <button class="btn btn-boss btn-big" id="btnBoss">🐲 ボス戦</button>
           <button class="btn btn-dungeon btn-big" id="btnDungeon">🏰 ダンジョン</button>
+          <button class="btn btn-sprint btn-big" id="btnSprint">⏱️ タイムアタック</button>
           <button class="btn btn-weekly btn-big" id="btnWeekly">🎯 ウィークリー</button>
           <button class="btn btn-oni btn-big" id="btnSurvival">💀 サバイバル</button>
           <button class="btn btn-chaos btn-big hidden" id="btnChaos">🌪️ カオスモード</button>
           <button class="btn btn-online btn-big" id="btnOnline">🌐 オンライン対戦</button>
         </div>
         <nav class="menu-nav">
+          <button class="nav-btn" id="btnMissions"><span>📋</span>ミッション<i id="missionDot" class="nav-dot hidden"></i></button>
           <button class="nav-btn" id="btnLeaderboard"><span>🏆</span>ランキング</button>
           <button class="nav-btn" id="btnShop"><span>🛍️</span>ショップ</button>
           <button class="nav-btn" id="btnGacha"><span>🎰</span>ガチャ</button>
@@ -73,8 +75,10 @@
           <button class="nav-btn hidden" id="btnAdmin"><span>🛡️</span>管理</button>
         </nav>
         <div id="eventBanner" class="event-banner hidden"></div>
+        <button id="pollBanner" class="poll-banner hidden"></button>
         <div id="seasonBanner" class="season-banner hidden"></div>
-        <div id="onlineBadge" class="online-badge hidden">🟢 オンライン: <b id="onlineCount">0</b>人</div>
+        <div id="onlineBadge" class="online-badge hidden">🟢 オンライン: <b id="onlineCount">0</b>人<span id="moodTag" class="mood-tag"></span></div>
+        <button id="liveFeed" class="live-feed hidden" title="ライブフィード"><span class="lf-dot"></span><span id="liveFeedText">📡</span></button>
       </div>
     </section>
 
@@ -84,6 +88,9 @@
         <div class="hud-left">
           <button id="btnQuit" class="chip icon-btn">✕</button>
           <button id="btnReroll" class="chip icon-btn" title="ピースを引き直す（1ゲーム1回）">🔄<b id="rerollLeft">1</b></button>
+          <button id="btnUlt" class="chip icon-btn ult-btn hidden" title="アルティメット：ゲージ満タンで発動！">
+            <span class="ult-ring"></span><span id="ultIcon" class="ult-icon">💥</span><b id="ultPct">0</b>
+          </button>
           <button id="btnAuto" class="chip icon-btn hidden" title="オートパイロット（管理者専用）">🤖<b id="autoState">OFF</b></button>
           <button id="btnAdminCmd" class="chip icon-btn hidden" title="管理者コマンド">🛡️</button>
           <button id="btnEmote" class="chip icon-btn hidden" title="エモートを送る">😊</button>
@@ -100,6 +107,10 @@
         <button class="chip icon-btn" data-item="item_cleaner" title="クリーナー：お邪魔＋最下行を掃除">🧹<b>0</b></button>
         <button class="chip icon-btn" data-item="item_fever" title="フィーバー：15秒間スコア2倍">⭐<b>0</b></button>
         <button class="chip icon-btn" data-item="item_mini" title="ミニブロック：手持ちが極小ピースに変化">🧩<b>0</b></button>
+      </div>
+      <div id="coopBar" class="coop-bar hidden">
+        <div id="coopTurnLabel" class="coop-turn-label">🤝</div>
+        <div class="coop-turnbar"><div id="coopTurnFill"></div></div>
       </div>
       <div id="oppPanel" class="opp-panel hidden">
         <div class="vs-bar"><div id="vsBarMe"></div><div id="vsBarOpp"></div></div>
@@ -126,6 +137,7 @@
         <div class="mm-spinner"><span></span><span></span><span></span><span></span></div>
         <h2 id="mmStatus">対戦相手を探しています…</h2>
         <p id="mmSub" class="muted">オンライン: <span id="mmOnline">-</span>人</p>
+        <p id="mmQueue" class="muted mm-queue"></p>
         <button class="btn btn-ghost" id="btnCancelQueue">キャンセル</button>
       </div>
     </section>
@@ -164,6 +176,7 @@
       <div class="tabs">
         <button class="tab active" data-lb="score">ハイスコア</button>
         <button class="tab" data-lb="rating">レート</button>
+        <button class="tab" data-lb="sprint">⏱️タイムアタック</button>
         <button class="tab" data-lb="dungeon">ダンジョン</button>
         <button class="tab" data-lb="weekly">ウィークリー</button>
       </div>
@@ -180,9 +193,24 @@
         <button class="tab active" data-shop="skin">ブロック</button>
         <button class="tab" data-shop="board">ボード</button>
         <button class="tab" data-shop="fx">エフェクト</button>
+        <button class="tab" data-shop="ult">⚡奥義</button>
         <button class="tab" data-shop="item">アイテム</button>
       </div>
       <div id="shopGrid" class="shop-grid"></div>
+    </section>
+
+    <!-- ===================== Missions / achievements ===================== -->
+    <section id="screen-missions" class="screen sub-screen hidden">
+      <div class="sub-header">
+        <button class="chip icon-btn back-btn" data-back>←</button>
+        <h2>📋 ミッション</h2>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-ms="daily">デイリー</button>
+        <button class="tab" data-ms="weekly">ウィークリー</button>
+        <button class="tab" data-ms="ach">🏅 実績</button>
+      </div>
+      <div id="msBody" class="ms-body"></div>
     </section>
 
     <!-- ===================== Battle pass ===================== -->
@@ -212,6 +240,7 @@
         <button class="btn btn-ghost btn-sm" id="btnSeasonManage">🗓️ シーズン管理</button>
         <button class="btn btn-ghost btn-sm" id="btnMaintenance">🛠 メンテナンス</button>
         <button class="btn btn-ghost btn-sm" id="btnBackup">💾 バックアップDL</button>
+        <button class="btn btn-ghost btn-sm" id="btnRestore" style="color:var(--green)">♻️ データ復元</button>
         <button class="btn btn-ghost btn-sm" id="btnLbReset" style="color:var(--red)">🏆 ランキングリセット</button>
       </div>
       <div class="admin-actions">
@@ -219,8 +248,13 @@
         <button class="btn btn-ghost btn-sm" id="btnSelfGems">💎 自分にジェム付与</button>
         <button class="btn btn-ghost btn-sm" id="btnSelfItems">🧪 自分にアイテム付与</button>
         <button class="btn btn-ghost btn-sm" id="btnUnlockHidden">🔓 隠し難易度を全解放</button>
-        <button class="btn btn-ghost btn-sm" id="btnEvent">🌪️ 期間限定イベント</button>
+        <button class="btn btn-ghost btn-sm" id="btnEvent">🎪 期間限定イベント</button>
+        <button class="btn btn-ghost btn-sm" id="btnPoll">🗳️ 投票を作る</button>
         <button class="btn btn-ghost btn-sm" id="btnWeeklyReset" style="color:var(--red)">🎯 ウィークリー記録リセット</button>
+      </div>
+      <div class="admin-actions">
+        <button class="btn btn-ghost btn-sm" id="btnMissionsDone">📋 自分のミッション全達成</button>
+        <button class="btn btn-ghost btn-sm" id="btnAchReset" style="color:var(--red)">🏅 自分の実績受取をリセット</button>
       </div>
       <div class="admin-actions">
         <button class="btn btn-ghost btn-sm" id="btnPop">🎭 にぎわい設定</button>

@@ -6,9 +6,11 @@ import { Engine } from '../public/js/engine.js';
 import { chooseMove } from '../public/js/ai.js';
 import { RAID_BOSSES } from './catalog.js';
 import {
-  effectiveScale, pickPersona, lobbyPersona,
-  ambientOnline, ambientMatches, randomChatLine, chooseReplies, chatPaceFactor,
+  effectiveScale, pickPersona, pickResidentBot, residentLine,
+  ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor,
+  toggles, isQuietNow, popFactor, worldCtx,
 } from './ambient.js';
+import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
 
 const COUNTDOWN = 3;
 // ms alone in queue before an AI player fills the seat (randomized per entry
@@ -22,6 +24,12 @@ const DURATIONS = [60, 120, 180];
 const TOURNEY_ROUND_SECS = (process.env.TOURNEY_SECS || '60,60,90')
   .split(',').map(n => Math.max(5, Number(n) || 60));
 const TOURNEY_INTERMISSION = 7000;
+// Co-op: one shared board, alternating turns.
+const COOP_TURN_MS = Number(process.env.COOP_TURN_MS) || 15000;
+const COOP_BOT_THINK_MS = 1800;
+// Hard stop so a run can't hang forever (env-overridable for tests).
+const COOP_MAX_SECS = Number(process.env.COOP_MAX_SECS) || 600;
+const coopBotWait = () => 6000 + Math.random() * 5000;
 // Bot strength rises with the round: QF easy/normal, SF normal/hard, F hard/oni.
 const TOURNEY_BOT_LEVELS = [['easy', 'normal'], ['normal', 'hard'], ['hard', 'oni']];
 
@@ -34,7 +42,7 @@ export function initBattle(server, deps) {
   const rooms = new Map();                 // code -> room
   const tourneys = new Map();              // id -> tournament
   const royales = new Map();               // id -> battle royale
-  const queues = { duel: [], team: [], raid: [], tourney: [], royale: [] };   // entries: { ws, since, botAt }
+  const queues = { duel: [], team: [], raid: [], tourney: [], royale: [], coop: [] };   // entries: { ws, since, botAt }
 
   function send(sock, msg) {
     if (sock.isBot) return;
@@ -48,59 +56,165 @@ export function initBattle(server, deps) {
 
   // ---- global chat (in-memory history) ----
   const chatHistory = [];   // { type:'chat', from, role, text, at }
+  const feedHistory = [];   // { icon, text, textEn, at, real, who }
 
-  // Ambient chat: simulated players keep the lobby lively. Seed a little
-  // back-history so the chat never looks dead, then post at a natural pace.
-  function postAmbient(text) {
-    const entry = {
-      type: 'chat', from: lobbyPersona().name, role: 'user',
-      text: text || randomChatLine(), at: Date.now(),
-    };
+  // =========================================================================
+  // Crowd director — the simulated residents live here.
+  //
+  // Single lines, two-person dialogues, a live activity feed, greetings for
+  // arriving players, and reactions to real-world moments (events, polls,
+  // match results). Everything respects the admin toggles + quiet hours and
+  // only runs while at least one real client is connected.
+  // =========================================================================
+
+  const crowdOn = (key) => effectiveScale() > 0 && clients.size > 0 && !isQuietNow() && (!key || toggles()[key]);
+
+  // Names of real people online — residents may greet them.
+  const humanNames = () => [...clients].filter(c => !c.isBot).map(sockName).filter(Boolean);
+
+  function postChat(name, text) {
+    const entry = { type: 'chat', from: name, role: 'user', text, at: Date.now() };
     chatHistory.push(entry);
     if (chatHistory.length > 60) chatHistory.shift();
     broadcastAll(entry);
     return entry;
   }
 
-  if (effectiveScale()) {
-    let t = Date.now() - 25 * 60 * 1000;
-    const used = new Set();
-    for (let i = 0; i < 8; i++) {
-      t += (1.5 + Math.random() * 3) * 60 * 1000;
-      chatHistory.push({
-        type: 'chat', from: pickPersona({ used }).name, role: 'user',
-        text: randomChatLine(), at: Math.min(t, Date.now() - 30000),
-      });
+  // Legacy entry point (admin "say"): a resident says `text`, or improvises.
+  function postAmbient(text) {
+    const line = residentLine();
+    return postChat(line.name, text || line.text);
+  }
+
+  // Run a scripted list of [{ resident|name, text, delay }] with its timing.
+  function performScript(script, key = 'chat') {
+    for (const s of script) {
+      setTimeout(() => {
+        if (!crowdOn(key)) return;
+        postChat(s.resident ? s.resident.name : s.name, s.text);
+      }, s.delay);
     }
   }
-  const ambientChat = () => {
-    setTimeout(() => {
-      if (effectiveScale() && clients.size > 0) postAmbient();
-      ambientChat();
-    }, (22000 + Math.random() * 53000) / chatPaceFactor());
-  };
-  ambientChat();
 
-  // AI players answer real messages (rate-limited so they never spam).
+  // Seed a little back-history so the chat never looks dead on first open.
+  if (effectiveScale()) {
+    let t = Date.now() - 25 * 60 * 1000;
+    const ctx = worldCtx({ now: t });
+    for (let i = 0; i < 8; i++) {
+      t += (1.5 + Math.random() * 3) * 60 * 1000;
+      const line = residentLine(null, t);
+      chatHistory.push({ type: 'chat', from: line.name, role: 'user', text: line.text, at: Math.min(t, Date.now() - 30000) });
+    }
+    void ctx;
+  }
+
+  // Chat cadence: busier crowd → shorter gaps. Dialogues are rarer.
+  let lastDialogueAt = 0;
+  const directChat = () => {
+    const gap = (20000 + Math.random() * 50000) / chatPaceFactor() / Math.max(0.5, Math.min(2, popFactor()));
+    setTimeout(() => {
+      try {
+        if (crowdOn('chat')) {
+          const wantDialogue = toggles().dialogues && Date.now() - lastDialogueAt > 150000 && Math.random() < 0.3;
+          const script = wantDialogue ? composeDialogue(worldCtx({ humans: humanNames() })) : null;
+          if (script) {
+            lastDialogueAt = Date.now();
+            performScript(script, 'chat');
+          } else {
+            const line = residentLine();
+            postChat(line.name, line.text);
+          }
+        }
+      } catch (err) { console.error('[crowd] chat tick failed:', err.message); }
+      directChat();
+    }, gap);
+  };
+  directChat();
+
+  // Live feed: what residents are "doing" around the arena.
+  function postFeed(item) {
+    const entry = { type: 'feed', ...item, at: item.at || Date.now() };
+    feedHistory.push(entry);
+    if (feedHistory.length > 40) feedHistory.shift();
+    broadcastAll(entry);
+    return entry;
+  }
+  const directFeed = () => {
+    const gap = (25000 + Math.random() * 60000) / Math.max(0.5, Math.min(2.2, popFactor()));
+    setTimeout(() => {
+      try {
+        if (crowdOn('feed')) {
+          const item = composeFeed(worldCtx());
+          if (item) postFeed(item);
+        }
+      } catch (err) { console.error('[crowd] feed tick failed:', err.message); }
+      directFeed();
+    }, gap);
+  };
+  directFeed();
+  // A handful of items so the ticker isn't empty on first load.
+  if (effectiveScale()) {
+    let t = Date.now() - 20 * 60 * 1000;
+    for (let i = 0; i < 6; i++) {
+      t += (2 + Math.random() * 3) * 60 * 1000;
+      const item = composeFeed(worldCtx({ now: t }));
+      if (item) feedHistory.push({ type: 'feed', ...item, at: Math.min(t, Date.now() - 20000) });
+    }
+  }
+
+  // Residents answer real messages (rate-limited so they never spam).
   let replyCooldownUntil = 0;
   function maybeAmbientReply(text) {
-    if (!effectiveScale()) return;
+    if (!crowdOn('reactions')) return;
     if (Date.now() < replyCooldownUntil) return;
     if (Math.random() > 0.85) return;
     const replies = chooseReplies(text);
     if (!replies.length) return;
     replyCooldownUntil = Date.now() + 12000;
-    for (const r of replies) {
-      setTimeout(() => { if (clients.size > 0) postAmbient(r.text); }, r.delay);
+    performScript(replies, 'reactions');
+  }
+
+  // Someone real just arrived: maybe a resident says hi.
+  let lastGreetAt = 0;
+  function maybeGreet(ws) {
+    if (!crowdOn('greetings')) return;
+    if (Date.now() - lastGreetAt < 150000 || Math.random() > 0.45) return;
+    lastGreetAt = Date.now();
+    const named = !!ws.user && Math.random() < 0.6;
+    const script = composeReaction(named ? 'greet_named' : 'greet_plain', worldCtx(), { you: sockName(ws) }, 1);
+    performScript(script, 'greetings');
+  }
+
+  // Reactions to world moments: events, polls, real players' achievements.
+  function react(kind, extra = {}, count) {
+    if (!crowdOn('reactions')) return [];
+    const n = count || (kind === 'event_start' ? 3 : kind === 'poll_open' ? 2 : kind === 'champion' ? 2 : 1);
+    const script = composeReaction(kind, worldCtx(), extra, n);
+    performScript(script, 'reactions');
+    return script;
+  }
+
+  // After a match: the resident who played as a bot comments on the human.
+  let lastMatchReactAt = 0;
+  function reactToMatch(resident, humanName, outcome, mode) {
+    if (!crowdOn('reactions')) return;
+    if (Date.now() - lastMatchReactAt < 45000 || Math.random() > 0.4) return;
+    lastMatchReactAt = Date.now();
+    const kind = mode === 'coop' ? 'coop_done' : outcome === 'human_won' ? 'lost_to' : outcome === 'draw' ? 'drew' : 'beat';
+    const script = composeReaction(kind, worldCtx(), { you: humanName, only: [resident.id] }, 1);
+    if (script.length) {
+      script[0].delay = 8000 + Math.random() * 30000;
+      performScript(script, 'reactions');
     }
   }
 
   // Live population sync: keep every client's counters in agreement.
   setInterval(() => {
     if (clients.size > 0) {
-      broadcastAll({ type: 'online', online: displayOnline(), matches: displayMatches() });
+      broadcastAll({ type: 'online', online: displayOnline(), matches: displayMatches(), queueing: ambientQueue() + queueSizeAll(), mood: crowdMood().id });
     }
   }, 25000);
+  function queueSizeAll() { return Object.values(queues).reduce((a, q) => a + q.length, 0); }
 
   function sockRate(ws, key, limit, windowMs) {
     const now = Date.now();
@@ -139,12 +253,24 @@ export function initBattle(server, deps) {
     constructor(level = 'random', used) {
       this.isBot = true;
       this.level = BOT_LEVELS.includes(level) ? level : randomBotLevel();
-      const persona = pickPersona({ used });
-      this.name = persona.name;
-      const [rLo, rHi] = BOT_RATING[this.level];
-      this.rating = persona.registered ? rLo + crypto.randomInt(rHi - rLo) : null;
-      const [lLo, lHi] = BOT_LVL[this.level];
-      this.fakeLevel = persona.registered ? lLo + crypto.randomInt(lHi - lLo) : 1;
+      // Prefer a resident whose rating matches this strength — the name you
+      // beat in ranked is the same one chatting in the lobby and sitting on
+      // the leaderboard. Fall back to a throwaway persona otherwise.
+      const res = Math.random() < 0.7 ? pickResidentBot(this.level, used) : null;
+      if (res) {
+        this.resident = res.resident;
+        this.name = res.name;
+        this.rating = res.rating;
+        this.fakeLevel = res.level;
+      } else {
+        this.resident = null;
+        const persona = pickPersona({ used });
+        this.name = persona.name;
+        const [rLo, rHi] = BOT_RATING[this.level];
+        this.rating = persona.registered ? rLo + crypto.randomInt(rHi - rLo) : null;
+        const [lLo, lHi] = BOT_LVL[this.level];
+        this.fakeLevel = persona.registered ? lLo + crypto.randomInt(lHi - lLo) : 1;
+      }
       this.timer = null;
       this.emoteTimer = null;
     }
@@ -214,6 +340,13 @@ export function initBattle(server, deps) {
         score: 0, lines: 0, maxCombo: 0, finished: false, forfeited: false,
       })),
     };
+    // Co-op: ONE board, alternating turns, refereed by the server.
+    if (mode === 'coop') {
+      match.engine = new Engine(seed);
+      match.turn = 0;
+      match.moves = 0;
+      match.turnEndsAt = Date.now() + (COUNTDOWN * 1000) + COOP_TURN_MS;
+    }
     // Raid: everyone fights one shared boss whose HP scales with party size.
     if (mode === 'raid') {
       const def = RAID_BOSSES[crypto.randomInt(RAID_BOSSES.length)];
@@ -238,7 +371,12 @@ export function initBattle(server, deps) {
         })),
       });
     }
-    for (const p of match.players) if (p.sock.isBot) p.sock.startPlay(match, p.slot);
+    // Co-op bots wait their turn instead of playing their own board.
+    for (const p of match.players) if (p.sock.isBot && mode !== 'coop') p.sock.startPlay(match, p.slot);
+    if (mode === 'coop') {
+      match.coopTick = setInterval(() => coopTick(match), 400);
+      setTimeout(() => { if (!match.ended) coopBroadcast(match, null); }, COUNTDOWN * 1000);
+    }
     if (mode === 'raid') {
       // Server-driven boss attacks + HP sync.
       match.raidAtk = setInterval(() => {
@@ -268,6 +406,96 @@ export function initBattle(server, deps) {
 
   function totalDamage(match) {
     return match.players.reduce((a, p) => a + p.score, 0);
+  }
+
+  // -------------------------------------------------------------------------
+  // Co-op: two players, one board, alternating turns.
+  //
+  // The server owns the engine so the two clients can never disagree. Clients
+  // keep a mirror Engine seeded identically and replay each confirmed move, so
+  // every placement animates locally exactly as a solo one would.
+  // -------------------------------------------------------------------------
+
+  function coopBroadcast(match, move) {
+    const e = match.engine;
+    for (const p of match.players) {
+      if (p.sock.isBot) continue;
+      send(p.sock, {
+        type: 'coop_state',
+        move,                                  // { slot, index, row, col } or null
+        turn: match.turn,
+        // Clocks differ between machines — ship a remaining duration, not a
+        // timestamp, so the turn bar is right on every client.
+        turnRemain: Math.max(0, match.turnEndsAt - Date.now()),
+        turnMs: COOP_TURN_MS,
+        score: e.score,
+        lines: e.linesCleared,
+        combo: e.streak,
+        moves: match.moves,
+        over: e.over,
+        grid: e.snapshot(),                    // resync safety net
+      });
+    }
+  }
+
+  // Apply one move to the shared board. Returns false when it is illegal.
+  function coopApply(match, slot, index, row, col) {
+    const e = match.engine;
+    if (match.ended || e.over) return false;
+    if (match.turn !== slot) return false;
+    if (Date.now() < match.startedAt + COUNTDOWN * 1000) return false;
+    const piece = e.hand[index];
+    if (!piece || !e.canPlace(piece, row, col)) return false;
+
+    const result = e.place(index, row, col);
+    if (!result) return false;
+    match.moves++;
+    // The score is shared, so both players carry the same totals; only the
+    // per-player move count records who did what.
+    match.players[slot].moves = (match.players[slot].moves || 0) + 1;
+    for (const q of match.players) {
+      q.score = e.score;
+      q.lines = e.linesCleared;
+      q.maxCombo = Math.max(q.maxCombo, e.maxCombo);
+    }
+    match.turn = (slot + 1) % match.players.length;
+    match.turnEndsAt = Date.now() + COOP_TURN_MS;
+    coopBroadcast(match, { slot, index, row, col });
+    if (e.over) {
+      clearInterval(match.coopTick);
+      setTimeout(() => endMatch(match, 'coop_over'), 900);
+    }
+    return true;
+  }
+
+  // Play the best move available for whoever's turn it is (bot turn, timeout,
+  // or a disconnected partner) so a co-op run never deadlocks.
+  function coopAutoMove(match) {
+    const e = match.engine;
+    const level = match.players[match.turn].sock.isBot ? (match.players[match.turn].sock.level || 'normal') : 'hard';
+    const mv = chooseMove(e, level);
+    if (!mv) {
+      e.over = true;
+      clearInterval(match.coopTick);
+      coopBroadcast(match, null);
+      setTimeout(() => endMatch(match, 'coop_over'), 900);
+      return;
+    }
+    coopApply(match, match.turn, mv.index, mv.row, mv.col);
+  }
+
+  function coopTick(match) {
+    if (match.ended || match.engine.over) return;
+    if (Date.now() < match.startedAt + COUNTDOWN * 1000) return;
+    const cur = match.players[match.turn];
+    const isBot = cur.sock.isBot;
+    // Bots "think" for a beat; humans get the full turn clock.
+    const due = isBot
+      ? Date.now() >= match.turnEndsAt - COOP_TURN_MS + (COOP_BOT_THINK_MS)
+      : Date.now() >= match.turnEndsAt;
+    if (!due) return;
+    if (!isBot && cur.sock.readyState !== cur.sock.OPEN) cur.forfeited = false;   // keep playing for them
+    coopAutoMove(match);
   }
 
   function broadcastState(match, fromSlot, state) {
@@ -305,6 +533,7 @@ export function initBattle(server, deps) {
     clearTimeout(match.timer);
     clearInterval(match.raidAtk);
     clearInterval(match.raidSync);
+    clearInterval(match.coopTick);
     matches.delete(match.id);
     for (const p of match.players) if (p.sock.isBot) p.sock.stop();
 
@@ -316,10 +545,12 @@ export function initBattle(server, deps) {
     }
     // Raid is co-op: everyone wins if the boss fell, loses otherwise.
     if (match.mode === 'raid') winTeam = match.bossDead ? 0 : -2;
+    // Co-op has no opponent — it is a shared run, never a win or a loss.
+    if (match.mode === 'coop') winTeam = -1;
 
     const playersInfo = match.players.map(p => ({
       slot: p.slot, team: p.team, name: sockName(p.sock),
-      score: p.score, isBot: !!p.sock.isBot,
+      score: p.score, moves: p.moves || 0, isBot: !!p.sock.isBot,
     }));
 
     const humanUsers = match.players.map(p =>
@@ -353,12 +584,18 @@ export function initBattle(server, deps) {
           if (outcome === 1) me.stats.pvpWins += 1;
           else if (outcome === 0) me.stats.pvpLosses += 1;
         }
+        if (match.mode === 'coop') {
+          me.stats = me.stats || {};
+          if (p.score > (me.stats.coopBest || 0)) me.stats.coopBest = p.score;
+        }
         if (!p.forfeited) {
           rewards = applyGameResult(me, {
             mode: match.tourney ? 'tournament'
-              : match.mode === 'team' ? 'team' : match.mode === 'raid' ? 'raid' : 'pvp',
+              : match.mode === 'team' ? 'team' : match.mode === 'raid' ? 'raid'
+              : match.mode === 'coop' ? 'coop' : 'pvp',
             score: p.score, lines: p.lines, maxCombo: p.maxCombo,
-            duration: match.duration,
+            duration: match.mode === 'coop' ? Math.max(1, (Date.now() - match.startedAt) / 1000) : match.duration,
+            pieces: match.moves || 0,
             // Tournament: the badge/bonus fires only on winning the FINAL.
             won: match.tourney ? (outcome === 1 && !!match.tourney.final) : outcome === 1,
             drew: outcome === 0.5,
@@ -374,11 +611,24 @@ export function initBattle(server, deps) {
         teamScores: ts,
         boss: match.boss || null,
         bossDead: !!match.bossDead,
+        coop: match.mode === 'coop'
+          ? { score: match.engine.score, lines: match.engine.linesCleared, combo: match.engine.maxCombo, moves: match.moves, best: me ? (me.stats.coopBest || 0) : 0 }
+          : null,
         you: { slot: p.slot, team: p.team },
         players: playersInfo,
         ratingDelta, rewards,
         user: me ? publicUser(me) : null,
       });
+    }
+    // A resident who played as a bot may talk about the human afterwards.
+    if (match.mode === 'duel' || match.mode === 'coop') {
+      const human = match.players.find(p => !p.sock.isBot && !p.forfeited);
+      const bot = match.players.find(p => p.sock.isBot && p.sock.resident);
+      if (human && bot) {
+        const hOut = match.mode === 'coop' ? 'coop'
+          : winTeam === -1 ? 'draw' : human.team === winTeam ? 'human_won' : 'human_lost';
+        reactToMatch(bot.sock.resident, sockName(human.sock), hOut, match.mode);
+      }
     }
     for (const p of match.players) {
       if (!p.sock.isBot && p.sock.matchId === match.id) p.sock.matchId = null;
@@ -394,7 +644,7 @@ export function initBattle(server, deps) {
   function joinQueue(ws, mode) {
     if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId) return;
     leaveQueues(ws);
-    const wait = mode === 'duel' ? duelBotWait() : teamBotWait();
+    const wait = mode === 'duel' ? duelBotWait() : mode === 'coop' ? coopBotWait() : teamBotWait();
     queues[mode].push({ ws, since: Date.now(), botAt: Date.now() + wait });
     send(ws, { type: 'queued', mode });
     sweepQueues();
@@ -408,7 +658,7 @@ export function initBattle(server, deps) {
   }
 
   function sweepQueues() {
-    for (const mode of ['duel', 'team', 'raid', 'tourney', 'royale']) {
+    for (const mode of ['duel', 'team', 'raid', 'tourney', 'royale', 'coop']) {
       queues[mode] = queues[mode].filter(e => e.ws.readyState === e.ws.OPEN && !e.ws.matchId);
     }
     // tournament: start with up to 8 humans once the first entrant has waited
@@ -443,6 +693,21 @@ export function initBattle(server, deps) {
       const used = new Set(humans.map(e => sockName(e.ws)));
       while (entries.length < 4) entries.push({ sock: new Bot('random', used), team: entries.length % 2 });
       createMatch({ mode: 'team', entries });
+    }
+    // co-op: pairs share one board; a bot partner joins after the wait
+    while (queues.coop.length >= 2) {
+      const [a, b] = queues.coop.splice(0, 2);
+      createMatch({
+        mode: 'coop', duration: COOP_MAX_SECS, rated: false,
+        entries: [{ sock: a.ws, team: 0 }, { sock: b.ws, team: 0 }],
+      });
+    }
+    if (queues.coop.length === 1 && Date.now() >= queues.coop[0].botAt) {
+      const [a] = queues.coop.splice(0, 1);
+      createMatch({
+        mode: 'coop', duration: COOP_MAX_SECS, rated: false,
+        entries: [{ sock: a.ws, team: 0 }, { sock: new Bot('random', new Set([sockName(a.ws)])), team: 0 }],
+      });
     }
     // raid: co-op party of 4 (all on team 0), bots fill after the wait
     while (queues.raid.length >= 4) {
@@ -824,12 +1089,17 @@ export function initBattle(server, deps) {
             type: 'hello_ok',
             name: user ? user.username : ws.guestName,
             online: displayOnline(),
+            queueing: ambientQueue() + queueSizeAll(),
+            mood: crowdMood().id,
             chat: chatHistory.slice(-40),
+            feed: feedHistory.slice(-20),
           });
+          // Only a fresh arrival gets greeted, not a reconnecting chat socket.
+          if (!ws.greeted) { ws.greeted = true; maybeGreet(ws); }
           break;
         }
         case 'queue': {
-          const mode = ['team', 'raid', 'tourney', 'royale'].includes(msg.mode) ? msg.mode : 'duel';
+          const mode = ['team', 'raid', 'tourney', 'royale', 'coop'].includes(msg.mode) ? msg.mode : 'duel';
           joinQueue(ws, mode);
           break;
         }
@@ -866,7 +1136,16 @@ export function initBattle(server, deps) {
         }
         case 'finish': {
           if (!match || match.ended || !me) return;
+          if (match.mode === 'coop') return;   // co-op ends when the shared board tops out
           finishPlayer(match, me.slot, msg.score, msg.lines, msg.combo);
+          break;
+        }
+        case 'coop_place': {
+          if (!match || match.ended || !me || match.mode !== 'coop') return;
+          if (!sockRate(ws, '_coopRate', 40, 10000)) return;
+          const ok = coopApply(match, me.slot, Number(msg.index), Number(msg.row), Number(msg.col));
+          // Rejected (not your turn / stale board): resend authoritative state.
+          if (!ok) send(ws, { type: 'coop_reject', turn: match.turn, grid: match.engine.snapshot(), score: match.engine.score });
           break;
         }
         case 'create_room': {
@@ -959,6 +1238,21 @@ export function initBattle(server, deps) {
         ws.royaleId = null;
       }
       const match = ws.matchId ? matches.get(ws.matchId) : null;
+      // Co-op: a dropped partner doesn't end the run — the server plays their
+      // turns so whoever is still there can finish the board.
+      if (match && !match.ended && match.mode === 'coop') {
+        const p = match.players.find(q => q.sock === ws);
+        if (p) p.finished = true;
+        const stillHere = match.players.some(q => q !== p && !q.sock.isBot && q.sock.readyState === q.sock.OPEN);
+        if (!stillHere) endMatch(match, 'abandoned');
+        else {
+          for (const q of match.players) {
+            if (q !== p && !q.sock.isBot) send(q.sock, { type: 'coop_partner_left' });
+          }
+        }
+        ws.matchId = null;
+        return;
+      }
       if (match && !match.ended) {
         const p = match.players.find(q => q.sock === ws);
         if (p && !p.finished) {
@@ -997,6 +1291,42 @@ export function initBattle(server, deps) {
         broadcastAll({ type: 'chat_clear' });
       },
       say: (text) => postAmbient(text),
+    },
+    crowd: {
+      react,
+      feed: (item) => postFeed(item),
+      feedHistory: () => feedHistory.slice(),
+      // Admin test hooks: fire one thing right now, bypassing the cadence.
+      test: (what) => {
+        const ctx = worldCtx({ humans: humanNames() });
+        if (what === 'dialogue') {
+          const s = composeDialogue(ctx);
+          if (!s) return { error: '会話できる住人が足りません（人口を上げるか時間帯を待ってください）' };
+          performScript(s.map((x, i) => ({ ...x, delay: i * 2500 })), null);
+          return { lines: s.map(x => `${x.resident.name}: ${x.text}`) };
+        }
+        if (what === 'feed') {
+          const item = composeFeed(ctx);
+          if (!item) return { error: 'オンラインの住人がいません' };
+          postFeed(item);
+          return { lines: [`${item.icon} ${item.text}`] };
+        }
+        if (what === 'greet') {
+          const s = composeReaction('greet_plain', ctx, {}, 1);
+          performScript(s.map(x => ({ ...x, delay: 500 })), null);
+          return { lines: s.map(x => `${x.resident.name}: ${x.text}`) };
+        }
+        if (what === 'reaction') {
+          const kind = ctx.event ? 'event_start' : ctx.poll ? 'poll_open' : 'greet_plain';
+          const s = composeReaction(kind, ctx, {}, 2);
+          performScript(s.map((x, i) => ({ ...x, delay: 500 + i * 2500 })), null);
+          return { lines: s.map(x => `${x.resident.name}: ${x.text}`) };
+        }
+        const line = residentLine();
+        postChat(line.name, line.text);
+        return { lines: [`${line.name}: ${line.text}`] };
+      },
+      activeCount: () => worldCtx().active.length,
     },
   };
 }

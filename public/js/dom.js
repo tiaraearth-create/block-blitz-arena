@@ -5,7 +5,7 @@ import { t } from './i18n.js';
 export const $ = sel => document.querySelector(sel);
 export const $$ = sel => [...document.querySelectorAll(sel)];
 
-const SCREENS = ['menu', 'game', 'matchmaking', 'room', 'leaderboard', 'shop', 'battlepass', 'admin'];
+const SCREENS = ['menu', 'game', 'matchmaking', 'room', 'leaderboard', 'shop', 'battlepass', 'missions', 'admin'];
 
 export function showScreen(name) {
   for (const s of SCREENS) {
@@ -67,6 +67,25 @@ export function countdownOverlay(n, onDone, audio) {
 }
 
 export function fmt(n) { return Number(n).toLocaleString('ja-JP'); }
+
+// ---------------------------------------------------------------------------
+// Staff-only UI switch
+//
+// Admins get extras normal players never see (chaos access outside events,
+// autopilot, the in-game command palette). Those stay on by default but can be
+// hidden so an admin can look at the game exactly as a player does.
+// ---------------------------------------------------------------------------
+
+const STAFF_UI_KEY = 'bba_staff_ui';
+
+export function staffUiOn() { return localStorage.getItem(STAFF_UI_KEY) !== '0'; }
+export function setStaffUi(on) { localStorage.setItem(STAFF_UI_KEY, on ? '1' : '0'); }
+
+// True when the current user is staff AND wants to see staff-only controls.
+export function staffExtras() {
+  const u = session.user;
+  return !!u && (u.role === 'admin') && staffUiOn();
+}
 
 // Competitive rank tier for a rating value (shown next to ratings everywhere).
 export function rankOf(rating) {
