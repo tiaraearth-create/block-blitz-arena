@@ -1160,6 +1160,7 @@ export async function openAdmin() {
       <div class="stat-card"><b>${stats.crowd ? ({ party: '🔥', busy: '🙂', calm: '😴', off: '⚫' }[stats.crowd.mood.id] || '🙂') : '🙂'}</b><span>${stats.crowd ? ({ party: '大盛況', busy: 'にぎやか', calm: 'まったり', off: 'オフ' }[stats.crowd.mood.id] || '') : ''}${stats.crowd && stats.crowd.quietNow ? '（静かな時間帯）' : ''}</span></div>
       <div class="stat-card"><b>S${stats.season.number}</b><span>${escapeHtml(stats.season.name)}</span></div>
       <div class="stat-card" style="${stats.maintenance ? 'border-color:var(--red)' : ''}"><b>${stats.maintenance ? '🛠' : '✅'}</b><span>${stats.maintenance ? 'メンテナンス中' : '稼働中'}</span></div>
+      <div class="stat-card" style="${stats.sessionsPersist ? '' : 'border-color:var(--yellow)'}" title="SESSION_SECRET 環境変数が設定されているとON。更新してもログイン状態が維持されます"><b>${stats.sessionsPersist ? '🔐' : '⚠️'}</b><span>${stats.sessionsPersist ? 'セッション維持 ON' : 'セッション維持 OFF（SESSION_SECRET未設定）'}</span></div>
       <div class="stat-card"><b>¥${fmt(txData.totalJpy)}</b><span>売上(デモ) ${fmt(txData.totalCount)}件</span></div>`;
     $('#btnMaintenance').textContent = stats.maintenance ? '✅ メンテ解除' : '🛠 メンテナンス開始';
     renderAdminUsers(usersData.users);

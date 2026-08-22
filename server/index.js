@@ -613,6 +613,8 @@ app.get('/api/status', (_req, res) => {
     queueing: ambientQueue() + battle.queueSize(),
     mood: crowdMood().id,
     maintenance: inMaintenance(),
+    // True when SESSION_SECRET is set, i.e. logins survive redeploys.
+    sessionsPersist: SESSIONS_PERSIST,
     event: currentEvent(),
     // Menu badge only — the full poll (and the caller's own vote) comes from
     // /api/poll, which needs auth to know who is asking.
