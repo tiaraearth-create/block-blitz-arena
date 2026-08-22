@@ -5,13 +5,14 @@
 # is wiped on every deploy AND whenever the instance restarts.
 #
 #   Free plan  → before each deploy: 管理者パネル → 💾 バックアップDL
-#                after the deploy:   管理者パネル → ♻️ データ復元（マージ）
+#                after the deploy:   https://<your-url>/?restore=1 → file +
+#                the admin password from the backup → ♻️ 復元（マージ）
 #   Paid disk  → switch `plan` to `starter` and uncomment the disk block below.
 #                Data then survives deploys with nothing to do by hand.
 #
-# The uncommented free setup below is safe to run as long as you keep taking
-# backups; the restore flow merges, so players who signed up after a wipe are
-# never thrown away.
+# SESSIONS: with SESSION_SECRET set, logins survive deploys/restarts — players
+# stay signed in through the wipe and re-attach automatically once the data is
+# restored. (Without it, every redeploy logs everyone out.)
 services:
   - type: web
     name: block-blitz-arena
@@ -20,6 +21,11 @@ services:
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /api/status
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true        # long random string; keeps logins across deploys
+      - key: ADMIN_PASSWORD
+        sync: false                # prompted on first deploy; pins the admin password
     # --- permanent data (requires the paid "starter" plan) ---
     # plan: starter
     # disk:

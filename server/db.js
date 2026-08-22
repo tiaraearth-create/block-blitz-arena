@@ -4,12 +4,15 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, 'data');
+// DATA_DIR env lets tests (and hosts with a mounted disk elsewhere) relocate the data.
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 const DEFAULT_DB = {
   users: {},        // id -> user record
-  tokens: {},       // token -> { userId, createdAt }
+  tokens: {},       // legacy token -> { userId, createdAt }
+  revoked: {},      // signed token -> revokedAt (single-device logouts)
+  deleted: {},      // userId -> deletedAt (so a stale session knows the account is gone)
   season: null,     // { id, name, number, endsAt }
   transactions: [], // gem purchases (demo)
   meta: { createdAt: Date.now() },

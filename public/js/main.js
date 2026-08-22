@@ -7,7 +7,7 @@ import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderbo
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
-import { initChat, showFeedModal, setMood } from './chat.js';
+import { initChat, reconnectChat, showFeedModal, setMood } from './chat.js';
 import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
 
 applyStaticI18n();
@@ -601,6 +601,33 @@ if (location.search.includes('purchase=success')) {
 document.body.dataset.screen = 'menu';
 initChat();
 
+// Poll until the server has our account again (after a data restore), then
+// re-attach the session without asking the player to log in.
+let restoreWaitTimer = null;
+function waitForRestore() {
+  clearInterval(restoreWaitTimer);
+  restoreWaitTimer = setInterval(async () => {
+    if (!session.token || session.user) { clearInterval(restoreWaitTimer); return; }
+    try {
+      await refreshMe();
+      clearInterval(restoreWaitTimer);
+      updateTopbar();
+      reconnectChat();
+      refreshMissionDot();
+      refreshPollBanner();
+      audio.coin();
+      toast(t(`✅ おかえりなさい、${session.user.username}さん！データが復元されました`,
+        `✅ Welcome back, ${session.user.username}! Your data has been restored`), 'ok', 5000);
+    } catch (err) {
+      if (err.code !== 'NO_USER' && (err.status === 401 || err.status === 403)) {
+        clearInterval(restoreWaitTimer);
+        setToken(null);
+        updateTopbar();
+      }
+    }
+  }, 30000);
+}
+
 (async () => {
   updateTopbar();
   if (session.token) {
@@ -624,6 +651,17 @@ initChat();
         break;
       } catch (err) {
         if (String(err.message).includes('凍結')) { toast(err.message, 'err'); break; }
+        // The session is fine but the account data is missing on the server
+        // (a redeploy wiped it, restore pending): keep the token and keep
+        // checking — the login comes back by itself once the data is restored.
+        if (err.code === 'NO_USER') {
+          session.user = null;
+          updateTopbar();
+          toast(t('⚠️ サーバーのアカウントデータが復元待ちです。復元が終わると自動でログインに戻ります',
+            '⚠️ Your account data is waiting to be restored on the server — you will be logged back in automatically'), 'err', 7000);
+          waitForRestore();
+          break;
+        }
         // Only drop the session on real auth errors — keep it through outages.
         if (err.status === 401 || err.status === 403) {
           setToken(null);

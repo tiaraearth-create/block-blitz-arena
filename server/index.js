@@ -11,8 +11,8 @@ import { fileURLToPath } from 'url';
 import { loadDb, saveDb, flushDb, DATA_DIR } from './db.js';
 import { initBattle } from './battle.js';
 import {
-  hashPassword, verifyPassword, issueToken, revokeToken,
-  authMiddleware, requireAuth, requireAdmin, userFromToken,
+  hashPassword, verifyPassword, issueToken, revokeToken, revokeAllTokens,
+  authMiddleware, requireAuth, requireAdmin, userFromToken, SESSIONS_PERSIST,
 } from './auth.js';
 import {
   SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED, BOOST_ITEMS, EQUIP_SLOTS,
@@ -545,6 +545,15 @@ app.post('/api/logout', requireAuth, (req, res) => {
 });
 
 app.get('/api/me', (req, res) => {
+  if (!req.user && req.token) {
+    // A signed session whose account is not here (yet): the client keeps the
+    // token and re-attaches by itself once the data is restored.
+    if (req.tokenStatus === 'missing') {
+      return res.status(401).json({ error: 'アカウントのデータが見つかりません（データ復元待ち）', code: 'NO_USER', season: currentSeason() });
+    }
+    // Logged out elsewhere, deleted, expired, or signed with another secret.
+    return res.status(401).json({ error: 'セッションが終了しました。もう一度ログインしてください', code: 'SESSION_ENDED', season: currentSeason() });
+  }
   const dailyBonus = req.user && !req.user.banned ? grantDaily(req.user) : null;
   res.json({ user: publicUser(req.user), season: currentSeason(), dailyBonus, maintenance: inMaintenance() });
 });
@@ -582,10 +591,9 @@ app.delete('/api/me', requireAuth, (req, res) => {
   if (user.role === 'admin') {
     return res.status(400).json({ error: '管理者アカウントは削除できません（先に権限を外してください）' });
   }
+  revokeAllTokens(user.id);
   delete db.users[user.id];
-  for (const [t, rec] of Object.entries(db.tokens)) {
-    if (rec.userId === user.id) delete db.tokens[t];
-  }
+  db.deleted[user.id] = Date.now();
   saveDb();
   res.json({ ok: true });
 });
@@ -1318,9 +1326,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     target.salt = salt;
     target.passHash = hash;
     // force re-login everywhere with the new password
-    for (const [tk, rec] of Object.entries(db.tokens)) {
-      if (rec.userId === target.id) delete db.tokens[tk];
-    }
+    revokeAllTokens(target.id);
   }
   const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale'];
   if (typeof b.grantBadge === 'string') {
@@ -1353,10 +1359,9 @@ app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   const target = db.users[req.params.id];
   if (!target) return res.status(404).json({ error: 'ユーザーが見つかりません' });
   if (target.role === 'admin') return res.status(400).json({ error: '管理者は削除できません' });
+  revokeAllTokens(req.params.id);
   delete db.users[req.params.id];
-  for (const [t, rec] of Object.entries(db.tokens)) {
-    if (rec.userId === req.params.id) delete db.tokens[t];
-  }
+  db.deleted[req.params.id] = Date.now();
   saveDb();
   res.json({ ok: true });
 });
@@ -1711,6 +1716,7 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     },
     maintenance: inMaintenance(),
     season: currentSeason(),
+    sessionsPersist: SESSIONS_PERSIST,
   });
 });
 

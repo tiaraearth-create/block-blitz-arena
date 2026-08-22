@@ -1,9 +1,29 @@
-// Authentication: pbkdf2 password hashing + random bearer tokens.
+// Authentication: pbkdf2 password hashing + signed bearer tokens.
+//
+// Tokens are *stateless* ("v2"): `v2.<userId>.<issuedAt>.<hmac>` signed with
+// SESSION_SECRET. Nothing about a session needs to live in the database, so a
+// redeploy that wipes server/data does not log anyone out — as long as the
+// same SESSION_SECRET is set in the environment. Without it a random secret
+// is generated per boot and sessions die with the process (the old behaviour).
+//
+// Revocation still needs a little state: single-device logout adds the token
+// to db.revoked; password changes bump user.sessionsSince so every token
+// issued before that moment is refused. Legacy random tokens (db.tokens, from
+// older builds and restored backups) keep working as before.
 import crypto from 'crypto';
 import { loadDb, saveDb } from './db.js';
 
-const TOKEN_TTL = 1000 * 60 * 60 * 24 * 180; // 180 days (sliding — refreshed on use)
-const TOKEN_REFRESH_AFTER = 1000 * 60 * 60 * 24; // bump createdAt at most daily
+const LEGACY_TTL = 1000 * 60 * 60 * 24 * 180;  // 180 days (sliding — refreshed on use)
+const LEGACY_REFRESH_AFTER = 1000 * 60 * 60 * 24; // bump createdAt at most daily
+const V2_TTL = 1000 * 60 * 60 * 24 * 365;       // a year; players re-login yearly
+
+const ENV_SECRET = String(process.env.SESSION_SECRET || '');
+export const SESSIONS_PERSIST = ENV_SECRET.length >= 16;
+const SECRET = SESSIONS_PERSIST ? ENV_SECRET : crypto.randomBytes(32).toString('hex');
+if (!SESSIONS_PERSIST) {
+  console.warn('[auth] SESSION_SECRET が未設定（または16文字未満）です: ログイン状態は再起動・再デプロイで失われます。'
+    + ' 環境変数 SESSION_SECRET に長いランダム文字列を設定すると維持されます');
+}
 
 export function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.pbkdf2Sync(password, salt, 120000, 32, 'sha256').toString('hex');
@@ -15,51 +35,110 @@ export function verifyPassword(password, salt, expectedHash) {
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(expectedHash, 'hex'));
 }
 
+function sign(payload) {
+  return crypto.createHmac('sha256', SECRET).update(payload).digest('base64url');
+}
+
 export function issueToken(userId) {
+  const payload = `${userId}.${Date.now()}`;
+  return `v2.${payload}.${sign(payload)}`;
+}
+
+// Verify a v2 token's signature and age. Returns { userId, createdAt } or null.
+export function parseToken(token) {
+  if (typeof token !== 'string' || !token.startsWith('v2.')) return null;
+  const parts = token.split('.');
+  if (parts.length !== 4) return null;
+  const [, userId, createdAtStr, sig] = parts;
+  const expected = sign(`${userId}.${createdAtStr}`);
+  const a = Buffer.from(sig), b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const createdAt = Number(createdAtStr);
+  if (!Number.isFinite(createdAt) || Date.now() - createdAt > V2_TTL) return null;
+  return { userId, createdAt };
+}
+
+// Single-device logout.
+export function revokeToken(token) {
+  if (!token) return;
   const db = loadDb();
-  const token = crypto.randomBytes(32).toString('hex');
-  db.tokens[token] = { userId, createdAt: Date.now() };
-  // prune expired tokens occasionally
-  const now = Date.now();
-  for (const [t, rec] of Object.entries(db.tokens)) {
-    if (now - rec.createdAt > TOKEN_TTL) delete db.tokens[t];
+  if (token.startsWith('v2.')) {
+    db.revoked = db.revoked || {};
+    db.revoked[token] = Date.now();
+    const cutoff = Date.now() - V2_TTL;
+    for (const [t, at] of Object.entries(db.revoked)) if (at < cutoff) delete db.revoked[t];
+  } else {
+    delete db.tokens[token];
   }
   saveDb();
-  return token;
 }
 
-export function revokeToken(token) {
+// Every session of one user (password change, admin reset, account deletion).
+export function revokeAllTokens(userId) {
   const db = loadDb();
-  delete db.tokens[token];
+  for (const [t, rec] of Object.entries(db.tokens)) {
+    if (rec.userId === userId) delete db.tokens[t];
+  }
+  const u = db.users[userId];
+  if (u) u.sessionsSince = Date.now();
   saveDb();
 }
 
-export function userFromToken(token) {
-  if (!token) return null;
+// Resolve a bearer token.
+//   ok       — req.user set
+//   none     — no token presented
+//   missing  — valid signature but the account is not in the database
+//              (typically: data wiped by a redeploy, restore pending)
+//   deleted  — the account was deleted on purpose
+//   revoked  — logged out / password changed
+//   invalid  — bad signature, expired, or unknown legacy token
+export function resolveToken(token) {
+  if (!token) return { user: null, status: 'none' };
   const db = loadDb();
+  const v2 = parseToken(token);
+  if (v2) {
+    if (db.revoked && db.revoked[token]) return { user: null, status: 'revoked' };
+    const user = db.users[v2.userId];
+    if (!user) return { user: null, status: db.deleted && db.deleted[v2.userId] ? 'deleted' : 'missing' };
+    if (user.sessionsSince && v2.createdAt < user.sessionsSince) return { user: null, status: 'revoked' };
+    return { user, status: 'ok' };
+  }
+  if (token.startsWith('v2.')) return { user: null, status: 'invalid' };
+
+  // Legacy random tokens.
   const rec = db.tokens[token];
-  if (!rec) return null;
-  if (Date.now() - rec.createdAt > TOKEN_TTL) { delete db.tokens[token]; saveDb(); return null; }
-  // Sliding expiry: active players stay logged in forever (throttled to
-  // one refresh per day so we don't rewrite the db on every request).
-  if (Date.now() - rec.createdAt > TOKEN_REFRESH_AFTER) {
+  if (!rec) return { user: null, status: 'invalid' };
+  if (Date.now() - rec.createdAt > LEGACY_TTL) { delete db.tokens[token]; saveDb(); return { user: null, status: 'invalid' }; }
+  if (Date.now() - rec.createdAt > LEGACY_REFRESH_AFTER) {
     rec.createdAt = Date.now();
     saveDb();
   }
-  return db.users[rec.userId] || null;
+  const user = db.users[rec.userId];
+  return user ? { user, status: 'ok' } : { user: null, status: 'missing' };
 }
 
-// Express middleware: attaches req.user (or null).
+export function userFromToken(token) {
+  return resolveToken(token).user;
+}
+
+// Express middleware: attaches req.user (or null) and req.tokenStatus.
 export function authMiddleware(req, _res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  req.user = userFromToken(token);
+  const r = resolveToken(token);
+  req.user = r.user;
   req.token = token;
+  req.tokenStatus = r.status;
   next();
 }
 
 export function requireAuth(req, res, next) {
-  if (!req.user) return res.status(401).json({ error: 'ログインが必要です' });
+  if (!req.user) {
+    if (req.tokenStatus === 'missing') {
+      return res.status(401).json({ error: 'アカウントのデータが見つかりません（データ復元待ち）', code: 'NO_USER' });
+    }
+    return res.status(401).json({ error: 'ログインが必要です', code: req.token ? 'SESSION_ENDED' : 'NO_TOKEN' });
+  }
   if (req.user.banned) return res.status(403).json({ error: 'このアカウントは凍結されています' });
   next();
 }

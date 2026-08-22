@@ -136,13 +136,18 @@ export function applyRestore(db, data, mode = 'merge') {
       report.added++;
       continue;
     }
-    if (progressOf(inc) > progressOf(live)) {
-      // The backup is further along: it wins, but keep the live id so any
-      // sessions and references issued since the wipe still resolve.
+    if (progressOf(inc) >= progressOf(live)) {
+      // The backup is at least as far along (ties go to the backup — that is
+      // the account everyone actually had, e.g. the real admin vs the one
+      // re-seeded after a wipe). It wins AND keeps its own id: every session
+      // signed before the wipe references that id, so logins come straight
+      // back. Only the few sessions issued in the wipe→restore window lose.
       delete db.users[live.id];
-      const merged = { ...inc, id: live.id };
-      db.users[live.id] = merged;
-      byName.set(merged.username.toLowerCase(), merged);
+      db.users[inc.id] = inc;
+      byName.set(inc.username.toLowerCase(), inc);
+      for (const [tk, rec] of Object.entries(db.tokens || {})) {
+        if (rec && rec.userId === live.id) delete db.tokens[tk];
+      }
       report.updated++;
     } else {
       report.kept++;
@@ -160,6 +165,14 @@ export function applyRestore(db, data, mode = 'merge') {
     if (!rec || !db.users[rec.userId]) delete db.tokens[tk];
   }
   report.tokens = Object.keys(db.tokens).length;
+
+  // Session bookkeeping: logged-out tokens stay logged out, deleted accounts
+  // stay deleted, even across a wipe.
+  for (const key of ['revoked', 'deleted']) {
+    if (data[key] && typeof data[key] === 'object') {
+      db[key] = { ...(data[key]), ...(db[key] || {}) };
+    }
+  }
 
   // Purchase history is append-only: union by transaction id.
   if (Array.isArray(data.transactions)) {

@@ -29,8 +29,10 @@ export async function api(path, { method = 'GET', body } = {}) {
   let data = {};
   try { data = await res.json(); } catch { /* empty body */ }
   if (!res.ok) {
+    if (data.season) session.season = data.season;   // /api/me sends it even when logged out
     const e = new Error(trServer(data.error) || `Error (${res.status})`);
     e.status = res.status;
+    e.code = data.code || null;   // e.g. NO_USER (restore pending) / SESSION_ENDED
     throw e;
   }
   if (data.user !== undefined) session.user = data.user;
