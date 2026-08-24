@@ -13,6 +13,7 @@ const N = {
   D4: 293.66, E4: 329.63, F4: 349.23, Fs4: 369.99, G4: 392, A4: 440, B4: 493.88,
   C5: 523.25, Cs5: 554.37, D5: 587.33, E5: 659.25, Fs5: 739.99, G5: 783.99, A5: 880,
   B5: 987.77, Cs6: 1108.73, E6: 1318.51,
+  Bb1: 58.27, Bb3: 233.08, Eb4: 311.13, Bb4: 466.16, F5: 698.46,
 };
 
 // Each track: bpm, swing (0..0.3 on odd 16ths), bars (each bar = 16 steps):
@@ -116,6 +117,83 @@ const TRACKS = {
       { chord: [N.E4, N.Gs4 || N.A4, N.B4], bass: N.E2 },
     ],
   },
+  // ---- Guest tracks ported from ブロックブラスト (Block Blast) ----
+  // Faithful to the original's sequencer: arp cycles root→3rd→5th→3rd an
+  // octave above the chord on every 8th note, bass hits beats 1 & 3 an octave
+  // below, kick on 1 & 3, hat on offbeats. Chords/tempo/waveforms are the
+  // originals; only volumes are re-balanced for this engine's gain staging.
+  blastMenu: {
+    bpm: 92, swing: 0, padType: 'sine', padVol: 0, arpType: 'sine',
+    kick: [], snare: [], hat: [], hatVol: 0.05,
+    bassSteps: [0, 8], bassLen: 1, bassType: 'triangle', bassVol: 0.27,
+    arpSteps: [0, 2, 4, 6, 8, 10, 12, 14], arpVol: 0.2, arpDelay: false,
+    bars: [
+      { chord: [N.A4, N.C5, N.E5, N.C5], bass: N.A2 },    // Am
+      { chord: [N.F4, N.A4, N.C5, N.A4], bass: N.F2 },    // F
+      { chord: [N.C5, N.E5, N.G5, N.E5], bass: N.C3 },    // C
+      { chord: [N.G4, N.B4, N.D5, N.B4], bass: N.G2 },    // G
+    ],
+  },
+  blastGame: {
+    bpm: 118, swing: 0, padType: 'sine', padVol: 0, arpType: 'square',
+    kick: [0, 8], snare: [], hat: [2, 6, 10, 14], hatVol: 0.06,
+    bassSteps: [0, 8], bassLen: 1, bassType: 'triangle', bassVol: 0.32,
+    arpSteps: [0, 2, 4, 6, 8, 10, 12, 14], arpVol: 0.13, arpDelay: false,
+    bars: [
+      { chord: [N.C5, N.E5, N.G5, N.E5], bass: N.C3 },    // C
+      { chord: [N.G4, N.B4, N.D5, N.B4], bass: N.G2 },    // G
+      { chord: [N.A4, N.C5, N.E5, N.C5], bass: N.A2 },    // Am
+      { chord: [N.F4, N.A4, N.C5, N.A4], bass: N.F2 },    // F
+    ],
+  },
+  blastVs: {
+    bpm: 128, swing: 0, padType: 'sine', padVol: 0, arpType: 'sawtooth',
+    kick: [0, 8], snare: [], hat: [2, 6, 10, 14], hatVol: 0.06,
+    bassSteps: [0, 8], bassLen: 1, bassType: 'sawtooth', bassVol: 0.25,
+    arpSteps: [0, 2, 4, 6, 8, 10, 12, 14], arpVol: 0.1, arpDelay: false,
+    bars: [
+      { chord: [N.D5, N.F5, N.A5, N.F5], bass: N.D3 },    // Dm
+      { chord: [N.Bb4, N.D5, N.F5, N.D5], bass: N.Bb2 },  // Bb
+      { chord: [N.C5, N.F5, N.A5, N.F5], bass: N.C3 },    // F/C
+      { chord: [N.C5, N.E5, N.G5, N.E5], bass: N.C3 },    // C
+    ],
+  },
+  blastGod: {
+    bpm: 142, swing: 0, padType: 'sine', padVol: 0, arpType: 'sawtooth',
+    kick: [0, 8], snare: [], hat: [2, 6, 10, 14], hatVol: 0.07,
+    bassSteps: [0, 8], bassLen: 1, bassType: 'square', bassVol: 0.27,
+    arpSteps: [0, 2, 4, 6, 8, 10, 12, 14], arpVol: 0.12, arpDelay: false,
+    bars: [
+      { chord: [N.D5, N.Fs5, N.A5, N.Fs5], bass: N.D3 },  // D
+      { chord: [N.A4, N.Cs5, N.E5, N.Cs5], bass: N.A2 },  // A
+      { chord: [N.B4, N.D5, N.Fs5, N.D5], bass: N.B2 },   // Bm
+      { chord: [N.G4, N.B4, N.D5, N.B4], bass: N.G2 },    // G
+    ],
+  },
+  blastBoss: {
+    bpm: 76, swing: 0, padType: 'sine', padVol: 0, arpType: 'sawtooth',
+    kick: [0, 8], snare: [], hat: [], hatVol: 0.06,
+    bassSteps: [0, 8], bassLen: 1, bassType: 'sawtooth', bassVol: 0.45,
+    arpSteps: [0, 2, 4, 6, 8, 10, 12, 14], arpVol: 0.09, arpDelay: false,
+    bars: [
+      { chord: [N.D4, N.F4, N.A4, N.F4], bass: N.D2 },    // Dm
+      { chord: [N.Bb3, N.D4, N.F4, N.D4], bass: N.Bb1 },  // Bb
+      { chord: [N.C4, N.Eb4, N.G4, N.Eb4], bass: N.C2 },  // Cm
+      { chord: [N.A3, N.C4, N.E4, N.C4], bass: N.A1 },    // Am
+    ],
+  },
+  blastBoss2: {
+    bpm: 148, swing: 0, padType: 'sine', padVol: 0, arpType: 'sawtooth',
+    kick: [0, 8], snare: [], hat: [2, 6, 10, 14], hatVol: 0.07,
+    bassSteps: [0, 8], bassLen: 1, bassType: 'sawtooth', bassVol: 0.5,
+    arpSteps: [0, 2, 4, 6, 8, 10, 12, 14], arpVol: 0.11, arpDelay: false,
+    bars: [
+      { chord: [N.D4, N.F4, N.A4, N.F4], bass: N.D2 },    // Dm
+      { chord: [N.Bb3, N.D4, N.F4, N.D4], bass: N.Bb1 },  // Bb
+      { chord: [N.E4, N.G4, N.Bb4, N.G4], bass: N.E2 },   // Edim
+      { chord: [N.A3, N.C4, N.E4, N.C4], bass: N.A1 },    // Am
+    ],
+  },
 };
 // fix kami 4th chord (Gs4 not defined above)
 TRACKS.kami.bars[3].chord = [N.E4, 415.3, N.B4];
@@ -131,6 +209,12 @@ export const TRACK_INFO = [
   { id: 'oni',    icon: '👹', name: '鬼の巣窟',         nameEn: "Oni's Den",       where: '鬼・深淵',                 whereEn: 'Oni / Abyss' },
   { id: 'pixel',  icon: '👾', name: 'PIXEL RUSH 182',   nameEn: 'PIXEL RUSH 182',  where: 'バトルロイヤル',           whereEn: 'Battle Royale' },
   { id: 'kami',   icon: '🔱', name: '天上の光',         nameEn: 'Celestial Light', where: '神・天国ダンジョン',       whereEn: 'Kami / Heaven' },
+  { id: 'blastMenu',  icon: '🧱', name: 'ブラスト・ホーム', nameEn: 'Blast Home',       where: 'ブロックブラストより：メニュー', whereEn: 'From Block Blast: menu' },
+  { id: 'blastGame',  icon: '💠', name: 'ブラスト・パズル', nameEn: 'Blast Puzzle',     where: 'ブロックブラストより：ソロ',     whereEn: 'From Block Blast: solo' },
+  { id: 'blastVs',    icon: '🤖', name: 'ブラスト・バトル', nameEn: 'Blast Battle',     where: 'ブロックブラストより：対戦',     whereEn: 'From Block Blast: versus' },
+  { id: 'blastGod',   icon: '⚡', name: 'ゴッドラッシュ',   nameEn: 'God Rush',         where: 'ブロックブラストより：神モード', whereEn: 'From Block Blast: God mode' },
+  { id: 'blastBoss',  icon: '🌑', name: '終焉のテーマ',     nameEn: 'Theme of the End', where: 'ブロックブラストより：終焉戦',   whereEn: 'From Block Blast: final boss' },
+  { id: 'blastBoss2', icon: '💥', name: '終焉・覚醒',       nameEn: 'The End Awakened', where: 'ブロックブラストより：覚醒形態', whereEn: 'From Block Blast: awakened' },
 ].map(t => ({ ...t, bpm: TRACKS[t.id].bpm }));
 
 class AudioEngine {
