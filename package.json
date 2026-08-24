@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
-    "test": "node test/session.test.mjs"
+    "test": "node test/session.test.mjs && node test/rank-rewards.test.mjs"
   },
   "engines": {
     "node": ">=18"

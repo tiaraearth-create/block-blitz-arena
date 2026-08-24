@@ -1,5 +1,5 @@
 // Persistent user settings (localStorage) applied to audio / effects.
-import { audio } from './audio.js';
+import { audio, TRACK_INFO } from './audio.js';
 
 const KEY = 'bba_settings';
 const DEFAULTS = {
@@ -10,12 +10,16 @@ const DEFAULTS = {
   shake: true,
   particles: 'normal',   // 'low' | 'normal' | 'high'
   chatTranslate: true,   // show foreign-language chat in your language
+  bgmTrack: null,        // jukebox pin: track id to loop everywhere (null = auto per screen)
 };
 
 let settings = { ...DEFAULTS };
 try {
   settings = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') };
 } catch { /* corrupted storage -> defaults */ }
+// A pinned track id that no longer exists (renamed/removed in an update)
+// silently degrades to auto — the UI must never show a phantom pin.
+if (settings.bgmTrack && !TRACK_INFO.some(t => t.id === settings.bgmTrack)) settings.bgmTrack = null;
 
 export function getSettings() { return settings; }
 
@@ -32,5 +36,9 @@ export function updateSettings(patch) {
 export function applySettings() {
   audio.setSfx(settings.sfxOn);
   audio.setVolumes(settings.sfxVol, settings.musicVol);
+  // Order matters: the engine boots with musicOn=true, so the enabled flag
+  // must be corrected BEFORE the locked track is applied — otherwise a saved
+  // {musicOn:false, bgmTrack:…} plays an unstoppable burst at page load.
   audio.setMusicEnabled(settings.musicOn);
+  audio.setLockedTrack(settings.bgmTrack);
 }

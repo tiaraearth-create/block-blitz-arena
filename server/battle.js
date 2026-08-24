@@ -6,13 +6,13 @@ import { Engine } from '../public/js/engine.js';
 import { chooseMove } from '../public/js/ai.js';
 import { RAID_BOSSES } from './catalog.js';
 import {
-  effectiveScale, pickPersona, pickResidentBot, residentLine,
+  effectiveScale, pickPersona, pickResidentBot, residentLine, residentById,
   ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor,
   toggles, isQuietNow, popFactor, worldCtx,
 } from './ambient.js';
 import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
 import { translateChat, translateLocal, detectLang } from './translate.js';
-import { isOpen as pollIsOpen, vote as pollVote, residentChoice } from './polls.js';
+import { isOpen as pollIsOpen, vote as pollVote, residentChoice, residentVoteAt, isSwingVoter } from './polls.js';
 
 const COUNTDOWN = 3;
 // ms alone in queue before an AI player fills the seat (randomized per entry
@@ -124,7 +124,8 @@ export function initBattle(server, deps) {
   // Chat cadence: busier crowd → shorter gaps. Dialogues are rarer.
   let lastDialogueAt = 0;
   const directChat = () => {
-    const gap = (20000 + Math.random() * 50000) / chatPaceFactor() / Math.max(0.5, Math.min(2, popFactor()));
+    // Absolute floor keeps a ×100 crowd lively without a broadcast storm.
+    const gap = Math.max(2500, (20000 + Math.random() * 50000) / chatPaceFactor() / Math.max(0.5, Math.min(4, popFactor())));
     setTimeout(() => {
       try {
         if (crowdOn('chat')) {
@@ -153,7 +154,7 @@ export function initBattle(server, deps) {
     return entry;
   }
   const directFeed = () => {
-    const gap = (25000 + Math.random() * 60000) / Math.max(0.5, Math.min(2.2, popFactor()));
+    const gap = Math.max(6000, (25000 + Math.random() * 60000) / Math.max(0.5, Math.min(4, popFactor())));
     setTimeout(() => {
       try {
         if (crowdOn('feed')) {
@@ -175,27 +176,89 @@ export function initBattle(server, deps) {
     }
   }
 
-  // Residents vote in open polls, a few at a time, with tastes that follow
-  // their archetype (gacha addicts love Lucky Day…). Admins see the AI/real
-  // split; the menu just shows a lively poll.
+  // Residents vote in open polls with real opinions: archetype + keyword
+  // tastes, a stable personal lean, bandwagon/contrarian streaks, guild
+  // solidarity and per-resident timing (early birds vs deadline voters).
+  // Swing voters defect late when their pick is losing, and someone calls out
+  // the deadline. Unlike chat, votes keep trickling in even while no real
+  // player is connected — a long poll shouldn't come back empty.
+  const votesOn = () => effectiveScale() > 0 && !isQuietNow() && toggles().votes;
+
+  // Votes already cast by the resident's ghost-guildmates ({optionId: n}).
+  // Uses deps.residentGuildTag (pure ghost-guild lookup, no db.users scan)
+  // memoized per tick — the naive per-voter tagOfName walk measurably stalled
+  // the event loop once the roster grew and accounts piled up.
+  const guildVotesFor = (poll, resident, tagMemo) => {
+    if (!deps.residentGuildTag) return null;
+    const tagOfResident = (name) => {
+      if (!tagMemo.has(name)) tagMemo.set(name, deps.residentGuildTag(name));
+      return tagMemo.get(name);
+    };
+    const myTag = tagOfResident(resident.name);
+    if (!myTag) return null;
+    const votes = {};
+    let any = false;
+    for (const [voter, opt] of Object.entries(poll.voters)) {
+      if (!voter.startsWith('r:')) continue;
+      const other = residentById(voter.slice(2));
+      if (!other || other.id === resident.id) continue;
+      if (tagOfResident(other.name) === myTag) { votes[opt] = (votes[opt] || 0) + 1; any = true; }
+    }
+    return any ? votes : null;
+  };
+
+  // Cast (or change) a resident's vote, remember their archetype for the
+  // admin breakdown, and sometimes have them say so in chat.
+  const castResidentVote = (poll, r, optionId, ctx, kind) => {
+    if (!optionId || !pollVote(poll, `r:${r.id}`, optionId).ok) return false;
+    if (!poll.voterMeta) poll.voterMeta = {};
+    poll.voterMeta[`r:${r.id}`] = r.arch;
+    deps.saveDb();
+    if (Math.random() < 0.18) {
+      const opt = poll.options.find(o => o.id === optionId);
+      performScript(composeReaction(kind, ctx, { opt: opt ? opt.text : '', only: [r.id] }, 1), 'chat');
+    }
+    return true;
+  };
+
   const directVotes = () => {
     setTimeout(() => {
       try {
         const poll = deps.db.meta.poll;
-        if (crowdOn('votes') && poll && pollIsOpen(poll)) {
+        if (votesOn() && poll && pollIsOpen(poll)) {
           const ctx = worldCtx();
-          const fresh = ctx.active.filter(r => !poll.voters[`r:${r.id}`]);
-          // Votes trickle in over the first ~70% of the poll, faster when busy.
           const elapsed = (Date.now() - poll.createdAt) / Math.max(1, poll.endsAt - poll.createdAt);
-          if (fresh.length && elapsed < 0.72 && Math.random() < 0.45 * Math.min(2, popFactor())) {
-            const r = fresh[Math.floor(Math.random() * fresh.length)];
-            const optionId = residentChoice(poll, r);
-            if (optionId && pollVote(poll, `r:${r.id}`, optionId).ok) {
-              deps.saveDb();
-              // Sometimes they say so.
-              if (Math.random() < 0.18) {
-                const opt = poll.options.find(o => o.id === optionId);
-                performScript(composeReaction('poll_open', ctx, { opt: opt ? opt.text : '', only: [r.id] }, 1), 'chat');
+          // Fresh voters whose personal moment has arrived (a busier arena
+          // lets more of them through per tick).
+          const tagMemo = new Map();
+          const due = ctx.active.filter(r => !poll.voters[`r:${r.id}`] && elapsed >= residentVoteAt(poll, r));
+          const burst = Math.min(due.length, 1 + Math.floor(popFactor()));
+          for (let i = 0; i < burst && due.length; i++) {
+            if (Math.random() > 0.75) continue;
+            const r = due.splice(Math.floor(Math.random() * due.length), 1)[0];
+            castResidentVote(poll, r, residentChoice(poll, r, { guildVotes: guildVotesFor(poll, r, tagMemo) }), ctx, 'poll_voted');
+          }
+          // Deadline call-out, once per poll — only consumed while someone is
+          // actually connected to hear it (performScript's chat gate would
+          // otherwise drop the lines and the flag would burn for nothing).
+          if (elapsed >= 0.82 && !poll.lastCall && clients.size > 0) {
+            poll.lastCall = true;
+            deps.saveDb();
+            performScript(composeReaction('poll_lastcall', ctx, {}, 2), 'chat');
+          }
+          // Swing voters: near the end, someone on a clearly-losing option
+          // defects to the leader (it reads social, not random).
+          if (elapsed >= 0.7 && elapsed < 0.97 && Math.random() < 0.25) {
+            const votesOf = id => { const o = poll.options.find(x => x.id === id); return o ? o.votes : 0; };
+            const leader = poll.options.reduce((a, o) => (o.votes > a.votes ? o : a), poll.options[0]);
+            if (leader.votes > 0) {
+              const cands = ctx.active.filter(r => {
+                const cur = poll.voters[`r:${r.id}`];
+                return cur && cur !== leader.id && votesOf(cur) * 2 <= leader.votes && isSwingVoter(poll, r);
+              });
+              if (cands.length) {
+                const r = cands[Math.floor(Math.random() * cands.length)];
+                castResidentVote(poll, r, leader.id, ctx, 'poll_swing');
               }
             }
           }

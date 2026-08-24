@@ -26,11 +26,13 @@ import { achievementsView, claimAchievement, ACHIEVEMENTS } from './achievements
 import {
   ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider,
   rosterView, retiredResidents, crowdMood, ambientQueue, isQuietNow, DEFAULT_TOGGLES, ARCHETYPES,
+  MAX_LIVE_SCALE,
 } from './ambient.js';
 import { BADGE_NAMES } from './crowd.js';
 import {
   GUILD_CREATE_COST, GUILD_ICONS, createGuild, findGuild, joinGuild, leaveGuild, kickMember,
   addGuildPoints, guildView, guildLevel, guildCoinBonus, ghostGuildViews, tagOfName, validateGuildInput,
+  ghostGuildOfResident,
 } from './guilds.js';
 import { TRANSLATE_ENGINE } from './translate.js';
 import {
@@ -135,6 +137,7 @@ function migrateUser(user) {
   if (!s.sprint || typeof s.sprint !== 'object') s.sprint = {};
   if (!Array.isArray(s.history)) s.history = [];
   if (!Array.isArray(user.achievements)) user.achievements = [];
+  if (!Array.isArray(user.rankRewards)) user.rankRewards = [];   // pending ランキング報酬
   if (!user.equipped) user.equipped = { ...DEFAULT_EQUIPPED };
   // Ultimate-skill slot (v2.0): everyone starts with the free 破壊の衝撃波.
   if (!user.equipped.ult) user.equipped.ult = DEFAULT_EQUIPPED.ult;
@@ -189,6 +192,7 @@ function publicUser(user) {
     battlePass: adminBp, badges: user.badges,
     equippedTitle: user.equippedTitle || null,
     achievements: user.achievements,
+    rankRewards: user.rankRewards || [],
     guild: user.guildId && db.guilds[user.guildId]
       ? { id: user.guildId, name: db.guilds[user.guildId].name, tag: db.guilds[user.guildId].tag, icon: db.guilds[user.guildId].icon, owner: db.guilds[user.guildId].ownerId === user.id }
       : null,
@@ -200,6 +204,9 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   mode = String(mode || 'solo');
   migrateUser(user);
+  // Pay out last week's ranking BEFORE this game can overwrite a stale
+  // stats.weekly record with the new week.
+  finalizeWeeklyRankings();
   // v2.0 telemetry from the client — clamped like everything else.
   const clamp = (v, max) => Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
   wave = clamp(wave, 999);
@@ -454,8 +461,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
 
 // Real players' notable moments go on the live feed (starred), and the crowd
 // may react. Capped per user so a hot streak doesn't flood the ticker.
-const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯' };
-const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1' };
+const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', weekly1: '🏅' };
+const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', weekly1: 'Weekly Champion' };
 const feedAt = new Map();   // userId -> last feed timestamp
 function postRealFeed(user, notes) {
   if (!notes.length) return;
@@ -597,6 +604,7 @@ app.get('/api/me', (req, res) => {
     // Logged out elsewhere, deleted, expired, or signed with another secret.
     return res.status(401).json({ error: 'セッションが終了しました。もう一度ログインしてください', code: 'SESSION_ENDED', season: currentSeason() });
   }
+  finalizeWeeklyRankings();
   const dailyBonus = req.user && !req.user.banned ? grantDaily(req.user) : null;
   res.json({ user: publicUser(req.user), season: currentSeason(), dailyBonus, maintenance: inMaintenance() });
 });
@@ -669,6 +677,9 @@ app.get('/api/status', (_req, res) => {
 
 // Wipe everyone's weekly-challenge record (fresh week on demand).
 app.post('/api/admin/weekly/reset', requireAuth, requireAdmin, (req, res) => {
+  // Pay out any finished week first — deleting stale records here would
+  // otherwise silently destroy the ranking rewards they still owe.
+  finalizeWeeklyRankings();
   let affected = 0;
   for (const u of Object.values(db.users)) {
     if (u.stats && u.stats.weekly) { delete u.stats.weekly; affected++; }
@@ -1016,6 +1027,7 @@ function weeklySeed(weekId) {
 }
 
 app.get('/api/weekly', (req, res) => {
+  finalizeWeeklyRankings();
   const n = currentWeekNum();
   const week = weekIdOf(n);
   const w = req.user && req.user.stats.weekly;
@@ -1029,6 +1041,99 @@ app.get('/api/weekly', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Weekly ranking rewards (ランキング報酬)
+//
+// When the week rolls over, everyone who set a weekly-challenge score gets
+// coins/gems by final rank — real players only, so the AI residents on the
+// board never take a prize from a person. #1 also earns the 週間チャンピオン
+// badge (and its title). Granted lazily from boot + the hot endpoints,
+// because the free-tier server may well be asleep at Monday 00:00 UTC.
+// ---------------------------------------------------------------------------
+
+const WEEKLY_RANK_REWARDS = [
+  { upTo: 1,        coins: 2000, gems: 300, badge: 'weekly1' },
+  { upTo: 2,        coins: 1200, gems: 180 },
+  { upTo: 3,        coins: 800,  gems: 120 },
+  { upTo: 10,       coins: 500,  gems: 60 },
+  { upTo: 30,       coins: 300,  gems: 30 },
+  { upTo: Infinity, coins: 150,  gems: 10 },
+];
+function rankRewardFor(rank) {
+  return WEEKLY_RANK_REWARDS.find(t => rank <= t.upTo) || WEEKLY_RANK_REWARDS[WEEKLY_RANK_REWARDS.length - 1];
+}
+// JSON-safe copy for the client (Infinity does not survive res.json).
+const rankRewardsTable = () => WEEKLY_RANK_REWARDS.map(t => ({
+  upTo: Number.isFinite(t.upTo) ? t.upTo : null, coins: t.coins, gems: t.gems, badge: t.badge || null,
+}));
+
+function finalizeWeeklyRankings() {
+  const curW = weekIdOf(currentWeekNum());
+  if (db.meta.lastRankRewardWeek === curW) return;
+  db.meta.lastRankRewardWeek = curW;
+  // Stale weekly records (any past week — the server may have slept through
+  // several) are grouped per week, ranked, and marked so a record is never
+  // paid twice even across backup/restore cycles.
+  const byWeek = new Map();
+  for (const u of Object.values(db.users)) {
+    const w = u.stats && u.stats.weekly;
+    if (!w || w.week === curW || w.rewarded || !(w.best > 0)) continue;
+    w.rewarded = true;
+    if (u.banned || u.role === 'admin') continue;
+    if (!byWeek.has(w.week)) byWeek.set(w.week, []);
+    byWeek.get(w.week).push(u);
+  }
+  for (const [week, players] of byWeek) {
+    players.sort((a, b) => b.stats.weekly.best - a.stats.weekly.best);
+    players.forEach((u, i) => {
+      migrateUser(u);
+      const rank = i + 1;
+      const t = rankRewardFor(rank);
+      u.rankRewards.push({
+        id: crypto.randomUUID(), board: 'weekly', week, rank, of: players.length,
+        best: u.stats.weekly.best, coins: t.coins, gems: t.gems, badge: t.badge || null, at: Date.now(),
+      });
+    });
+    const medals = ['🥇', '🥈', '🥉'];
+    const top = players.slice(0, 3).map((u, i) => `${medals[i]} ${u.username}（${fmtNum(u.stats.weekly.best)}点）`);
+    db.news.push({
+      id: crypto.randomUUID(),
+      title: `🏆 週間チャレンジ結果発表（${week}）`,
+      body: `先週の週間チャレンジの結果です（参加${players.length}人）！\n${top.join('\n')}\n\n参加者全員に順位に応じたコイン＆ジェムをお届けしました。ゲームを開くと受け取れます。今週のチャレンジも開催中！`,
+      pinned: false, by: '運営', at: Date.now(),
+    });
+    if (db.news.length > 200) db.news.shift();
+    battle.crowd.feed({
+      icon: '🏆', real: true, who: '運営',
+      text: `週間チャレンジ結果発表！1位は ${players[0].username}`,
+      textEn: `Weekly challenge results are in — #1 is ${players[0].username}!`,
+    });
+    battle.crowd.react('champion', { you: players[0].username });
+  }
+  saveDb();
+}
+
+// Claim every pending ranking reward at once.
+app.post('/api/rank/claim', requireAuth, maintenanceGuard, (req, res) => {
+  migrateUser(req.user);
+  finalizeWeeklyRankings();
+  const pending = req.user.rankRewards;
+  if (!pending.length) return res.status(409).json({ error: '受け取れるランキング報酬はありません' });
+  let coins = 0, gems = 0;
+  const badges = [];
+  for (const r of pending) {
+    coins += r.coins || 0;
+    gems += r.gems || 0;
+    if (r.badge && !req.user.badges.includes(r.badge)) { req.user.badges.push(r.badge); badges.push(r.badge); }
+  }
+  req.user.coins += coins;
+  req.user.gems += gems;
+  const claimed = pending.slice();
+  req.user.rankRewards = [];
+  saveDb();
+  res.json({ reward: { coins, gems, badges }, claimed, user: publicUser(req.user) });
+});
+
+// ---------------------------------------------------------------------------
 // Game results & leaderboard
 // ---------------------------------------------------------------------------
 
@@ -1038,6 +1143,7 @@ app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
 });
 
 app.get('/api/leaderboard', (req, res) => {
+  finalizeWeeklyRankings();
   const board = ['rating', 'dungeon', 'weekly', 'sprint'].includes(req.query.board) ? req.query.board : 'score';
   const week = weekIdOf(currentWeekNum());
   const weeklyBestOf = u => (u.stats.weekly && u.stats.weekly.week === week ? u.stats.weekly.best : 0);
@@ -1078,7 +1184,8 @@ app.get('/api/leaderboard', (req, res) => {
       : board === 'sprint' ? (b.sprintBest || 0) - (a.sprintBest || 0)
       : b.bestScore - a.bestScore)
     .slice(0, 100);
-  res.json({ board, rows });
+  // The weekly board pays prizes at the Monday reset — send the tier table.
+  res.json({ board, rows, ...(board === 'weekly' ? { rewards: rankRewardsTable() } : {}) });
 });
 
 // ---------------------------------------------------------------------------
@@ -1790,6 +1897,8 @@ const CROWD_PRESETS = {
   quiet:  { scale: 0.5, chatPace: 0.5, toggles: { ...DEFAULT_TOGGLES, dialogues: false, greetings: false }, quiet: null },
   normal: { scale: 1,   chatPace: 1,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
   party:  { scale: 3,   chatPace: 2.5, toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  fever:  { scale: 25,  chatPace: 3.5, toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  mega:   { scale: 100, chatPace: 4,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
   night:  { scale: 0.7, chatPace: 0.75, toggles: { ...DEFAULT_TOGGLES }, quiet: null },
   silent: { scale: 1,   chatPace: 1,   toggles: { ...DEFAULT_TOGGLES, chat: false, dialogues: false, feed: false, greetings: false, reactions: false }, quiet: null },
 };
@@ -1813,8 +1922,8 @@ app.post('/api/admin/pop', requireAuth, requireAdmin, (req, res) => {
     if (p.quiet !== undefined) patch.quiet = p.quiet;
   }
   if (b.scale !== undefined) {
-    const scale = Math.max(0, Math.min(10, Number(b.scale)));
-    if (!Number.isFinite(scale)) return res.status(400).json({ error: '0〜10の数値で指定してください' });
+    const scale = Math.max(0, Math.min(MAX_LIVE_SCALE, Number(b.scale)));
+    if (!Number.isFinite(scale)) return res.status(400).json({ error: `0〜${MAX_LIVE_SCALE}の数値で指定してください` });
     db.meta.popScale = scale;
     setLiveScale(scale);
   }
@@ -1942,6 +2051,8 @@ const battle = initBattle(server, {
   MATCH_DURATION,
   isMaintenance: inMaintenance,
   guildTagOf: (name, user) => tagOfName(db, name, user),
+  // AI-vote guild solidarity: ghost-guild tag only (never scans db.users).
+  residentGuildTag: (name) => { const g = ghostGuildOfResident(name); return g ? g.tag : null; },
 });
 
 // The crowd reads the live event / open poll through this (no import cycle).
@@ -2003,6 +2114,7 @@ currentSeason();
 seedAdmin();
 pinAdminPassword();
 seedNews();
+finalizeWeeklyRankings();   // pay out any week that ended while we were down
 console.log(`[chat] 自動翻訳エンジン: ${TRANSLATE_ENGINE === 'api' ? '外部API (TRANSLATE_URL)' : '内蔵フレーズ辞書'}`);
 
 // A boot snapshot means a bad restore is always one click away from undo.

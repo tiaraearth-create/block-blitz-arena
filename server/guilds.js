@@ -193,7 +193,11 @@ export function ghostGuilds() {
   for (const r of roster) {
     const h = unit(r.id, 'guild');
     if (h < 0.3) continue;                          // ~30% of residents are guildless
-    guilds[Math.floor((h - 0.3) / 0.7 * guilds.length) % guilds.length].members.push(r);
+    const g = guilds[Math.floor((h - 0.3) / 0.7 * guilds.length) % guilds.length];
+    // Ghost guilds obey the same member cap as real ones — a scale-grown
+    // roster (up to 240 residents) must not show "26/20" or quadruple the
+    // ghosts' weekly points on the ranking. Overflow residents stay guildless.
+    if (g.members.length < GUILD_MAX_MEMBERS) g.members.push(r);
   }
   ghostCache = guilds;
   ghostCacheKey = key;

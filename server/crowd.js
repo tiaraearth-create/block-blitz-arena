@@ -538,6 +538,21 @@ const REACTIONS = {
     ja: ['投票結果出たね', '「{winner}」に決まった！', '{winner}に投票してよかった', 'まあ妥当な結果'],
     en: ['poll results are in', '"{winner}" won the vote'],
   },
+  // a resident just cast their vote ({opt} = their actual choice)
+  poll_voted: {
+    ja: ['{opt}に入れた！', '{opt}に一票', '悩んだけど{opt}にした', 'これは{opt}でしょ', '{opt}に投票してきた'],
+    en: ['just voted {opt}', '{opt} gets my vote', 'went with {opt} after some thought'],
+  },
+  // a swing voter changed sides ({opt} = the new choice)
+  poll_swing: {
+    ja: ['やっぱ{opt}に変えた', 'ごめん、{opt}に乗り換えたw', '形勢見て{opt}に変更した', 'みんな{opt}なら…私も{opt}'],
+    en: ['ok I switched to {opt}', 'changed my vote to {opt} lol', 'fine, {opt} it is'],
+  },
+  // the poll is about to close
+  poll_lastcall: {
+    ja: ['投票そろそろ締切だよ！', 'まだ投票してない人いる？急いで〜', '「{question}」の投票、忘れずに！', '投票締切間近！！'],
+    en: ['poll is closing soon, go vote!', 'last call for the poll!', 'don\'t forget to vote on "{question}"!'],
+  },
   // real player achievements (announced by the server)
   champion: {
     ja: ['{you}さん優勝おめでとう！！', '{you}さんつよ…', '優勝者きたあああ', '{you}さん次は倒す'],
@@ -560,6 +575,7 @@ const REACTIONS = {
 export const BADGE_NAMES = {
   oni: '鬼討伐バッジ', kami: '神殺しバッジ', souzou: '創造神討伐バッジ', maou: '魔王討伐バッジ',
   rush: 'ボスラッシュ制覇', dungeon: '百塔踏破', tourney: '大会優勝', royale: 'バトロワ1位',
+  weekly1: '週間チャンピオン',
 };
 
 // Pick one or more residents to react. Returns [{ resident, text, delay }].

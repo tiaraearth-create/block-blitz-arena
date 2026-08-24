@@ -120,6 +120,19 @@ const TRACKS = {
 // fix kami 4th chord (Gs4 not defined above)
 TRACKS.kami.bars[3].chord = [N.E4, 415.3, N.B4];
 
+// Jukebox metadata: titles + where each track normally plays.
+// bpm is read from TRACKS so the two never drift apart.
+export const TRACK_INFO = [
+  { id: 'menu',   icon: '🏠', name: 'やすらぎのロビー', nameEn: 'Cozy Lobby',      where: 'メニュー',                 whereEn: 'Menu' },
+  { id: 'solo',   icon: '🧩', name: 'ブロックさんぽ',   nameEn: 'Block Stroll',    where: 'ソロ・ウィークリー',       whereEn: 'Solo / Weekly' },
+  { id: 'battle', icon: '⚔️', name: 'アリーナの熱気',   nameEn: 'Arena Heat',      where: 'オンライン対戦',           whereEn: 'Online battles' },
+  { id: 'hard',   icon: '🔥', name: '限界突破',         nameEn: 'Limit Break',     where: '達人・タイムアタック',     whereEn: 'Expert / Time Attack' },
+  { id: 'boss',   icon: '🐲', name: '巨影せまる',       nameEn: 'Looming Giant',   where: 'ボス戦',                   whereEn: 'Boss fights' },
+  { id: 'oni',    icon: '👹', name: '鬼の巣窟',         nameEn: "Oni's Den",       where: '鬼・深淵',                 whereEn: 'Oni / Abyss' },
+  { id: 'pixel',  icon: '👾', name: 'PIXEL RUSH 182',   nameEn: 'PIXEL RUSH 182',  where: 'バトルロイヤル',           whereEn: 'Battle Royale' },
+  { id: 'kami',   icon: '🔱', name: '天上の光',         nameEn: 'Celestial Light', where: '神・天国ダンジョン',       whereEn: 'Kami / Heaven' },
+].map(t => ({ ...t, bpm: TRACKS[t.id].bpm }));
+
 class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -131,7 +144,9 @@ class AudioEngine {
     this.sfxOn = true;
     this.sfxVol = 0.9;
     this.musicVol = 0.6;
-    this.trackName = null;       // requested track ('menu', 'solo', ...)
+    this.trackName = null;       // what the game asked for ('menu', 'solo', ...)
+    this.lockedTrack = null;     // jukebox pin: overrides the game's choice everywhere
+    this.previewTrack = null;    // jukebox modal preview: overrides everything while open
     this.playing = null;         // currently scheduled track
     this.scheduler = null;
     this.step = 0;
@@ -181,15 +196,29 @@ class AudioEngine {
   setMusicEnabled(on) {
     this.musicOn = on;
     if (!on) this.stopScheduler();
-    else if (this.trackName) this.playTrack(this.trackName, true);
+    // No force: re-applying settings (e.g. dragging a volume slider) must not
+    // restart the current track from the top.
+    else this.syncTrack();
   }
 
   // -------------------------------------------------------------------------
   // Music engine
   // -------------------------------------------------------------------------
+  // Which track actually sounds: jukebox preview > jukebox pin > game request.
 
   playTrack(name, force = false) {
     this.trackName = name;
+    this.syncTrack(force);
+  }
+
+  // Jukebox (サウンドトラック): preview while the modal is open, or pin one
+  // track so screen changes stop switching the music (ループ固定).
+  preview(name) { this.previewTrack = TRACKS[name] ? name : null; this.syncTrack(); }
+  stopPreview() { this.previewTrack = null; this.syncTrack(); }
+  setLockedTrack(name) { this.lockedTrack = name && TRACKS[name] ? name : null; this.syncTrack(); }
+
+  syncTrack(force = false) {
+    const name = this.previewTrack || this.lockedTrack || this.trackName;
     if (!name) { this.stopScheduler(); return; }
     if (!this.musicOn || !this.ensure()) return;
     if (this.playing === name && !force) return;
@@ -201,7 +230,7 @@ class AudioEngine {
     this.scheduleAhead();
   }
 
-  stopMusic() { this.trackName = null; this.stopScheduler(); }
+  stopMusic() { this.trackName = null; this.syncTrack(); }
 
   stopScheduler() {
     if (this.scheduler) { clearInterval(this.scheduler); this.scheduler = null; }

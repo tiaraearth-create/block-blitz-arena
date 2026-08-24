@@ -120,6 +120,7 @@ const CATALOG_EN = {
   sprinter: { name: 'Gale-Force Blocker', desc: 'Score 20,000 in a 60s Time Attack' },
   buddy: { name: 'Great Duo', desc: 'Play 10 co-op runs' },
   soulmate: { name: 'In Perfect Sync', desc: 'Reach 20,000 in co-op' },
+  weeklyking: { name: 'Weekly Sovereign', desc: 'Finish #1 in the weekly challenge' },
 };
 
 // Name/description for a catalog object ({id, name, desc}) in the UI language.

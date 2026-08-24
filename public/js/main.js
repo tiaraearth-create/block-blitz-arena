@@ -4,7 +4,7 @@ import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, sta
 import { audio } from './audio.js';
 import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
-import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews } from './screens.js';
+import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
@@ -236,7 +236,10 @@ startGodLoop();
 // ---- audio boot: autoplay if allowed, otherwise tap-to-start splash ----
 function startAudioNow() {
   audio.ensure();
-  if (!audio.playing) audio.playTrack(audio.trackName || 'menu');
+  // Always register the menu track as the game's request — a jukebox-locked
+  // track may already be sounding, and without this the "おまかせ" reset
+  // would have nothing to fall back to. No-op when already playing it.
+  audio.playTrack(audio.trackName || 'menu');
 }
 
 function dismissSplash(e) {
@@ -670,6 +673,10 @@ function waitForRestore() {
           toast(t(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? `（🔥${st}日連続！）` : ''}`,
             `🎁 Daily bonus +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? ` (🔥${st}-day streak!)` : ''}`), 'ok', 3500);
           audio.coin();
+        }
+        // 週明け: ランキング報酬が待っていたら受け取りダイアログを出す。
+        if (data.user && data.user.rankRewards && data.user.rankRewards.length) {
+          setTimeout(() => showRankRewardsModal(), 1600);
         }
         break;
       } catch (err) {

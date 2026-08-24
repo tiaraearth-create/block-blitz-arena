@@ -2,7 +2,7 @@
 import { session, api, setToken, refreshMe } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar, confettiBurst, rankOf, staffUiOn, setStaffUi } from './dom.js';
 import { getSkin, BOARDS } from './themes.js';
-import { audio } from './audio.js';
+import { audio, TRACK_INFO } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
 import { reconnectChat, markNewsSeen } from './chat.js';
 import { t as tr, setLang, LANG, catName, catDesc } from './i18n.js';
@@ -60,6 +60,9 @@ export function showAuthModal() {
         setTimeout(() => toast(tr(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? `（🔥${st}日連続！）` : ''}`,
           `🎁 Daily bonus +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? ` (🔥${st}-day streak!)` : ''}`), 'ok', 3500), 900);
       }
+      if (data.user.rankRewards && data.user.rankRewards.length) {
+        setTimeout(() => showRankRewardsModal(), 1400);
+      }
     } catch (err) {
       errEl.textContent = err.message;
       audio.error();
@@ -71,7 +74,7 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
@@ -385,6 +388,10 @@ export function showSettingsModal() {
         <input type="checkbox" id="setMusicOn" ${s.musicOn ? 'checked' : ''}>
       </div>
       <div class="settings-row">
+        <label>🎧 ${tr('サウンドトラック', 'Soundtrack')}<br><small class="muted" style="font-weight:600">${tr('好きな曲を選んでループ再生', 'Pick any track & loop it')}</small></label>
+        <button class="btn btn-sm btn-ghost" id="setJukebox">${(() => { const t = TRACK_INFO.find(x => x.id === s.bgmTrack); return t ? `🔁 ${escapeHtml(tr(t.name, t.nameEn))}` : tr('開く', 'Open'); })()}</button>
+      </div>
+      <div class="settings-row">
         <label>${tr('📳 画面シェイク', '📳 Screen shake')}</label>
         <input type="checkbox" id="setShake" ${s.shake ? 'checked' : ''}>
       </div>
@@ -441,6 +448,7 @@ export function showSettingsModal() {
   });
 
   m.querySelector('#setCredits').onclick = () => showCreditsModal();
+  m.querySelector('#setJukebox').onclick = () => { audio.click(); closeModal(); showJukeboxModal(); };
 
   const renameBtn = m.querySelector('#setRename');
   if (renameBtn) renameBtn.onclick = () => showRenameModal();
@@ -525,6 +533,107 @@ export function showSettingsModal() {
 }
 
 // ---------------------------------------------------------------------------
+// 🎧 サウンドトラック (Jukebox) — 全曲を試聴・ループ固定・音量調整
+// ---------------------------------------------------------------------------
+
+export function showJukeboxModal() {
+  const s = getSettings();
+  // 保存値は必ず実在するトラックIDに正規化してから使う。
+  const savedPin = TRACK_INFO.some(t => t.id === s.bgmTrack) ? s.bgmTrack : null;
+  let lock = !!savedPin;                         // 🔁 選んだ曲をどの画面でも流す
+  let sel = savedPin || audio.playing || null;   // いま選択中のトラック
+
+  const m = showModal(`
+    <h2>🎧 ${tr('サウンドトラック', 'Soundtrack')}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">
+      ${tr('タップで再生。🔁をONにすると、どの画面でもその曲がループ再生され続けます', 'Tap a track to play it. Turn 🔁 on and it keeps looping on every screen')}
+    </p>
+    <div class="settings-row">
+      <label>🔊 ${tr('BGM音量', 'Music volume')}</label>
+      <input type="range" id="jbVol" min="0" max="100" value="${Math.round(s.musicVol * 100)}">
+      <b id="jbVolPct" style="min-width:42px;text-align:right;font-variant-numeric:tabular-nums">${Math.round(s.musicVol * 100)}%</b>
+    </div>
+    <div class="settings-row">
+      <label>🔁 ${tr('選んだ曲をループ固定', 'Loop my pick everywhere')}</label>
+      <input type="checkbox" id="jbLock" ${lock ? 'checked' : ''}>
+    </div>
+    <div class="jb-list" id="jbList"></div>
+    <div class="modal-buttons"><button class="btn btn-primary" id="jbClose">${tr('閉じる', 'Close')}</button></div>`,
+  // 背景タップで閉じると stopPreview が走らず試聴が鳴りっぱなしになるため、
+  // 閉じるのは必ず「閉じる」ボタン経由にする。
+  { dismissable: false });
+
+  const list = m.querySelector('#jbList');
+  const render = () => {
+    const now = audio.playing;
+    const autoActive = !lock && !audio.previewTrack;
+    list.innerHTML = `
+      ${TRACK_INFO.map(t => `
+        <button class="jb-row ${now === t.id ? 'playing' : ''}" data-jb="${t.id}">
+          <span class="jb-icon">${t.icon}</span>
+          <span class="jb-meta">
+            <b>${escapeHtml(tr(t.name, t.nameEn))}${lock && sel === t.id ? ' <span class="jb-pin">🔁</span>' : ''}</b>
+            <small>${escapeHtml(tr(t.where, t.whereEn))} ・ ${t.bpm} BPM</small>
+          </span>
+          ${now === t.id ? '<span class="jb-eq"><i></i><i></i><i></i></span>' : '<span class="jb-play">▶</span>'}
+        </button>`).join('')}
+      <button class="jb-row jb-auto ${autoActive ? 'playing' : ''}" data-jb="">
+        <span class="jb-icon">🔄</span>
+        <span class="jb-meta"><b>${tr('おまかせ', 'Auto')}</b><small>${tr('画面ごとにBGMを自動で切り替え（通常モード）', 'Music switches with each screen (default)')}</small></span>
+        ${autoActive ? '<span class="jb-play">✓</span>' : ''}
+      </button>`;
+    list.querySelectorAll('[data-jb]').forEach(b => {
+      b.onclick = () => {
+        const id = b.dataset.jb;
+        if (!id) {
+          // おまかせ: 固定解除して通常の画面連動BGMへ
+          lock = false;
+          sel = null;
+          m.querySelector('#jbLock').checked = false;
+          updateSettings({ bgmTrack: null });
+          audio.stopPreview();
+        } else {
+          sel = id;
+          // 曲をタップした＝聴きたいということ。BGMがOFFでも鳴らす。
+          if (!getSettings().musicOn) {
+            updateSettings({ musicOn: true });
+            toast(tr('🎵 BGMをONにしました', '🎵 Music turned on'), 'ok', 1800);
+          }
+          audio.preview(id);
+          if (lock) updateSettings({ bgmTrack: id });
+        }
+        render();
+      };
+    });
+  };
+  render();
+
+  m.querySelector('#jbVol').oninput = e => {
+    updateSettings({ musicVol: e.target.value / 100 });
+    m.querySelector('#jbVolPct').textContent = `${e.target.value}%`;
+  };
+  m.querySelector('#jbLock').onchange = e => {
+    lock = e.target.checked;
+    if (lock) {
+      // タップ時と同じく、聴く気があるのにBGMがOFFなら黙ってONにする —
+      // 「ループ再生します」と言いながら無音、は嘘になる。
+      if (!getSettings().musicOn) updateSettings({ musicOn: true });
+      sel = TRACK_INFO.some(t => t.id === sel) ? sel : (audio.playing || 'menu');
+    }
+    updateSettings({ bgmTrack: lock ? sel : null });
+    toast(lock
+      ? tr('🔁 この曲をどの画面でもループ再生します', '🔁 This track now loops on every screen')
+      : tr('🔄 画面ごとの自動BGMに戻しました', '🔄 Back to automatic per-screen music'), 'ok', 2200);
+    render();
+  };
+  m.querySelector('#jbClose').onclick = () => {
+    audio.stopPreview();   // 固定中はその曲が流れ続け、未固定なら元のBGMに戻る
+    closeModal();
+    showSettingsModal();
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Leaderboard
 // ---------------------------------------------------------------------------
 
@@ -540,8 +649,21 @@ export async function openLeaderboard(board = 'score') {
       return;
     }
     const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯' };
-    list.innerHTML = data.rows.map((r, i) => `
+    // Weekly board: show the prize table paid out at every Monday reset.
+    let rewardHead = '';
+    if (board === 'weekly' && data.rewards) {
+      let prev = 0;
+      const chips = data.rewards.map(t => {
+        const label = t.upTo === null ? tr(`${prev + 1}位〜`, `#${prev + 1}+`)
+          : t.upTo === prev + 1 ? tr(`${t.upTo}位`, `#${t.upTo}`)
+          : tr(`${prev + 1}〜${t.upTo}位`, `#${prev + 1}-${t.upTo}`);
+        prev = t.upTo === null ? prev : t.upTo;
+        return `<span>${label} ${fmt(t.coins)}🪙+${fmt(t.gems)}💎${t.badge ? '+🏅' : ''}</span>`;
+      }).join('');
+      rewardHead = `<div class="lb-rewards">🎁 <b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
+    }
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅' };
+    list.innerHTML = rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
         <div class="lb-name">${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
@@ -861,8 +983,11 @@ function renderMissions() {
   const bonusClaimed = daily ? data.dailyBonusClaimed : data.weeklyBonusClaimed;
   const allClaimed = rows.every(r => r.claimed);
   const doneCount = rows.filter(r => r.claimed).length;
+  // 受け取りそびれたランキング報酬の入口（起動時のダイアログを閉じてもここから受け取れる）
+  const rankPending = session.user && Array.isArray(session.user.rankRewards) ? session.user.rankRewards.length : 0;
 
   body.innerHTML = `
+    ${rankPending ? `<button class="btn btn-gold" id="msRankRewards" style="width:100%;margin-bottom:10px">🏆 ${tr(`ランキング報酬が${rankPending}件届いています — タップで受け取る`, `${rankPending} ranking reward${rankPending > 1 ? 's' : ''} waiting — tap to claim`)}</button>` : ''}
     <div class="ms-head">
       <div>
         <b>${daily ? tr('デイリーミッション', 'Daily Missions') : tr('ウィークリーミッション', 'Weekly Missions')}</b>
@@ -902,6 +1027,9 @@ function renderMissions() {
           : `<button class="btn btn-sm ${allClaimed ? 'btn-gold' : 'btn-ghost'}" data-claim="${daily ? 'daily_bonus' : 'weekly_bonus'}" ${allClaimed ? '' : 'disabled'}>${tr('受取', 'Claim')}</button>`}
       </div>
     </div>`;
+
+  const rk = body.querySelector('#msRankRewards');
+  if (rk) rk.onclick = () => showRankRewardsModal(true);
 
   body.querySelectorAll('[data-claim]:not([disabled])').forEach(btn => {
     btn.onclick = async () => {
@@ -993,6 +1121,53 @@ function renderAchievements() {
   if (all) all.onclick = () => claim('*');
 }
 
+// 週間ランキング報酬の受け取りダイアログ（pending は /api/me が session.user
+// に載せてくる — ログイン直後・週明けの起動時に出る）。閉じてしまっても
+// ミッション画面のバナーからいつでも受け取れる。
+export function showRankRewardsModal(force = false) {
+  const pending = (session.user && session.user.rankRewards) || [];
+  if (!pending.length) return;
+  // 自動表示は他のモーダル（復元ダイアログ等）を奪わない。
+  if (!force && $('#modal-root').querySelector('.modal')) return;
+  const total = pending.reduce((a, r) => ({ coins: a.coins + (r.coins || 0), gems: a.gems + (r.gems || 0) }), { coins: 0, gems: 0 });
+  const medal = r => r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : '🎖️';
+  const m = showModal(`
+    <h2>🏆 ${tr('ランキング報酬', 'Ranking Rewards')}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">${tr('週間チャレンジの最終結果が出ました！', 'The weekly challenge results are in!')}</p>
+    <div class="rank-reward-list">
+      ${pending.map(r => `
+        <div class="rank-reward-row">
+          <span><b>${medal(r)} ${tr(`${r.rank}位`, `#${r.rank}`)}</b> <small class="muted">/ ${r.of}${tr('人中', ' players')} ・ ${escapeHtml(r.week)} ・ ${fmt(r.best)}${tr('点', ' pts')}</small></span>
+          <b>+${fmt(r.coins)}🪙 +${fmt(r.gems)}💎${r.badge ? ' +🏅' : ''}</b>
+        </div>`).join('')}
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-primary" id="rkClaim">🎁 ${tr('受け取る', 'Claim')}（+${fmt(total.coins)}🪙 +${fmt(total.gems)}💎）</button>
+      <button class="btn btn-ghost" id="rkLater">${tr('あとで', 'Later')}</button>
+    </div>`);
+  m.querySelector('#rkLater').onclick = closeModal;
+  const claimBtn = m.querySelector('#rkClaim');
+  claimBtn.onclick = async () => {
+    claimBtn.disabled = true;   // ダブルタップで409トーストを出さない
+    try {
+      const res = await api('/api/rank/claim', { method: 'POST', body: {} });
+      closeModal();
+      audio.coin();
+      confettiBurst(50);
+      updateTopbar();
+      toast(tr(`🏆 ランキング報酬を受け取りました！ +${fmt(res.reward.coins)}🪙 +${fmt(res.reward.gems)}💎${res.reward.badges.length ? '（🏅週間チャンピオン獲得！）' : ''}`,
+        `🏆 Rewards claimed! +${fmt(res.reward.coins)}🪙 +${fmt(res.reward.gems)}💎${res.reward.badges.length ? ' (🏅 Weekly Champion!)' : ''}`), 'ok', 4500);
+      const banner = $('#msRankRewards');
+      if (banner) banner.remove();
+      refreshMissionDot();
+    } catch (err) {
+      audio.error();
+      toast(err.message, 'err');
+      claimBtn.disabled = false;
+    }
+  };
+}
+
 // Red dot on the menu button whenever something is waiting to be claimed.
 export async function refreshMissionDot() {
   const dot = $('#missionDot');
@@ -1010,6 +1185,7 @@ export async function refreshMissionDot() {
       if (ms.weekly.every(r => r.claimed) && !ms.weeklyBonusClaimed) pending++;
     }
     if (ach) pending += ach.rows.filter(r => r.done && !r.claimed).length;
+    if (session.user && Array.isArray(session.user.rankRewards)) pending += session.user.rankRewards.length;
     dot.classList.toggle('hidden', pending === 0);
     dot.textContent = pending > 9 ? '9+' : String(pending || '');
   } catch {
@@ -1968,7 +2144,8 @@ export async function showPollAdminModal() {
         ${poll.options.map(o => `
           <div class="poll-option revealed" style="cursor:default">
             <span class="poll-fill" style="width:${o.pct || 0}%"></span>
-            <span class="poll-text">${escapeHtml(o.text)}</span>
+            <span class="poll-text">${escapeHtml(o.text)}${o.archs && o.archs.length
+              ? `<small class="muted" style="display:block;font-size:10px">🤖 ${o.archs.map(a => `${escapeHtml(a.label)}×${a.n}`).join('・')}</small>` : ''}</span>
             <span class="poll-pct">${o.pct || 0}% <small>(${fmt(o.votes || 0)}${o.ai !== undefined ? ` = 👤${o.real}+🤖${o.ai}` : ''})</small></span>
           </div>`).join('')}
       </div>
@@ -2098,10 +2275,11 @@ const MOOD_LABEL = { party: '🔥 大盛況', busy: '🙂 にぎやか', calm: '
 const TOGGLE_LABELS = [
   ['chat', '💬 住人のチャット'], ['dialogues', '🗣️ 住人どうしの会話'], ['feed', '📡 ライブフィード'],
   ['greetings', '👋 入室した人への挨拶'], ['reactions', '⚡ 返事・イベント/投票/対戦への反応'],
-  ['ghosts', '🏆 ランキングの住人'], ['bots', '🤖 対戦ボットを住人に'],
+  ['ghosts', '🏆 ランキングの住人'], ['bots', '🤖 対戦ボットを住人に'], ['votes', '🗳️ AI住人の投票'],
 ];
 const PRESETS = [
   ['normal', '🙂 標準', '人口×1・ふつうのにぎわい'], ['party', '🎉 お祭り', '人口×3・おしゃべり×2.5'],
+  ['fever', '🔥 フィーバー', '人口×25・住人も大増員'], ['mega', '🌋 伝説の夜', '人口×100・限界ににぎやか'],
   ['quiet', '🤫 しずか', '人口×0.5・会話と挨拶なし'], ['night', '🌙 深夜の秘密基地', '人口×0.7・ゆったり'],
   ['silent', '🔇 人口だけ', '人数は出るが誰も喋らない'], ['off', '⚫ 完全オフ', 'AIプレイヤーを全停止'],
 ];
@@ -2144,7 +2322,7 @@ async function showCrowdModal(tab = 'basic') {
       </div>
       <div class="settings-row" style="margin-top:12px"><label>👥 人口倍率 <b>×${st.scale}</b></label></div>
       <div class="seg seg-wrap" id="popSeg" style="justify-content:center">
-        ${[0, 0.5, 1, 1.5, 2, 3, 5, 7, 10].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
+        ${[0, 0.5, 1, 1.5, 2, 3, 5, 10, 25, 50, 100].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
       </div>
       <div class="settings-row" style="margin-top:10px"><label>💬 チャット頻度</label><div class="seg" id="paceSeg">
         ${[[0.5, 'ひかえめ'], [1, '標準'], [2, 'おしゃべり'], [4, '大騒ぎ']].map(([v, l]) =>

@@ -130,6 +130,7 @@ export const TITLES = [
   { id: 'abysslord', name: '深淵の支配者',     color: '#c026d3', desc: '深淵ダンジョン A100制覇' },
   { id: 'guildfounder', name: 'ギルド創設者', color: '#f59e0b', desc: 'ギルドを設立する' },
   { id: 'guildace', name: 'ギルドのエース',   color: '#22d3ee', desc: 'ギルドに週2,000ポイント貢献' },
+  { id: 'weeklyking', name: '週間王者',       color: '#ffd75e', desc: '週間チャレンジで週間1位に輝く' },
 ];
 
 export function earnedTitles(user) {
@@ -179,6 +180,7 @@ export function earnedTitles(user) {
   if (has('abyss')) out.push('abysslord');
   if (user.guildFounded) out.push('guildfounder');
   if ((s.guildBestWeek || 0) >= 2000) out.push('guildace');
+  if (has('weekly1')) out.push('weeklyking');
   return out;
 }
 

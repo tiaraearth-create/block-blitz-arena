@@ -17,10 +17,13 @@ import { composeLine, chooseReplies as crowdReplies, buildCtx } from './crowd.js
 
 export const POP_SCALE = process.env.POP_SCALE === undefined ? 1 : Math.max(0, Number(process.env.POP_SCALE) || 0);
 
+export const MAX_LIVE_SCALE = 100;
+
 let liveScale = 1;
 export function setLiveScale(x) {
-  liveScale = Math.max(0, Math.min(10, Number(x)));
+  liveScale = Math.max(0, Math.min(MAX_LIVE_SCALE, Number(x)));
   if (!Number.isFinite(liveScale)) liveScale = 1;
+  rosterCache = null;   // the roster grows with the scale
 }
 export function getLiveScale() { return liveScale; }
 export function effectiveScale() { return POP_SCALE * liveScale; }
@@ -96,13 +99,26 @@ export function isQuietNow(now = Date.now()) {
 // Roster
 // ---------------------------------------------------------------------------
 
+// The cast grows with the crowd scale (√ curve, capped) so a packed arena
+// still has enough named residents to chat, vote and fill the boards.
+// buildRoster is deterministic per index, so growing only APPENDS residents —
+// r0..r63 keep their identity (and the admin's removed-list stays valid).
+const MAX_ROSTER = 240;
+export function rosterSize() {
+  const scale = effectiveScale();
+  return Math.min(MAX_ROSTER, Math.round(64 * Math.max(1, Math.sqrt(scale))));
+}
+
 let rosterCache = null;
+let rosterCacheSize = 0;
 export function getRoster() {
-  if (rosterCache) return rosterCache;
+  const size = rosterSize();
+  if (rosterCache && rosterCacheSize === size) return rosterCache;
   const removed = new Set(custom.removed);
-  const base = buildRoster(custom.rosterSeed).filter(r => !removed.has(r.id));
+  const base = buildRoster(custom.rosterSeed, size).filter(r => !removed.has(r.id));
   const extra = custom.extra.map((spec, i) => customResident(spec, i)).filter(r => !removed.has(r.id));
   rosterCache = base.concat(extra);
+  rosterCacheSize = size;
   return rosterCache;
 }
 
@@ -111,7 +127,12 @@ export function getRoster() {
 export function popFactor(now = Date.now()) {
   const scale = effectiveScale();
   if (!scale) return 0;
-  return Math.max(0.3, Math.min(2.2, ambientOnline(now) / 320));
+  const base = Math.max(0.3, Math.min(2.2, ambientOnline(now) / 320));
+  // Above ×2 the raw curve saturates; a log-damped boost lets big multipliers
+  // keep pushing the crowd (×10 ≈ ×1.7, ×100 ≈ ×2.7) without runaway timers —
+  // consumers keep their own absolute floors on gaps.
+  const boost = scale > 2 ? 1 + Math.log10(scale / 2) : 1;
+  return Math.min(4, base * boost);
 }
 
 export function activeResidents(now = Date.now()) {
@@ -252,8 +273,11 @@ export function ambientQueue(now = Date.now()) {
 export function crowdMood(now = Date.now()) {
   const scale = effectiveScale();
   if (!scale) return { id: 'off', ratio: 0 };
-  const peak = Math.max(...HOURLY) * scale * 1.25;
-  const ratio = ambientOnline(now) / peak;
+  // Reference peak grows slower than the scale (^0.7), so cranking the
+  // multiplier genuinely shifts the mood toward "party" instead of the scale
+  // cancelling itself out of the ratio.
+  const peak = Math.max(...HOURLY) * 1.25 * Math.max(1, Math.pow(scale, 0.7));
+  const ratio = Math.min(3, ambientOnline(now) / peak);
   return { id: ratio > 0.72 ? 'party' : ratio > 0.38 ? 'busy' : 'calm', ratio: Math.round(ratio * 100) / 100 };
 }
 
@@ -306,7 +330,8 @@ const GHOST_COUNT = { score: 40, rating: 30, dungeon: 24, weekly: 18, sprint: 22
 export function ghostRows(board, weekId, taken, now = Date.now()) {
   const scale = effectiveScale();
   if (!scale || !custom.toggles.ghosts) return [];
-  const count = Math.round((GHOST_COUNT[board] || 24) * Math.min(scale, 2));
+  // The public board is sliced to 100 rows — never generate more than that.
+  const count = Math.min(100, Math.round((GHOST_COUNT[board] || 24) * Math.min(scale, 2.5)));
   const used = new Set(taken);
   const rows = [];
 
@@ -362,11 +387,13 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
   return rows;
 }
 
-// Residents the admin retired (so they can be brought back).
+// Residents the admin retired (so they can be brought back). Always builds
+// the maximum roster: a resident retired while the scale was high (r64+)
+// must stay restorable even after the scale is lowered again.
 export function retiredResidents() {
   const removed = new Set(custom.removed);
   if (!removed.size) return [];
-  const base = buildRoster(custom.rosterSeed).filter(r => removed.has(r.id));
+  const base = buildRoster(custom.rosterSeed, MAX_ROSTER).filter(r => removed.has(r.id));
   const extra = custom.extra.map((spec, i) => customResident(spec, i)).filter(r => removed.has(r.id));
   return base.concat(extra).map(r => ({ id: r.id, name: r.name, archLabel: archetype(r.arch).label }));
 }
