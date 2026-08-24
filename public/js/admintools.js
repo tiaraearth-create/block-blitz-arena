@@ -1,4 +1,4 @@
-// Admin tools (staff only): the in-game command palette 3.0 and autopilot 3.0.
+// Admin tools (staff only): the in-game command palette 3.0 and autopilot 5.0.
 //
 // Everything here manipulates the running mode through the hooks modes.js
 // exports; nothing is persisted. Gated by staffExtras() so an admin can hide
@@ -234,12 +234,17 @@ export function runCommandLine(line) {
 }
 
 // ---------------------------------------------------------------------------
-// Autopilot 3.0
+// Autopilot 5.0 — ♾️不滅ブレイン + 🚑オートレスキュー
 // ---------------------------------------------------------------------------
 
-export const AUTO_BRAINS = ['easy', 'normal', 'hard', 'oni', 'kami', 'souzou'];
+export const AUTO_BRAINS = ['immortal', 'easy', 'normal', 'hard', 'oni', 'kami', 'souzou'];
 export const AUTO_SPEEDS = [1, 2, 4, 8, 16, 32];
 export const AUTO_STYLES = [['normal', '通常'], ['clear', '全消し狙い'], ['combo', 'コンボ重視'], ['safe', '安全重視']];
+
+// The immortal brain is autopilot-only — it must never appear in the VS AI
+// difficulty list, so its label lives here instead of AI_LEVELS.
+const BRAIN_META = { immortal: { avatar: '♾️', name: '不滅', nameEn: 'Immortal' } };
+const brainInfo = b => BRAIN_META[b] || AI_LEVELS[b] || BRAIN_META.immortal;
 
 function toggleAutopilotOn() {
   autopilot.on = true;
@@ -251,12 +256,13 @@ export function showAutopilotPanel() {
   if (!isAdmin()) return;
   const a = autopilot;
   const m = showModal(`
-    <h2>🤖 オートパイロット 3.0</h2>
+    <h2>🤖 オートパイロット 5.0</h2>
+    <p style="opacity:.72;font-size:12px;margin:2px 0 8px">♾️不滅ブレイン：生存最優先の探索で32倍速でも死なない。詰んでも🚑オートレスキューが即蘇生。</p>
     <div class="form-col">
       <div class="settings-row"><label>電源</label><div class="seg" id="auOn">
         <button data-v="1" ${a.on ? 'class="active"' : ''}>ON</button><button data-v="0" ${!a.on ? 'class="active"' : ''}>OFF</button></div></div>
       <div class="settings-row"><label>🧠 ブレイン</label><div class="seg seg-wrap" id="auBrain">
-        ${AUTO_BRAINS.map(b => `<button data-v="${b}" ${a.brain === b ? 'class="active"' : ''}>${AI_LEVELS[b].avatar}${AI_LEVELS[b].name}</button>`).join('')}</div></div>
+        ${AUTO_BRAINS.map(b => `<button data-v="${b}" ${a.brain === b ? 'class="active"' : ''}>${brainInfo(b).avatar}${brainInfo(b).name}</button>`).join('')}</div></div>
       <div class="settings-row"><label>⚡ 速度</label><div class="seg seg-wrap" id="auSpeed">
         ${AUTO_SPEEDS.map(s => `<button data-v="${s}" ${a.speed === s ? 'class="active"' : ''}>x${s}</button>`).join('')}</div></div>
       <div class="settings-row"><label>🎯 スタイル</label><div class="seg seg-wrap" id="auStyle">
@@ -264,11 +270,12 @@ export function showAutopilotPanel() {
       <div class="toggle-grid">
         <label class="toggle-item"><input type="checkbox" id="auItems" ${a.autoItems !== false ? 'checked' : ''}><span>💣 アイテム自動使用</span></label>
         <label class="toggle-item"><input type="checkbox" id="auUlt" ${a.autoUlt !== false ? 'checked' : ''}><span>⚡ 奥義自動発動</span></label>
+        <label class="toggle-item"><input type="checkbox" id="auGuard" ${a.guard !== false ? 'checked' : ''}><span>🚑 オートレスキュー（詰み防止）</span></label>
         <label class="toggle-item"><input type="checkbox" id="auContinue" ${a.autoContinue ? 'checked' : ''}><span>🔁 終了後も自動で続ける</span></label>
         <label class="toggle-item"><input type="checkbox" id="auPerks" ${a.autoPerks !== false ? 'checked' : ''}><span>🎁 パーク自動選択</span></label>
       </div>
       <div class="settings-row"><label>🛑 目標スコアで停止</label><input id="auTarget" type="number" min="0" step="1000" value="${a.targetScore || ''}" placeholder="なし" style="width:110px"></div>
-      <div class="test-out" id="auStats">${autoStatsText()}</div>
+      <div class="test-out" id="auStats" style="white-space:pre-line">${autoStatsText()}</div>
     </div>
     <div class="modal-buttons"><button class="btn btn-ghost" id="auClose">閉じる</button><button class="btn btn-primary" id="auApply">適用</button></div>`);
   const seg = (id, key, cast = v => v) => m.querySelectorAll(`#${id} button`).forEach(b => {
@@ -282,11 +289,12 @@ export function showAutopilotPanel() {
   m.querySelector('#auApply').onclick = () => {
     a.autoItems = m.querySelector('#auItems').checked;
     a.autoUlt = m.querySelector('#auUlt').checked;
+    a.guard = m.querySelector('#auGuard').checked;
     a.autoContinue = m.querySelector('#auContinue').checked;
     a.autoPerks = m.querySelector('#auPerks').checked;
     a.targetScore = Number(m.querySelector('#auTarget').value) || 0;
     closeModal();
-    if (a.on) { runAutopilot(); toast(`🤖 起動: ${AI_LEVELS[a.brain || 'souzou'].name}ブレイン x${a.speed} ${AUTO_STYLES.find(s => s[0] === (a.style || 'normal'))[1]}`, 'ok', 2600); }
+    if (a.on) { runAutopilot(); toast(`🤖 起動: ${brainInfo(a.brain || 'immortal').name}ブレイン x${a.speed} ${AUTO_STYLES.find(s => s[0] === (a.style || 'normal'))[1]}`, 'ok', 2600); }
     else { stopAutopilot(); toast('🤖 停止', '', 1200); }
     updateAutoBtn();
   };
@@ -295,9 +303,14 @@ export function showAutopilotPanel() {
 
 function autoStatsText() {
   const a = autopilot;
-  const s = a.stats || { moves: 0, clears: 0, started: 0 };
+  const s = a.stats || { moves: 0, clears: 0, rescues: 0, thinkMs: 0, started: 0 };
   const secs = Math.max(1, (Date.now() - (s.started || Date.now())) / 1000);
-  return `📊 手数 ${fmt(s.moves)} ・ 消去 ${fmt(s.clears)} ライン ・ ${(s.moves / secs).toFixed(1)} 手/秒 ・ 稼働 ${Math.floor(secs)}秒`;
+  const plan = a.lastPlan;
+  const danger = !plan ? '—'
+    : plan.stranded > 0 || plan.missingW > 0.25 ? '🔴危険'
+    : plan.missingW > 0.06 ? '🟡注意' : '🟢安全';
+  return `📊 手数 ${fmt(s.moves)} ・ 消去 ${fmt(s.clears)} ライン ・ ${(s.moves / secs).toFixed(1)} 手/秒 ・ 稼働 ${Math.floor(secs)}秒
+🚑 レスキュー ${fmt(s.rescues || 0)}回 ・ 🧠 思考 ${(s.thinkMs || 0).toFixed(1)}ms ・ 盤面 ${danger}`;
 }
 
 // Quick tap on the HUD 🤖 button: ON → speed up → panel on long list; a
@@ -308,7 +321,7 @@ export function quickAutopilot() {
   if (!autopilot.on) {
     autopilot.on = true;
     autopilot.speed = autopilot.speed || 1;
-    toast(`🤖 オートパイロット起動（${AI_LEVELS[autopilot.brain || 'souzou'].name}） — 長押しで設定`, 'ok', 2200);
+    toast(`🤖 オートパイロット起動（${brainInfo(autopilot.brain || 'immortal').name}） — 長押しで設定`, 'ok', 2200);
     updateAutoBtn();
     runAutopilot();
   } else {

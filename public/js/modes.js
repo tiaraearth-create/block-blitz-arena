@@ -2,7 +2,7 @@
 // plus the admin-only autopilot.
 import { Engine, shapeSize } from './engine.js';
 import { GameView, MiniBoard } from './game.js';
-import { chooseMove, AI_LEVELS } from './ai.js';
+import { chooseMove, AI_LEVELS, planImmortalMove } from './ai.js';
 import { audio } from './audio.js';
 import { session, api, refreshMe, BattleClient } from './net.js';
 import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf, staffExtras } from './dom.js';
@@ -17,6 +17,7 @@ let currentMode = null;
 function getView() {
   if (!view) {
     view = new GameView($('#gameCanvas'), { interactive: true });
+    view.onRescue = () => autoRescue();   // autopilot 5.0 guard (checks its own eligibility)
     window.__bbaView = view;   // debug/testing hook
   }
   view.setTheme(equippedTheme());
@@ -106,6 +107,7 @@ function updateRerollHud(engine) {
 
 function handleEngineOver() {
   if (!currentMode) return;
+  if (autoRescue()) return;   // autopilot 5.0: the guard saved the board
   if (currentMode.onTopOut) currentMode.onTopOut();
   else currentMode.finish();
 }
@@ -417,14 +419,16 @@ export function useGameItem(id) {
 }
 
 // ---------------------------------------------------------------------------
-// Autopilot (admin only): the strongest AI plays your board, any mode.
+// Autopilot 5.0 (admin only): the strongest AI plays your board, any mode.
+// The ♾️不滅 (immortal) brain plans for survival, and the 🚑 guard layer pulls
+// dead boards back to life before the game-over pipeline ever sees them.
 // ---------------------------------------------------------------------------
 
 export const autopilot = {
   on: false, speed: 1, timer: null,
-  brain: 'souzou', style: 'normal',
+  brain: 'immortal', style: 'normal', guard: true, lastPlan: null,
   autoItems: true, autoUlt: true, autoContinue: false, autoPerks: true, targetScore: 0,
-  stats: { moves: 0, clears: 0, started: 0 },
+  stats: { moves: 0, clears: 0, rescues: 0, thinkMs: 0, started: 0 },
 };
 
 function isAdmin() { return !!session.user && session.user.role === 'admin'; }
@@ -460,13 +464,17 @@ export function toggleAutopilot() {
 }
 
 // Autopilot fires boosters like a pro: cleaner for garbage floods, bomb for
-// clogged boards, fever whenever the board is open enough to combo.
+// clogged boards, fever whenever the board is open enough to combo. In an
+// emergency (5.0): cooldowns collapse and items become life support.
 function autoUseItems(m) {
-  if (Date.now() - (autopilot.itemAt || 0) < 2500) return;
-  if ($('#itemBar').classList.contains('hidden')) return;
   const e = m.engine;
+  const plan = autopilot.lastPlan;
+  const emergency = plan && (plan.stranded > 0 || plan.missingW > 0.25);
+  if (Date.now() - (autopilot.itemAt || 0) < (emergency ? 600 : 2500)) return;
+  if ($('#itemBar').classList.contains('hidden')) return;
   // Ultimates first: a charged gauge is always the strongest button available.
-  if (autopilot.autoUlt !== false && e.ult >= 100 && Date.now() - (autopilot.ultAt || 0) > 3000) {
+  if (autopilot.autoUlt !== false && e.ult >= 100
+    && Date.now() - (autopilot.ultAt || 0) > (emergency ? 900 : 3000)) {
     autopilot.itemAt = autopilot.ultAt = Date.now();
     fireUltCurrent();
     return;
@@ -475,6 +483,23 @@ function autoUseItems(m) {
   const counts = getItemCounts();
   const filled = e.grid.reduce((a, x) => a + (x ? 1 : 0), 0);
   const garbage = e.grid.reduce((a, x) => a + (x === 9 ? 1 : 0), 0);
+  if (emergency) {
+    if (garbage >= 3 && (counts.item_cleaner || 0) > 0) {
+      autopilot.itemAt = Date.now();
+      useGameItem('item_cleaner');
+      return;
+    }
+    if (filled >= 20 && (counts.item_bomb || 0) > 0) {
+      autopilot.itemAt = Date.now();
+      useGameItem('item_bomb');
+      return;
+    }
+    if (plan.stranded > 0 && (counts.item_mini || 0) > 0) {
+      autopilot.itemAt = Date.now();
+      useGameItem('item_mini');
+      return;
+    }
+  }
   if (garbage >= 8 && (counts.item_cleaner || 0) > 0) {
     autopilot.itemAt = Date.now();
     useGameItem('item_cleaner');
@@ -485,6 +510,60 @@ function autoUseItems(m) {
     && filled < 30 && Date.now() - (autopilot.feverAt || 0) > 20000) {
     autopilot.itemAt = autopilot.feverAt = Date.now();
     useGameItem('item_fever');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 🚑 Auto-rescue (autopilot 5.0): called from every game-over entry point in
+// the local PvE modes. When the board dies it redraws / detonates its way back
+// to a playable state BEFORE the finish pipeline runs. Fair-seed and
+// server-authoritative modes (AI / online / weekly / co-op / intent) never
+// qualify — the whitelist below is deliberate.
+// ---------------------------------------------------------------------------
+
+const RESCUE_MODES = new Set(['solo', 'boss', 'dungeon', 'chaos', 'survival', 'sprint']);
+let rescueBusy = false;
+
+function autoRescue() {
+  if (!autopilot.on || autopilot.guard === false || rescueBusy) return false;
+  const m = currentMode;
+  if (!m || !m.engine || m.ended || !view) return false;
+  if (m.usesIntent || m.isCoop || !RESCUE_MODES.has(m.mode)) return false;
+  const e = m.engine;
+  const alive = () => {
+    if (e.over && e.hasAnyMove()) e.over = false;
+    return !e.over;
+  };
+  if (alive()) return true;   // stale flag — nothing to do
+  rescueBusy = true;
+  try {
+    // 1) Redraw the hand. engine.reroll() refuses on a dead board by design,
+    //    so the guard lifts the flag first — this is a staff tool, and exactly
+    //    the moment infinite rerolls exist for.
+    const redraw = tries => {
+      while (!alive() && tries-- > 0) {
+        e.over = false;
+        if (!e.reroll()) { e.over = !e.hasAnyMove(); break; }
+      }
+    };
+    redraw(e.infiniteReroll ? 16 : Math.max(0, e.rerolls));
+    // 2) Open the board with items, then redraw once more.
+    if (!alive() && !$('#itemBar').classList.contains('hidden')) {
+      const counts = getItemCounts();
+      for (const id of ['item_bomb', 'item_mini', 'item_cleaner']) {
+        if (alive()) break;
+        if ((counts[id] || 0) > 0) useGameItem(id);
+      }
+      redraw(e.infiniteReroll ? 8 : Math.max(0, e.rerolls));
+    }
+    if (!alive()) return false;
+    autopilot.stats.rescues = (autopilot.stats.rescues || 0) + 1;
+    updateRerollHud(e);
+    if (view.reviveFlash) view.reviveFlash();
+    toast(t('🚑 オートレスキュー！', '🚑 Auto-rescue!'), 'ok', 1200);
+    return true;
+  } finally {
+    rescueBusy = false;
   }
 }
 
@@ -504,7 +583,16 @@ function simMove(engine, index, row, col) {
 
 // Style layer on top of the brain: bias the chosen move toward the goal.
 function pickAutoMove(engine) {
-  const base = chooseMove(engine, autopilot.brain || 'souzou');
+  const brain = autopilot.brain || 'immortal';
+  if (brain === 'immortal') {
+    // 5.0 brain: styles are weights inside the search, not an override on top.
+    const plan = planImmortalMove(engine, autopilot.style || 'normal');
+    autopilot.lastPlan = plan;
+    autopilot.stats.thinkMs = Math.round(plan.ms * 10) / 10;
+    return plan.move;
+  }
+  autopilot.lastPlan = null;
+  const base = chooseMove(engine, brain);
   const style = autopilot.style || 'normal';
   if (style === 'normal' || !base) return base;
   let best = base, bestScore = -Infinity;
@@ -544,12 +632,26 @@ export function runAutopilot() {
       }
       autoUseItems(m);
       const mv = pickAutoMove(m.engine);
-      if (mv) {
+      const plan = autopilot.lastPlan;
+      if (plan && plan.stranded > 0 && (m.engine.infiniteReroll || m.engine.rerolls > 0)
+        && !m.usesIntent && !m.isCoop) {
+        // 5.0: the search proved no order places this hand. Redraw NOW —
+        // placing first can flip `over`, and a dead board refuses rerolls.
+        m.engine.reroll();
+        updateRerollHud(m.engine);
+        if (m.engine.over) handleEngineOver();
+      } else if (mv) {
         if ((m.isCoop || m.usesIntent) && view.onIntentPlace) {
           view.onIntentPlace(mv.index, mv.row, mv.col);   // mode-authoritative placement
         } else {
           const r = m.engine.place(mv.index, mv.row, mv.col);
-          if (r) { view.applyResult(r); autopilot.stats.moves++; autopilot.stats.clears += r.lineCount; }
+          if (r) {
+            // 5.0 guard: pull a dead refill back to life before the game-over
+            // pipeline (applyResult → onGameOver) ever sees it.
+            if (r.over && autoRescue()) r.over = false;
+            view.applyResult(r);
+            autopilot.stats.moves++; autopilot.stats.clears += r.lineCount;
+          }
         }
       } else if (m.engine.rerolls > 0 || m.engine.infiniteReroll) {
         m.engine.reroll();
@@ -568,7 +670,8 @@ export function runAutopilot() {
 export function stopAutopilot() {
   autopilot.on = false;
   autopilot.speed = 1;
-  autopilot.stats = { moves: 0, clears: 0, started: 0 };
+  autopilot.lastPlan = null;
+  autopilot.stats = { moves: 0, clears: 0, rescues: 0, thinkMs: 0, started: 0 };
   clearTimeout(autopilot.timer);
   updateAutoBtn();
 }
@@ -1916,6 +2019,7 @@ class BossRushMode {
 
   onTopOut() {
     if (this.ended) return;
+    if (autoRescue()) return;   // autopilot 5.0 guard — before burning the phoenix
     if (this.phoenix) {
       this.phoenix = false;
       this.engine.reviveBoard();
@@ -2555,6 +2659,7 @@ class DungeonMode {
 
   onTopOut() {
     if (this.ended || this.perkOpen) return;
+    if (autoRescue()) return;   // autopilot 5.0 guard — before spending a life
     if (this.lives > 1) {
       this.lives--;
       this.engine.reviveBoard();
@@ -2852,6 +2957,7 @@ class ChaosMode extends VersusBase {
 
   onTopOut() {
     if (this.ended) return;
+    if (autoRescue()) return;   // autopilot 5.0 guard — keeps the combo streak alive
     toast(t('ボードリセット！スコアは維持されます', 'Board reset! Your score is kept'), '', 1600);
     this.engine.reviveBoard();
     getView().reviveFlash();
@@ -3776,7 +3882,7 @@ class SurvivalMode {
     const interval = Math.max(5, 15 - this.wave * 0.6);
     this.nextAt = Date.now() + interval * 1000;
     this.updateHud();
-    if (this.engine.over || !this.engine.hasAnyMove()) this.finish();
+    if ((this.engine.over || !this.engine.hasAnyMove()) && !autoRescue()) this.finish();
   }
 
   async finish() {

@@ -30,6 +30,7 @@ export class GameView {
     this.onPlace = null;            // callback(result)
     this.onIntentPlace = null;      // callback(index,row,col) -> true to take over the move
     this.onGameOver = null;
+    this.onRescue = null;           // callback() -> true if a guard revived the board (autopilot 5.0)
     this.onIllegal = null;
     this.glowCells = null;          // Set of r*8+c a mode wants highlighted
     this.dangerCells = null;        // Set of r*8+c flashing red (boss attack telegraph)
@@ -265,6 +266,8 @@ export class GameView {
         this.addFloatText(this.boardX + this.boardSize / 2, this.boardY + this.boardSize / 2, 'INVINCIBLE!', '#ffd75e', 1.6);
         return;
       }
+      // Autopilot 5.0 guard: a rescue may redraw the hand / clear cells instead.
+      if (this.onRescue && this.onRescue()) return;
       audio.gameOver();
       if (this.onGameOver) this.onGameOver();
     }

@@ -1,5 +1,5 @@
 // Heuristic AI player for VS mode. Plays its own Engine instance.
-import { SIZE } from './engine.js';
+import { SIZE, SHAPES, shapeSize } from './engine.js';
 
 export const AI_LEVELS = {
   easy:   { name: '見習い', nameEn: 'Novice',  moveMs: 2600, noise: 0.5,  lookahead: false, avatar: '🤖' },
@@ -180,6 +180,225 @@ function beamSearch(engine, beamWidth = 10) {
     }
   }
   return states[0] ? states[0].first : null;
+}
+
+// ---------------------------------------------------------------------------
+// Autopilot 5.0 — ♾️不滅 (Immortal) brain.
+// Survival-first full-hand beam search. Differences from the souzou beam:
+//  - survival pressure is applied WHILE pruning (souzou only re-ranks the
+//    survivors at the very end, so safe lines are often discarded early)
+//  - lines that strand a hand piece are heavily punished instead of being
+//    silently kept "as the best line so far"
+//  - the final board (= the refill boundary, where a random hand of 3 arrives)
+//    is scored by the draw-weight share of shapes that could no longer be
+//    placed anywhere — the direct proxy for "can the next hand kill me?"
+// ---------------------------------------------------------------------------
+
+const SHAPE_FITS = SHAPES.map(s => {
+  const { rows, cols } = shapeSize(s.cells);
+  return { cells: s.cells, rows, cols, w: s.w };
+});
+const AI_TOTAL_W = SHAPES.reduce((a, s) => a + s.w, 0);
+
+function fitsAnywhere(grid, f) {
+  for (let r = 0; r <= SIZE - f.rows; r++) {
+    for (let c = 0; c <= SIZE - f.cols; c++) {
+      let ok = true;
+      for (const [dr, dc] of f.cells) {
+        if (grid[(r + dr) * SIZE + (c + dc)] !== 0) { ok = false; break; }
+      }
+      if (ok) return true;
+    }
+  }
+  return false;
+}
+
+// Draw-weight share (0..1) of shapes that no longer fit anywhere. Game over is
+// a refill hand of 3 with no fits, so death probability ≈ (this share)³.
+export function missingDrawWeight(grid) {
+  let missing = 0;
+  for (const f of SHAPE_FITS) if (!fitsAnywhere(grid, f)) missing += f.w;
+  return missing / AI_TOTAL_W;
+}
+
+// Cheap mid-depth probes: losing the 3x3 pocket or both long lanes is what
+// actually corners a board, so tax those states before they enter the beam.
+const RISK_PROBES = [
+  { cells: [[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]], rows: 3, cols: 3, pen: 1500 },
+  { cells: [[0,0],[0,1],[0,2],[0,3],[0,4]], rows: 1, cols: 5, pen: 450 },
+  { cells: [[0,0],[1,0],[2,0],[3,0],[4,0]], rows: 5, cols: 1, pen: 450 },
+];
+
+function quickRisk(grid) {
+  let risk = 0;
+  for (const p of RISK_PROBES) if (!fitsAnywhere(grid, p)) risk += p.pen;
+  return risk;
+}
+
+// Style layer for the immortal brain: weights inside the search, never a
+// single-ply override on top of it.
+const IMMORTAL_STYLES = {
+  normal: { line: 900,  survive: 5200, open: 1,   future: 4500 },
+  combo:  { line: 1500, survive: 4200, open: 1,   future: 3800 },
+  clear:  { line: 900,  survive: 4600, open: 1,   future: 4200, empty: 6 },
+  safe:   { line: 700,  survive: 8000, open: 1.4, future: 7000, empty: 3 },
+};
+
+const popcount = x => { let n = 0; while (x) { x &= x - 1; n++; } return n; };
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+// Weighted random shape (same distribution the engine draws from).
+function sampleShapeFit() {
+  let roll = Math.random() * AI_TOTAL_W;
+  for (let i = 0; i < SHAPE_FITS.length; i++) {
+    roll -= SHAPE_FITS[i].w;
+    if (roll <= 0) return SHAPE_FITS[i];
+  }
+  return SHAPE_FITS[0];
+}
+
+// Can this 3-piece hand be fully placed (clears included, any order/anchor)?
+// Bounded DFS: running out of budget counts as "no" — that only happens on
+// tight boards, where pessimism is exactly what we want.
+function canPlaceHand(grid, fits, budget) {
+  if (!fits.length) return true;
+  if (budget.n <= 0) return false;
+  for (let i = 0; i < fits.length; i++) {
+    const f = fits[i];
+    for (let r = 0; r <= SIZE - f.rows && budget.n > 0; r++) {
+      for (let c = 0; c <= SIZE - f.cols && budget.n > 0; c++) {
+        let ok = true;
+        for (const [dr, dc] of f.cells) {
+          if (grid[(r + dr) * SIZE + (c + dc)] !== 0) { ok = false; break; }
+        }
+        if (!ok) continue;
+        budget.n--;
+        const sim = simulate(grid, { cells: f.cells, color: 1 }, r, c);
+        const rest = fits.slice(0, i).concat(fits.slice(i + 1));
+        if (canPlaceHand(sim.grid, rest, budget)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Fraction of sampled future hands that survive on this board (0..1).
+function futureSurvivalRate(grid, sampledHands) {
+  let ok = 0;
+  for (const hand of sampledHands) {
+    if (canPlaceHand(grid, hand, { n: 70 })) ok++;
+  }
+  return ok / sampledHands.length;
+}
+
+const FUTURE_HANDS = 12;   // sampled refills scored per candidate final board
+
+let beamAuto = 26;   // self-tunes to the device so x32 ticks never fall behind
+
+export function planImmortalMove(engine, style = 'normal') {
+  const t0 = nowMs();
+  const W = IMMORTAL_STYLES[style] || IMMORTAL_STYLES.normal;
+  const handIdx = [];
+  for (let i = 0; i < engine.hand.length; i++) if (engine.hand[i]) handIdx.push(i);
+  if (!handIdx.length) {
+    return { move: null, stranded: 0, missingW: missingDrawWeight(engine.grid), ms: 0 };
+  }
+
+  let states = [{ grid: engine.grid, used: 0, lines: 0, first: null, value: 0 }];
+  const deadEnds = [];   // lines where some hand piece can never be placed
+  let completed = true;
+  for (let depth = 0; depth < handIdx.length; depth++) {
+    const next = [];
+    for (const st of states) {
+      let children = 0;
+      for (const i of handIdx) {
+        if (st.used & (1 << i)) continue;
+        const piece = engine.hand[i];
+        const { rows, cols } = shapeSize(piece.cells);
+        for (let r = 0; r <= SIZE - rows; r++) {
+          for (let c = 0; c <= SIZE - cols; c++) {
+            let ok = true;
+            for (const [dr, dc] of piece.cells) {
+              if (st.grid[(r + dr) * SIZE + (c + dc)] !== 0) { ok = false; break; }
+            }
+            if (!ok) continue;
+            const sim = simulate(st.grid, piece, r, c);
+            const lines = st.lines + sim.lines;
+            children++;
+            next.push({
+              grid: sim.grid, used: st.used | (1 << i), lines,
+              first: st.first || { index: i, row: r, col: c },
+              value: lines * W.line + evaluateGrid(sim.grid),
+            });
+          }
+        }
+      }
+      if (!children && st.first) deadEnds.push(st);
+    }
+    if (!next.length) { completed = false; break; }
+    // Two-stage prune: cheap value first, then survival probes on the
+    // shortlist — safe lines reach the beam BEFORE they can be discarded.
+    next.sort((a, b) => b.value - a.value);
+    const shortlist = next.slice(0, Math.max(beamAuto * 3, 36));
+    for (const st of shortlist) st.value -= quickRisk(st.grid);
+    shortlist.sort((a, b) => b.value - a.value);
+    states = shortlist.slice(0, beamAuto);
+    if (depth === handIdx.length - 1) {
+      for (const st of states) {
+        st.missing = missingDrawWeight(st.grid);
+        st.value += openness(st.grid) * W.open
+          - st.missing * W.survive
+          - (st.missing > 0.45 ? 2600 : 0);
+        if (W.empty) {
+          let e0 = 0;
+          for (let k = 0; k < SIZE * SIZE; k++) if (!st.grid[k]) e0++;
+          st.value += e0 * W.empty;
+        }
+      }
+      states.sort((a, b) => b.value - a.value);
+      // Expectimax-lite: play the SAME sampled refills against each finalist
+      // board and score the survival rate directly. This is what per-shape
+      // fit checks can't see — three pieces that fit alone but not together.
+      const finalists = states.slice(0, Math.min(states.length, 10));
+      const hands = [];
+      for (let h = 0; h < FUTURE_HANDS; h++) {
+        hands.push([sampleShapeFit(), sampleShapeFit(), sampleShapeFit()]);
+      }
+      for (const st of finalists) {
+        st.value += (futureSurvivalRate(st.grid, hands) - 1) * W.future;
+      }
+      finalists.sort((a, b) => b.value - a.value);
+      states = finalists;
+    }
+  }
+
+  let best = completed && states[0] && states[0].first ? states[0] : null;
+  let stranded = 0;
+  if (!best && deadEnds.length) {
+    // No order places the whole hand. Take the line that strands the fewest
+    // pieces and leaves the safest board — the guard layer handles the rest.
+    for (const st of deadEnds) st.left = handIdx.length - popcount(st.used);
+    deadEnds.sort((a, b) => (a.left - b.left) || (b.value - a.value));
+    const top = deadEnds.slice(0, 6);
+    for (const st of top) {
+      st.missing = missingDrawWeight(st.grid);
+      st.value -= st.missing * W.survive;
+    }
+    top.sort((a, b) => (a.left - b.left) || (b.value - a.value));
+    best = top[0];
+    stranded = best.left;
+  }
+
+  const ms = nowMs() - t0;
+  if (ms > 10 && beamAuto > 12) beamAuto -= 2;
+  else if (ms < 5 && beamAuto < 40) beamAuto += 1;
+
+  return {
+    move: best ? best.first : null,
+    stranded,
+    missingW: best && best.missing != null ? best.missing : missingDrawWeight(engine.grid),
+    ms,
+  };
 }
 
 // Choose the AI's next move: { index, row, col } or null if stuck.
