@@ -31,6 +31,10 @@ export class GameView {
     this.onIntentPlace = null;      // callback(index,row,col) -> true to take over the move
     this.onGameOver = null;
     this.onIllegal = null;
+    this.glowCells = null;          // Set of r*8+c a mode wants highlighted
+    this.dangerCells = null;        // Set of r*8+c flashing red (boss attack telegraph)
+    this.coolCells = null;          // Set of r*8+c pulsing cyan (meltdown coolant)
+    this.onTrayDrop = null;         // callback(fromSlot, toSlot) -> true to handle (chimera weld)
 
     this.running = false;
     this.lastTs = 0;
@@ -56,6 +60,9 @@ export class GameView {
     this.floatTexts.length = 0;
     this.particles.clear();
     this.drag = null;
+    this.glowCells = null;
+    this.dangerCells = null;
+    this.coolCells = null;
   }
 
   setTheme({ skinId, boardId, fxId }) {
@@ -118,6 +125,11 @@ export class GameView {
       const { x, y } = pos(e);
       const slot = this.trayHit(x, y);
       if (slot !== -1 && this.engine.hand[slot]) {
+        // Boss curse: a frozen piece can't be picked up until the ice melts.
+        if (this.engine.hand[slot].frozenUntil > Date.now()) {
+          audio.invalid();
+          return;
+        }
         try { this.canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
         this.drag = { index: slot, piece: this.engine.hand[slot], px: x, py: y };
         audio.pickup();
@@ -134,9 +146,15 @@ export class GameView {
 
     const drop = e => {
       if (!this.drag) return;
+      const { x, y } = pos(e);
       const anchor = this.dragAnchor();
       const { index } = this.drag;
       this.drag = null;
+      // Chimera welding: the drag preview (drawDrag) uses the same predicate,
+      // so whenever the weld highlight is showing, releasing welds — and
+      // whenever a board ghost is showing, releasing places. Never both.
+      const wslot = this.weldTargetAt(x, y, index);
+      if (wslot !== -1 && this.onTrayDrop(index, wslot)) return;
       if (anchor && this.engine.canPlace(this.engine.hand[index], anchor.r, anchor.c)) {
         // Co-op runs on a server-authoritative board: the hook forwards the
         // move and returns true, and the real placement arrives as a broadcast.
@@ -156,6 +174,17 @@ export class GameView {
     const slotW = this.W / 3;
     if (y < this.trayY) return -1;
     return Math.max(0, Math.min(2, Math.floor(x / slotW)));
+  }
+
+  // Chimera: which tray slot a drag at (x,y) would weld onto, or -1.
+  // Bottom-row placements hover the finger just past the tray's top edge, so
+  // welding needs the finger clearly inside the tray.
+  weldTargetAt(x, y, index) {
+    if (!this.onTrayDrop || !this.engine) return -1;
+    if (y <= this.trayY + Math.min(40, this.trayH * 0.3)) return -1;
+    const slot = this.trayHit(x, y);
+    if (slot === -1 || slot === index || !this.engine.hand[slot]) return -1;
+    return slot;
   }
 
   // Current drag → board anchor cell (top-left of the piece), or null.
@@ -291,6 +320,8 @@ export class GameView {
     this.drawGrid();
     if (this.engine) {
       this.drawBlocks();
+      this.drawDanger();
+      this.drawCool();
       this.drawDying();
       this.drawFlashes();
       if (this.drag) this.drawDrag();
@@ -385,7 +416,8 @@ export class GameView {
   drawBlocks() {
     const { ctx, cell } = this;
     const skin = getSkin(this.skinId);
-    const ghost = this.drag ? this.ghostInfo() : null;
+    const ghost = this.drag && this.weldTargetAt(this.drag.px, this.drag.py, this.drag.index) === -1
+      ? this.ghostInfo() : null;
 
     for (let r = 0; r < SIZE; r++) {
       for (let c = 0; c < SIZE; c++) {
@@ -400,9 +432,10 @@ export class GameView {
           if (p >= 1) this.spawnAnim.delete(key);
           else scale = 1.25 - 0.25 * this.easeOut(p);
         }
-        // highlight blocks in lines about to clear
+        // highlight blocks in lines about to clear, or mode-flagged cells
         let glow = 0;
         if (ghost && ghost.valid && (ghost.willRows.has(r) || ghost.willCols.has(c))) glow = 1;
+        if (!glow && this.glowCells && this.glowCells.has(key)) glow = 1;
         this.drawScaledBlock(skin, x, y, cell, v, 1, scale, glow);
       }
     }
@@ -426,6 +459,45 @@ export class GameView {
       skin(ctx, x, y, s, color, alpha);
     }
     if (scale !== 1) ctx.restore();
+  }
+
+  // Meltdown coolant: mode-flagged cells shimmer cyan.
+  drawCool() {
+    if (!this.coolCells || !this.coolCells.size) return;
+    const { ctx, cell } = this;
+    const pulse = 0.25 + 0.2 * Math.sin(this.time * 4);
+    for (const k of this.coolCells) {
+      const r = (k / SIZE) | 0, c = k % SIZE;
+      const x = this.boardX + c * cell, y = this.boardY + r * cell;
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = '#4dd0ff';
+      ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
+      ctx.globalAlpha = 1;
+      ctx.font = `${cell * 0.5}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('❄️', x + cell / 2, y + cell / 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Boss telegraph: target cells pulse red until the attack lands (or is cut).
+  drawDanger() {
+    if (!this.dangerCells || !this.dangerCells.size) return;
+    const { ctx, cell } = this;
+    const pulse = 0.22 + 0.2 * Math.sin(this.time * 7);
+    for (const k of this.dangerCells) {
+      const r = (k / SIZE) | 0, c = k % SIZE;
+      const x = this.boardX + c * cell, y = this.boardY + r * cell;
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = '#ff3b3b';
+      ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
+      ctx.globalAlpha = Math.min(1, pulse + 0.35);
+      ctx.strokeStyle = '#ff6b6b';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 2, y + 2, cell - 4, cell - 4);
+    }
+    ctx.globalAlpha = 1;
   }
 
   ghostInfo() {
@@ -455,9 +527,29 @@ export class GameView {
   drawDrag() {
     const { ctx, cell } = this;
     const skin = getSkin(this.skinId);
-    const ghost = this.ghostInfo();
     const piece = this.engine.hand[this.drag.index];
     if (!piece) return;
+
+    // Weld zone: highlight the target slot INSTEAD of a board ghost, so the
+    // preview always matches what releasing will do.
+    const wslot = this.weldTargetAt(this.drag.px, this.drag.py, this.drag.index);
+    const ghost = wslot === -1 ? this.ghostInfo() : null;
+    if (wslot !== -1) {
+      const slotW = this.W / 3;
+      const pulse = 0.25 + 0.15 * Math.sin(this.time * 6);
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = '#b06bff';
+      ctx.fillRect(wslot * slotW + 4, this.trayY + 2, slotW - 8, this.trayH - 6);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#b06bff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(wslot * slotW + 4, this.trayY + 2, slotW - 8, this.trayH - 6);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🧬', wslot * slotW + slotW / 2, this.trayY + 14);
+    }
 
     // ghost on board
     if (ghost) {
@@ -499,6 +591,7 @@ export class GameView {
       skin(ctx, left + dc * cell, top + dr * cell, cell, piece.color, 0.95);
     }
     ctx.restore();
+    if (piece.weld > 1) this.drawPieceTag(left, top, pw, ph, `×${piece.weld}`, '#b06bff');
   }
 
   drawDying() {
@@ -539,10 +632,46 @@ export class GameView {
       const alpha = placeable ? 1 : 0.3;
       // subtle idle bobbing
       const bob = Math.sin(this.time * 2 + i * 1.7) * 2;
+      const frozen = piece.frozenUntil > Date.now();
       for (const [dr, dc] of piece.cells) {
-        skin(ctx, ox + dc * maxCell, oy + dr * maxCell + bob, maxCell, piece.color, alpha);
+        skin(ctx, ox + dc * maxCell, oy + dr * maxCell + bob, maxCell, piece.color, frozen ? 0.45 : alpha);
+      }
+      if (piece.weld > 1) this.drawPieceTag(ox, oy + bob, pw, ph, `×${piece.weld}`, '#b06bff', alpha);
+      if (frozen) {
+        ctx.globalAlpha = 0.4;
+        ctx.fillStyle = '#9bd8ff';
+        ctx.fillRect(ox - 3, oy + bob - 3, pw + 6, ph + 6);
+        ctx.globalAlpha = 1;
+        ctx.font = `${Math.max(16, maxCell)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('❄️', ox + pw / 2, oy + bob + ph / 2);
       }
     }
+  }
+
+  // Glowing frame + corner label on a special hand piece (chimera welds).
+  drawPieceTag(x, y, w, h, text, color, alpha = 1) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6 + 3 * Math.sin(this.time * 4);
+    ctx.strokeRect(x - 3, y - 3, w + 6, h + 6);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = color;
+    const bw = Math.max(18, text.length * 8 + 6);
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(x - 6, y - 10, bw, 14, 5) : ctx.rect(x - 6, y - 10, bw, 14);
+    ctx.fill();
+    ctx.fillStyle = '#0b0e1f';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x - 6 + bw / 2, y - 3);
+    ctx.restore();
   }
 
   drawFloatTexts() {

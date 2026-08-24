@@ -1,6 +1,6 @@
 // Game mode controllers: Solo, VS AI, Online (1v1 / 2v2 team / custom rooms),
 // plus the admin-only autopilot.
-import { Engine } from './engine.js';
+import { Engine, shapeSize } from './engine.js';
 import { GameView, MiniBoard } from './game.js';
 import { chooseMove, AI_LEVELS } from './ai.js';
 import { audio } from './audio.js';
@@ -161,9 +161,11 @@ function updateUltHud() {
   const e = currentMode && currentMode.engine;
   const btn = $('#btnUlt');
   if (!e || btn.classList.contains('hidden')) return;
-  // ⚡奥義祭 event: pick the charge rate up live, even mid-game.
+  // ⚡奥義祭 event: pick the charge rate up live, even mid-game. Modes can
+  // stack their own bonus (rush の雷の遺物) via mode.ultRateBonus — this poll
+  // must multiply it in, not clobber it.
   const ev = window.__bbaEvent;
-  e.ultRate = (ev && ev.bonus && ev.bonus.ultRate) || 1;
+  e.ultRate = (((ev && ev.bonus && ev.bonus.ultRate) || 1) * ((currentMode && currentMode.ultRateBonus) || 1));
   btn.classList.toggle('ult-boosted', e.ultRate > 1);
   // Admins run a permanently charged gauge.
   if (session.user && session.user.role === 'admin' && staffExtras()) e.ult = 100;
@@ -543,8 +545,8 @@ export function runAutopilot() {
       autoUseItems(m);
       const mv = pickAutoMove(m.engine);
       if (mv) {
-        if (m.isCoop && view.onIntentPlace) {
-          view.onIntentPlace(mv.index, mv.row, mv.col);   // server-authoritative board
+        if ((m.isCoop || m.usesIntent) && view.onIntentPlace) {
+          view.onIntentPlace(mv.index, mv.row, mv.col);   // mode-authoritative placement
         } else {
           const r = m.engine.place(mv.index, mv.row, mv.col);
           if (r) { view.applyResult(r); autopilot.stats.moves++; autopilot.stats.clears += r.lineCount; }
@@ -642,6 +644,372 @@ class SoloMode {
 
   quit() { this.finish(); }
   destroy() {}
+}
+
+// ---------------------------------------------------------------------------
+// ☢️ メルトダウン: ライン消しで炉心温度＝スコア倍率が上がり、100%で爆発。
+// 盤面に湧く冷却セル(❄️)を含むラインを消すと熱が下がる — 稼ぐペダルと
+// ブレーキが同じペダル。臨界(90%+)で置くと倍率さらに1.5倍。
+// ---------------------------------------------------------------------------
+
+class MeltdownMode {
+  constructor() {
+    this.mode = 'meltdown';
+    this.usesIntent = true;
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    $('#chaosBar').classList.remove('hidden');   // 熱ゲージとして流用
+    showItemBar(false);   // 純スコアタ — アイテム/奥義なし
+    this.startedAt = Date.now();
+    this.ended = false;
+    this.heat = 0;
+    this.maxHeat = 0;
+    this.placedSince = 0;
+    this.coolCells = new Set();
+    const v = getView();
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.coolCells = this.coolCells;
+    v.inputLocked = false;
+    v.onIntentPlace = (i, r, c) => this.intent(i, r, c);
+    v.onPlace = null;
+    v.onGameOver = () => this.finish(false);
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('oni');
+    this.alarmInt = setInterval(() => this.alarmTick(), 600);
+    toast(t('☢️ 消すほど熱く、熱いほど稼げる。100%で爆発！❄️で冷やせ！', '☢️ Clears heat the core — heat multiplies your score. 100% = boom! Cool it with ❄️!'), 'announce', 3200);
+  }
+
+  mult() {
+    const base = 1 + this.heat / 10;
+    return Math.round(base * (this.heat >= 90 ? 1.5 : 1) * 10) / 10;
+  }
+
+  // 神モードの盤面リセットやスタッフアイテムはグリッドを直接書き換える —
+  // Set がグリッドとズレたら幻の❄️や不正な冷却になるので、毎手同期する。
+  pruneCool() {
+    const e = this.engine;
+    for (const k of [...this.coolCells]) if (e.grid[k] !== 6) this.coolCells.delete(k);
+  }
+
+  intent(index, row, col) {
+    const e = this.engine;
+    const piece = e.hand[index];
+    if (!piece || this.ended || !e.canPlace(piece, row, col)) return true;
+    this.pruneCool();
+    const v = getView();
+    const save = e.scoreMult;
+    e.scoreMult = save * this.mult();
+    const result = e.place(index, row, col);
+    e.scoreMult = save;
+    if (!result) return true;
+    let cooled = 0;
+    if (result.lineCount) {
+      for (const [r, c] of result.clearedCells) {
+        const k = r * 8 + c;
+        if (this.coolCells.has(k)) { this.coolCells.delete(k); cooled++; }
+      }
+      this.heat = Math.max(0, Math.min(100, this.heat + 4 + 5 * result.lineCount - cooled * 35));
+    }
+    v.applyResult(result);
+    if (cooled) {
+      v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.3, `❄️ -${cooled * 35}%`, '#4dd0ff', 1.6);
+      audio.coin();
+    }
+    this.maxHeat = Math.max(this.maxHeat, this.heat);
+    this.placedSince++;
+    if (this.placedSince >= 3) { this.placedSince = 0; this.spawnCool(); }
+    this.updateHud();
+    if (this.ended) return true;
+    if (this.heat >= 100) this.meltdown();
+    return true;
+  }
+
+  // 3手ごとに冷却セルが湧く。置き場を奪って窒息させたら本末転倒なので、
+  // 湧いた結果ノーモーブになるときは取り消す。
+  spawnCool() {
+    const e = this.engine;
+    const empty = [];
+    for (let k = 0; k < 64; k++) if (!e.grid[k]) empty.push(k);
+    if (empty.length < 6) return;
+    const k = empty[(Math.random() * empty.length) | 0];
+    e.grid[k] = 6;
+    if (!e.hasAnyMove()) { e.grid[k] = 0; return; }
+    this.coolCells.add(k);
+    const v = getView();
+    v.spawnAnim.set(k, v.time);
+  }
+
+  alarmTick() {
+    if (this.ended) return;
+    const v = getView();
+    if (this.heat >= 85) v.screenFlash = Math.max(v.screenFlash, 0.1);
+    if (this.heat >= 95) audio.countdown(false);
+  }
+
+  meltdown() {
+    const v = getView();
+    v.screenFlash = 0.8;
+    v.shake = 22;
+    audio.bossAttack();
+    confettiBurst(60);
+    toast(t('☢️ 炉心爆発！！', '☢️ CORE MELTDOWN!!'), 'err', 2500);
+    this.finish(true);
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = `×${this.mult().toFixed(1)} ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`;
+    const timer = $('#hudTimer');
+    timer.textContent = `🔥${Math.round(this.heat)}%`;
+    timer.classList.toggle('urgent', this.heat >= 85);
+    const fill = $('#chaosBarFill');
+    fill.style.width = `${Math.round(this.heat)}%`;
+    fill.style.background = this.heat < 50 ? '#43d9e8' : this.heat < 85 ? '#ffa93d' : '#ff3b3b';
+  }
+
+  best() {
+    const local = Number(localStorage.getItem('bba_meltdown_best') || 0);
+    return session.user ? Math.max(local, session.user.stats.meltdownBest || 0) : local;
+  }
+
+  async finish(exploded = false) {
+    if (this.ended) return;
+    this.ended = true;
+    clearInterval(this.alarmInt);
+    getView().inputLocked = true;
+    const e = this.engine;
+    const localBest = Number(localStorage.getItem('bba_meltdown_best') || 0);
+    const isBest = e.score > 0 && e.score >= Math.max(localBest, this.best());
+    if (e.score > localBest) localStorage.setItem('bba_meltdown_best', String(e.score));
+    const rewards = await submitResult({
+      mode: 'meltdown', score: e.score, lines: e.linesCleared,
+      maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
+    });
+    if (isBest) confettiBurst();
+    const m = showModal(`
+      <div class="result-banner ${isBest ? 'win' : exploded ? 'lose' : 'draw'}">${isBest ? 'NEW RECORD!' : exploded ? t('☢️ 炉心爆発…', '☢️ MELTDOWN…') : 'GAME OVER'}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        <div class="rs-row"><span>${t('🔥 最高熱', '🔥 Peak heat')}</span><b>${Math.round(this.maxHeat)}%</b></div>
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
+  }
+
+  quit() { this.finish(false); }
+
+  destroy() {
+    this.ended = true;
+    clearInterval(this.alarmInt);
+    const timer = $('#hudTimer');
+    timer.classList.add('hidden');
+    timer.classList.remove('urgent');
+    $('#chaosBar').classList.add('hidden');
+    const fill = $('#chaosBarFill');
+    fill.style.background = '';
+    fill.style.width = '0%';
+    if (view) { view.onIntentPlace = null; view.coolCells = null; }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 🧬 キメラ工房: 手札のピースをドラッグで溶接して怪物ピースを錬成。
+// 合体数がそのままスコア倍率（2体=×2、3体=×3）。手札は全部置くまで
+// 補充されないので、合体は常に窒息リスクとの取引になる。
+// ---------------------------------------------------------------------------
+
+function chimeraMerge(aCells, bCells, how) {
+  const { rows: ar, cols: ac } = shapeSize(aCells);
+  const off = how === 'side' ? [0, ac] : how === 'down' ? [ar, 0] : [ar, ac];
+  const merged = [
+    ...aCells.map(([r, c]) => [r, c]),
+    ...bCells.map(([r, c]) => [r + off[0], c + off[1]]),
+  ];
+  const { rows, cols } = shapeSize(merged);
+  if (rows > 8 || cols > 8) return null;
+  return merged;
+}
+
+function chimeraCellsHtml(cells) {
+  const { rows, cols } = shapeSize(cells);
+  const on = new Set(cells.map(([r, c]) => r * cols + c));
+  let inner = '';
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) inner += `<i class="${on.has(r * cols + c) ? 'on' : ''}"></i>`;
+  }
+  return `<span class="deck-piece" style="grid-template-columns:repeat(${cols},9px)">${inner}</span>`;
+}
+
+class ChimeraMode {
+  constructor() {
+    this.mode = 'chimera';
+    this.usesIntent = true;
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#hudTimer').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    showItemBar(false);   // ミニブロック等は錬成した手札を壊してしまう
+    this.startedAt = Date.now();
+    this.ended = false;
+    this.welds = 0;
+    this.maxWeld = 1;
+    const v = getView();
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.inputLocked = false;
+    v.onIntentPlace = (i, r, c) => this.intent(i, r, c);
+    v.onTrayDrop = (from, to) => this.tryWeld(from, to);
+    v.onPlace = null;
+    v.onGameOver = () => this.finish();
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('solo');
+    toast(t('🧬 ピースをピースにドラッグで溶接！大きいほど高倍率！', '🧬 Drag a piece onto another to weld them — bigger means bigger multipliers!'), 'announce', 3200);
+  }
+
+  intent(index, row, col) {
+    const e = this.engine;
+    const piece = e.hand[index];
+    if (!piece || this.ended || !e.canPlace(piece, row, col)) return true;
+    const v = getView();
+    const weld = piece.weld || 1;
+    const save = e.scoreMult;
+    e.scoreMult = save * weld;
+    const result = e.place(index, row, col);
+    e.scoreMult = save;
+    if (!result) return true;
+    v.applyResult(result);
+    if (weld > 1 && result.lineCount) {
+      v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.3, t(`🧬 キメラ ×${weld}！`, `🧬 CHIMERA ×${weld}!`), '#b06bff', 1.8);
+      audio.combo(6 + weld);
+    }
+    this.updateHud();
+    return true;
+  }
+
+  // ピースをピースに落とすと溶接候補（横/縦/斜め）を提示。
+  tryWeld(from, to) {
+    const e = this.engine;
+    const base = e.hand[to];
+    const add = e.hand[from];
+    if (!base || !add || from === to || this.ended) return false;
+    const opts = [
+      ['side', t('→ 横に接合', '→ weld right')],
+      ['down', t('↓ 縦に接合', '↓ weld below')],
+      ['diag', t('↘ 斜めに接合', '↘ weld diagonal')],
+    ].map(([how, label]) => ({ how, label, cells: chimeraMerge(base.cells, add.cells, how) }))
+      .filter(o => o.cells);
+    if (!opts.length) {
+      toast(t('🧬 大きすぎて溶接できない！', '🧬 Too big to weld!'), 'err', 1500);
+      return true;
+    }
+    const v = getView();
+    v.inputLocked = true;
+    const m = showModal(`
+      <h2>🧬 ${t('溶接する？', 'Weld them?')}</h2>
+      <div class="form-col">
+        ${opts.map((o, i) => `
+          <button class="btn btn-ghost perk-btn" data-perk="${i}">
+            <span class="perk-icon">🧬</span>
+            <span class="perk-body"><b>${o.label} ${chimeraCellsHtml(o.cells)}</b><small>${t(`${o.cells.length}マスの怪物ピース ・ 倍率×${(base.weld || 1) + (add.weld || 1)}`, `${o.cells.length}-cell monster ・ ×${(base.weld || 1) + (add.weld || 1)} multiplier`)}</small></span>
+          </button>`).join('')}
+      </div>
+      <div class="modal-buttons"><button class="btn btn-ghost" id="wldCancel">${t('やめる', 'Cancel')}</button></div>`,
+      { dismissable: false });
+    const done = () => { v.inputLocked = false; closeModal(); };
+    m.querySelector('#wldCancel').onclick = () => { audio.click(); done(); };
+    m.querySelectorAll('[data-perk]').forEach(b => {
+      b.onclick = () => {
+        const o = opts[Number(b.dataset.perk)];
+        const weld = (base.weld || 1) + (add.weld || 1);
+        e.hand[to] = { shape: -1, cells: o.cells, color: base.color, weld };
+        e.hand[from] = null;
+        this.welds++;
+        this.maxWeld = Math.max(this.maxWeld, weld);
+        audio.levelUp();
+        done();
+        // 巨大ピースで詰んだ扱いにしない — 置けるかは手札次第で判定し直す
+        if (!e.hasAnyMove()) { e.over = true; this.finish(); }
+        else e.over = false;
+        this.updateHud();
+      };
+    });
+    return true;
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = t(`🧬 合体${this.welds}回 ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`, `🧬 ${this.welds} welds ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`);
+  }
+
+  best() {
+    const local = Number(localStorage.getItem('bba_chimera_best') || 0);
+    return session.user ? Math.max(local, session.user.stats.chimeraBest || 0) : local;
+  }
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    getView().inputLocked = true;
+    const e = this.engine;
+    const localBest = Number(localStorage.getItem('bba_chimera_best') || 0);
+    const isBest = e.score > 0 && e.score >= Math.max(localBest, this.best());
+    if (e.score > localBest) localStorage.setItem('bba_chimera_best', String(e.score));
+    const rewards = await submitResult({
+      mode: 'chimera', score: e.score, lines: e.linesCleared,
+      maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
+    });
+    if (isBest) confettiBurst();
+    const m = showModal(`
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : 'GAME OVER'}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        <div class="rs-row"><span>${t('🧬 溶接回数', '🧬 Welds')}</span><b>${fmt(this.welds)}</b></div>
+        <div class="rs-row"><span>${t('🧬 最大キメラ', '🧬 Biggest chimera')}</span><b>×${fmt(this.maxWeld)}</b></div>
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
+  }
+
+  quit() { this.finish(); }
+
+  destroy() {
+    this.ended = true;
+    if (view) { view.onIntentPlace = null; view.onTrayDrop = null; }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -931,7 +1299,204 @@ const BOSS_STAGE = {
   golem:  { board: 'board_ocean',  track: 'boss' },
   dragon: { board: 'board_sunset', track: 'boss' },
   maou:   { board: 'board_oni',    track: 'oni' },
+  mecha:  { board: 'board_cyber',  track: 'pixel' },
+  frost:  { board: 'board_snow',   track: 'kami' },
 };
+
+// ---------------------------------------------------------------------------
+// ボス共通戦闘システム — 技テーブル・予告&カット・フェーズ制。
+// BossMode（単体戦）と BossRushMode（無限地獄）が共有する。
+// 予告技は着弾マスが赤く点滅し、そのマスを通るラインを消すと『カット』：
+// 攻撃キャンセル＋反撃ダメージ＋奥義ゲージ加速。
+// ---------------------------------------------------------------------------
+
+const TELEGRAPH_MS = 4200;
+
+const BOSS_MOVES = {
+  garbage:     { name: 'お邪魔弾',       nameEn: 'Garbage Shot',   telegraph: true },
+  breath_row:  { name: '火炎ブレス',     nameEn: 'Flame Breath',   telegraph: true },
+  laser_col:   { name: '縦断レーザー',   nameEn: 'Piercing Laser', telegraph: true },
+  laser_col2:  { name: 'ダブルレーザー', nameEn: 'Twin Lasers',    telegraph: true },
+  quake:       { name: '大地震',         nameEn: 'Quake',          telegraph: false },
+  curse_hand:  { name: '呪縛',           nameEn: 'Hand Curse',     telegraph: false },
+  curse_hand2: { name: '二重呪縛',       nameEn: 'Double Curse',   telegraph: false },
+};
+
+function bossAtkMs(m) {
+  return m.boss.atkSec * 1000 * (m.phase2 ? (m.boss.atk2 || 0.75) : 1);
+}
+
+function bossTelegraphMs(m) {
+  return m.phase2 ? TELEGRAPH_MS * 0.8 : TELEGRAPH_MS;
+}
+
+// Target cells for a telegraphed move (empty cells only — filling a target
+// yourself also defuses that cell).
+function bossMoveCells(m, moveId) {
+  const e = m.engine;
+  const empty = [];
+  for (let i = 0; i < 64; i++) if (!e.grid[i]) empty.push(i);
+  if (moveId === 'breath_row') {
+    const r = (Math.random() * 8) | 0;
+    return empty.filter(k => ((k / 8) | 0) === r);
+  }
+  if (moveId === 'laser_col' || moveId === 'laser_col2') {
+    const n = moveId === 'laser_col2' ? 2 : 1;
+    const cols = [...Array(8).keys()];
+    const picked = [];
+    for (let i = 0; i < n; i++) picked.push(cols.splice((Math.random() * cols.length) | 0, 1)[0]);
+    return empty.filter(k => picked.includes(k % 8));
+  }
+  const n = Math.max(1, m.boss.atkCells + (m.atkCellsDelta || 0));
+  const out = [];
+  for (let i = 0; i < n && empty.length; i++) out.push(empty.splice((Math.random() * empty.length) | 0, 1)[0]);
+  return out;
+}
+
+function bossBeginMove(m) {
+  if (m.ended || !m.engine || view.inputLocked || m.relicOpen || m.pendingAtk) return;
+  const list = (m.phase2 && m.boss.moves2) || m.boss.moves || ['garbage'];
+  const moveId = list[(Math.random() * list.length) | 0];
+  const def = BOSS_MOVES[moveId] || BOSS_MOVES.garbage;
+  if (!def.telegraph) {
+    bossInstantMove(m, moveId);
+    m.nextAtk = Date.now() + bossAtkMs(m);
+    return;
+  }
+  const cells = bossMoveCells(m, moveId);
+  if (!cells.length) { m.nextAtk = Date.now() + bossAtkMs(m); return; }
+  m.pendingAtk = { cells, moveId };
+  m.nextAtk = Date.now() + bossTelegraphMs(m);
+  view.dangerCells = new Set(cells);
+  audio.countdown(false);
+  toast(t(`⚠️ ${m.boss.emoji} ${def.name}の予告！赤マスをラインで切れ！`, `⚠️ ${def.nameEn} incoming! Cut the red cells with a line!`), 'err', 1700);
+}
+
+function bossInstantMove(m, moveId) {
+  const e = m.engine;
+  // 絶対防御/フォートレスは予告技と同様に即時技も完全無効化する。
+  if (e.fortressActive && e.fortressActive()) {
+    toast(t('🛡️ 絶対防御が攻撃を無効化！', '🛡️ Absolute Guard nullified the attack!'), 'ok', 1500);
+    m.afterAttack();
+    return;
+  }
+  audio.bossAttack();
+  const em = $('#bossEmoji');
+  em.classList.remove('boss-atk'); void em.offsetWidth; em.classList.add('boss-atk');
+  if (moveId === 'quake') {
+    // 全列が下へ崩落（カオスの重力と同じ）＋お邪魔2個
+    for (let c = 0; c < 8; c++) {
+      const col = [];
+      for (let r = 0; r < 8; r++) { const cv = e.grid[r * 8 + c]; if (cv) col.push(cv); }
+      for (let r = 0; r < 8; r++) {
+        const k = r * 8 + c;
+        const nv = r < 8 - col.length ? 0 : col[r - (8 - col.length)];
+        if (e.grid[k] !== nv) { e.grid[k] = nv; if (nv) view.spawnAnim.set(k, view.time); }
+      }
+    }
+    const cells = e.addGarbage(2);
+    m.garbageTaken = (m.garbageTaken || 0) + cells.length;
+    view.shake = 14;
+    toast(t(`${m.boss.emoji} 大地震！ブロックが崩落！`, `${m.boss.emoji} Quake! The board collapses!`), 'err', 1500);
+  } else if (moveId === 'curse_hand' || moveId === 'curse_hand2') {
+    const n = moveId === 'curse_hand2' ? 2 : 1;
+    const idxs = e.hand.map((p, i) => (p ? i : -1)).filter(i => i >= 0);
+    let frozen = 0;
+    // 最低1枠は自由に残す — 完全ロックは理不尽
+    for (let i = 0; i < n && idxs.length > 1; i++) {
+      const slot = idxs.splice((Math.random() * idxs.length) | 0, 1)[0];
+      e.hand[slot].frozenUntil = Date.now() + 8000;
+      frozen++;
+    }
+    if (frozen) {
+      view.screenFlash = 0.25;
+      toast(t(`${m.boss.emoji} 呪縛！ピース${frozen}個が凍結（8秒）`, `${m.boss.emoji} Curse! ${frozen} piece(s) frozen (8s)`), 'err', 1800);
+    }
+  }
+  m.afterAttack();
+}
+
+function bossImpact(m) {
+  const e = m.engine;
+  const pa = m.pendingAtk;
+  m.pendingAtk = null;
+  view.dangerCells = null;
+  // 予告時間ぶんを次の攻撃間隔から差し引く — 予告の追加で実質の攻撃頻度が
+  // 旧仕様より下がらないように。
+  m.nextAtk = Date.now() + Math.max(2500, bossAtkMs(m) - bossTelegraphMs(m));
+  if (e.fortressActive && e.fortressActive()) {
+    toast(t('🛡️ 絶対防御が攻撃を無効化！', '🛡️ Absolute Guard nullified the attack!'), 'ok', 1500);
+    return;
+  }
+  const landed = [];
+  for (const k of pa.cells) {
+    if (!e.grid[k]) { e.grid[k] = 9; landed.push(k); }
+  }
+  m.garbageTaken = (m.garbageTaken || 0) + landed.length;
+  audio.bossAttack();
+  const em = $('#bossEmoji');
+  em.classList.remove('boss-atk'); void em.offsetWidth; em.classList.add('boss-atk');
+  for (const k of landed) {
+    const r = (k / 8) | 0, c = k % 8;
+    view.spawnAnim.set(k, view.time);
+    view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
+  }
+  view.shake = 12;
+  const def = BOSS_MOVES[pa.moveId] || BOSS_MOVES.garbage;
+  toast(t(`${m.boss.emoji} ${def.name}が直撃！`, `${m.boss.emoji} ${def.nameEn} hits!`), 'err', 1300);
+  // Direct grid writes bypass engine.place's game-over check.
+  if (!e.hasAnyMove()) e.over = true;
+  m.afterAttack();
+}
+
+// Clearing a line through a telegraphed cell = CUT: cancel + counter damage.
+function bossTryCut(m, result) {
+  const pa = m.pendingAtk;
+  if (!pa || result.lineCount === 0) return 0;
+  const hit = pa.cells.some(k => {
+    const r = (k / 8) | 0, c = k % 8;
+    return result.fullRows.includes(r) || result.fullCols.includes(c);
+  });
+  if (!hit) return 0;
+  m.pendingAtk = null;
+  view.dangerCells = null;
+  m.cuts = (m.cuts || 0) + 1;
+  m.nextAtk = Date.now() + Math.max(2500, bossAtkMs(m) - bossTelegraphMs(m));
+  const dmg = Math.round((200 + m.maxHp * 0.018) * (m.counterMult || 1));
+  m.hp -= dmg;
+  m.engine.chargeUlt(12);
+  audio.combo(9);
+  view.screenFlash = 0.3;
+  view.addFloatText(view.boardX + view.boardSize / 2, view.boardY + view.boardSize * 0.18, 'COUNTER!', '#43d9e8', 2);
+  m.damageFloat(dmg, true);
+  return dmg;
+}
+
+function bossCheckPhase(m) {
+  if (m.phase2 || m.hp > m.maxHp / 2 || m.hp <= 0 || m.ended) return;
+  m.phase2 = true;
+  $('#bossEmoji').classList.add('boss-enrage');
+  view.screenFlash = 0.45;
+  view.shake = 16;
+  audio.kamiDescend();
+  toast(t(`😡 ${m.boss.name} 第二形態！攻撃が激化する！`, `😡 ${catName(m.boss)} enters phase 2! Attacks intensify!`), 'announce', 2600);
+}
+
+// 討伐ランク: 速さ・カット数・被弾数・コンボから S/A/B/C。
+function bossRankFor(m) {
+  const dur = (Date.now() - m.startedAt) / 1000;
+  const par = m.maxHp / 110 + 25;
+  let pts = 100;
+  pts -= Math.max(0, dur / par - 1) * 45;
+  pts += Math.min(30, (m.cuts || 0) * 6);
+  pts -= (m.garbageTaken || 0) * 1.1;
+  if (m.engine.maxCombo >= 8) pts += 8;
+  return pts >= 96 ? 'S' : pts >= 72 ? 'A' : pts >= 45 ? 'B' : 'C';
+}
+
+function bossRankHtml(rank) {
+  return `<div class="boss-rank-wrap"><span class="boss-rank rank-${rank}">${rank}</span><small>${t('討伐ランク', 'Clear rank')}</small></div>`;
+}
 
 class BossMode {
   constructor(boss, bossIndex, bossCount) {
@@ -953,6 +1518,11 @@ class BossMode {
     $('#bossName').textContent = catName(this.boss);
     showItemBar(true);
     this.hp = this.boss.hp;
+    this.maxHp = this.boss.hp;
+    this.phase2 = false;
+    this.pendingAtk = null;
+    this.cuts = 0;
+    this.garbageTaken = 0;
     this.updateHpBar();
     this.startedAt = Date.now();
 
@@ -972,9 +1542,13 @@ class BossMode {
 
     countdownOverlay(3, () => {
       v.inputLocked = false;
-      this.nextAtk = Date.now() + this.boss.atkSec * 1000;
+      this.nextAtk = Date.now() + bossAtkMs(this);
       this.atkInt = setInterval(() => this.tickAttack(), 100);
     }, audio);
+  }
+
+  afterAttack() {
+    if (this.engine.over) this.finish(false);
   }
 
   updateHud() {
@@ -994,8 +1568,10 @@ class BossMode {
     this.updateHud();
     const dmg = result.gained;
     this.hp -= dmg;
-    this.updateHpBar();
     this.damageFloat(dmg, result.lineCount > 0);
+    bossTryCut(this, result);
+    bossCheckPhase(this);
+    this.updateHpBar();
     if (result.lineCount > 0) {
       const em = $('#bossEmoji');
       em.classList.remove('boss-hit'); void em.offsetWidth; em.classList.add('boss-hit');
@@ -1014,30 +1590,15 @@ class BossMode {
 
   tickAttack() {
     if (this.ended) return;
-    const total = this.boss.atkSec * 1000;
+    const total = this.pendingAtk ? bossTelegraphMs(this) : bossAtkMs(this);
     const remain = Math.max(0, this.nextAtk - Date.now());
-    $('#bossAtkBar').style.width = `${(1 - remain / total) * 100}%`;
+    const bar = $('#bossAtkBar');
+    bar.style.width = `${Math.max(0, Math.min(100, (1 - remain / total) * 100))}%`;
+    bar.classList.toggle('danger', !!this.pendingAtk);
     if (remain <= 0) {
-      this.nextAtk = Date.now() + total;
-      this.attack();
+      if (this.pendingAtk) bossImpact(this);
+      else bossBeginMove(this);
     }
-  }
-
-  attack() {
-    if (this.ended || !this.engine || view.inputLocked) return;
-    const cells = this.engine.addGarbage(this.boss.atkCells);
-    audio.bossAttack();
-    const em = $('#bossEmoji');
-    em.classList.remove('boss-atk'); void em.offsetWidth; em.classList.add('boss-atk');
-    for (const [r, c] of cells) {
-      view.spawnAnim.set(r * 8 + c, view.time);
-      const cx = view.boardX + (c + 0.5) * view.cell;
-      const cy = view.boardY + (r + 0.5) * view.cell;
-      view.particles.burstCell(cx, cy, view.cell, 9, 'fx_default');
-    }
-    view.shake = 12;
-    toast(t(`${this.boss.emoji} ${this.boss.name}の攻撃！`, `${this.boss.emoji} ${catName(this.boss)} attacks!`), 'err', 1300);
-    if (this.engine.over) this.finish(false);
   }
 
   async finish(won) {
@@ -1045,6 +1606,10 @@ class BossMode {
     this.ended = true;
     clearInterval(this.atkInt);
     view.inputLocked = true;
+    view.dangerCells = null;
+    $('#bossAtkBar').classList.remove('danger');
+    const dur = (Date.now() - this.startedAt) / 1000;
+    const rank = won ? bossRankFor(this) : null;
     if (won) {
       audio.bossDefeated();
       confettiBurst(60);
@@ -1060,7 +1625,7 @@ class BossMode {
     const rewards = await submitResult({
       mode: 'boss', bossId: this.boss.id, score: this.engine.score,
       lines: this.engine.linesCleared, maxCombo: this.engine.maxCombo,
-      duration: (Date.now() - this.startedAt) / 1000, won,
+      duration: dur, won, rank,
     });
     if (rewards && rewards.badge === 'maou') {
       setTimeout(() => toast(t('😈 バッジ「魔王討伐」を獲得！', '😈 Badge earned: Demon Lord Slain!'), 'announce', 4000), 1200);
@@ -1070,11 +1635,14 @@ class BossMode {
     const banner = won ? t(`${this.boss.emoji} 討伐成功！`, `${this.boss.emoji} Boss defeated!`) : this.aborted ? t('🤝 中断（引き分け）', '🤝 Aborted (draw)') : t('やられた…', 'Defeated…');
     const m = showModal(`
       <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
+      ${won ? bossRankHtml(rank) : ''}
       ${this.aborted ? `<p class="muted center">${t('途中終了は引き分け扱いです。敗北にはなりません', 'Quitting early counts as a draw, not a loss')}</p>` : ''}
       <div class="result-stats">
         <div class="rs-row"><span>${t('与えたダメージ', 'Damage dealt')}</span><b>${fmt(this.engine.score)}</b></div>
         ${won ? '' : `<div class="rs-row"><span>${t(`${this.boss.name}の残りHP`, `${catName(this.boss)}'s HP left`)}</span><b>${fmt(Math.max(0, this.hp))}</b></div>`}
-        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(this.engine.linesCleared)}</b></div>
+        <div class="rs-row"><span>${t('⏱️ 討伐タイム', '⏱️ Clear time')}</span><b>${Math.round(dur)}${t('秒', 's')}</b></div>
+        <div class="rs-row"><span>${t('✂️ 攻撃カット', '✂️ Attacks cut')}</span><b>${fmt(this.cuts)}</b></div>
+        <div class="rs-row"><span>${t('💢 被弾お邪魔', '💢 Garbage taken')}</span><b>${fmt(this.garbageTaken)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(this.engine.maxCombo)}</b></div>
         ${rewardsRows(rewards)}
       </div>
@@ -1082,6 +1650,7 @@ class BossMode {
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${hasNext ? t('次のボスへ', 'Next boss') : won ? t('もう一度', 'Play again') : this.aborted ? t('もう一度', 'Play again') : t('リベンジ', 'Revenge!')}</button>
       </div>`, { dismissable: false });
+    if (won) setTimeout(() => { const el = m.querySelector('.boss-rank'); if (el) { el.classList.add('show'); audio.victory(); } }, 500);
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => {
       closeModal();
@@ -1100,6 +1669,8 @@ class BossMode {
     this.ended = true;
     clearInterval(this.atkInt);
     $('#bossPanel').classList.add('hidden');
+    $('#bossAtkBar').classList.remove('danger');
+    if (view) view.dangerCells = null;
   }
 }
 
@@ -1111,16 +1682,41 @@ export function startBoss(boss, bossIndex, bossCount) {
 }
 
 // ---------------------------------------------------------------------------
-// Boss rush: all bosses back-to-back on one board. Unlocked after clearing
-// every boss. One life — top out once and the run is over.
+// ⚔️ 無限地獄ラッシュ: 全ボス連戦のローグライク。撃破ごとに遺物を1つ選んで
+// ビルドを組み、全ボスを撃破したら2周目へ（HP倍増・攻撃加速）。深度＝累計
+// 撃破数が記録になる。1ミス終了 — ただし不死鳥の羽があれば一度だけ蘇る。
 // ---------------------------------------------------------------------------
+
+const RUSH_RELICS = [
+  { id: 'atk',     icon: '🗡️', name: '剛力の遺物',   nameEn: 'Relic of Might',   desc: '与ダメージ+40%（累積可）',        descEn: 'Damage +40% (stacks)', w: 10 },
+  { id: 'counter', icon: '🧨', name: '火薬の遺物',   nameEn: 'Relic of Powder',  desc: 'カット反撃ダメージ2倍（累積可）', descEn: 'Counter damage ×2 (stacks)', w: 8 },
+  { id: 'reroll',  icon: '🔄', name: '風の遺物',     nameEn: 'Relic of Wind',    desc: 'リロール+2',                      descEn: '+2 rerolls', w: 9 },
+  { id: 'ult',     icon: '⚡', name: '雷の遺物',     nameEn: 'Relic of Thunder', desc: '奥義ゲージの溜まり1.5倍（累積可）', descEn: 'Ult charge ×1.5 (stacks)', w: 8 },
+  { id: 'heal',    icon: '💚', name: '慈悲の遺物',   nameEn: 'Relic of Mercy',   desc: '下2行とお邪魔を全消去',           descEn: 'Clear bottom rows + garbage', w: 9 },
+  { id: 'calm',    icon: '🎯', name: '静寂の遺物',   nameEn: 'Relic of Calm',    desc: 'ボスの攻撃セル-1（最低1）',       descEn: 'Boss attack cells -1 (min 1)', w: 7 },
+  { id: 'shield',  icon: '🛡️', name: '城壁の遺物',   nameEn: 'Relic of Walls',   desc: 'コンボが途切れなくなる',          descEn: 'Your combo never breaks', w: 6, unique: true },
+  { id: 'phoenix', icon: '🐦', name: '不死鳥の羽',   nameEn: 'Phoenix Feather',  desc: '一度だけ窒息から復活する',        descEn: 'Revive once from a top-out', w: 5, unique: true },
+];
 
 class BossRushMode {
   constructor(bosses) {
     this.mode = 'boss';        // shares boss-panel admin command (HP halve)
     this.bosses = bosses;
-    this.stage = 0;
-    this.boss = bosses[0];
+    this.kills = 0;            // 深度 = 累計撃破数
+    this.relics = [];
+  }
+
+  lap() { return Math.floor(this.kills / this.bosses.length); }
+
+  // 周回でHPが倍々に、攻撃間隔が少しずつ短く。
+  scaledBoss() {
+    const base = this.bosses[this.kills % this.bosses.length];
+    const lap = this.lap();
+    return {
+      ...base,
+      hp: Math.round(base.hp * (1 + lap)),
+      atkSec: Math.max(4, base.atkSec * Math.pow(0.94, lap)),
+    };
   }
 
   start() {
@@ -1131,6 +1727,16 @@ class BossRushMode {
     $('#bossPanel').classList.remove('hidden');
     document.querySelector('.boss-atkbar').classList.remove('hidden');
     showItemBar(true);
+    this.kills = 0;
+    this.relics = [];
+    this.counterMult = 1;
+    this.atkCellsDelta = 0;
+    this.ultRateBonus = 1;
+    this.phoenix = false;
+    this.relicOpen = false;
+    this.cuts = 0;
+    this.garbageTaken = 0;
+    this.boss = this.scaledBoss();
     this.applyBossPanel();
     this.startedAt = Date.now();
 
@@ -1140,26 +1746,57 @@ class BossRushMode {
     v.setEngine(this.engine);
     v.inputLocked = true;
     v.onPlace = r => this.onPlace(r);
-    v.onGameOver = () => this.finish(false);
+    v.onGameOver = () => this.onTopOut();
     this.updateHud();
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
     audio.playTrack('boss');
-    toast(t('⚔️ ボスラッシュ開始！全ボスを連続で討伐せよ！', '⚔️ Boss Rush! Take down every boss back to back!'), 'announce', 2600);
+    toast(t('⚔️ 無限地獄ラッシュ！倒すほど深く、敵は強く。遺物でビルドを組め！', '⚔️ Infinite Hell Rush! The deeper you go, the stronger they get. Build with relics!'), 'announce', 3200);
 
     countdownOverlay(3, () => {
       v.inputLocked = false;
-      this.nextAtk = Date.now() + this.boss.atkSec * 1000;
+      this.nextAtk = Date.now() + bossAtkMs(this);
       this.atkInt = setInterval(() => this.tickAttack(), 100);
     }, audio);
   }
 
+  afterAttack() {
+    if (this.engine.over) this.onTopOut();
+  }
+
+  damageFloat(dmg, big) {
+    const span = document.createElement('span');
+    span.className = `dmg-float ${big ? 'big' : ''}`;
+    span.textContent = `-${fmt(dmg)}`;
+    span.style.left = `${30 + Math.random() * 40}%`;
+    $('#bossPanel').appendChild(span);
+    setTimeout(() => span.remove(), 900);
+  }
+
+  tickAttack() {
+    if (this.ended || this.relicOpen) return;
+    const total = this.pendingAtk ? bossTelegraphMs(this) : bossAtkMs(this);
+    const remain = Math.max(0, this.nextAtk - Date.now());
+    const bar = $('#bossAtkBar');
+    bar.style.width = `${Math.max(0, Math.min(100, (1 - remain / total) * 100))}%`;
+    bar.classList.toggle('danger', !!this.pendingAtk);
+    if (remain <= 0) {
+      if (this.pendingAtk) bossImpact(this);
+      else bossBeginMove(this);
+    }
+  }
+
   applyBossPanel() {
     this.hp = this.boss.hp;
+    this.maxHp = this.boss.hp;
+    this.phase2 = false;
+    this.pendingAtk = null;
+    if (view) view.dangerCells = null;
     $('#bossEmoji').textContent = this.boss.emoji;
     $('#bossEmoji').className = 'boss-emoji';
-    $('#bossName').textContent = t(`${this.boss.name}（${this.stage + 1}/${this.bosses.length}）`, `${catName(this.boss)} (${this.stage + 1}/${this.bosses.length})`);
+    const lapTxt = this.lap() > 0 ? t(`（${this.lap() + 1}周目）`, ` (lap ${this.lap() + 1})`) : '';
+    $('#bossName').textContent = `${catName(this.boss)}${lapTxt}`;
     this.updateHpBar();
   }
 
@@ -1167,65 +1804,130 @@ class BossRushMode {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = t(`⚔️ ボスラッシュ ${this.stage + 1}/${this.bosses.length}`, `⚔️ Boss Rush ${this.stage + 1}/${this.bosses.length}`);
+    $('#hudSub').textContent = t(`⚔️ 深度${this.kills + 1} ・ 遺物${this.relics.length}`, `⚔️ Depth ${this.kills + 1} ・ ${this.relics.length} relics`);
   }
 
   updateHpBar() {
-    const pct = Math.max(0, (this.hp / this.boss.hp) * 100);
+    const pct = Math.max(0, (this.hp / this.maxHp) * 100);
     $('#bossHp').style.width = `${pct}%`;
-    $('#bossHpText').textContent = `${fmt(Math.max(0, this.hp))} / ${fmt(this.boss.hp)}`;
+    $('#bossHpText').textContent = `${fmt(Math.max(0, this.hp))} / ${fmt(this.maxHp)}`;
   }
 
   onPlace(result) {
     this.updateHud();
     this.hp -= result.gained;
+    bossTryCut(this, result);
+    bossCheckPhase(this);
     this.updateHpBar();
     if (result.lineCount > 0) {
       const em = $('#bossEmoji');
       em.classList.remove('boss-hit'); void em.offsetWidth; em.classList.add('boss-hit');
     }
-    if (this.hp <= 0 && !this.ended) {
-      if (this.stage + 1 >= this.bosses.length) this.finish(true);
-      else this.nextBoss();
-    }
+    if (this.hp <= 0 && !this.ended) this.bossDown();
   }
 
-  nextBoss() {
-    this.stage++;
-    this.boss = this.bosses[this.stage];
+  bossDown() {
+    this.kills++;
+    this.pendingAtk = null;
+    if (view) view.dangerCells = null;
     audio.bossDefeated();
     confettiBurst(30);
     if (view) view.shake = 12;
-    toast(t(`${this.bosses[this.stage - 1].emoji} 撃破！つぎは ${this.boss.emoji} ${this.boss.name}！`, `${this.bosses[this.stage - 1].emoji} Down! Next up: ${this.boss.emoji} ${catName(this.boss)}!`), 'announce', 2400);
-    this.applyBossPanel();
-    this.updateHud();
-    this.nextAtk = Date.now() + this.boss.atkSec * 1000;
+    // 遺物を選んでから次のボスへ（選択中は攻撃停止）。
+    this.relicOpen = true;
+    view.inputLocked = true;
+    this.offerRelic(() => {
+      this.boss = this.scaledBoss();
+      this.applyBossPanel();
+      this.updateHud();
+      this.relicOpen = false;
+      view.inputLocked = false;
+      this.nextAtk = Date.now() + bossAtkMs(this);
+      const lapUp = this.kills % this.bosses.length === 0;
+      toast(lapUp
+        ? t(`🔥 ${this.lap() + 1}周目突入！ボスが強化された！`, `🔥 Lap ${this.lap() + 1}! The bosses grow stronger!`)
+        : t(`つぎは ${this.boss.emoji} ${this.boss.name}！`, `Next up: ${this.boss.emoji} ${catName(this.boss)}!`), 'announce', 2400);
+    });
   }
 
-  tickAttack() {
+  relicChoices() {
+    const pool = RUSH_RELICS.filter(r =>
+      !(r.unique && (r.id === 'shield' ? this.engine.streakShield : this.phoenix)));
+    const out = [];
+    const bag = pool.slice();
+    while (out.length < 3 && bag.length) {
+      const total = bag.reduce((a, r) => a + r.w, 0);
+      let x = Math.random() * total;
+      for (let i = 0; i < bag.length; i++) {
+        x -= bag[i].w;
+        if (x <= 0) { out.push(bag.splice(i, 1)[0]); break; }
+      }
+    }
+    return out;
+  }
+
+  offerRelic(next) {
+    const choices = this.relicChoices();
+    const m = showModal(`
+      <h2>${this.boss.emoji} ${t('撃破！', 'Down!')} <small class="muted">${t(`深度${this.kills}`, `depth ${this.kills}`)}</small></h2>
+      <p class="muted center" style="margin-bottom:10px">${t('遺物を1つ選べ', 'Choose a relic')}</p>
+      <div class="form-col">
+        ${choices.map(r => `
+          <button class="btn btn-ghost perk-btn" data-perk="${r.id}">
+            <span class="perk-icon">${r.icon}</span>
+            <span class="perk-body"><b>${t(r.name, r.nameEn)}</b><small>${t(r.desc, r.descEn)}</small></span>
+          </button>`).join('')}
+      </div>
+      <p class="muted center deck-strip">${this.relics.length ? `${t('所持遺物', 'Relics')}: ${this.relics.map(id => (RUSH_RELICS.find(r => r.id === id) || {}).icon || '').join(' ')}` : ''}</p>`,
+      { dismissable: false });
+    m.querySelectorAll('[data-perk]').forEach(b => {
+      b.onclick = () => { this.applyRelic(b.dataset.perk); closeModal(); next(); };
+    });
+    if (autopilot.on && autopilot.autoPerks !== false) {
+      setTimeout(() => {
+        const b = m.querySelector('[data-perk]');
+        if (b && document.body.contains(b)) b.click();
+      }, 800);
+    }
+  }
+
+  applyRelic(id) {
+    const e = this.engine;
+    audio.coin();
+    this.relics.push(id);
+    switch (id) {
+      case 'atk':     e.scoreMult = Math.round((e.scoreMult + 0.4) * 100) / 100; break;
+      case 'counter': this.counterMult *= 2; break;
+      case 'reroll':  e.rerolls += 2; updateRerollHud(e); break;
+      // updateUltHud rewrites e.ultRate every 120ms — the bonus must live on
+      // the mode where that poll multiplies it in.
+      case 'ult':     this.ultRateBonus *= 1.5; break;
+      case 'heal': {
+        for (let i = 0; i < 64; i++) if (e.grid[i] === 9) e.grid[i] = 0;
+        for (let r = 6; r < 8; r++) for (let c = 0; c < 8; c++) e.grid[r * 8 + c] = 0;
+        view.reviveFlash();
+        break;
+      }
+      case 'calm':    this.atkCellsDelta--; break;
+      case 'shield':  e.streakShield = true; break;
+      case 'phoenix': this.phoenix = true; break;
+    }
+  }
+
+  onTopOut() {
     if (this.ended) return;
-    const total = this.boss.atkSec * 1000;
-    const remain = Math.max(0, this.nextAtk - Date.now());
-    $('#bossAtkBar').style.width = `${(1 - remain / total) * 100}%`;
-    if (remain <= 0) {
-      this.nextAtk = Date.now() + total;
-      this.attack();
+    if (this.phoenix) {
+      this.phoenix = false;
+      this.engine.reviveBoard();
+      view.reviveFlash();
+      confettiBurst(40);
+      audio.levelUp();
+      toast(t('🐦 不死鳥の羽が燃え尽きた！盤面リセットで復活！', '🐦 The Phoenix Feather burns out — board reset, you live!'), 'announce', 3000);
+      this.updateHud();
+      updateRerollHud(this.engine);
+      return;
     }
-  }
-
-  attack() {
-    if (this.ended || !this.engine || view.inputLocked) return;
-    const cells = this.engine.addGarbage(this.boss.atkCells);
-    audio.bossAttack();
-    const em = $('#bossEmoji');
-    em.classList.remove('boss-atk'); void em.offsetWidth; em.classList.add('boss-atk');
-    for (const [r, c] of cells) {
-      view.spawnAnim.set(r * 8 + c, view.time);
-      view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
-    }
-    view.shake = 12;
-    toast(t(`${this.boss.emoji} ${this.boss.name}の攻撃！`, `${this.boss.emoji} ${catName(this.boss)} attacks!`), 'err', 1300);
-    if (this.engine.over) this.finish(false);
+    this.finish(false);
   }
 
   async finish(won) {
@@ -1233,33 +1935,36 @@ class BossRushMode {
     this.ended = true;
     clearInterval(this.atkInt);
     view.inputLocked = true;
-    if (won) {
-      audio.bossDefeated();
-      confettiBurst(80);
-      $('#bossEmoji').classList.add('boss-dead');
-    } else if (!this.aborted) {
-      audio.gameOver();
-    }
+    view.dangerCells = null;
+    $('#bossAtkBar').classList.remove('danger');
+    // 「制覇」= 1周（全ボス撃破）以上。深度がそのまま記録になる。
+    const conquered = this.kills >= this.bosses.length;
+    if (!this.aborted) audio.gameOver();
+    const localDepth = Number(localStorage.getItem('bba_rush_depth') || 0);
+    const isBest = this.kills > 0 && this.kills > localDepth;
+    if (this.kills > localDepth) localStorage.setItem('bba_rush_depth', String(this.kills));
     const rewards = await submitResult({
       mode: 'boss_rush', score: this.engine.score,
       lines: this.engine.linesCleared, maxCombo: this.engine.maxCombo,
-      duration: (Date.now() - this.startedAt) / 1000, won,
+      duration: (Date.now() - this.startedAt) / 1000, won: conquered, depth: this.kills,
     });
     if (rewards && rewards.badge === 'rush') {
       setTimeout(() => toast(t('⚔️ バッジ「ボスラッシュ制覇」を獲得！+300💎', '⚔️ Badge earned: Boss Rush Conqueror! +300💎'), 'announce', 5000), 1200);
     }
-    const banner = won ? t('⚔️ ボスラッシュ制覇！！', '⚔️ Boss Rush conquered!!') : this.aborted ? t('🤝 中断（引き分け）', '🤝 Aborted (draw)') : t(`${this.boss.emoji} に敗北…`, `Defeated by ${this.boss.emoji}…`);
+    if (isBest) confettiBurst(50);
+    const banner = isBest ? t('⚔️ 最深記録更新！', '⚔️ New depth record!') : this.aborted ? t('🤝 中断', '🤝 Aborted') : t(`${this.boss.emoji} に敗北…`, `Defeated by ${this.boss.emoji}…`);
     const m = showModal(`
-      <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
+      <div class="result-banner ${isBest ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
       <div class="result-stats">
-        <div class="rs-row"><span>${t('到達', 'Progress')}</span><b>${won ? t('完全制覇', 'Full clear') : t(`${this.stage + 1}体目 (${this.boss.name})`, `Boss ${this.stage + 1} (${catName(this.boss)})`)}</b></div>
+        <div class="rs-row"><span>${t('⚔️ 深度', '⚔️ Depth')}</span><b>${fmt(this.kills)}${t('体', '')} ${this.lap() > 0 || conquered ? t(`（${this.lap() + 1}周目）`, ` (lap ${this.lap() + 1})`) : ''}</b></div>
+        <div class="rs-row"><span>${t('🏺 集めた遺物', '🏺 Relics collected')}</span><b>${this.relics.map(id => (RUSH_RELICS.find(r => r.id === id) || {}).icon || '').join('') || t('なし', 'none')}</b></div>
         <div class="rs-row"><span>${t('総ダメージ', 'Total damage')}</span><b>${fmt(this.engine.score)}</b></div>
-        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(this.engine.maxCombo)}</b></div>
+        <div class="rs-row"><span>${t('✂️ 攻撃カット', '✂️ Attacks cut')}</span><b>${fmt(this.cuts)}</b></div>
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${won ? t('もう一周', 'Run it again') : t('リベンジ', 'Revenge!')}</button>
+        <button class="btn btn-ai" id="rAgain">${t('もう一度潜る', 'Dive again')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startBossRush(this.bosses); };
@@ -1271,6 +1976,8 @@ class BossRushMode {
     this.ended = true;
     clearInterval(this.atkInt);
     $('#bossPanel').classList.add('hidden');
+    $('#bossAtkBar').classList.remove('danger');
+    if (view) view.dangerCells = null;
   }
 }
 
@@ -3253,8 +3960,14 @@ export function startSurvival() {
 
 function endToMenu() {
   if (currentMode) { currentMode.destroy(); currentMode = null; }
-  // Only co-op installs this; make sure it never leaks into the next mode.
-  if (view) view.onIntentPlace = null;
+  // Mode-installed view hooks/overlays must never leak into the next mode.
+  if (view) {
+    view.onIntentPlace = null;
+    view.onTrayDrop = null;
+    view.glowCells = null;
+    view.dangerCells = null;
+    view.coolCells = null;
+  }
   if (view) view.stop();
   stopAutopilot();
   const picker = document.querySelector('.emote-picker');
@@ -3268,6 +3981,20 @@ function endToMenu() {
 export function startSolo() {
   if (currentMode) currentMode.destroy();
   currentMode = new SoloMode();
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+export function startMeltdown() {
+  if (currentMode) currentMode.destroy();
+  currentMode = new MeltdownMode();
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+export function startChimera() {
+  if (currentMode) currentMode.destroy();
+  currentMode = new ChimeraMode();
   window.__bbaMode = currentMode;
   currentMode.start();
 }

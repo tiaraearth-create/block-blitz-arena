@@ -55,7 +55,7 @@ export const ACHIEVEMENTS = [
 
   // ---- 探索 ----
   a('ach_boss1',    '🐲', 'explore', 1,   400,  3,  'ボス初討伐',   'First Kill',       'ボスを1体討伐',       'Defeat 1 boss',           u => S(u).bossMax || 0),
-  a('ach_boss4',    '😈', 'explore', 4,   2000, 16, '魔王を討ちし者', 'Demon Lord Slayer', '全ボスを討伐',      'Defeat every boss',       u => S(u).bossMax || 0),
+  a('ach_boss4',    '😈', 'explore', 6,   2000, 16, '魔王を討ちし者', 'Demon Lord Slayer', '全6ボスを討伐',      'Defeat all 6 bosses',     u => S(u).bossMax || 0),
   a('ach_rush',     '⚔️', 'explore', 1,   2500, 20, 'ボスラッシュ制覇', 'Rush Conqueror', 'ボスラッシュクリア', 'Clear Boss Rush',         u => has(u, 'rush') ? 1 : 0),
   a('ach_dun10',    '🏰', 'explore', 10,  500,  4,  '塔の来訪者',   'Tower Visitor',    'ダンジョンF10到達',    'Reach dungeon F10',       u => S(u).dungeonMax || 0),
   a('ach_dun50',    '🏰', 'explore', 50,  2000, 16, '塔の探検家',   'Tower Explorer',   'ダンジョンF50到達',    'Reach dungeon F50',       u => S(u).dungeonMax || 0),

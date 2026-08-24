@@ -29,7 +29,9 @@ function applyGod() {
   if (view) view.godInvincible = god.invincible;
   e.fortressUntil = god.noGarbage ? 8.64e15 : (e.fortressUntil > 8e15 ? 0 : e.fortressUntil);
   if (god.combo) e.streakShield = true;
-  e.scoreMult = god.mult;
+  // このループは全ユーザーで毎秒走る — 無条件で書くと、ダンジョンのパークや
+  // 地獄ラッシュの剛力の遺物など「モードが積んだ scoreMult」を握り潰す。
+  if (god.mult !== 1) e.scoreMult = god.mult;
   if (god.fever) { e.feverUntil = 8.64e15; e.feverMult = Math.max(e.feverMult || 2, 2); $('#hudScore').classList.add('fever'); }
   else if (e.feverUntil > 8e15) { e.feverUntil = 0; $('#hudScore').classList.remove('fever'); }
   if (god.freezeEnemy) {
@@ -170,10 +172,17 @@ export async function adminCmd(cmd) {
       else { e.score += Math.max(0, m.hp); m.hp = 0; }
       if (m.updateHpBar) m.updateHpBar();
       if (m.updateRaidHp) m.updateRaidHp();
-      if (m.hp <= 0) { if (m.mode === 'dungeon') m.floorCleared(); else if (m.finish) m.finish(true); }
+      // 無限地獄ラッシュは撃破カウント（bossDown）、それ以外は勝利終了。
+      if (m.hp <= 0) { if (m.mode === 'dungeon') m.floorCleared(); else if (m.bossDown) m.bossDown(); else if (m.finish) m.finish(true); }
       break;
     }
-    case 'bossatk': if (!m || !m.attack) return toast('ボス戦・ダンジョンのみ', 'err'); m.attack(); break;
+    case 'bossatk': {
+      if (!m) return toast('ボス戦・ダンジョンのみ', 'err');
+      if (m.attack) m.attack();                                    // ダンジョン/レイド
+      else if (typeof m.nextAtk === 'number') m.nextAtk = Date.now();   // 新ボス戦: 次tickで技発動
+      else return toast('ボス戦・ダンジョンのみ', 'err');
+      break;
+    }
     // ---- dungeon ----
     case 'floorclear': if (!m || m.mode !== 'dungeon') return toast('ダンジョンのみ', 'err'); if (m.perkOpen) return; e.score += Math.max(0, m.hp); m.hp = 0; m.updateHpBar(); m.floorCleared(); break;
     case 'warp10': case 'floor100': {
@@ -212,7 +221,7 @@ export function runCommandLine(line) {
     case 'score': if (!needGame()) return; if (arg.startsWith('+') || arg.startsWith('-')) e.score = Math.max(0, e.score + Number(arg)); else e.score = Math.max(0, n || 0); refreshHud(m); toast(`スコア → ${fmt(e.score)}`, 'ok'); break;
     case 'floor': if (!m || m.mode !== 'dungeon') return toast('ダンジョンのみ', 'err'); if (m.perkOpen) return; m.floor = Math.max(1, Math.min(m.realm.floors, Math.floor(n) || 1)) - 1; m.hp = 0; m.updateHpBar(); m.floorCleared(); break;
     case 'time': if (!m || m.endAt === undefined) return toast('タイマーのあるモードのみ', 'err'); m.endAt += (n || 60) * 1000; m.timeLeft += (n || 60); toast(`⏱ ${n > 0 ? '+' : ''}${n}秒`, 'ok'); break;
-    case 'hp': if (!m || !enemyHp(m)) return toast('敵のいるモードのみ', 'err'); m.hp = Math.max(0, Math.floor(n) || 0); if (m.updateHpBar) m.updateHpBar(); if (m.hp <= 0) { if (m.mode === 'dungeon') m.floorCleared(); else if (m.finish) m.finish(true); } break;
+    case 'hp': if (!m || !enemyHp(m)) return toast('敵のいるモードのみ', 'err'); m.hp = Math.max(0, Math.floor(n) || 0); if (m.updateHpBar) m.updateHpBar(); if (m.hp <= 0) { if (m.mode === 'dungeon') m.floorCleared(); else if (m.bossDown) m.bossDown(); else if (m.finish) m.finish(true); } break;
     case 'mult': god.mult = Math.max(1, Math.min(1000, n || 1)); applyGod(); toast(`スコア倍率 ×${god.mult}`, 'ok'); break;
     case 'lives': if (!m || m.mode !== 'dungeon') return toast('ダンジョンのみ', 'err'); m.lives = Math.max(1, Math.floor(n) || 1); m.updateHud(); break;
     case 'ult': { if (!needGame()) return; const id = arg.startsWith('ult_') ? arg : `ult_${arg}`; adminCmd(`ultcast:${ULT_META[id] ? id : equippedUlt()}`); break; }

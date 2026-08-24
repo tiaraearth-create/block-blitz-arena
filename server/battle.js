@@ -6,7 +6,7 @@ import { Engine } from '../public/js/engine.js';
 import { chooseMove } from '../public/js/ai.js';
 import { RAID_BOSSES } from './catalog.js';
 import {
-  effectiveScale, pickPersona, pickResidentBot, residentLine, residentById,
+  effectiveScale, pickPersona, pickResidentBot, residentLine, residentById, residentByName,
   ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor,
   toggles, isQuietNow, popFactor, worldCtx,
 } from './ambient.js';
@@ -82,15 +82,90 @@ export function initBattle(server, deps) {
   };
 
   function postChat(name, text, extra = {}) {
-    const entry = { type: 'chat', from: name, role: 'user', text, at: Date.now(), tag: tagOf(name, null), ...extra };
+    const entry = { type: 'chat', id: crypto.randomUUID(), from: name, role: 'user', text, at: Date.now(), tag: tagOf(name, null), ...extra };
     // Residents' lines come from ja/en templates — the table translates them
     // almost verbatim, so every crowd message ships with its translation.
     const tr = translateLocal(text, detectLang(text) === 'ja' ? 'en' : 'ja');
     if (tr) entry.tr = tr;
-    chatHistory.push(entry);
-    if (chatHistory.length > 60) chatHistory.shift();
+    pushHistory(entry);
     broadcastAll(entry);
     return entry;
+  }
+
+  // ---- reactions (絵文字スタンプ) ----
+  // One reaction per person per message; picking the same emoji again removes
+  // it, a different one moves it. Ownership is keyed by a STABLE identity
+  // (account id / connection id / resident id) kept server-side only, so a
+  // guest who renames themselves to match another player cannot forge or
+  // remove that player's reactions. Display names are just labels.
+  const REACT_EMOJI = ['👍', '😂', '🔥', '💖', '😮', '🎉', '😭', '👏'];
+  const reactOwners = new Map();   // msgId -> Map(ownerKey -> { emoji, name })
+
+  function pushHistory(entry) {
+    chatHistory.push(entry);
+    if (chatHistory.length > 60) {
+      const old = chatHistory.shift();
+      if (old && old.id) reactOwners.delete(old.id);
+    }
+  }
+
+  function reactOwnerKey(ws) {
+    if (ws.user) return `u:${ws.user.id}`;
+    if (!ws.reactId) ws.reactId = crypto.randomUUID();
+    return `g:${ws.reactId}`;
+  }
+
+  function applyReaction(entry, ownerKey, name, emoji) {
+    let owners = reactOwners.get(entry.id);
+    if (!owners) { owners = new Map(); reactOwners.set(entry.id, owners); }
+    const prev = owners.get(ownerKey);
+    if (prev && prev.emoji === emoji) owners.delete(ownerKey);
+    else owners.set(ownerKey, { emoji, name });
+    const reacts = {};
+    for (const { emoji: em, name: nm } of owners.values()) (reacts[em] = reacts[em] || []).push(nm);
+    entry.reacts = reacts;
+    broadcastAll({ type: 'react', msgId: entry.id, reacts });
+  }
+
+  // A real player's message draws resident stamps — the chat feels watched
+  // (in the good way). Emoji choice loosely follows the message's vibe.
+  function reactEmojiFor(text) {
+    if (/gg|おつ|勝った|かった|win|clear|クリア|できた|update|更新|おめ/i.test(text)) return ['🎉', '👏', '🔥', '💖'];
+    if (/負け|まけた|むり|無理|つら|しんど|lose|dead/i.test(text)) return ['😭', '💖', '😮'];
+    if (/[wｗ]{2,}|草|笑|lol|haha|lmao/i.test(text)) return ['😂', '😂', '👍'];
+    return ['👍', '🔥', '💖', '😂', '😮'];
+  }
+
+  function maybeResidentReacts(entry) {
+    if (!crowdOn('reactions') || Math.random() > 0.5) return;
+    const active = worldCtx().active;
+    if (!active.length) return;
+    const pool = active.slice();
+    const emojis = reactEmojiFor(entry.text);
+    const n = 1 + (Math.random() < 0.35 ? 1 : 0) + (Math.random() < 0.12 ? 1 : 0);
+    for (let i = 0; i < n && pool.length; i++) {
+      const r = pool.splice((Math.random() * pool.length) | 0, 1)[0];
+      setTimeout(() => {
+        try {
+          if (!crowdOn('reactions')) return;
+          const cur = chatHistory.find(e2 => e2.id === entry.id);
+          if (cur) applyReaction(cur, `r:${r.id}`, r.name, emojis[(Math.random() * emojis.length) | 0]);
+        } catch (err) { console.error('[crowd] react failed:', err.message); }
+      }, 2500 + Math.random() * 12000);
+    }
+  }
+
+  // Replying to a resident's message always gets an answer from that resident.
+  // The category/language are judged from the RAW text (a prefixed name would
+  // break the ^-anchored reply rules and language detection); the target is
+  // forced via chooseReplies' mention slot. Per-socket cooldown keeps a
+  // rapid-fire replier from turning the cast into an echo chamber.
+  function forceResidentReply(ws, name, text) {
+    if (!crowdOn('reactions')) return;
+    if (Date.now() - (ws.forcedReplyAt || 0) < 5000) return;
+    ws.forcedReplyAt = Date.now();
+    const replies = chooseReplies(text, Date.now(), name);
+    if (replies.length) performScript(replies, 'reactions');
   }
 
   // Legacy entry point (admin "say"): a resident says `text`, or improvises.
@@ -116,7 +191,7 @@ export function initBattle(server, deps) {
     for (let i = 0; i < 8; i++) {
       t += (1.5 + Math.random() * 3) * 60 * 1000;
       const line = residentLine(null, t);
-      chatHistory.push({ type: 'chat', from: line.name, role: 'user', text: line.text, at: Math.min(t, Date.now() - 30000) });
+      chatHistory.push({ type: 'chat', id: crypto.randomUUID(), from: line.name, role: 'user', text: line.text, at: Math.min(t, Date.now() - 30000) });
     }
     void ctx;
   }
@@ -1316,17 +1391,37 @@ export function initBattle(server, deps) {
             return;
           }
           const role = u ? u.role : 'guest';
-          const entry = { type: 'chat', from: sockName(ws), role, text, at: Date.now(), tag: tagOf(sockName(ws), u) };
+          const entry = { type: 'chat', id: crypto.randomUUID(), from: sockName(ws), role, text, at: Date.now(), tag: tagOf(sockName(ws), u) };
+          // 返信: 引用元のスニペットを載せる。相手が住人なら必ず返事が来る。
+          const replyTarget = msg.replyTo ? chatHistory.find(e2 => e2.id === String(msg.replyTo)) : null;
+          if (replyTarget) {
+            entry.reply = { id: replyTarget.id, from: replyTarget.from, text: String(replyTarget.text).slice(0, 60) };
+          }
           // Real messages get the best translation available (external engine
           // when configured, phrase table otherwise) before they go out.
           translateChat(text).then(tr => {
             if (tr) entry.tr = tr;
           }).catch(() => {}).finally(() => {
-            chatHistory.push(entry);
-            if (chatHistory.length > 60) chatHistory.shift();
+            pushHistory(entry);
             broadcastAll(entry);
-            maybeAmbientReply(text);
+            const repliedResident = replyTarget && residentByName(replyTarget.from);
+            if (repliedResident) forceResidentReply(ws, replyTarget.from, text);
+            else maybeAmbientReply(text);
+            maybeResidentReacts(entry);
           });
+          break;
+        }
+        case 'react': {
+          const emoji = String(msg.emoji || '');
+          if (!REACT_EMOJI.includes(emoji)) return;
+          // ミュートはリアクションにも効く（モデレーションの抜け穴防止）。
+          const ru = ws.user ? db.users[ws.user.id] : null;
+          if (ru && ru.muted) return;
+          if (!sockRate(ws, 'reactTimes', 12, 10000)) return;
+          const who = sockName(ws);
+          const entry = chatHistory.find(e2 => e2.id === String(msg.msgId || ''));
+          if (!who || !entry) return;
+          applyReaction(entry, reactOwnerKey(ws), who, emoji);
           break;
         }
         case 'emote': {

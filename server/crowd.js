@@ -118,7 +118,9 @@ function renderSlot(key, v, lang) {
     case 'mode': case 'mode2': return MODE_NAMES[v] ? MODE_NAMES[v][L] : String(v);
     case 'tier': return v && typeof v === 'object' ? (L ? v.nameEn : v.name) : String(v);
     case 'ai': return typeof v === 'number' ? AI_LABELS[v][L] : String(v);
-    case 'score': case 'sprint': return Number(v).toLocaleString('en-US');
+    // extra からは整形済み文字列（'12,000'）が来ることがある — Number() に
+    // 通すと NaN になるので、数値のときだけフォーマットする。
+    case 'score': case 'sprint': return typeof v === 'number' ? v.toLocaleString('en-US') : String(v);
     case 'event': return v === null ? (L ? 'the event' : 'イベント') : String(v);
     case 'name': return v === null ? (L ? 'someone' : '誰か') : String(v);
     case 'you': return v === null ? (L ? 'you' : 'きみ') : String(v);
@@ -681,15 +683,19 @@ const REPLY_RULES = [
 ];
 
 // Returns [{ resident, text, delay }]. `residents` = currently active cast.
-export function chooseReplies(text, ctx) {
+// forcedName: a resident who MUST answer first (a direct reply to their
+// message) — even quiet lurkers respond when spoken to directly.
+export function chooseReplies(text, ctx, forcedName = null) {
   const t = String(text || '').trim();
   if (!t) return [];
   const active = (ctx.active || []).filter(r => r.chatty > 0.3);
-  if (!active.length) return [];
+  const forced = forcedName ? (ctx.active || []).find(r => r.name === forcedName) : null;
+  if (!active.length && !forced) return [];
   const lang = /[ぁ-んァ-ヶ一-龠ー]/.test(t) ? 'ja' : 'en';
 
-  // Mentioned residents always answer.
-  const mentioned = active.filter(r => r.name.length >= 2 && t.includes(r.name));
+  // Mentioned residents always answer; a direct-reply target leads the queue.
+  let mentioned = active.filter(r => r.name.length >= 2 && t.includes(r.name));
+  if (forced) mentioned = [forced, ...mentioned.filter(r => r.id !== forced.id)];
 
   let category = 'generic';
   for (const [cat, re] of REPLY_RULES) {
@@ -734,3 +740,260 @@ export function chooseReplies(text, ctx) {
 }
 
 export { tierOf };
+
+// ---------------------------------------------------------------------------
+// にぎわい語彙メガ拡張 — 追加コンテンツはここに一括登録して本体テーブルへ
+// push/merge する（本体の定義は読みやすいまま保つ）。
+// ---------------------------------------------------------------------------
+
+const EXTRA_LINES = [
+  { ja: "目覚まし止めた流れでログインしてた", en: "turned off my alarm and somehow ended up logged in", ctx: "morning" },
+  { ja: "朝のソロ1周で頭起こしてる", arch: ["morning"], ctx: "morning" },
+  { ja: "午前中に用事ぜんぶ終わらせた 偉すぎる", not: ["kid"], ctx: "day" },
+  { ja: "昼のロビー静かで好き", en: "the afternoon lobby is so peaceful", arch: ["lurker","senpai","morning"], ctx: "day" },
+  { ja: "夕焼け見ながらタイムアタックしてた", ctx: "evening" },
+  { ja: "今日はもう店じまい ランクマは明日の私に任せた", not: ["kid"], ctx: "night" },
+  { ja: "風呂上がりのランクマ謎に勝てる", ctx: "night" },
+  { ja: "気づいたら日付変わってた", en: "wait, when did it become tomorrow", ctx: "late", w: 2 },
+  { ja: "明日の自分に謝りながら{mode}回してる", en: "apologizing to tomorrow's me while queuing {mode} again", not: ["kid"], ctx: "late" },
+  { ja: "寝る前の1戦が3戦になるのなんで", en: "\"one game before bed\" is never one game", ctx: "night", w: 2 },
+  { ja: "寝落ちしてサバイバルで放置死してた", en: "fell asleep mid-survival and woke up dead", ctx: "late" },
+  { ja: "深夜だけ配置が冴えるの何なんだろうな", en: "why is my placement godlike only at 2am", arch: ["nightowl","tryhard","streamer"], ctx: "late" },
+  { ja: "日曜の夜だけ時間の流れ早すぎる", en: "sunday evenings last five minutes I swear", ctx: "weekend" },
+  { ja: "月曜はログボだけが裏切らない", en: "the monday login bonus, only good part of mondays", ctx: "mondayish" },
+  { ja: "金曜の脳は判断力ゼロだからガチャ引きがち", en: "friday brain says pull the gacha", arch: ["gacha","casual","nightowl"], ctx: "friday" },
+  { ja: "土曜の朝から協力募集出てて平和", ctx: "weekend" },
+  { ja: "週末しか潜れないランクマ勢です", not: ["kid"], ctx: "weekend" },
+  { ja: "週間ランキングのリセット見届けるのちょっと寂しい", en: "watching the weekly board reset always stings a little", ctx: "mondayish" },
+  { ja: "カレー煮込みながら片手でソロ", en: "stirring curry with one hand, placing blocks with the other" },
+  { ja: "電車乗り過ごしかけた このゲームのせい", en: "almost missed my station because of this game", not: ["kid"] },
+  { ja: "雨だし今日は引きこもりブロック日和", en: "raining all day, so it's a blocks day" },
+  { ja: "布団の中でやると勝率下がる説", en: "playing under the covers = instant losses, proven" },
+  { ja: "テスト前なのにダンジョン潜ってる", arch: ["kid","casual"] },
+  { ja: "洗濯機が回ってる間だけソロやる縛り", en: "solo runs synced to the washing machine cycle", not: ["kid"] },
+  { ja: "夜食ラーメン作りながらマッチング待ち", en: "making midnight ramen while the queue pops", not: ["kid"], ctx: "late" },
+  { ja: "仕事の休憩ぜんぶタイムアタックに溶けてる", en: "my work breaks are just time attack now", not: ["kid"], ctx: "day" },
+  { ja: "コンビニ行く道でウィークリーの残り数えてた", not: ["kid"] },
+  { ja: "ご飯できたって呼ばれたのに{boss}が第二形態入った", en: "dinner is ready but {boss} just hit phase two", ctx: "evening", w: 2 },
+  { ja: "目が乾いてきたから目薬さして続行" },
+  { ja: "眠気と手持ちのピース どっちも限界", ctx: "night" },
+  { ja: "手が滑って一番置きたくない場所に置いた", en: "my finger slipped onto the exact spot I was avoiding", w: 2 },
+  { ja: "リロール温存しすぎて使わないまま詰むのやめたい", en: "hoarded my reroll so hard I topped out still holding it", w: 2 },
+  { ja: "全消しの音で脳汁出る", en: "the full clear sound is pure dopamine", w: 2 },
+  { ja: "お邪魔ライン連打してきた相手のこと一生覚えてる", en: "I will remember the garbage line spammer forever" },
+  { ja: "最適配置ひらめいた瞬間に時間切れた", en: "found the perfect placement exactly as the timer hit zero" },
+  { ja: "ほしい向きと逆のL字ばっかり来る", en: "every L piece comes mirrored from the one I need" },
+  { ja: "詰んでるのに気づくのはいつも1手遅い", en: "I always spot the dead board one move too late" },
+  { ja: "ボム温存→盤面事故→使う暇なし いつもの" },
+  { ja: "3x3の穴キープしてたのに最後まで来なかった", en: "kept a 3x3 hole open all game, it never came" },
+  { ja: "コンボ続いてる時ほど手汗がやばい", en: "the longer the combo the sweatier my hands" },
+  { ja: "惜しかった盤面ほどスクショ撮りがち" },
+  { ja: "予告マス見えてるのに手が追いつかない", en: "I can see the telegraphed cells, my hands just refuse" },
+  { ja: "フィーバー中に限って置きミスする", en: "fever time is when I misplace everything" },
+  { ja: "瀕死盤面から全消しで生還した時だけ天才", en: "clutch full clear from a dead board = temporary genius" },
+  { ja: "始めて3日ですがもう毎日ログインしてます", en: "day 3 and I haven't missed a login yet", arch: ["newbie"] },
+  { ja: "今日はノルマ10戦 終わるまで喋らん", en: "ten game quota today, talk after", arch: ["tryhard"] },
+  { ja: "勝ち負けよりブロック積んでる時間が好きかもしれん", en: "honestly the stacking is more fun than the winning", arch: ["casual"] },
+  { ja: "ガチャ断ち3日目 えらい", arch: ["gacha"] },
+  { ja: "learning japanese one chat message at a time", en: "learning japanese one chat message at a time", arch: ["global"] },
+  { ja: "塔100Fの景色いつか絶対見る", en: "one day I'll see the view from floor 100", arch: ["explorer"] },
+  { ja: "みんな水分とってね〜 休憩も上達のうちよ", en: "hydrate everyone, resting is part of improving", arch: ["senpai"] },
+  { ja: "きょう学校でこのゲームの話でもりあがった！", arch: ["kid"] },
+  { ja: "配信ない日は逆に落ち着かない", en: "off-stream days feel so weird", arch: ["streamer"], w: 0.7 },
+  { ja: "…見てるだけでも楽しい", en: "…just watching is fun too", arch: ["lurker"], w: 0.5 },
+  { ja: "無限地獄ラッシュ深度{n}到達 手が震えてる", en: "depth {n} in endless hell rush, hands are shaking", arch: ["tryhard","explorer","nightowl"] },
+  { ja: "不死鳥の羽に2回救われた あれ実質勝ち確遺物", en: "phoenix feather revived me twice, that relic is a free win", arch: ["explorer","casual"] },
+  { ja: "遺物、火薬と雷どっち取る？", en: "gunpowder or thunder, which relic do you grab?", arch: ["explorer","tryhard","global"] },
+  { ja: "2周目入った瞬間ボスのHP倍でラン終わったw", en: "lap 2 doubled the boss hp and my run just died lol", arch: ["casual","explorer"] },
+  { ja: "慈悲の遺物、地味だけど一番仕事してる説", arch: ["senpai","explorer"] },
+  { ja: "深度12きた 「地獄を駆ける者」ゲット", en: "depth 12 done, got the hell-runner title", arch: ["tryhard","explorer"], w: 0.7 },
+  { ja: "寝る前に1周のつもりの無限地獄ラッシュ、3周してた", en: "\"one quick hell rush before bed\" — three laps later", arch: ["nightowl"], ctx: "late" },
+  { ja: "遺物の引き悪くて深度3で終了 かなしい", arch: ["casual","gacha","newbie"] },
+  { ja: "予告マス全部カットしてCOUNTER!出た時の快感やばい", en: "cutting every telegraphed cell for that COUNTER! is the best feeling", w: 2 },
+  { ja: "ドラゴンのブレス予告見逃して1行まるごと焼かれた", en: "missed the breath telegraph and a whole row got torched", arch: ["casual","newbie","kid"] },
+  { ja: "まおうの呪縛で手札凍ったまま何もできず終わった", arch: ["casual","newbie"] },
+  { ja: "エクスマキナの縦レーザー初見殺しすぎでしょ", en: "ex machina's vertical laser is a certified first-timer killer", arch: ["casual","explorer","tryhard"] },
+  { ja: "フリオーネの二重呪縛どう捌くのあれ", en: "how are you even supposed to handle frione's double bind", arch: ["tryhard","explorer","nightowl"] },
+  { ja: "第二形態で発狂した瞬間の空気変わるのこわい", arch: ["casual","kid","newbie"] },
+  { ja: "ゴーレムの大地震で盤面ぐちゃぐちゃにされた", en: "golem earthquake turned my board into soup", arch: ["casual","explorer"] },
+  { ja: "スライムキングすらSランク取れないんだが", en: "can't even S rank the slime king, help", arch: ["casual","nightowl"] },
+  { ja: "討伐ランクずっとA止まり Sの壁高すぎ", en: "forever stuck at rank A, the S wall is real", arch: ["tryhard","explorer"] },
+  { ja: "全ボスSで「完全討伐者」取った 燃え尽きた", en: "S ranked every boss for the perfect-slayer title, I am now retired", arch: ["tryhard","explorer","nightowl"], w: 0.5 },
+  { ja: "カットあと一手間に合わなくて直撃もらった", en: "one move short of the cut and ate the full hit" },
+  { ja: "ボスのカットは慣れると詰将棋みたいで楽しいよ〜", arch: ["senpai"] },
+  { ja: "月曜のログインは週間報酬の受け取りから始まる", en: "monday login ritual: collect the weekly rewards first", arch: ["morning","casual","lurker"], ctx: "mondayish", w: 2 },
+  { ja: "週間王者の🏅つけてる人ロビーで見た オーラある", en: "saw someone with the weekly champ badge in the lobby, instant aura", arch: ["casual","kid","newbie"] },
+  { ja: "今週こそ週間王者とる", arch: ["tryhard"], w: 0.8 },
+  { ja: "週間チャレンジ2位でジェム入った 1位の壁は厚い", en: "2nd place weekly gems secured, but 1st is a fortress", arch: ["tryhard","morning","explorer"] },
+  { ja: "ジュークボックス、PIXEL RUSH 182でループ固定してる", en: "jukebox permanently locked on PIXEL RUSH 182", arch: ["nightowl","tryhard","streamer"] },
+  { ja: "「限界突破」流れると勝手に手が速くなる", en: "when the Limit Break track plays my hands just speed up on their own" },
+  { ja: "やすらぎのロビーを作業用BGMにしてる 眠くなる", en: "the lobby theme is my study music now, dangerously sleepy", arch: ["lurker","morning","casual"] },
+  { ja: "天国ダンジョンで「天上の光」聴くとちょっと泣きそうになる", arch: ["explorer","casual"] },
+  { ja: "自分のメッセージにスタンプ3個ついてた ちょっとうれしい", en: "my message got 3 reactions, small win", arch: ["lurker","newbie","casual"] },
+  { ja: "名前タップでプロフカード出るの今日知った", en: "today I learned you can tap a name to see the profile card", arch: ["newbie","casual","lurker"] },
+  { ja: "返信機能できてから会話追いやすくなったね", arch: ["senpai","morning"] },
+  { ja: "the auto-translate here is lowkey magic, I can actually talk to everyone", en: "the auto-translate here is lowkey magic, I can actually talk to everyone", arch: ["global"] },
+  { ja: "深淵ダンジョン、暗すぎて画面の明るさ上げた", en: "the abyss is so dark I had to turn my brightness up", arch: ["explorer","casual","nightowl"] },
+  { ja: "深淵、途中から急に別ゲーになるのやめてほしいw", arch: ["explorer","casual"] },
+  { ja: "深淵の最深部って何があるの 行った人いる？", en: "what's at the bottom of the abyss? anyone been?", arch: ["explorer","nightowl","casual"] },
+  { ja: "ギルドの週間レースあと少しで1位 みんなログインして！", en: "guild race is SO close to 1st, everyone log in!", arch: ["tryhard","senpai","kid"] },
+  { ja: "ギルドレベル上がってコインボーナス増えた 入り得すぎる", en: "guild leveled up and the coin bonus went up, join one already", arch: ["casual","gacha","senpai"] },
+  { ja: "無言ギルドだけど週間レースだけは全員本気なのすき", arch: ["lurker","casual"] },
+  { ja: "バトロワ残り10人からの心拍数えぐい", en: "final 10 in battle royale, my heart rate is not ok", arch: ["casual","streamer","nightowl"] },
+  { ja: "バトロワ開幕の100人表示、見るだけで圧ある", en: "seeing all 100 players at the start is such a rush", arch: ["newbie","casual","kid"] },
+  { ja: "称号「{title}」に付け替えた しっくりきてる", en: "switched my title to {title}, it just fits" },
+  { ja: "プロフカードで見た称号がレアすぎて取り方調べてる", arch: ["explorer","casual","gacha"] },
+  { ja: "実績コンプまであと{n}個 先は長い", en: "{n} achievements to 100%… the road is long", arch: ["explorer","lurker","tryhard"] },
+  { ja: "隠し実績あるらしくて手当たり次第変なことしてる", en: "apparently there are hidden achievements so now I just do weird stuff every run", arch: ["explorer","casual"] },
+];
+LINES.push(...EXTRA_LINES);
+
+const EXTRA_DIALOGUES = [
+  { lang: "ja", lines: [["a", "無限地獄で不死鳥の羽引けた"], ["b", "1回復活のやつか 強い"], ["a", "おかげで深度更新できた"], ["b", "遺物運も実力よ"]], archA: ["explorer","tryhard","nightowl"], archB: ["senpai","explorer"] },
+  { lang: "ja", lines: [["a", "無限地獄の2周目、HP倍増きつすぎない？"], ["b", "火薬と雷そろえてからが本番"], ["a", "なるほど 遺物ゲーか"], ["b", "慈悲も地味に助かる"]], archA: ["casual","explorer"], archB: ["tryhard","explorer","nightowl"] },
+  { lang: "ja", lines: [["a", "予告の赤マス消してCOUNTER!出すの気持ちよすぎる"], ["b", "あの音いいよね"], ["a", "全カットで討伐ランクS狙ってる"], ["b", "第二形態の発狂からが本番"]], archA: ["casual","kid","explorer"], archB: ["tryhard","explorer","senpai"] },
+  { lang: "ja", lines: [["a", "エクスマキナの縦レーザーどう対処するの"], ["b", "避けるんじゃなくて予告の列を先に消す"], ["a", "それが間に合わないんよ…"], ["b", "細長いピース温存しとくと楽"]], archA: ["newbie","casual"], archB: ["tryhard","senpai","explorer"] },
+  { lang: "ja", lines: [["a", "フリオーネの二重呪縛えげつない"], ["b", "手札凍ってる間に盤面詰むのよね"], ["a", "まおうより意地悪じゃん"], ["b", "凍る前に盤面軽くしとくしかない"]], archA: ["casual","nightowl","explorer"], archB: ["tryhard","explorer"] },
+  { lang: "ja", lines: [["a", "週間チャレンジ1位いけそう"], ["b", "週間王者狙い？"], ["a", "🏅バッジ欲しい 月曜まで逃げ切る"], ["b", "追い上げるからよろしくw"]], archA: ["tryhard","nightowl"], archB: ["casual","tryhard"] },
+  { lang: "ja", lines: [["a", "ジュークボックスでPIXEL RUSH 182ループ固定にした"], ["b", "あれテンション上がるよね"], ["a", "作業がはかどりすぎる"], ["b", "おれはやすらぎのロビー派"]], archA: ["casual","streamer","nightowl"], archB: ["casual","morning"] },
+  { lang: "ja", lines: [["a", "ねえねえ神AI勝てた？！"], ["b", "まだ"], ["a", "ぼく創造神やったら3手でまけた！！"], ["b", "創造神はそういうもん"], ["a", "ガチ勢でもむずいんだ！！"]], archA: ["kid"], archB: ["tryhard"] },
+  { lang: "ja", lines: [["a", "UR狙いで30連した"], ["b", "結果は聞かないほうがいい？"], ["a", "SR被り3枚"], ["b", "昨日のおれと同じで草"]], archA: ["gacha"], archB: ["gacha"] },
+  { lang: "ja", lines: [["a", "深淵クリアした"], ["b", "えっ喋った"], ["b", "しかも報告がえぐい"], ["a", "以上"]], archA: ["lurker"], archB: ["casual","streamer","kid"] },
+  { lang: "ja", lines: [["a", "今夜バトロワ100人配信する 生き残るとこ見せるよ"], ["b", "見る！何時から？！"], ["a", "21時 初手から端で立ち回る予定"], ["b", "宿題おわらせて待機します！"]], archA: ["streamer"], archB: ["kid","casual"] },
+  { lang: "ja", lines: [["a", "2v2組も 気楽にやろ"], ["b", "勝ちにいくなら"], ["a", "負けても笑えればよくない？w"], ["b", "よくない"], ["a", "そういうとこ好きだよw"]], archA: ["casual"], archB: ["tryhard"] },
+  { lang: "ja", lines: [["a", "おはよ〜 朝活タイムアタック行くよ〜"], ["b", "こっちは今から寝るとこ"], ["a", "徹夜？！"], ["b", "ラッシュで深度盛ってたら朝だった"]], archA: ["morning"], archB: ["nightowl"], ctx: "morning" },
+  { lang: "ja", lines: [["a", "レイドって初心者が行っても迷惑じゃないですか…？"], ["b", "全然大丈夫よ〜 ライン消せるだけで戦力なの"], ["a", "じゃあティアマト行ってみます"], ["b", "初レイドがティアマトは根性あるわね〜"]], archA: ["newbie"], archB: ["senpai"] },
+  { lang: "ja", lines: [["a", "この時間の無限地獄がいちばん集中できる"], ["b", "通知も来ないしね"], ["a", "今日は深度{n}まで潜る"], ["b", "朝日を見ることになるぞ"]], archA: ["nightowl"], archB: ["nightowl","tryhard"], ctx: "late" },
+  { lang: "ja", lines: [["a", "おはよ ログインストリーク{n}日目"], ["b", "続いてるね〜"], ["a", "歯磨きより先にログインしてる"], ["b", "それはそれでどうなのw"]], archA: ["morning","casual"], archB: ["casual","senpai"], ctx: "morning" },
+  { lang: "ja", lines: [["a", "土曜は朝からトーナメント三昧"], ["b", "8人戦の連戦きつくない？"], ["a", "週末しかがっつりできんから"], ["b", "わかる 平日は2戦で寝てる"]], archA: ["casual","tryhard"], archB: ["casual","nightowl"], ctx: "weekend" },
+  { lang: "ja", lines: [["a", "{event}の報酬どこまで取った？"], ["b", "まだ半分"], ["a", "期間中に走り切らんと"], ["b", "仕事が邪魔すぎる"]], ctx: "event" },
+  { lang: "ja", lines: [["a", "明日休みだから朝までランクマ回す"], ["b", "レート溶かすやつじゃんそれw"], ["a", "今日は勝てる気がするんよ"], ["b", "フラグやめろw"]], archA: ["nightowl","tryhard","casual"], archB: ["casual","nightowl"], ctx: "friday" },
+  { lang: "en", lines: [["a", "weekly reset in 2 hours and i'm 300 points off first"], ["b", "grind time"], ["a", "if i lose the champion title to a last minute snipe i'm done"], ["b", "get in there lol"]], archA: ["global"], archB: ["global"] },
+];
+DIALOGUES.push(...EXTRA_DIALOGUES);
+
+const EXTRA_FEED = [
+  { id: "hellrush", icon: "🌋", w: 3, min: 0.5, ja: "{me} が無限地獄ラッシュで深度{n}に到達", en: "{me} reached depth {n} in Infinite Hell Rush" },
+  { id: "phoenix", icon: "🪶", w: 2, min: 0.4, ja: "{me} が不死鳥の羽で復活して連戦継続！", en: "{me} revived with the Phoenix Feather and kept the run alive!" },
+  { id: "counter", icon: "🛡️", w: 4, min: 0.3, ja: "{me} が {boss} の予告攻撃をカット！COUNTER発動", en: "{me} cut {boss}'s telegraphed attack — COUNTER!" },
+  { id: "boss_s", icon: "💮", w: 2, min: 0.55, ja: "{me} が {boss} を討伐ランクSでクリア！", en: "{me} took down {boss} with an S rank!" },
+  { id: "exmachina", icon: "⚙️", w: 1.2, min: 0.65, ja: "{me} が機械神エクスマキナを撃破！！", en: "{me} shut down Ex Machina the Machine God!!" },
+  { id: "frione", icon: "🧊", w: 1.2, min: 0.65, ja: "{me} が氷雪女王フリオーネを討伐！二重呪縛を突破", en: "{me} melted Frione the Frost Queen!!" },
+  { id: "weekly_win", icon: "🎖️", w: 0.5, min: 0.72, ja: "{me} が週間ランキング1位！称号「週間王者」を獲得", en: "{me} finished #1 this week and earned \"Weekly Champion\"!" },
+  { id: "abyss", icon: "🕳️", w: 2, min: 0.5, ja: "{me} が深淵に足を踏み入れた…", en: "{me} stepped into the Abyss…" },
+  { id: "heaven", icon: "😇", w: 1.5, min: 0.45, ja: "{me} が天国ダンジョンを踏破！", en: "{me} conquered the Heaven dungeon!" },
+  { id: "guild", icon: "⚜️", w: 3, min: 0, ja: "{me} がギルドに加入した", en: "{me} joined a guild" },
+];
+FEED.push(...EXTRA_FEED);
+
+// 新しい返答カテゴリ（住人が新機能の話題に反応できるように）。
+const EXTRA_REPLY_CATEGORIES = {
+  rush: { ja: ["不死鳥の羽ないと深度二桁きつくない?","2周目のHP倍増からが本番","遺物は火薬と雷が鉄板な気がする","深度12到達した、称号もらえてうれしい","慈悲引いてから急に安定した","遺物の引き運で全部決まる説あるw"], en: ["phoenix feather is a must past depth 10","loop 2 hp scaling is brutal","relic rng decides the whole run tbh"], arch: ["explorer","tryhard","nightowl","senpai","global"] },
+  cut: { ja: ["予告マス消してCOUNTER出すの気持ちよすぎ","赤点滅きたら他は全部後回しでいい","ドラゴンのブレスは1行予告だからカット練習に向いてるよ","発狂後は予告さばききれんw","カット決め続けてたらSランク出た","反撃ダメージ入ると一気に楽になるよね"], en: ["countering the telegraph never gets old","red tiles first, everything else can wait","phase 2 telegraphs come way too fast lol"], arch: ["tryhard","senpai","explorer","casual","global"] },
+  newboss: { ja: ["エクスマキナの縦レーザー、1列空けとかないと死ぬ","フリオーネの二重呪縛えぐすぎん?","機械神やっとSランク取れた、長かった…","手札2枚凍結はさすがにやりすぎだと思うw","氷雪女王、まおうよりきつい気がする","新ボスどっちもBGM込みでかっこいいのずるい"], en: ["ex machina laser deleted my whole column","double freeze from the ice queen is pure evil","finally got S on the machine god, took forever"], arch: ["explorer","tryhard","senpai","nightowl","streamer","global"] },
+  music: { ja: ["PIXEL RUSH 182ずっとループしてるわ","鬼の巣窟のBGM不穏で好き","ジュークボックスのループ固定地味に神機能","やすらぎのロビー流しながら作業してるw","限界突破かかると手が速くなる気がする","天上の光きれいすぎて手が止まる"], en: ["pixel rush 182 on loop all day","the jukebox loop setting is so good","the boss theme goes hard ngl"], arch: ["casual","streamer","nightowl","morning","kid","global"] },
+  reward: { ja: ["週間王者の🏅、一回でいいから欲しい","月曜リセット前の駆け込みほんとしんどいw","先週入賞してジェムもらえた","1位の人どんだけやりこんでるんだ…","日曜の夜は順位変動えぐくて見てられない","今週こそ入賞ライン守りたい"], en: ["the weekly champion badge is my dream","got gems for placing last week, not bad","monday reset always sneaks up on me"], arch: ["tryhard","gacha","casual","senpai","morning","global"] },
+  sleepy: { ja: ["わかる、おれももう限界","あと1戦だけって言い続けて2時間経った","寝落ちしてサバイバル放置してたことあるw","無理せず寝な〜、ランクマは逃げないよ","眠いときのランクマは事故るからやめとき","おれは寝ない(寝ろ)"], en: ["same, one more game then bed (a lie)","go sleep, ranked will still be here tomorrow","sleepy ranked is how you lose rating"] },
+  hungry: { ja: ["わかる、夜食の時間だ","カップ麺待ちの3分でタイムアタックやりがち","腹減ってると全然集中できん","なんか食べてきな〜、盤面は逃げないから","ブロック見てたら豆腐に見えてきた","飯食ってからが本番"], en: ["snack break, then the grind continues","i play the 60s sprint while my noodles cook lol","cant focus on an empty stomach fr"] },
+  study: { ja: ["宿題終わらせてからのほうが気楽に遊べるよ〜","テスト前ほどやりたくなるのなんでだろうねw","おれも明日テストなのにここにいる","息抜きは60秒タイムアタック1回だけって決めるといいよ","単語帳とブロック交互にやってる","テストがんばれ！終わったら対戦しよ"], en: ["why is the game 10x more fun before exams lol","good luck on the test! come back after","one sprint per study break, thats the rule"], arch: ["kid","casual","senpai","nightowl","global"] },
+};
+Object.assign(REPLIES, EXTRA_REPLY_CATEGORIES);
+
+// 対応する話題ルール。REPLY_RULES は先勝ちマッチなので、包括ルールの
+// 'question'（末尾）の手前に挿し込む。
+const EXTRA_REPLY_RULES = [
+  ['rush', new RegExp("地獄ラッシュ|無限地獄|深度|遺物|hell rush|relic|depth", 'i')],
+  ['cut', new RegExp("カット|予告|counter|反撃|telegraph", 'i')],
+  ['newboss', new RegExp("エクスマキナ|フリオーネ|機械神|氷雪|凍結|呪縛|ex ?machina|ice queen|frione", 'i')],
+  ['music', new RegExp("BGM|サウンドトラック|ジュークボックス|曲|music|soundtrack|jukebox|\\bsong\\b", 'i')],
+  ['reward', new RegExp("報酬|週間王者|入賞|rewards?|prize", 'i')],
+  ['sleepy', new RegExp("眠[いすた]|ねむ|寝落ち|sleepy|zzz|\\btired\\b", 'i')],
+  ['hungry', new RegExp("腹減|はらへ|お腹|空腹|夜食|hungry|starving|snack", 'i')],
+  ['study', new RegExp("宿題|テスト|試験|勉強|授業|homework|exam|study", 'i')],
+];
+REPLY_RULES.splice(REPLY_RULES.length - 1, 0, ...EXTRA_REPLY_RULES);
+
+// 既存カテゴリへの返答追加。
+const REPLY_ADDITIONS = {
+  greeting: { ja: ["おかえり〜","お、きたね！今日も潜る?","ひさしぶり！元気だった?"], en: ["welcome back!","sup! good to see you"] },
+  gg: { ja: ["接戦だったね","いい勝負だった！また当たろ","ナイスゲームでした"], en: ["that was close!","rematch sometime?"] },
+  laugh: { ja: ["それはw","草生える","おもろw"], en: ["dead 💀","im crying lol"] },
+  sad: { ja: ["一旦休憩しよ","その悔しさが伸びしろよ","爆死報告助かる、仲間がいて安心する","そういう日もあるって"], en: ["happens to the best of us","take a break, reset the brain"] },
+  battle: { ja: ["2v2なら乗る！","5分後なら行ける","ルームID教えて","負けても泣かない約束ねw"], en: ["im down, custom or ranked?","give me 5 min then lets go"] },
+  praise: { ja: ["運が良かっただけw","最後ひやひやだったけどね","その言葉で今日一日がんばれる"], en: ["luck carried me tbh","appreciate it 🙏"] },
+  beginner: { ja: ["最初はAI対戦の見習いで練習するといいよ","5連バーの置き場所は常に残しとくと安心","奥義はゲージMAXで⚡押すだけだから使ってみて","焦らなくて大丈夫、みんな最初は下手だった"], en: ["start with the apprentice AI, its chill","always keep a spot for the long bar, trust"] },
+  dungeon: { ja: ["天国は逆にピース良すぎて油断する","深淵はまだクリアできる気がしない","塔は50F超えたあたりから景色変わるよね"], en: ["the abyss is on another level of hard","heaven floors sound easy… they are not"] },
+  gacha: { ja: ["単発で出たときの脳汁がやばい","10連ぜんぶNだったんだけどw","ラッキーデーまでジェム我慢中","SR止まりの才能ある"], en: ["all N on a 10 pull, im done lol","saving gems for lucky day"] },
+  boss: { ja: ["まおうの呪縛中は消せる手を残しとくのが大事","ハデスレイド行く人おる?","ゴーレムの大地震で盤面ぐちゃぐちゃになったw","討伐ランクS狙い始めると立ち回り変わるよね"], en: ["anyone up for the hades raid?","the golem earthquake wrecked my whole board"] },
+  coins: { ja: ["ギルドレベル上がるとコインボーナスつくよ","週間チャレンジの報酬も地味にでかい","ログボ切らしたくなくて毎日inだけはしてる"], en: ["guild level bonus adds up","login streaks are basically free money"] },
+  rating: { ja: ["1500の壁が厚すぎる","負けが込んだら一回ソロ挟んで整えるといいよ","2v2は相方次第でレート溶けるw","朝は強い人少ない気がする、気のせいかもだけど"], en: ["stuck at the diamond wall, send help","never queue tilted, learned that the hard way"] },
+};
+for (const [k, add] of Object.entries(REPLY_ADDITIONS)) {
+  const spec = REPLIES[k];
+  if (!spec) continue;
+  spec.ja.push(...add.ja);
+  if (add.en.length) (spec.en = spec.en || []).push(...add.en);
+}
+
+// 既存リアクションへのセリフ追加。
+const REACTION_ADDITIONS = {
+  greet_named: { ja: ["{you}さんおかえり","あ、{you}さんだ","{you}さんおつです","{you}さん今日も来たね"], en: ["ayy {you} is here","good to see you {you}"] },
+  lost_to: { ja: ["{you}さんに手も足も出なかった","{you}さん何食べたらそんな上手くなるの","完敗です…{you}さん","{you}さんの盤面きれいすぎて参考になる"], en: ["{you} didnt even let me play the game","how are you this good {you}"] },
+  beat: { ja: ["{you}さん最後まで分からなかった","ギリ勝ちw {you}さん強くなってない？","{you}さんとの試合は毎回しんどい（いい意味で）"], en: ["that was way too close {you}","good game {you}, you almost had me"] },
+  event_start: { ja: ["{event}か、寝れなくなるやつ","イベント初日が一番おいしいんよ","{event}走るぞ〜","いいタイミングでログインしたわ"], en: ["{event}?? cya irl obligations","logged in at the perfect time lol"] },
+  poll_voted: { ja: ["直感で{opt}","{opt}以外ありえなくない？","票入れてきた、{opt}で","正直どっちでもいいけど{opt}"], en: ["{opt}, no hesitation","my gut said {opt}"] },
+  poll_close: { ja: ["{winner}かあ、僅差だったね","負けた側だけど{winner}も楽しみ","ほら{winner}って言ったじゃん"], en: ["called it, {winner} all the way","my side lost but {winner} works too"] },
+  champion: { ja: ["{you}さん決勝の試合えぐかった","大会の{you}さん別人すぎ","優勝{you}さんかー、納得","{you}さん胴上げしたい"], en: ["{you} just won the whole thing??","tournament arc complete, gz {you}"] },
+  record: { ja: ["{score}は画面二度見した","{you}さんの伸び方おかしい（称賛）","{score}点とか見たことない数字","{you}さんどんどん記録伸びてくじゃん"], en: ["{score}?? actually insane {you}","new record every week huh {you}"] },
+  badge: { ja: ["{badge}ってどうやったら取れるの","{you}さんのプロフィール{badge}で光ってる","{badge}は憧れる"], en: ["{badge} is such a flex {you}","ok now I want {badge} too"] },
+  coop_done: { ja: ["{you}さんと息ぴったりだったね","{you}さんが右側処理してくれて助かった","協力たのしー、{you}さんまたやろ","{you}さんナイスフォロー"], en: ["we were so in sync {you}","carried by {you} in co-op lol"] },
+};
+for (const [k, add] of Object.entries(REACTION_ADDITIONS)) {
+  const spec = REACTIONS[k];
+  if (!spec) continue;
+  spec.ja.push(...add.ja);
+  if (add.en.length) (spec.en = spec.en || []).push(...add.en);
+}
+
+// ---------------------------------------------------------------------------
+// ☢️メルトダウン / 🧬キメラ工房 の語彙（モード差し替えに伴う入れ替え）
+// ---------------------------------------------------------------------------
+
+LINES.push(
+  { ja: "メルトダウン90%キープで稼ぐの心臓に悪すぎ", en: "farming at 90% heat is terrible for my heart", arch: ["tryhard", "nightowl", "streamer"] },
+  { ja: "❄️のライン迷ってる間に熱100いった", en: "hesitated on the coolant line and boom, 100%", arch: ["casual", "newbie"] },
+  { ja: "メルトダウン、爆発する瞬間ちょっとクセになる", arch: ["casual", "kid", "gacha"] },
+  { ja: "臨界ボーナス欲張って爆散した 後悔はない", en: "greeded the critical bonus and exploded, zero regrets", arch: ["nightowl", "gacha", "streamer"] },
+  { ja: "メルトダウンで初めて×12見た 手が震えた", en: "saw a ×12 multiplier in meltdown, hands were shaking", arch: ["tryhard", "explorer"] },
+  { ja: "冷却セル、来てほしい列に限って湧かない", arch: ["casual", "lurker"] },
+  { ja: "メルトダウンのアラーム鳴り出すと心拍数上がる", en: "the meltdown alarm spikes my heart rate every time", arch: ["casual", "morning"] },
+  { ja: "熱ゼロ安全運転じゃ全然伸びないのよく出来てる", arch: ["senpai", "tryhard"] },
+  { ja: "キメラ工房で3体合体の怪物つくった", en: "built a triple-monster in the chimera lab", arch: ["casual", "explorer", "kid"] },
+  { ja: "15マスキメラを完璧な穴に落とした 気持ちよすぎ", en: "dropped a 15-cell chimera into the perfect hole, bliss", arch: ["tryhard", "explorer"] },
+  { ja: "キメラでかくしすぎて置き場なくて詰んだw", en: "made a chimera too big to place anywhere lol", arch: ["casual", "gacha", "kid"] },
+  { ja: "溶接は2体まで派 3体はロマン", arch: ["senpai", "tryhard"] },
+  { ja: "キメラ×3で6ライン同時に消えた時の音えぐい", arch: ["streamer", "casual"] },
+  { ja: "溶接のやり方いま知った ピース同士ドラッグなのね", arch: ["newbie", "casual"] },
+  { ja: "メルトダウンもキメラ工房も中毒性たかい", en: "meltdown and the chimera lab are both way too addicting", arch: ["casual", "global"] },
+  { ja: "the chimera lab rewired how I see pieces", en: "the chimera lab rewired how I see pieces", arch: ["global"] },
+);
+
+DIALOGUES.push(
+  { lang: "ja", lines: [["a", "メルトダウン何点いった？"], ["b", "12万 熱95で回してた"], ["a", "それもう消防士でしょ"], ["b", "燃えてるのは俺の心"]], archA: ["casual", "tryhard"], archB: ["nightowl", "tryhard", "streamer"] },
+  { lang: "ja", lines: [["a", "キメラ工房で5連バー2本つないだ"], ["b", "10マス棒！？"], ["a", "置き場なくて死んだ"], ["b", "ロマンの代償w"]], archA: ["explorer", "casual", "gacha"], archB: ["casual", "senpai"] },
+  { lang: "ja", lines: [["a", "❄️消すか稼ぐか毎回悩む"], ["b", "悩んでる間に熱上がるのよね"], ["a", "それで2回爆発した"]], archA: ["casual", "newbie"], archB: ["senpai", "nightowl"] },
+);
+
+FEED.push(
+  { id: "meltdown", icon: "☢️", w: 4, min: 0.35, ja: "{me} がメルトダウンで熱90%超の臨界プレイ中！", en: "{me} is running critical heat in Meltdown!" },
+  { id: "chimera", icon: "🧬", w: 4, min: 0.3, ja: "{me} が{n}体合体のキメラを錬成！", en: "{me} welded a {n}-piece chimera!" },
+);
+
+Object.assign(REPLIES, {
+  meltdown: { ja: ["熱90キープ勢こわい", "❄️は保険で1個残す派", "爆発した時のスクショ見たい", "臨界ボーナス味しめると戻れないよね", "冷やすタイミングほんとむずい"], en: ["critical farmers are built different", "always keep one coolant in reserve", "the explosion is half the fun"] },
+  chimera: { ja: ["3体合体はロマン", "でかくしすぎ注意ね", "完璧な穴に落ちた時の音が最高", "彫ってから溶接する派だな", "×3キメラの破壊力えぐいよ"], en: ["triple monsters are pure ambition", "carve first, then weld", "nothing beats slotting the monster in"] },
+});
+REPLY_RULES.splice(REPLY_RULES.length - 1, 0,
+  ["meltdown", /メルトダウン|臨界|炉心|冷却|meltdown|coolant/i],
+  ["chimera", /キメラ|溶接|合体|chimera/i],
+);

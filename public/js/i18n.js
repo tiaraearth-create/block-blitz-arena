@@ -121,6 +121,10 @@ const CATALOG_EN = {
   buddy: { name: 'Great Duo', desc: 'Play 10 co-op runs' },
   soulmate: { name: 'In Perfect Sync', desc: 'Reach 20,000 in co-op' },
   weeklyking: { name: 'Weekly Sovereign', desc: 'Finish #1 in the weekly challenge' },
+  bossmaster: { name: 'Perfect Slayer', desc: 'S-rank every boss' },
+  hellrunner: { name: 'Hell Runner', desc: 'Reach depth 12 in Infinite Hell Rush' },
+  mecha: { name: 'Deus Ex Machina', desc: '' },
+  frost: { name: 'Frost Queen Frione', desc: '' },
 };
 
 // Name/description for a catalog object ({id, name, desc}) in the UI language.
@@ -223,6 +227,8 @@ export function applyStaticI18n() {
   set('#btnSprint', '⏱️ Time Attack');
   set('#btnWeekly', '🎯 Weekly');
   set('#btnSurvival', '💀 Survival');
+  set('#btnMeltdown', '☢️ Meltdown');
+  set('#btnChimera', '🧬 Chimera Lab');
   set('#btnChaos', '🌪️ Chaos Mode');
   set('#btnOnline', '🌐 Online Battle');
 

@@ -69,11 +69,23 @@ export const BOOST_ITEMS = [
 ];
 
 // ---- Boss battles ----
+// moves / moves2: attack-pattern ids for phase 1 / phase 2 (HP <= 50%),
+// dispatched client-side (modes.js BOSS_MOVES). atk2 = phase-2 attack-interval
+// multiplier. Telegraphed moves flash their target cells first and can be CUT
+// by clearing a line through them.
 export const BOSSES = [
-  { id: 'slime',  name: 'スライムキング',   emoji: '🟢', hp: 3000,  atkSec: 12, atkCells: 3, gemsFirst: 50 },
-  { id: 'golem',  name: 'アイアンゴーレム', emoji: '🗿', hp: 8000,  atkSec: 10, atkCells: 4, gemsFirst: 80 },
-  { id: 'dragon', name: 'ドラゴン',         emoji: '🐉', hp: 15000, atkSec: 9,  atkCells: 5, gemsFirst: 120 },
-  { id: 'maou',   name: 'まおう',           emoji: '😈', hp: 25000, atkSec: 8,  atkCells: 6, gemsFirst: 200 },
+  { id: 'slime',  name: 'スライムキング',   emoji: '🟢', hp: 3000,  atkSec: 12, atkCells: 3, gemsFirst: 50,
+    moves: ['garbage'], moves2: ['garbage'], atk2: 0.75 },
+  { id: 'golem',  name: 'アイアンゴーレム', emoji: '🗿', hp: 8000,  atkSec: 10, atkCells: 4, gemsFirst: 80,
+    moves: ['garbage', 'quake'], moves2: ['garbage', 'quake'], atk2: 0.75 },
+  { id: 'dragon', name: 'ドラゴン',         emoji: '🐉', hp: 15000, atkSec: 9,  atkCells: 5, gemsFirst: 120,
+    moves: ['garbage', 'breath_row'], moves2: ['breath_row', 'garbage'], atk2: 0.75 },
+  { id: 'maou',   name: 'まおう',           emoji: '😈', hp: 25000, atkSec: 8,  atkCells: 6, gemsFirst: 200,
+    moves: ['garbage', 'curse_hand'], moves2: ['garbage', 'curse_hand', 'breath_row'], atk2: 0.7 },
+  { id: 'mecha',  name: '機械神エクスマキナ', emoji: '⚙️', hp: 40000, atkSec: 8, atkCells: 6, gemsFirst: 300,
+    moves: ['garbage', 'laser_col', 'quake'], moves2: ['laser_col', 'laser_col2', 'quake'], atk2: 0.72 },
+  { id: 'frost',  name: '氷雪女王フリオーネ', emoji: '🧊', hp: 60000, atkSec: 8, atkCells: 7, gemsFirst: 500,
+    moves: ['garbage', 'curse_hand'], moves2: ['garbage', 'curse_hand2', 'breath_row'], atk2: 0.7 },
 ];
 
 // Raid-exclusive bosses: never appear in the solo boss mode.
@@ -131,6 +143,8 @@ export const TITLES = [
   { id: 'guildfounder', name: 'ギルド創設者', color: '#f59e0b', desc: 'ギルドを設立する' },
   { id: 'guildace', name: 'ギルドのエース',   color: '#22d3ee', desc: 'ギルドに週2,000ポイント貢献' },
   { id: 'weeklyking', name: '週間王者',       color: '#ffd75e', desc: '週間チャレンジで週間1位に輝く' },
+  { id: 'bossmaster', name: '完全討伐者',     color: '#ff5d5d', desc: '全ボスをSランクで討伐する' },
+  { id: 'hellrunner', name: '地獄を駆ける者', color: '#c026d3', desc: '無限地獄ラッシュで深度12に到達' },
 ];
 
 export function earnedTitles(user) {
@@ -181,6 +195,8 @@ export function earnedTitles(user) {
   if (user.guildFounded) out.push('guildfounder');
   if ((s.guildBestWeek || 0) >= 2000) out.push('guildace');
   if (has('weekly1')) out.push('weeklyking');
+  if (BOSSES.every(b => (s.bossRanks || {})[b.id] === 'S')) out.push('bossmaster');
+  if ((s.rushDepth || 0) >= 12) out.push('hellrunner');
   return out;
 }
 

@@ -312,11 +312,12 @@ export function randomChatLine() {
 }
 
 // Reply engine: when a real player chats, residents answer.
-// Returns [{ name, text, delay, resident }].
-export function chooseReplies(text, now = Date.now()) {
+// Returns [{ name, text, delay, resident }]. forcedName: this resident must
+// answer first (direct replies in chat).
+export function chooseReplies(text, now = Date.now(), forcedName = null) {
   if (!custom.toggles.reactions) return [];
   const ctx = worldCtx({ now });
-  return crowdReplies(text, ctx).map(x => ({ name: x.resident.name, text: x.text, delay: x.delay, resident: x.resident }));
+  return crowdReplies(text, ctx, forcedName).map(x => ({ name: x.resident.name, text: x.text, delay: x.delay, resident: x.resident }));
 }
 
 // ---------------------------------------------------------------------------

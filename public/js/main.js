@@ -2,7 +2,7 @@
 import { session, api, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, staffExtras } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
 import { confettiBurst } from './dom.js';
@@ -119,16 +119,21 @@ async function openBossSelect(preferIndex = null) {
           </button>`;
         }).join('')}
         ${(() => {
-          const rushOpen = bossMax >= data.bosses.length;
+          // 無限地獄は最初の4体を倒せば解放。周回対象は解放済みボスのみ。
+          const rushOpen = bossMax >= 4;
+          const depthBest = Math.max(Number(localStorage.getItem('bba_rush_depth') || 0),
+            session.user ? (session.user.stats.rushDepth || 0) : 0);
           return `
           <button class="btn boss-select ${rushOpen ? 'btn-oni' : 'btn-ghost'}" data-rush ${rushOpen ? '' : 'disabled'}>
-            <span>${rushOpen ? '⚔️' : '🔒'} ${t('ボスラッシュ', 'Boss Rush')}</span>
-            <small>${rushOpen ? t('全4体を連戦！休憩なし・1ミスで終了', 'All 4 bosses back to back! No breaks, one loss ends it') : t('全ボスを討伐すると解放', 'Defeat every boss to unlock')}</small>
+            <span>${rushOpen ? '⚔️' : '🔒'} ${t('無限地獄ラッシュ', 'Infinite Hell Rush')}</span>
+            <small>${rushOpen
+              ? t(`遺物ビルド×無限周回のローグライク連戦${depthBest ? ` ・ 最深記録 ${depthBest}体` : ''}`, `Relic-build roguelike gauntlet${depthBest ? ` ・ best depth ${depthBest}` : ''}`)
+              : t('最初の4ボスを討伐すると解放', 'Defeat the first 4 bosses to unlock')}</small>
           </button>`;
         })()}
       </div>`);
     const rushBtn = m.querySelector('[data-rush]:not([disabled])');
-    if (rushBtn) rushBtn.onclick = () => { closeModal(); startBossRush(data.bosses); };
+    if (rushBtn) rushBtn.onclick = () => { closeModal(); startBossRush(data.bosses.slice(0, Math.max(4, bossMax))); };
     m.querySelectorAll('[data-boss]:not([disabled])').forEach(btn => {
       btn.onclick = () => {
         const i = Number(btn.dataset.boss);
@@ -507,6 +512,46 @@ $('#btnDungeon').onclick = () => { audio.click(); showDungeonSelect(); };
 
 // ---- survival ----
 $('#btnSurvival').onclick = () => { audio.click(); startSurvival(); };
+
+// ---- meltdown (炉心スコアアタック) ----
+$('#btnMeltdown').onclick = () => {
+  audio.click();
+  const best = Math.max(Number(localStorage.getItem('bba_meltdown_best') || 0),
+    session.user ? (session.user.stats.meltdownBest || 0) : 0);
+  const m = showModal(`
+    <h2>☢️ ${t('メルトダウン', 'Meltdown')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('ラインを消すほど<b>炉心温度＝スコア倍率</b>が上昇（最大×15超）。ただし<b>100%で爆発</b>して即終了！<br><small>盤面に湧く❄️冷却セルを含むラインを消すと熱-35%。臨界(90%+)で置くと倍率さらに1.5倍 — 冷やすか、稼ぐか。</small>',
+          'Every clear heats the core — <b>heat is your score multiplier</b> (up to ×15+). But <b>100% = detonation</b>!<br><small>Clear a line through a ❄️ coolant cell for -35% heat. Placements at 90%+ get an extra ×1.5 — cool it or push it.</small>')}
+    </p>
+    ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="mlCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-melt" id="mlStart">☢️ ${t('炉心起動', 'Ignite the core')}</button>
+    </div>`);
+  m.querySelector('#mlCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#mlStart').onclick = () => { audio.click(); closeModal(); startMeltdown(); };
+};
+
+// ---- chimera lab (ピース溶接) ----
+$('#btnChimera').onclick = () => {
+  audio.click();
+  const best = Math.max(Number(localStorage.getItem('bba_chimera_best') || 0),
+    session.user ? (session.user.stats.chimeraBest || 0) : 0);
+  const m = showModal(`
+    <h2>🧬 ${t('キメラ工房', 'Chimera Lab')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('手札のピースを<b>ピースにドラッグして溶接</b>！自作の巨大キメラは<b>合体数がそのままスコア倍率</b>（2体=×2、3体=×3）<br><small>ただし手札は全部置くまで補充されない — 合体するほど窒息リスクと隣り合わせ。盤面を彫って、怪物を叩き込め！</small>',
+          '<b>Drag a piece onto another to weld them</b>! Your monster chimera scores <b>×its weld count</b> (2 pieces = ×2, 3 = ×3)<br><small>But your hand only refills once empty — every weld trades safety for power. Carve the board, then slam the monster in!</small>')}
+    </p>
+    ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="chCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-chimera" id="chStart">🧬 ${t('錬成開始', 'Start welding')}</button>
+    </div>`);
+  m.querySelector('#chCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#chStart').onclick = () => { audio.click(); closeModal(); startChimera(); };
+};
 
 // ---- time attack ----
 $('#btnSprint').onclick = () => {

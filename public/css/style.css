@@ -65,7 +65,9 @@ body {
 @keyframes screenIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 
 /* ============ Menu ============ */
-#screen-menu { align-items: center; justify-content: center; overflow: hidden; }
+/* Scrollable when tall (11 mode buttons); margin:auto on .menu-content keeps
+   it centered whenever it fits — never clips the top like justify-content. */
+#screen-menu { align-items: center; overflow-y: auto; }
 .menu-bg { position: absolute; inset: 0; pointer-events: none; }
 .fb {
   position: absolute; width: 46px; height: 46px; border-radius: 10px;
@@ -83,7 +85,7 @@ body {
   to   { transform: translateY(-20vh) rotate(360deg); }
 }
 
-.menu-content { position: relative; display: flex; flex-direction: column; align-items: center; gap: 26px; padding: 20px; }
+.menu-content { position: relative; display: flex; flex-direction: column; align-items: center; gap: 22px; padding: 20px; margin: auto 0; }
 .logo { text-align: center; line-height: 1.15; }
 .logo-block {
   display: inline-block; font-size: clamp(40px, 9vw, 72px); font-weight: 900;
@@ -103,7 +105,11 @@ body {
   color: var(--muted); text-shadow: 0 0 18px rgba(91,139,255,0.6);
 }
 
-.menu-buttons { display: flex; flex-direction: column; gap: 12px; width: min(340px, 86vw); }
+/* 11 modes: two columns keep the menu on one screen. Solo & Online anchor
+   the top and bottom at full width. */
+.menu-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: min(430px, 92vw); }
+.menu-buttons #btnSolo, .menu-buttons #btnOnline { grid-column: 1 / -1; }
+.menu-buttons .btn-big { white-space: nowrap; }
 .btn {
   border: none; border-radius: 16px; padding: 12px 22px;
   font-size: 16px; font-weight: 800; color: #fff; cursor: pointer;
@@ -275,6 +281,76 @@ body {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 10px; padding: 9px 12px; font-size: 13px;
 }
+
+/* Chat 2.0: reactions, replies, profile cards */
+.cm-name { background: none; border: none; padding: 0; color: inherit; font: inherit; font-weight: 800; cursor: pointer; }
+.cm-name:hover { text-decoration: underline; }
+.cm-bubble { cursor: pointer; }
+.cm-reply {
+  display: block; font-size: 11px; color: var(--muted);
+  border-left: 2px solid var(--cyan); padding: 1px 6px; margin: 2px 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.cm-reacts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.cm-react-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 1px 7px; font-size: 12px; color: var(--text); cursor: pointer;
+}
+.cm-react-chip b { font-size: 10px; color: var(--muted); }
+.cm-react-chip:hover { background: var(--panel2); }
+.cm-actions {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;
+  background: rgba(10, 13, 30, 0.95); border: 1px solid var(--line);
+  border-radius: 12px; padding: 5px 7px; animation: rowIn .15s ease;
+}
+.cm-actions button {
+  background: none; border: none; font-size: 17px; cursor: pointer; padding: 2px 4px;
+  border-radius: 8px; color: var(--text);
+}
+.cm-actions button:hover { background: var(--panel2); transform: scale(1.15); }
+.cm-actions .cm-act-reply { font-size: 12px; font-weight: 800; }
+.chat-reply-bar {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--panel); border-top: 1px solid var(--line);
+  padding: 4px 10px; font-size: 11px; color: var(--muted);
+}
+.chat-reply-bar span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-reply-bar button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; }
+.profile-card .pc-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.profile-card .pc-avatar { font-size: 40px; }
+.profile-card .pc-id b { font-size: 17px; display: block; }
+.profile-card .pc-title { font-size: 12px; font-weight: 800; display: block; }
+.profile-card .pc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.profile-card .pc-stat {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 8px 10px; text-align: center;
+}
+.profile-card .pc-stat b { display: block; font-size: 15px; }
+.profile-card .pc-stat span { font-size: 10px; color: var(--muted); }
+.profile-card .pc-badges { font-size: 18px; margin-top: 8px; }
+
+/* Boss 2.0: clear rank, enrage, attack telegraph bar */
+.boss-rank-wrap { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0 10px; }
+.boss-rank-wrap small { color: var(--muted); font-weight: 700; }
+.boss-rank {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 64px; height: 64px; border-radius: 16px;
+  font-size: 40px; font-weight: 900;
+  transform: scale(0) rotate(-16deg); opacity: 0;
+  transition: transform .45s cubic-bezier(.2, 1.6, .4, 1), opacity .3s;
+  border: 2px solid var(--line); background: var(--panel);
+  text-shadow: 0 2px 6px rgba(0,0,0,0.5);
+}
+.boss-rank.show { transform: scale(1) rotate(-4deg); opacity: 1; }
+.boss-rank.rank-S { color: #ffd75e; border-color: #ffd75e; box-shadow: 0 0 22px rgba(255,215,94,0.55); }
+.boss-rank.rank-A { color: #43d9e8; border-color: #43d9e8; box-shadow: 0 0 16px rgba(67,217,232,0.4); }
+.boss-rank.rank-B { color: #5ee86e; border-color: #5ee86e; }
+.boss-rank.rank-C { color: #9aa3c7; }
+.boss-emoji.boss-enrage { animation: bossEnrage 0.9s ease-in-out infinite; filter: drop-shadow(0 0 10px rgba(255,60,60,0.8)); }
+@keyframes bossEnrage { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18) rotate(-4deg); } }
+#bossAtkBar.danger { background: linear-gradient(90deg, #ff3b3b, #ffa93d) !important; animation: dangerPulse .5s linear infinite; }
+@keyframes dangerPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
 /* 🎧 Soundtrack jukebox */
 .jb-list {
@@ -801,6 +877,28 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
 /* Checkpoint picker can hold up to 10 buttons */
 .seg-wrap { flex-wrap: wrap; justify-content: flex-end; }
 
+.btn-melt {
+  background: linear-gradient(135deg, #b45309, #dc2626 60%, #7f1d1d);
+  box-shadow: 0 6px 0 #601515, 0 8px 24px rgba(220,38,38,0.45);
+  text-shadow: 0 2px 4px rgba(0,0,0,0.4);
+}
+.btn-chimera {
+  background: linear-gradient(135deg, #7c3aed, #10b981);
+  box-shadow: 0 6px 0 #3b1a75, 0 8px 24px rgba(124,58,237,0.4);
+  text-shadow: 0 2px 4px rgba(0,0,0,0.4);
+}
+
+/* Decksmith: tiny shape previews (forge offers + deck strip) */
+.deck-piece {
+  display: inline-grid;
+  gap: 1px;
+  vertical-align: middle;
+  margin: 0 2px;
+}
+.deck-piece i { width: 9px; height: 9px; border-radius: 2px; }
+.deck-piece i.on { background: #8b9bd4; }
+.deck-strip { margin-top: 10px; font-size: 11px; line-height: 2; max-height: 72px; overflow-y: auto; }
+
 .btn-chaos {
   background: linear-gradient(120deg, #ff5d5d, #b06bff 40%, #43d9e8 75%, #ffe14d);
   background-size: 300% 300%;
@@ -924,8 +1022,10 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
   .menu-content { gap: 14px; padding: 14px 12px 24px; }
   .logo-block { font-size: 34px; padding: 2px 7px; margin: 0 2px; border-radius: 10px; }
   .logo-sub { font-size: 14px; letter-spacing: 0.4em; }
-  .menu-buttons { gap: 9px; }
+  .menu-buttons { gap: 8px; }
   .btn-big { padding: 12px 18px; font-size: 16px; }
+  .menu-buttons .btn-big { padding: 11px 6px; font-size: 13.5px; }
+    .menu-buttons #btnSolo, .menu-buttons #btnOnline { font-size: 15px; }
   .menu-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: min(340px, 92vw); }
   .nav-btn { min-width: 0; padding: 8px 4px; font-size: 11px; border-radius: 13px; }
   .nav-btn span { font-size: 19px; }

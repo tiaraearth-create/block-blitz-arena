@@ -26,7 +26,7 @@ import { achievementsView, claimAchievement, ACHIEVEMENTS } from './achievements
 import {
   ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider,
   rosterView, retiredResidents, crowdMood, ambientQueue, isQuietNow, DEFAULT_TOGGLES, ARCHETYPES,
-  MAX_LIVE_SCALE,
+  MAX_LIVE_SCALE, residentByName, activeResidents, residentStats, archetype,
 } from './ambient.js';
 import { BADGE_NAMES } from './crowd.js';
 import {
@@ -106,6 +106,7 @@ function newUser(username, password, role = 'user') {
       ultsUsed: 0, itemsUsed: 0, missionsDone: 0, piecesPlaced: 0,
       survivalWave: 0, winStreakBest: 0, loginStreak: 1, loginStreakBest: 1,
       sprintPlays: 0, coopPlays: 0, coopBest: 0, sprint: {},
+      meltdownBest: 0, chimeraBest: 0,
       history: [],
     },
     owned: [...DEFAULT_OWNED],
@@ -132,7 +133,9 @@ function migrateUser(user) {
     ultsUsed: 0, itemsUsed: 0, missionsDone: 0, piecesPlaced: 0,
     survivalWave: 0, winStreakBest: 0, loginStreak: 1, loginStreakBest: 1,
     sprintPlays: 0, coopPlays: 0, coopBest: 0, abyssMax: 0, guildBestWeek: 0,
+    meltdownBest: 0, chimeraBest: 0, rushDepth: 0,
   })) if (s[k] === undefined) s[k] = v;
+  if (!s.bossRanks || typeof s.bossRanks !== 'object') s.bossRanks = {};
   if (user.guildId && !(db.guilds && db.guilds[user.guildId])) user.guildId = null;
   if (!s.sprint || typeof s.sprint !== 'object') s.sprint = {};
   if (!Array.isArray(s.history)) s.history = [];
@@ -200,7 +203,7 @@ function publicUser(user) {
 }
 
 // Sanity-check and apply a finished game's rewards. Returns the reward summary.
-function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   mode = String(mode || 'solo');
   migrateUser(user);
@@ -214,13 +217,17 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   items = clamp(items, 200);
   pieces = clamp(pieces, 20000);
   floors = clamp(floors, 100);
+  depth = clamp(depth, 9999);
+  rank = ['S', 'A', 'B', 'C'].includes(rank) ? rank : null;
   score = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
   lines = Math.max(0, Math.min(5000, Math.floor(Number(lines) || 0)));
   maxCombo = Math.max(0, Math.min(200, Math.floor(Number(maxCombo) || 0)));
   duration = Math.max(1, Math.min(7200, Number(duration) || 1));
   // Cheat guard: cap plausible score rate. Time attack is *about* scoring
-  // fast, so it gets a looser ceiling than the endless modes.
-  const rateCap = mode === 'sprint' ? 1000 : 500;
+  // fast; Meltdown runs hot multipliers (×15+ near critical) in short bursts
+  // and Chimera stacks up to ×3 — both need looser ceilings than the endless
+  // modes or legit runs get silently clipped.
+  const rateCap = mode === 'sprint' ? 1000 : mode === 'meltdown' ? 2000 : mode === 'chimera' ? 1000 : 500;
   if (score > duration * rateCap) score = Math.floor(duration * rateCap);
 
   let coins = Math.min(1000, 20 + Math.floor(score / 100) + (won ? 50 : 0));
@@ -271,7 +278,11 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   s.totalLines += lines;
   const prevBest = s.bestScore;
   const prevCombo = s.maxCombo;
-  if (score > s.bestScore) s.bestScore = score;
+  // Meltdown's critical-heat multiplier (×15+) makes its totals incomparable
+  // to a plain game — it stays off the global score board (own best stat).
+  // Chimera caps around ×3, same ballpark as chaos, so it counts.
+  const scoreboardEligible = mode !== 'meltdown';
+  if (scoreboardEligible && score > s.bestScore) s.bestScore = score;
   if (maxCombo > s.maxCombo) s.maxCombo = maxCombo;
   s.ultsUsed = (s.ultsUsed || 0) + ults;
   s.itemsUsed = (s.itemsUsed || 0) + items;
@@ -348,6 +359,9 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     if (!s.weekly || s.weekly.week !== w) s.weekly = { week: w, best: 0 };
     if (score > s.weekly.best) s.weekly.best = score;
   }
+  // メルトダウン / キメラ工房: per-mode personal bests.
+  if (mode === 'meltdown' && score > (s.meltdownBest || 0)) s.meltdownBest = score;
+  if (mode === 'chimera' && score > (s.chimeraBest || 0)) s.chimeraBest = score;
   // Dungeon tower: track highest floor cleared; gems for each newly reached
   // checkpoint decade, badge + big gem bonus for conquering all 100 floors.
   // The Abyss: the hardest realm — double gems per decade, a badge and a big
@@ -388,7 +402,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
       user.gems += 500;
     }
   }
-  // Boss battles: sequential progression + first-clear gem bonus.
+  // Boss battles: sequential progression + first-clear gem bonus + clear rank.
   if (mode === 'boss') {
     const idx = BOSSES.findIndex(b => b.id === extraBossId);
     if (idx !== -1 && won) {
@@ -401,12 +415,20 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
         user.badges.push('maou');
         badge = 'maou';
       }
+      // 討伐ランク: ボスごとに最高ランクを保存（S > A > B > C）。
+      if (rank) {
+        if (!s.bossRanks || typeof s.bossRanks !== 'object') s.bossRanks = {};
+        const order = { S: 4, A: 3, B: 2, C: 1 };
+        if ((order[rank] || 0) > (order[s.bossRanks[extraBossId]] || 0)) s.bossRanks[extraBossId] = rank;
+      }
     }
   }
+  // 無限地獄ラッシュ: 深度（累計撃破数）のベストを記録。
+  if (mode === 'boss_rush' && depth > (s.rushDepth || 0)) s.rushDepth = depth;
   // ---- Live feed + crowd reactions for notable real moments ----
   const feedNotes = [];
   const nm = user.username;
-  if (score > prevBest && prevBest > 0 && score >= 8000) {
+  if (scoreboardEligible && score > prevBest && prevBest > 0 && score >= 8000) {
     feedNotes.push({ icon: '⭐', ja: `${nm} が自己ベスト ${fmtNum(score)} 点を更新！`, en: `${nm} set a new best: ${score.toLocaleString('en-US')}!`,
       react: score >= 30000 ? ['record', { you: nm, score: fmtNum(score) }] : null });
   }
@@ -445,9 +467,11 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
 
   // Daily / weekly missions advance off the same event.
   const missionsCompleted = trackMissions(user, currentWeekNum(), {
-    mode, score, lines, maxCombo, won: !!won,
+    mode, score, maxCombo, lines, won: !!won,
     floors: mode.startsWith('dungeon') ? floors : 0,
-    wave, ults, items, pieces,
+    // Survival missions must not advance from other modes' stray wave fields.
+    wave: mode === 'survival' ? wave : 0,
+    ults, items, pieces,
   });
   saveDb();
   return {
@@ -556,6 +580,9 @@ app.post('/api/register', (req, res) => {
   }
   const exists = Object.values(db.users).some(u => u.username.toLowerCase() === username.toLowerCase());
   if (exists) return res.status(409).json({ error: 'そのユーザー名は既に使われています' });
+  // AI住人と同名のアカウントは作れない — チャットの返信/プロフィールで
+  // 住人と人間の区別がつかなくなる。
+  if (residentByName(username)) return res.status(409).json({ error: 'その名前はアリーナの住人が使っています。別の名前でどうぞ' });
 
   const user = newUser(username, password);
   const token = issueToken(user.id);
@@ -619,6 +646,7 @@ app.post('/api/me/rename', requireAuth, (req, res) => {
   if (username.toLowerCase() !== user.username.toLowerCase()) {
     const exists = Object.values(db.users).some(u => u.id !== user.id && u.username.toLowerCase() === username.toLowerCase());
     if (exists) return res.status(409).json({ error: 'そのユーザー名は既に使われています' });
+    if (residentByName(username)) return res.status(409).json({ error: 'その名前はアリーナの住人が使っています。別の名前でどうぞ' });
   }
   const DAY = 24 * 60 * 60 * 1000;
   if (user.role !== 'admin' && user.lastRename && Date.now() - user.lastRename < DAY) {
@@ -686,6 +714,47 @@ app.post('/api/admin/weekly/reset', requireAuth, requireAdmin, (req, res) => {
   }
   saveDb();
   res.json({ affected });
+});
+
+// ---------------------------------------------------------------------------
+// Chat mini-profile: tap a name in chat — works for real players AND the AI
+// residents (whose stats come from the same generator as the ghost boards, so
+// the card matches what the rankings show).
+// ---------------------------------------------------------------------------
+
+app.get('/api/profile/:name', (req, res) => {
+  if (!rateLimit(`profile:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください' });
+  const name = String(req.params.name || '').slice(0, 20);
+  const u = Object.values(db.users).find(x => x.username === name && !x.banned);
+  if (u) {
+    migrateUser(u);
+    const s = u.stats;
+    const tl = TITLES.find(x => x.id === u.equippedTitle);
+    return res.json({ profile: {
+      kind: 'player', name: u.username, role: u.role,
+      level: levelOf(u.xp), rating: s.rating, bestScore: s.bestScore,
+      pvpWins: s.pvpWins, pvpLosses: s.pvpLosses, dungeonMax: s.dungeonMax || 0,
+      badges: u.badges, title: tl ? { id: tl.id, name: tl.name, color: tl.color } : null,
+      guildTag: u.guildId && db.guilds[u.guildId] ? db.guilds[u.guildId].tag : null,
+    } });
+  }
+  const r = residentByName(name);
+  if (r && r.registered) {
+    const st = residentStats(r, Date.now());
+    const a = archetype(r.arch);
+    return res.json({ profile: {
+      kind: 'resident', name: r.name, role: 'user',
+      level: st.level, rating: st.rating, bestScore: st.bestScore,
+      pvpWins: st.pvpWins, pvpLosses: st.pvpLosses, dungeonMax: st.dungeonMax,
+      badges: st.badges, title: st.title,
+      guildTag: tagOfName(db, r.name, null),
+      archLabel: a.label, archLabelEn: a.labelEn,
+      hours: r.hours, favMode: r.favMode,
+      online: activeResidents().some(x => x.id === r.id),
+    } });
+  }
+  if (r) return res.json({ profile: { kind: 'guest', name: r.name } });
+  res.status(404).json({ error: 'プレイヤーが見つかりません' });
 });
 
 // ---------------------------------------------------------------------------

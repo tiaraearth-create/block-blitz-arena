@@ -62,6 +62,8 @@
           <button class="btn btn-sprint btn-big" id="btnSprint">⏱️ タイムアタック</button>
           <button class="btn btn-weekly btn-big" id="btnWeekly">🎯 ウィークリー</button>
           <button class="btn btn-oni btn-big" id="btnSurvival">💀 サバイバル</button>
+          <button class="btn btn-melt btn-big" id="btnMeltdown">☢️ メルトダウン</button>
+          <button class="btn btn-chimera btn-big" id="btnChimera">🧬 キメラ工房</button>
           <button class="btn btn-chaos btn-big hidden" id="btnChaos">🌪️ カオスモード</button>
           <button class="btn btn-online btn-big" id="btnOnline">🌐 オンライン対戦</button>
         </div>
@@ -301,6 +303,7 @@
   <div id="chatBox" class="chat-box hidden">
     <div class="chat-head">💬 全体チャット <span id="chatOnline" class="muted"></span></div>
     <div id="chatMsgs" class="chat-msgs"></div>
+    <div id="chatReplyBar" class="chat-reply-bar hidden"><span id="chatReplyText"></span><button id="chatReplyCancel" title="返信をやめる">✕</button></div>
     <div class="chat-input-row">
       <input id="chatInput" type="text" maxlength="200" placeholder="みんなにメッセージ…" autocomplete="off">
       <button class="btn btn-sm btn-primary" id="chatSend">送信</button>
