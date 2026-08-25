@@ -134,6 +134,10 @@ function migrateUser(user) {
     survivalWave: 0, winStreakBest: 0, loginStreak: 1, loginStreakBest: 1,
     sprintPlays: 0, coopPlays: 0, coopBest: 0, abyssMax: 0, guildBestWeek: 0,
     meltdownBest: 0, chimeraBest: 0, rushDepth: 0,
+    totalWins: 0, playSecs: 0, bossKills: 0, chaosPlays: 0, meltdownPlays: 0,
+    chimeraPlays: 0, survivalPlays: 0, weeklyPlays: 0, dailyLogins: 1,
+    gachaPulls: 0, gachaSSR: 0, chatMessages: 0, reactionsGiven: 0,
+    weeklyWins: 0, puzzleStage: 0, puzzlePlays: 0, digDepth: 0, digPlays: 0,
   })) if (s[k] === undefined) s[k] = v;
   if (!s.bossRanks || typeof s.bossRanks !== 'object') s.bossRanks = {};
   if (user.guildId && !(db.guilds && db.guilds[user.guildId])) user.guildId = null;
@@ -151,19 +155,50 @@ function migrateUser(user) {
 
 function levelOf(xp) { return 1 + Math.floor(xp / 1000); }
 
+// Season number/endsAt derive from a fixed epoch instead of stored state, so a
+// redeploy (which wipes the DB on this hosting tier) computes the SAME season
+// with the SAME id — no more "every update restarts the 30-day season", and no
+// more battle-pass wipes (the pass is keyed by season id, which used to be a
+// per-instance random UUID). Admin overrides live in db.meta.seasonOverride:
+// { baseIndex, gen, numberOffset, name, startedAt, endsAt } — gen bumps force a
+// reset, endsAt (while in the future) freezes the season past the 30-day grid.
+const SEASON_MS = BP_SEASON_DAYS * 24 * 60 * 60 * 1000;
+const SEASON_EPOCH = 1784782260770;   // maps the live S2 (ends 2026-09-20) exactly
+
+function derivedSeasonIndex(now = Date.now()) {
+  return Math.max(1, Math.floor((now - SEASON_EPOCH) / SEASON_MS) + 1);
+}
+
 function currentSeason() {
-  if (!db.season || db.season.endsAt < Date.now()) {
-    const number = db.season ? db.season.number + 1 : 1;
-    db.season = {
-      id: crypto.randomUUID(),
-      number,
-      name: `シーズン ${number}`,
-      startedAt: Date.now(),
-      endsAt: Date.now() + BP_SEASON_DAYS * 24 * 60 * 60 * 1000,
-    };
-    saveDb();
+  const now = Date.now();
+  const idx = derivedSeasonIndex(now);
+  const o = db.meta.seasonOverride || null;
+  const extended = !!(o && o.endsAt && o.endsAt > now);
+  const effIdx = extended ? (o.baseIndex || idx) : idx;
+  const gen = o ? (o.gen || 0) : 0;
+  const number = effIdx + (o ? (o.numberOffset || 0) : 0);
+  const custom = o && o.name && effIdx === (o.baseIndex || idx);
+  return {
+    id: `s${effIdx}${gen ? '-' + gen : ''}`,
+    number,
+    name: custom ? o.name : `シーズン ${number}`,
+    startedAt: extended && o.startedAt ? o.startedAt : SEASON_EPOCH + (effIdx - 1) * SEASON_MS,
+    endsAt: extended ? o.endsAt : SEASON_EPOCH + effIdx * SEASON_MS,
+  };
+}
+
+// Bridge from the stored-season era (and from restored backups): a legacy
+// season object whose clock is still running IS today's season, so every
+// battle pass pointing at its old UUID carries over instead of resetting.
+function adoptLegacySeason(legacy) {
+  if (!legacy || !legacy.id || typeof legacy.id !== 'string') return 0;
+  const cur = currentSeason();
+  if (legacy.id === cur.id || !(legacy.endsAt > Date.now())) return 0;
+  let n = 0;
+  for (const u of Object.values(db.users)) {
+    if (u.battlePass && u.battlePass.season === legacy.id) { u.battlePass.season = cur.id; n++; }
   }
-  return db.season;
+  return n;
 }
 
 // Reset a user's battle pass if the season rolled over.
@@ -203,7 +238,7 @@ function publicUser(user) {
 }
 
 // Sanity-check and apply a finished game's rewards. Returns the reward summary.
-function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   mode = String(mode || 'solo');
   migrateUser(user);
@@ -218,6 +253,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   pieces = clamp(pieces, 20000);
   floors = clamp(floors, 100);
   depth = clamp(depth, 9999);
+  stage = clamp(stage, 9999);
   rank = ['S', 'A', 'B', 'C'].includes(rank) ? rank : null;
   score = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
   lines = Math.max(0, Math.min(5000, Math.floor(Number(lines) || 0)));
@@ -227,7 +263,9 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // fast; Meltdown runs hot multipliers (×15+ near critical) in short bursts
   // and Chimera stacks up to ×3 — both need looser ceilings than the endless
   // modes or legit runs get silently clipped.
-  const rateCap = mode === 'sprint' ? 1000 : mode === 'meltdown' ? 2000 : mode === 'chimera' ? 1000 : 500;
+  // Dig stacks depth-scaled ore bonuses on top of normal scoring, so it gets a
+  // slightly looser ceiling too.
+  const rateCap = mode === 'sprint' ? 1000 : mode === 'meltdown' ? 2000 : mode === 'chimera' ? 1000 : mode === 'dig' ? 800 : 500;
   if (score > duration * rateCap) score = Math.floor(duration * rateCap);
 
   let coins = Math.min(1000, 20 + Math.floor(score / 100) + (won ? 50 : 0));
@@ -291,6 +329,15 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   if (newWaveBest) s.survivalWave = wave;
   if (mode === 'sprint') s.sprintPlays = (s.sprintPlays || 0) + 1;
   if (mode === 'coop') s.coopPlays = (s.coopPlays || 0) + 1;
+  // Lifetime counters (v2.6) — cheap monotonic stats that power achievements.
+  if (won) s.totalWins = (s.totalWins || 0) + 1;
+  s.playSecs = (s.playSecs || 0) + duration;
+  if (mode === 'boss' && won) s.bossKills = (s.bossKills || 0) + 1;
+  if (mode === 'chaos') s.chaosPlays = (s.chaosPlays || 0) + 1;
+  if (mode === 'meltdown') s.meltdownPlays = (s.meltdownPlays || 0) + 1;
+  if (mode === 'chimera') s.chimeraPlays = (s.chimeraPlays || 0) + 1;
+  if (mode === 'survival') s.survivalPlays = (s.survivalPlays || 0) + 1;
+  if (mode === 'weekly') s.weeklyPlays = (s.weeklyPlays || 0) + 1;
   // Rolling score history powers the profile dashboard chart.
   if (!Array.isArray(s.history)) s.history = [];
   s.history.push({ t: Date.now(), m: String(mode).slice(0, 16), s: score, w: won ? 1 : 0 });
@@ -362,6 +409,37 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // メルトダウン / キメラ工房: per-mode personal bests.
   if (mode === 'meltdown' && score > (s.meltdownBest || 0)) s.meltdownBest = score;
   if (mode === 'chimera' && score > (s.chimeraBest || 0)) s.chimeraBest = score;
+  // 🧩 パズル遺跡: highest stage cleared + first-clear badge at stage 50.
+  if (mode === 'puzzle') {
+    s.puzzlePlays = (s.puzzlePlays || 0) + 1;
+    if (won && stage > (s.puzzleStage || 0)) {
+      const decades = Math.floor(stage / 10) - Math.floor((s.puzzleStage || 0) / 10);
+      if (decades > 0) {
+        gems += decades * 25;
+        user.gems += decades * 25;
+      }
+      s.puzzleStage = stage;
+      if (stage >= 50 && !user.badges.includes('puzzle')) {
+        user.badges.push('puzzle');
+        badge = 'puzzle';
+        gems += 300;
+        user.gems += 300;
+      }
+    }
+  }
+  // ⛏️ 採掘場: deepest dig + first-clear badge at 50m.
+  if (mode === 'dig') {
+    s.digPlays = (s.digPlays || 0) + 1;
+    if (depth > (s.digDepth || 0)) {
+      s.digDepth = depth;
+      if (depth >= 50 && !user.badges.includes('dig')) {
+        user.badges.push('dig');
+        badge = 'dig';
+        gems += 300;
+        user.gems += 300;
+      }
+    }
+  }
   // Dungeon tower: track highest floor cleared; gems for each newly reached
   // checkpoint decade, badge + big gem bonus for conquering all 100 floors.
   // The Abyss: the hardest realm — double gems per decade, a badge and a big
@@ -471,6 +549,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     floors: mode.startsWith('dungeon') ? floors : 0,
     // Survival missions must not advance from other modes' stray wave fields.
     wave: mode === 'survival' ? wave : 0,
+    stage: mode === 'puzzle' ? stage : 0,
+    depth: mode === 'dig' ? depth : 0,
     ults, items, pieces,
   });
   saveDb();
@@ -485,8 +565,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
 
 // Real players' notable moments go on the live feed (starred), and the crowd
 // may react. Capped per user so a hot streak doesn't flood the ticker.
-const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', weekly1: '🏅' };
-const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', weekly1: 'Weekly Champion' };
+const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', weekly1: '🏅', puzzle: '🧩', dig: '⛏️' };
+const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner' };
 const feedAt = new Map();   // userId -> last feed timestamp
 function postRealFeed(user, notes) {
   if (!notes.length) return;
@@ -547,6 +627,7 @@ function grantDaily(user) {
   const s = user.stats;
   s.loginStreak = user.lastDaily === yesterday ? (s.loginStreak || 0) + 1 : 1;
   if (s.loginStreak > (s.loginStreakBest || 0)) s.loginStreakBest = s.loginStreak;
+  s.dailyLogins = (s.dailyLogins || 0) + 1;   // lifetime total, streak-independent
   user.lastDaily = today;
   const mult = Math.min(3, 1 + (s.loginStreak - 1) * 0.35);
   const coins = Math.round(DAILY_COINS * mult);
@@ -965,17 +1046,26 @@ app.delete('/api/admin/guilds/:id', requireAuth, requireAdmin, (req, res) => {
 // ---------------------------------------------------------------------------
 
 function seedNews() {
-  if (db.news.length) return;
-  const mk = (title, body, daysAgo, pinned = false) => ({
-    id: crypto.randomUUID(), title, body, pinned, by: 'るみまき',
+  // Fixed ids: a re-seeded post is THE SAME post, so backup merges dedupe it
+  // instead of multiplying the launch announcements on every restore.
+  const mk = (id, title, body, daysAgo, pinned = false) => ({
+    id, title, body, pinned, by: 'るみまき',
     at: Date.now() - daysAgo * 86400000,
   });
-  db.news.push(
-    mk('🎉 v2.0 超進化アップデート！', '⚡アルティメットスキル（9種・ショップの「奥義」タブ）／📋デイリー・ウィークリーミッション／🏅実績58種／📊戦績ダッシュボード／⏱️タイムアタック／🤝協力プレイ（2人で1盤面）を追加しました。ラインを消して⚡ゲージを溜め、必殺技を撃とう！', 0, true),
-    mk('🎪 イベント＆🗳️投票スタート', '期間限定イベントが8種類に！コイン祭り・経験値ブースト・ジェムラッシュ・ボス襲来・奥義祭・ラッキーデー…開催中はメニューにバナーが出ます。投票機能では次のイベントをみんなで決められます（投票するまで結果は秘密）。', 0),
-    mk('🏰 ギルド機能・🌑 深淵ダンジョン・📰 ニュース', 'ギルドを作って週間ポイントを競おう（ギルドレベルでコインボーナス）。塔を制覇した猛者には過去最難関「深淵」が待っています。このニュース欄には運営からのお知らせが届きます。', 0),
-    mk('🎭 にぎわい2.0 ＆ チャット自動翻訳', 'ロビーの住人たちが性格を持ちました。イベントや投票に反応し、対戦した相手はあとでチャットで話しかけてくることも。チャットは日本語⇄英語を自動翻訳します（設定でOFFにできます）。', 0),
-  );
+  if (!db.news.length) {
+    db.news.push(
+      mk('seed-1', '🎉 v2.0 超進化アップデート！', '⚡アルティメットスキル（9種・ショップの「奥義」タブ）／📋デイリー・ウィークリーミッション／🏅実績58種／📊戦績ダッシュボード／⏱️タイムアタック／🤝協力プレイ（2人で1盤面）を追加しました。ラインを消して⚡ゲージを溜め、必殺技を撃とう！', 0, true),
+      mk('seed-2', '🎪 イベント＆🗳️投票スタート', '期間限定イベントが8種類に！コイン祭り・経験値ブースト・ジェムラッシュ・ボス襲来・奥義祭・ラッキーデー…開催中はメニューにバナーが出ます。投票機能では次のイベントをみんなで決められます（投票するまで結果は秘密）。', 0),
+      mk('seed-3', '🏰 ギルド機能・🌑 深淵ダンジョン・📰 ニュース', 'ギルドを作って週間ポイントを競おう（ギルドレベルでコインボーナス）。塔を制覇した猛者には過去最難関「深淵」が待っています。このニュース欄には運営からのお知らせが届きます。', 0),
+      mk('seed-4', '🎭 にぎわい2.0 ＆ チャット自動翻訳', 'ロビーの住人たちが性格を持ちました。イベントや投票に反応し、対戦した相手はあとでチャットで話しかけてくることも。チャットは日本語⇄英語を自動翻訳します（設定でOFFにできます）。', 0),
+    );
+  }
+  const V26_TITLE = '🛡️ v2.6 不滅アップデート！';
+  if (!db.news.some(n => n && (n.id === 'seed-v26' || n.title === V26_TITLE))) {
+    db.news.push(mk('seed-v26', V26_TITLE,
+      'アップデートでデータが消える時代は終わりです。シーズン・バトルパス・実績の受け取り状況・イベント・投票がすべて更新後も引き継がれるようになりました。さらに🏅実績が全100種に大増量、新モード「🧩パズル遺跡」（ステージ制パズル・星3評価）と「⛏️採掘場」（せり上がる地層を掘って鉱石を集めろ）が登場！チャットの住人たちも会話エンジン3.0に進化して、同じセリフの繰り返しがほぼなくなりました。',
+      0, true));
+  }
 }
 
 function newsView() {
@@ -1138,6 +1228,10 @@ const rankRewardsTable = () => WEEKLY_RANK_REWARDS.map(t => ({
 function finalizeWeeklyRankings() {
   const curW = weekIdOf(currentWeekNum());
   if (db.meta.lastRankRewardWeek === curW) return;
+  // A fresh post-deploy DB has nobody to rank — don't burn the weekly stamp,
+  // or the players about to be auto-restored would wait a full week for the
+  // payout of their already-finished week.
+  if (!Object.values(db.users).some(u => u.role !== 'admin' && !u.banned)) return;
   db.meta.lastRankRewardWeek = curW;
   // Stale weekly records (any past week — the server may have slept through
   // several) are grouped per week, ranked, and marked so a record is never
@@ -1156,6 +1250,7 @@ function finalizeWeeklyRankings() {
     players.forEach((u, i) => {
       migrateUser(u);
       const rank = i + 1;
+      if (rank === 1) u.stats.weeklyWins = (u.stats.weeklyWins || 0) + 1;
       const t = rankRewardFor(rank);
       u.rankRewards.push({
         id: crypto.randomUUID(), board: 'weekly', week, rank, of: players.length,
@@ -1213,7 +1308,7 @@ app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
 
 app.get('/api/leaderboard', (req, res) => {
   finalizeWeeklyRankings();
-  const board = ['rating', 'dungeon', 'weekly', 'sprint'].includes(req.query.board) ? req.query.board : 'score';
+  const board = ['rating', 'dungeon', 'weekly', 'sprint', 'puzzle', 'dig'].includes(req.query.board) ? req.query.board : 'score';
   const week = weekIdOf(currentWeekNum());
   const weeklyBestOf = u => (u.stats.weekly && u.stats.weekly.week === week ? u.stats.weekly.best : 0);
   // Time attack ranks on the headline 60-second board.
@@ -1223,6 +1318,8 @@ app.get('/api/leaderboard', (req, res) => {
   if (board === 'dungeon') users = users.filter(u => (u.stats.dungeonMax || 0) > 0);
   if (board === 'weekly') users = users.filter(u => weeklyBestOf(u) > 0);
   if (board === 'sprint') users = users.filter(u => sprintBestOf(u) > 0);
+  if (board === 'puzzle') users = users.filter(u => (u.stats.puzzleStage || 0) > 0);
+  if (board === 'dig') users = users.filter(u => (u.stats.digDepth || 0) > 0);
   const titleOf = u => {
     const t = TITLES.find(x => x.id === u.equippedTitle);
     return t ? { name: t.name, color: t.color } : null;
@@ -1240,6 +1337,8 @@ app.get('/api/leaderboard', (req, res) => {
     weeklyBest: weeklyBestOf(u),
     sprintBest: sprintBestOf(u),
     sprint180: (u.stats.sprint && u.stats.sprint.s180) || 0,
+    puzzleStage: u.stats.puzzleStage || 0,
+    digDepth: u.stats.digDepth || 0,
     badges: u.badges,
     title: titleOf(u),
   }));
@@ -1251,6 +1350,8 @@ app.get('/api/leaderboard', (req, res) => {
       : board === 'dungeon' ? b.dungeonMax - a.dungeonMax
       : board === 'weekly' ? b.weeklyBest - a.weeklyBest
       : board === 'sprint' ? (b.sprintBest || 0) - (a.sprintBest || 0)
+      : board === 'puzzle' ? (b.puzzleStage || 0) - (a.puzzleStage || 0)
+      : board === 'dig' ? (b.digDepth || 0) - (a.digDepth || 0)
       : b.bestScore - a.bestScore)
     .slice(0, 100);
   // The weekly board pays prizes at the Monday reset — send the tier table.
@@ -1512,6 +1613,9 @@ app.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
   }
   user.items = user.items || {};
   const results = Array.from({ length: count }, () => gachaPull(user, !!bonus.gachaLuck));
+  migrateUser(user);
+  user.stats.gachaPulls = (user.stats.gachaPulls || 0) + count;
+  user.stats.gachaSSR = (user.stats.gachaSSR || 0) + results.filter(r => r.rarity === 'SSR' || r.rarity === 'UR').length;
   saveDb();
   // Big pulls make the live feed.
   const ur = results.find(r => r.rarity === 'UR');
@@ -1711,7 +1815,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     // force re-login everywhere with the new password
     revokeAllTokens(target.id);
   }
-  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'abyss'];
+  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'abyss', 'weekly1', 'puzzle', 'dig'];
   if (typeof b.grantBadge === 'string') {
     if (!KNOWN_BADGES.includes(b.grantBadge)) return res.status(400).json({ error: `バッジIDが不正です（${KNOWN_BADGES.join(' / ')}）` });
     if (!target.badges.includes(b.grantBadge)) target.badges.push(b.grantBadge);
@@ -1749,42 +1853,48 @@ app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// Force a brand-new season starting now (everyone's battle pass resets — that
+// is the point of this button). Implemented as an override generation bump so
+// it survives redeploys via the backup's meta.
 app.post('/api/admin/season/new', requireAuth, requireAdmin, (req, res) => {
-  const number = db.season ? db.season.number + 1 : 1;
-  db.season = {
-    id: crypto.randomUUID(),
-    number,
-    name: sanitizeName(req.body.name) || `シーズン ${number}`,
+  const cur = currentSeason();
+  const idx = derivedSeasonIndex();
+  const o = db.meta.seasonOverride || {};
+  db.meta.seasonOverride = {
+    baseIndex: idx,
+    gen: (o.gen || 0) + 1,
+    numberOffset: (cur.number + 1) - idx,
+    name: sanitizeName(req.body.name) || null,
     startedAt: Date.now(),
-    endsAt: Date.now() + BP_SEASON_DAYS * 24 * 60 * 60 * 1000,
+    endsAt: Date.now() + SEASON_MS,
   };
   saveDb();
-  res.json({ season: db.season });
+  res.json({ season: currentSeason() });
 });
 
 // Change the current season — supports reverting the number/name WITHOUT
 // resetting everyone's battle pass progress (keepProgress, default true).
 app.post('/api/admin/season/set', requireAuth, requireAdmin, (req, res) => {
   const b = req.body || {};
-  const number = Math.max(1, Math.min(999, Math.floor(Number(b.number) || (db.season ? db.season.number : 1))));
-  const name = sanitizeName(b.name) || `シーズン ${number}`;
+  const cur = currentSeason();
+  const number = Math.max(1, Math.min(999, Math.floor(Number(b.number) || cur.number)));
+  const name = sanitizeName(b.name) || null;
   const days = Math.max(1, Math.min(365, Math.floor(Number(b.days) || 0)));
   const keepProgress = b.keepProgress !== false;
-
-  if (keepProgress && db.season) {
-    db.season.number = number;
-    db.season.name = name;
-    if (b.days) db.season.endsAt = Date.now() + days * 24 * 60 * 60 * 1000;
-  } else {
-    db.season = {
-      id: crypto.randomUUID(),
-      number, name,
-      startedAt: Date.now(),
-      endsAt: Date.now() + (b.days ? days : BP_SEASON_DAYS) * 24 * 60 * 60 * 1000,
-    };
-  }
+  const effIdx = Number(cur.id.slice(1).split('-')[0]) || derivedSeasonIndex();
+  const o = db.meta.seasonOverride || {};
+  db.meta.seasonOverride = {
+    baseIndex: effIdx,
+    gen: (o.gen || 0) + (keepProgress ? 0 : 1),
+    numberOffset: number - effIdx,
+    name,
+    startedAt: keepProgress ? (o.startedAt || cur.startedAt) : Date.now(),
+    // Only pin an endsAt when the admin actually chose a duration — otherwise
+    // stay on the natural 30-day grid so seasons keep rolling on schedule.
+    endsAt: b.days ? Date.now() + days * 24 * 60 * 60 * 1000 : (keepProgress ? (o.endsAt || null) : Date.now() + SEASON_MS),
+  };
   saveDb();
-  res.json({ season: db.season, progressKept: keepProgress });
+  res.json({ season: currentSeason(), progressKept: keepProgress });
 });
 
 // Reset competitive stats for all users (scores, ratings, PvP records).
@@ -1852,6 +1962,12 @@ app.post('/api/admin/restore', (req, res) => {
   }
   // Every restored account is brought up to the current schema right away.
   for (const u of Object.values(db.users)) migrateUser(u);
+  // Battle passes minted under the old UUID-season scheme carry over, and the
+  // restored world state (crowd scale, ambient config) takes effect now.
+  adoptLegacySeason(data.season);
+  db.season = null;
+  setLiveScale(db.meta.popScale ?? 1);
+  setCustom(db.meta.ambient);
   flushDb();
   console.log(`[restore] ${mode} by ${actor.username}${actor.fromBackup ? ' (backup password)' : ''}: +${report.added} 更新${report.updated} 維持${report.kept} → 合計${report.after}人`);
   battle.broadcastAll({
@@ -1881,6 +1997,10 @@ app.post('/api/admin/snapshots/restore', requireAuth, requireAdmin, (req, res) =
   snapshot(db, 'pre-rollback');
   const report = applyRestore(db, data, 'replace');
   for (const u of Object.values(db.users)) migrateUser(u);
+  adoptLegacySeason(data.season);
+  db.season = null;
+  setLiveScale(db.meta.popScale ?? 1);
+  setCustom(db.meta.ambient);
   flushDb();
   res.json({ report });
 });
@@ -2179,6 +2299,62 @@ function seedAdmin() {
   console.log('='.repeat(60));
 }
 
+// Seed backup — automatic self-heal on boot. The repo carries a recent
+// production backup at server/seed-backup.json (refresh it with
+// `npm run backup:pull` before pushing); a fresh post-deploy instance merges
+// it in with no manual /?restore=1 step. Merge is idempotent and
+// progress-winner, so running this on every boot is safe.
+const SEED_BACKUP_FILE = process.env.SEED_BACKUP_FILE || path.join(__dirname, 'seed-backup.json');
+function autoRestoreFromSeed() {
+  if (process.env.SEED_RESTORE === '0') return;
+  let data;
+  try {
+    if (!fs.existsSync(SEED_BACKUP_FILE)) return;
+    data = JSON.parse(fs.readFileSync(SEED_BACKUP_FILE, 'utf8'));
+  } catch (err) {
+    console.warn('[seed] seed-backup.json を読み込めませんでした:', err.message);
+    return;
+  }
+  // The repo is public, so the committed seed is encrypted with the admin
+  // password (scripts/pull-backup.mjs). ADMIN_PASSWORD must match to open it.
+  if (data && data.enc === 'aes-256-gcm') {
+    const pw = process.env.ADMIN_PASSWORD;
+    if (!pw) {
+      console.warn('[seed] seed-backup.json は暗号化されていますが ADMIN_PASSWORD 環境変数が未設定のため復元できません');
+      return;
+    }
+    try {
+      const salt = Buffer.from(data.salt, 'base64');
+      const iv = Buffer.from(data.iv, 'base64');
+      const key = crypto.scryptSync(pw, salt, 32, { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAuthTag(Buffer.from(data.tag, 'base64'));
+      data = JSON.parse(Buffer.concat([decipher.update(Buffer.from(data.data, 'base64')), decipher.final()]).toString('utf8'));
+    } catch {
+      console.warn('[seed] seed-backup.json の復号に失敗しました（ADMIN_PASSWORD がバックアップ取得時と一致していません）');
+      return;
+    }
+  }
+  const check = validateBackup(data);
+  if (!check.ok) { console.warn('[seed] seed-backup.json が不正です:', check.error); return; }
+  try {
+    const report = applyRestore(db, data, 'merge');
+    for (const u of Object.values(db.users)) migrateUser(u);
+    const adopted = adoptLegacySeason(data.season);
+    db.season = null;   // stored seasons are legacy — everything derives from SEASON_EPOCH now
+    setLiveScale(db.meta.popScale ?? 1);
+    setCustom(db.meta.ambient);
+    saveDb();
+    console.log(`[seed] 同梱バックアップを自動復元: 追加${report.added} 更新${report.updated} 維持${report.kept} → 合計${report.after}人${adopted ? `（バトルパス引き継ぎ${adopted}件）` : ''}`);
+  } catch (err) {
+    console.error('[seed] 自動復元に失敗:', err.message);
+  }
+}
+
+autoRestoreFromSeed();
+const seasonAdopted = adoptLegacySeason(db.season);
+if (db.season) { db.season = null; saveDb(); }
+if (seasonAdopted) console.log(`[season] 旧シーズンIDからバトルパスを引き継ぎました（${seasonAdopted}件）`);
 currentSeason();
 seedAdmin();
 pinAdminPassword();

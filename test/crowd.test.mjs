@@ -4,6 +4,7 @@
 // slots, bad archetype filters and crashes from newly added content.
 import { buildRoster, ARCHETYPES } from '../server/residents.js';
 import { composeLine, composeDialogue, composeFeed, composeReaction, chooseReplies, buildCtx } from '../server/crowd.js';
+import { _resetForTest } from '../server/chatgen.js';
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push([ok ? '✅' : '❌', name, detail]); if (!ok) process.exitCode = 1; };
@@ -109,5 +110,54 @@ const quiet = roster.find(r => r.chatty <= 0.3);
 const forcedCtx = buildCtx({ now: atHour(20), event: null, poll: null, active: [quiet, ...roster.slice(0, 10)], humans: [] });
 const forced = chooseReplies('gg', forcedCtx, quiet.name);
 check('forced reply: even a lurker answers a direct reply', forced.length > 0 && forced[0].resident.name === quiet.name, forced.length ? forced[0].resident.name : 'no reply');
+
+// ---- チャット3.0: 繰り返し耐性 --------------------------------------------
+// 実運用ペース（約30秒間隔・話者ローテーション）で2時間分の発言を生成し、
+// 完成文の重複がほぼ出ないことを確かめる。旧実装ではプールが数百固定なので
+// この条件だと必ず大量に重複していた。
+_resetForTest();
+{
+  const speakers = roster.slice(0, 40);
+  const base = atHour(20);
+  const seen = new Map();
+  let dup = 0;
+  const N = 240;
+  for (let i = 0; i < N; i++) {
+    const now = base + i * 30000;
+    const ctx = buildCtx({ now, event: i % 3 === 0 ? EVENT : null, poll: null, active: speakers, humans: [] });
+    const r = speakers[i % speakers.length];
+    const s = composeLine(r, ctx);
+    scan(s, 'rep/line');
+    if (seen.has(s)) dup++;
+    seen.set(s, i);
+  }
+  check(`repetition: ${N} lines over 2h — exact duplicates ≤ 2%`, dup <= N * 0.02, `dup=${dup} unique=${seen.size}`);
+  check('repetition: high surface diversity (≥95% unique)', seen.size >= N * 0.95, `unique=${seen.size}/${N}`);
+}
+
+// 返信の繰り返し: 同じ「gg」を20回投げても返答がほぼ毎回違う。
+_resetForTest();
+{
+  const ctx2 = ctxFor('evening', null, null);
+  const texts = [];
+  for (let i = 0; i < 20; i++) {
+    for (const rep of chooseReplies('gg', ctx2)) texts.push(rep.text);
+  }
+  const uniq = new Set(texts).size;
+  // The gg pool has ~9 ja lines — full rotation + stylize variation should
+  // land well past half distinct even when answers outnumber the pool.
+  check(`reply variety: 20×"gg" → ${texts.length} answers mostly distinct`, texts.length >= 10 && uniq >= Math.min(texts.length * 0.55, 14), `unique=${uniq}/${texts.length}`);
+}
+
+// リアクションの繰り返し: greet を大量に浴びても文面が回る。
+_resetForTest();
+{
+  const texts = [];
+  for (let i = 0; i < 30; i++) {
+    for (const step of composeReaction('greet_plain', ctxFor('evening', null, null), {}, 1)) texts.push(step.text);
+  }
+  const uniq = new Set(texts).size;
+  check('reaction variety: greetings rotate through the pool', uniq >= Math.min(texts.length, 5) - 1, `unique=${uniq}/${texts.length}`);
+}
 
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

@@ -53,6 +53,31 @@ function progressOf(u) {
     + (u.coins || 0) + (u.gems || 0) * 10 + (u.xp || 0);
 }
 
+// Claimed achievements, badges, owned cosmetics, item counts and battle-pass
+// progress are EARNED — the winner-takes-the-record merge must not un-earn
+// them just because the other copy of the account had more raw progress.
+// (This was why "アップデートのたびに実績をもう一度受け取り" happened whenever
+// the losing side of a merge held the claimed list.)
+function mergeEarned(winner, loser) {
+  if (!winner || !loser) return;
+  for (const k of ['achievements', 'badges', 'owned']) {
+    const a = Array.isArray(winner[k]) ? winner[k] : (winner[k] = []);
+    for (const v of (Array.isArray(loser[k]) ? loser[k] : [])) if (!a.includes(v)) a.push(v);
+  }
+  if (loser.items && typeof loser.items === 'object') {
+    winner.items = winner.items || {};
+    for (const [id, n] of Object.entries(loser.items)) {
+      winner.items[id] = Math.max(winner.items[id] || 0, Number(n) || 0);
+    }
+  }
+  const wb = winner.battlePass, lb = loser.battlePass;
+  if (wb && lb && wb.season === lb.season) {
+    wb.xp = Math.max(wb.xp || 0, lb.xp || 0);
+    wb.premium = !!(wb.premium || lb.premium);
+    wb.claimed = [...new Set([...(wb.claimed || []), ...(lb.claimed || [])])];
+  }
+}
+
 // --- snapshots ------------------------------------------------------------
 
 export function snapshot(db, label = 'auto') {
@@ -146,6 +171,7 @@ export function applyRestore(db, data, mode = 'merge') {
       // re-seeded after a wipe). It wins AND keeps its own id: every session
       // signed before the wipe references that id, so logins come straight
       // back. Only the few sessions issued in the wipe→restore window lose.
+      mergeEarned(inc, live);
       delete db.users[live.id];
       db.users[inc.id] = inc;
       byName.set(inc.username.toLowerCase(), inc);
@@ -154,6 +180,7 @@ export function applyRestore(db, data, mode = 'merge') {
       }
       report.updated++;
     } else {
+      mergeEarned(live, inc);
       report.kept++;
     }
   }
@@ -181,7 +208,32 @@ export function applyRestore(db, data, mode = 'merge') {
   if (Array.isArray(data.news)) {
     db.news = db.news || [];
     const seen = new Set(db.news.map(n => n && n.id));
-    for (const n of data.news) if (n && n.id && !seen.has(n.id)) db.news.push(n);
+    // Identical title+body means the same announcement even under a different
+    // random id (seedNews used to mint fresh UUIDs every boot — without this,
+    // the four launch posts multiplied on every wipe→restore cycle).
+    const seenBody = new Set(db.news.map(n => n && `${n.title}${n.body}`));
+    for (const n of data.news) {
+      if (!n || !n.id || seen.has(n.id)) continue;
+      const key = `${n.title}${n.body}`;
+      if (seenBody.has(key)) continue;
+      db.news.push(n);
+      seen.add(n.id);
+      seenBody.add(key);
+    }
+  }
+
+  // db.meta: a fresh post-deploy instance holds only trivial meta — adopt the
+  // backup's world state (event, poll+votes, crowd scale/config, maintenance,
+  // season override) for every key the live side hasn't set since boot.
+  if (data.meta && typeof data.meta === 'object') {
+    db.meta = db.meta || {};
+    for (const k of ['event', 'poll', 'popScale', 'ambient', 'maintenance', 'seasonOverride', 'createdAt']) {
+      if (db.meta[k] == null && data.meta[k] != null) db.meta[k] = data.meta[k];
+    }
+    // Weekly payouts: an empty post-deploy boot may have stamped the current
+    // week with nobody in it. Clearing the stamp lets finalizeWeeklyRankings
+    // re-run for the restored users (per-record `rewarded` flags keep it safe).
+    delete db.meta.lastRankRewardWeek;
   }
   // Members' guild pointers must agree with the guild roster after a merge.
   if (db.guilds) {

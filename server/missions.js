@@ -66,6 +66,8 @@ export const DAILY_POOL = [
   m('d_sprint2',  'sprint',  'sum', 2,    400,  0,  'タイムアタックを2回遊ぶ',        'Play 2 Time Attack runs'),
   m('d_sprint10k','sprintScore', 'max', 10000, 550, 2, 'タイムアタックで10,000点',    'Score 10,000 in Time Attack'),
   m('d_coop1',    'coop',    'sum', 1,    500,  2,  '協力プレイを1回遊ぶ',            'Play 1 co-op run'),
+  m('d_puzzle1',  'puzzle',  'sum', 1,    450,  0,  'パズル遺跡を1ステージクリア',     'Clear 1 Puzzle Ruins stage'),
+  m('d_dig12',    'digDepth','max', 12,   500,  2,  '採掘場で深度12に到達',           'Reach depth 12 in the Mines'),
 ];
 
 export const WEEKLY_POOL = [
@@ -83,6 +85,8 @@ export const WEEKLY_POOL = [
   m('w_pieces1500','pieces',  'sum', 1500,   2200, 11, 'ブロックを1,500個置く',       'Place 1,500 blocks'),
   m('w_sprint10',  'sprint',  'sum', 10,     2400, 12, 'タイムアタックを10回遊ぶ',     'Play 10 Time Attack runs'),
   m('w_coop5',     'coop',    'sum', 5,      2600, 14, '協力プレイを5回遊ぶ',          'Play 5 co-op runs'),
+  m('w_puzzle5',   'puzzle',  'sum', 5,      2400, 12, 'パズル遺跡を5ステージクリア',   'Clear 5 Puzzle Ruins stages'),
+  m('w_dig35',     'digDepth','max', 35,     2800, 14, '採掘場で深度35に到達',          'Reach depth 35 in the Mines'),
 ];
 
 export const DAILY_COUNT = 3;
@@ -130,7 +134,7 @@ function defOf(id) {
 }
 
 // Contribution of one finished game, per track key.
-function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, items, pieces }) {
+function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, items, pieces, stage, depth }) {
   const isPvp = mode === 'pvp' || mode === 'tournament' || mode === 'royale';
   return {
     games: 1,
@@ -150,6 +154,8 @@ function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, 
     sprint: mode === 'sprint' ? 1 : 0,
     sprintScore: mode === 'sprint' ? score : 0,
     coop: mode === 'coop' ? 1 : 0,
+    puzzle: mode === 'puzzle' && won ? 1 : 0,
+    digDepth: mode === 'dig' ? (depth || 0) : 0,
   };
 }
 

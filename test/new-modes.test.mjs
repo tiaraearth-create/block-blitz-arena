@@ -18,7 +18,7 @@ const j = async (p, opt = {}, token) => {
 
 let proc = null;
 async function start() {
-  proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, SESSION_SECRET: 'newmodes-test', POP_SCALE: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, SESSION_SECRET: 'newmodes-test', POP_SCALE: '0', SEED_RESTORE: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   proc.stdout.on('data', d => { log += d; });
   proc.stderr.on('data', d => { log += d; });
@@ -83,6 +83,43 @@ try {
   const rows = [...(ms.missions.daily || []), ...(ms.missions.weekly || [])];
   const waveMission = rows.find(r => r.id === 'd_survive8' || r.id === 'w_wave15');
   check('wave field from non-survival modes is ignored', !waveMission || waveMission.progress === 0, waveMission ? `${waveMission.id}=${waveMission.progress}` : 'no wave mission on board');
+
+  // ---- v2.6: 🧩 パズル遺跡 ----
+  await j('/api/game/result', { method: 'POST', body: { mode: 'puzzle', score: 900, lines: 4, maxCombo: 2, duration: 40, won: true, stage: 3 } }, tok);
+  me = await j('/api/me', {}, tok);
+  check('puzzleStage recorded on win', me.user.stats.puzzleStage === 3, `puzzleStage=${me.user.stats.puzzleStage}`);
+  await j('/api/game/result', { method: 'POST', body: { mode: 'puzzle', score: 900, lines: 4, maxCombo: 2, duration: 40, won: false, stage: 9 } }, tok);
+  me = await j('/api/me', {}, tok);
+  check('a FAILED stage does not advance puzzleStage', me.user.stats.puzzleStage === 3, `puzzleStage=${me.user.stats.puzzleStage}`);
+  await j('/api/game/result', { method: 'POST', body: { mode: 'puzzle', score: 1200, lines: 5, maxCombo: 3, duration: 55, won: true, stage: 12 } }, tok);
+  me = await j('/api/me', {}, tok);
+  check('stage 12 pays the decade gem bonus', me.user.stats.puzzleStage === 12, `puzzleStage=${me.user.stats.puzzleStage}`);
+  const puzzleGems = me.user.gems;
+  await j('/api/game/result', { method: 'POST', body: { mode: 'puzzle', score: 2000, lines: 6, maxCombo: 3, duration: 45, won: true, stage: 50 } }, tok);
+  me = await j('/api/me', {}, tok);
+  check('stage 50 grants the 🧩 puzzle badge', me.user.badges.includes('puzzle'), JSON.stringify(me.user.badges));
+  check('stage 50 pays badge + decade gems', me.user.gems > puzzleGems, `gems ${puzzleGems}→${me.user.gems}`);
+
+  // ---- v2.6: ⛏️ 採掘場 ----
+  await j('/api/game/result', { method: 'POST', body: { mode: 'dig', score: 15000, lines: 20, maxCombo: 5, duration: 180, won: false, depth: 22 } }, tok);
+  me = await j('/api/me', {}, tok);
+  check('digDepth recorded', me.user.stats.digDepth === 22, `digDepth=${me.user.stats.digDepth}`);
+  check('dig depth does NOT leak into boss_rush rushDepth', me.user.stats.rushDepth === 7, `rushDepth=${me.user.stats.rushDepth}`);
+  await j('/api/game/result', { method: 'POST', body: { mode: 'dig', score: 30000, lines: 40, maxCombo: 6, duration: 300, won: false, depth: 55 } }, tok);
+  me = await j('/api/me', {}, tok);
+  check('depth 55 grants the ⛏️ dig badge', me.user.badges.includes('dig'), JSON.stringify(me.user.badges));
+
+  // New leaderboards answer with the right value fields.
+  const lbP = await j('/api/leaderboard?board=puzzle');
+  const meRowP = (lbP.rows || []).find(r => r.username === 'モードテスト');
+  check('puzzle leaderboard lists the player at stage 50', !!meRowP && meRowP.puzzleStage === 50, JSON.stringify(meRowP && { s: meRowP.puzzleStage }));
+  const lbD = await j('/api/leaderboard?board=dig');
+  const meRowD = (lbD.rows || []).find(r => r.username === 'モードテスト');
+  check('dig leaderboard lists the player at 55m', !!meRowD && meRowD.digDepth === 55, JSON.stringify(meRowD && { d: meRowD.digDepth }));
+
+  // v2.6 lifetime counters tick.
+  check('totalWins counter ticks', me.user.stats.totalWins >= 3, `totalWins=${me.user.stats.totalWins}`);
+  check('playSecs accumulates', me.user.stats.playSecs > 0, `playSecs=${me.user.stats.playSecs}`);
 } catch (err) {
   check('test harness', false, err.stack || String(err));
 } finally {

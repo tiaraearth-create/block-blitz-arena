@@ -12,6 +12,9 @@
 import { residentStats, archetype, tierOf, jstHour, jstWeekday } from './residents.js';
 import { SHOP_ITEMS, BOSSES, TITLES } from './catalog.js';
 import { ACHIEVEMENTS } from './achievements.js';
+// チャット3.0 (v2.6): 再出防止メモリ + 話題スレッド + 生成合成エンジン
+import * as gen from './chatgen.js';
+import { OPENERS, TAILS, FOLLOWS, TOPICS, LIFE, REPLY_EXP, NEWMODE_LINES, NEWMODE_DIALOGUES, NEWMODE_FEED } from './chatgen-content.js';
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -33,6 +36,10 @@ export const MODE_NAMES = {
   survival: ['サバイバル', 'survival'],
   chaos:    ['カオス', 'chaos mode'],
   gacha:    ['ガチャ', 'gacha'],
+  meltdown: ['メルトダウン', 'meltdown'],
+  chimera:  ['キメラ工房', 'the chimera lab'],
+  puzzle:   ['パズル遺跡', 'the puzzle ruins'],
+  dig:      ['採掘場', 'the mines'],
 };
 
 const AI_LABELS = [['見習い', 'Apprentice'], ['戦士', 'Warrior'], ['達人', 'Master'], ['鬼', 'Oni']];
@@ -106,6 +113,9 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'title': v = pick(TITLES).name; break;
     case 'ach': v = pick(ACHIEVEMENTS); break;
     case 'question': v = ctx.poll ? ctx.poll.question : ''; break;
+    // v2.6 新モードの進行度 — 塔の進みからそれっぽい数字を出す
+    case 'depth': v = Math.max(3, Math.round(((st ? st.dungeonMax : 20) || 8) * 0.75) + rint(-4, 3)); break;
+    case 'stage': v = Math.max(1, Math.round(((st ? st.dungeonMax : 15) || 8) * 0.55) + rint(-3, 2)); break;
     default: v = '';
   }
   if (cache) cache[key] = v;
@@ -358,14 +368,111 @@ function weightedLine(lines, r, ctx) {
   return lines[lines.length - 1];
 }
 
+// ---- チャット3.0: 断片合成 ------------------------------------------------
+
+const archOkFor = r => e => (!e.arch || e.arch.includes(r.arch)) && (!e.not || !e.not.includes(r.arch));
+
+// 性格ごとに好むフォローの種類（先輩は豆知識、キッズは大騒ぎ…）。
+const FOLLOW_TASTE = {
+  senpai: { tip: 3, agree: 2, relate: 1.5 }, tryhard: { counter: 2.5, tip: 2, relate: 1.5 },
+  kid: { hype: 3, ask: 2 }, newbie: { ask: 3, agree: 1.5 }, lurker: { agree: 2.5 },
+  gacha: { relate: 2, hype: 1.5 }, streamer: { hype: 2, counter: 1.5 },
+  explorer: { relate: 2.5, tip: 1.5 }, morning: { agree: 1.5, tip: 1.5 },
+  nightowl: { counter: 1.5, relate: 1.5 }, casual: { agree: 1.5, relate: 1.5 }, global: { hype: 1.5, ask: 1.5 },
+};
+
+function pickFollowKind(r) {
+  const taste = FOLLOW_TASTE[r.arch] || {};
+  const kinds = Object.keys(FOLLOWS);
+  const weights = kinds.map(k => taste[k] || 1);
+  const total = weights.reduce((a, b) => a + b, 0);
+  let x = rnd() * total;
+  for (let i = 0; i < kinds.length; i++) { x -= weights[i]; if (x <= 0) return kinds[i]; }
+  return 'agree';
+}
+
+// 生活雑談プール: 時間帯 + 週末 + 食・学校・眠気・完全雑談を重み付きで混ぜる。
+function lifePool(r, ctx) {
+  const mix = [];
+  const add = (arr, w) => { for (const e of arr || []) mix.push({ ...e, w: (e.w || 1) * w }); };
+  add(LIFE[ctx.period], 1);
+  if (ctx.weekend) add(LIFE.weekend, 0.9);
+  add(LIFE.food, ctx.period === 'evening' || ctx.period === 'day' ? 0.5 : 0.25);
+  if (ctx.period !== 'late') add(LIFE.school, r.arch === 'kid' || r.arch === 'newbie' ? 0.7 : 0.3);
+  add(LIFE.sleepy, ctx.period === 'late' || ctx.period === 'night' ? 0.6 : 0.1);
+  add(LIFE.smalltalk, 0.55);
+  return mix.filter(archOkFor(r));
+}
+
+// 1本の発言を合成する。トピック本文 / フォロー / 生活雑談 / 旧LINESの
+// どれかを核にして、たまに前置きや締めの断片を継ぎ足す。
+function buildLine3(r, ctx) {
+  const en = r.lang === 'en';
+  let core = null;
+  const t = gen.tickTopic(ctx);
+  if (t && TOPICS[t.id]) {
+    if (t.role === 'follow' && rnd() < 0.9) {
+      const kind = pickFollowKind(r);
+      const e = gen.smartPick(`follow.${kind}`, (FOLLOWS[kind] || []).filter(archOkFor(r)), { now: ctx.now, rid: r.id });
+      if (e) core = en ? e.en : e.ja;
+    }
+    if (!core) {
+      const e = gen.smartPick(`topic.${t.id}`, TOPICS[t.id].filter(archOkFor(r)), { now: ctx.now, rid: r.id });
+      if (e) core = en ? e.en : e.ja;
+    }
+  }
+  if (!core && rnd() < 0.3) {
+    const e = gen.smartPick('life', lifePool(r, ctx), { now: ctx.now, rid: r.id });
+    if (e) core = en ? e.en : e.ja;
+  }
+  if (!core) {
+    // 旧LINES資産もローテーションの一部として生きる（再出防止つき）。
+    const pool = eligibleLines(r, ctx);
+    if (!pool.length) return null;
+    const weights = pool.map(l => {
+      let w = l.w || 1;
+      if (l.arch) w *= 1.8;
+      if (l.ctx === 'event' || l.ctx === 'poll') w *= 1.6;
+      if (l.ctx && l.ctx === ctx.period) w *= 1.3;
+      return w;
+    });
+    const line = gen.smartPick('lines', pool, { now: ctx.now, rid: r.id, weightFn: (_, i) => weights[i] });
+    if (!line) return null;
+    core = en ? line.en : line.ja;
+  }
+  if (!core) return null;
+  let s = fill(core, r, ctx);
+  // 断片の継ぎ足し: 短文なら前置き、それ以外はたまに締め。
+  if (s.length < 30 && rnd() < 0.28) {
+    const o = gen.smartPick('openers', OPENERS.filter(archOkFor(r)), { now: ctx.now, rid: r.id });
+    if (o) s = en ? `${o.en}, ${s}` : `${o.ja}、${s}`;
+  } else if (rnd() < 0.2) {
+    const tl = gen.smartPick('tails', TAILS.filter(archOkFor(r)), { now: ctx.now, rid: r.id });
+    if (tl) s = en ? `${s} — ${tl.en}` : `${s}。${tl.ja}`;
+  }
+  return stylize(s, r);
+}
+
 // A fresh line for this resident. customLines (admin) are mixed in.
 export function composeLine(r, ctx, customLines = []) {
-  if (customLines.length && rnd() < 0.35) return stylize(fill(pick(customLines), r, ctx), r);
+  if (customLines.length && rnd() < 0.3) return stylize(fill(pick(customLines), r, ctx), r);
+  // 完成文レベルの重複も拒否 — 直近6時間に流れた文とは一致させない。
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const s = buildLine3(r, ctx);
+    if (s && gen.surfaceFresh(s, ctx.now)) {
+      gen.noteSurface(s, ctx.now);
+      gen.noteSpoken(r.id, ctx.now);
+      return s;
+    }
+  }
   const pool = eligibleLines(r, ctx);
   if (!pool.length) return stylize(r.lang === 'en' ? 'gg' : 'こんにちは〜', r);
   const line = weightedLine(pool, r, ctx);
   const tpl = r.lang === 'en' ? line.en : line.ja;
-  return stylize(fill(tpl, r, ctx), r);
+  const s = stylize(fill(tpl, r, ctx), r);
+  gen.noteSurface(s, ctx.now);
+  gen.noteSpoken(r.id, ctx.now);
+  return s;
 }
 
 // ---------------------------------------------------------------------------
@@ -402,14 +509,58 @@ const DIALOGUES = [
 
 function fits(r, roles) { return !roles || roles.includes(r.arch); }
 
+// 3.0: トピックから即興の会話を組む — Aが本文、Bが相づち/反論/質問、
+// たまにAが体験談で返す。組んだ話題はロビー全体の話題として引き継がれ、
+// 続くソロ発言も同じ話題に乗る（会話が「続いて見える」仕掛けの本体）。
+function genTopicDialogue(ctx) {
+  const active = (ctx.active || []).filter(r => r.lang === 'ja');
+  if (active.length < 2) return null;
+  const entries = Object.keys(TOPICS).filter(id => (id !== 'event' || ctx.event) && (id !== 'poll' || ctx.poll));
+  const id = entries[Math.floor(rnd() * entries.length)];
+  const cores = TOPICS[id];
+  if (!cores || !cores.length) return null;
+  const a = pick(active);
+  const bs = active.filter(r => r.id !== a.id);
+  const b = pick(bs);
+  const coreE = gen.smartPick(`topic.${id}`, cores.filter(archOkFor(a)), { now: ctx.now, rid: a.id });
+  if (!coreE) return null;
+  const kindB = pickFollowKind(b);
+  const fB = gen.smartPick(`follow.${kindB}`, (FOLLOWS[kindB] || []).filter(archOkFor(b)), { now: ctx.now, rid: b.id });
+  if (!fB) return null;
+  const script = [[a, coreE.ja], [b, fB.ja]];
+  if (rnd() < 0.55) {
+    const kindA = rnd() < 0.5 ? 'relate' : 'tip';
+    const fA = gen.smartPick(`follow.${kindA}`, (FOLLOWS[kindA] || []).filter(archOkFor(a)), { now: ctx.now, rid: a.id });
+    if (fA) script.push([a, fA.ja]);
+  }
+  gen.adoptTopic(id, ctx);
+  let delay = 0;
+  const out = [];
+  for (const [r, tpl] of script) {
+    delay += 3000 + rnd() * 9000;
+    const s = stylize(fill(tpl, r, ctx), r);
+    if (!gen.surfaceFresh(s, ctx.now)) return null;   // rare — just skip this tick
+    gen.noteSurface(s, ctx.now);
+    gen.noteSpoken(r.id, ctx.now);
+    out.push({ resident: r, text: s, delay });
+  }
+  return out;
+}
+
 // Returns [{ resident, text, delay }] or null when the cast is too thin.
 export function composeDialogue(ctx) {
   const active = ctx.active || [];
   if (active.length < 2) return null;
+  // 半分は生成会話、半分は台本会話（台本も再出防止つき）。
+  if (rnd() < 0.5) {
+    const g = genTopicDialogue(ctx);
+    if (g) return g;
+  }
   const pool = DIALOGUES.filter(d => CTX_OK(d, ctx) && active.some(r => r.lang === d.lang));
   if (!pool.length) return null;
   for (let tries = 0; tries < 6; tries++) {
-    const d = pick(pool);
+    const d = gen.smartPick('dialogues', pool, { now: ctx.now });
+    if (!d) break;
     const cands = active.filter(r => r.lang === d.lang);
     const as = cands.filter(r => fits(r, d.archA));
     if (!as.length) continue;
@@ -422,7 +573,10 @@ export function composeDialogue(ctx) {
     return d.lines.map(([role, tpl]) => {
       const r = role === 'a' ? a : b;
       delay += 3000 + rnd() * 9000;
-      return { resident: r, text: stylize(fill(tpl, r, role === 'a' ? ctx : ctxB), r), delay };
+      const s = stylize(fill(tpl, r, role === 'a' ? ctx : ctxB), r);
+      gen.noteSurface(s, ctx.now);
+      gen.noteSpoken(r.id, ctx.now);
+      return { resident: r, text: s, delay };
     });
   }
   return null;
@@ -462,10 +616,9 @@ export function composeFeed(ctx) {
   const active = ctx.active || [];
   if (!active.length) return null;
   for (let tries = 0; tries < 8; tries++) {
-    const total = FEED.reduce((a, f) => a + f.w, 0);
-    let x = rnd() * total;
-    let f = FEED[FEED.length - 1];
-    for (const c of FEED) { x -= c.w; if (x <= 0) { f = c; break; } }
+    // 3.0: テンプレの再出防止つき抽選（「また誰かが鬼AIに勝った」の連発を潰す）。
+    const f = gen.smartPick('feed', FEED, { now: ctx.now });
+    if (!f) return null;
     const cands = active.filter(r => r.skill >= f.min && (!f.newbie || archetype(r.arch).newbie));
     if (!cands.length) continue;
     const r = pick(cands);
@@ -473,9 +626,12 @@ export function composeFeed(ctx) {
     if (f.id === 'raid') extra.boss = pick(RAID_NAMES);
     const ctxOthers = { ...ctx, active: active.filter(x => x.id !== r.id) };
     const cache = {};   // same numbers in both languages
+    const text = fill(f.ja, r, ctxOthers, extra, cache);
+    if (!gen.surfaceFresh(text, ctx.now)) continue;
+    gen.noteSurface(text, ctx.now);
     return {
       id: f.id, icon: f.icon, at: ctx.now, real: false,
-      text: fill(f.ja, r, ctxOthers, extra, cache),
+      text,
       textEn: fill(f.en, { ...r, lang: 'en' }, ctxOthers, extra, cache),
       who: r.name,
     };
@@ -577,13 +733,16 @@ const REACTIONS = {
 export const BADGE_NAMES = {
   oni: '鬼討伐バッジ', kami: '神殺しバッジ', souzou: '創造神討伐バッジ', maou: '魔王討伐バッジ',
   rush: 'ボスラッシュ制覇', dungeon: '百塔踏破', tourney: '大会優勝', royale: 'バトロワ1位',
-  weekly1: '週間チャンピオン',
+  weekly1: '週間チャンピオン', puzzle: '遺跡マスター', dig: 'マスター採掘士',
 };
 
 // Pick one or more residents to react. Returns [{ resident, text, delay }].
 export function composeReaction(kind, ctx, extra = {}, count = 1) {
   const active = ctx.active || [];
   if (!active.length) return [];
+  // 実際の出来事はロビーの話題も乗っ取る — 直後のソロ発言が同じ件で盛り上がる。
+  const tp = gen.topicForReaction(kind);
+  if (tp) gen.adoptTopic(tp, ctx);
   const out = [];
   const used = new Set();
   let delay = 4000 + rnd() * 10000;
@@ -593,13 +752,20 @@ export function composeReaction(kind, ctx, extra = {}, count = 1) {
     const r = pick(cands);
     used.add(r.id);
     // Event reactions get a type-specific flavour line about half the time.
+    let poolKey = kind;
     let pool = REACTIONS[kind];
     if (kind === 'event_start' && ctx.event && REACTIONS[`event_${ctx.event.type}`] && rnd() < 0.55) {
-      pool = REACTIONS[`event_${ctx.event.type}`];
+      poolKey = `event_${ctx.event.type}`;
+      pool = REACTIONS[poolKey];
     }
     if (!pool) break;
-    const lines = (r.lang === 'en' && pool.en) ? pool.en : pool.ja;
-    out.push({ resident: r, text: stylize(fill(pick(lines), r, ctx, extra), r), delay });
+    const useEn = r.lang === 'en' && pool.en;
+    const lines = useEn ? pool.en : pool.ja;
+    const tpl = gen.smartPick(`react.${poolKey}.${useEn ? 'en' : 'ja'}`, lines, { now: ctx.now, rid: r.id });
+    if (!tpl) break;
+    const s = stylize(fill(tpl, r, ctx, extra), r);
+    gen.noteSpoken(r.id, ctx.now);
+    out.push({ resident: r, text: s, delay });
     delay += 5000 + rnd() * 20000;
   }
   return out;
@@ -714,24 +880,31 @@ export function chooseReplies(text, ctx, forcedName = null) {
 
   const out = [];
   const used = new Set();
+  // 3.0: 返信も再出防止つき — 「gg」に毎回同じ返事が来る問題の本丸。
+  const replyPick = (r, lines, poolKey) =>
+    gen.smartPick(`reply.${poolKey}`, lines, { now: ctx.now, rid: r.id }) || lines[0];
   if (mentioned.length) {
     const r = mentioned[0];
     used.add(r.id);
-    const lines = (r.lang === 'en' && spec.en) ? spec.en : spec.ja;
-    out.push({ resident: r, text: stylize(fill(pick(lines), r, ctx), r), delay: 2500 + rnd() * 5000 });
+    const useEn = r.lang === 'en' && spec.en;
+    const lines = useEn ? spec.en : spec.ja;
+    gen.noteSpoken(r.id, ctx.now);
+    out.push({ resident: r, text: stylize(fill(replyPick(r, lines, `${category}.${useEn ? 'en' : 'ja'}`), r, ctx), r), delay: 2500 + rnd() * 5000 });
   }
   const r1 = pickResident(used);
   if (r1) {
     used.add(r1.id);
-    const first = pick(pool);
+    const first = replyPick(r1, pool, `${category}.${lang}`);
+    gen.noteSpoken(r1.id, ctx.now);
     out.push({ resident: r1, text: stylize(fill(first, r1, ctx), r1), delay: (out.length ? out[0].delay : 0) + 3500 + rnd() * 8500 });
     // Sometimes a second voice chimes in.
     if (rnd() < 0.28) {
       const r2 = pickResident(used);
       if (r2) {
         const pool2 = rnd() < 0.5 ? pool : ((lang === 'en' && REPLIES.generic.en) || REPLIES.generic.ja);
-        let second = pick(pool2);
+        let second = replyPick(r2, pool2, `${category}2.${lang}`);
         if (second === first) second = REPLIES.generic.ja[0];
+        gen.noteSpoken(r2.id, ctx.now);
         out.push({ resident: r2, text: stylize(fill(second, r2, ctx), r2), delay: out[out.length - 1].delay + 4000 + rnd() * 7000 });
       }
     }
@@ -996,4 +1169,28 @@ Object.assign(REPLIES, {
 REPLY_RULES.splice(REPLY_RULES.length - 1, 0,
   ["meltdown", /メルトダウン|臨界|炉心|冷却|meltdown|coolant/i],
   ["chimera", /キメラ|溶接|合体|chimera/i],
+);
+
+// ===========================================================================
+// v2.6 🧩⛏️ 新モード語彙 + チャット3.0 素材の合流
+// 生成コンテンツは chatgen-content.js（ライターパイプライン産・検証済み）。
+// 本体テーブルへの追記は常にこの形式で末尾に足す。
+// ===========================================================================
+
+LINES.push(...NEWMODE_LINES);
+DIALOGUES.push(...NEWMODE_DIALOGUES);
+FEED.push(...NEWMODE_FEED);
+
+// 返信プールの大増強: 既存カテゴリは追記、puzzle / dig は新設。
+for (const [cat, pools] of Object.entries(REPLY_EXP)) {
+  if (REPLIES[cat]) {
+    REPLIES[cat].ja.push(...pools.ja);
+    REPLIES[cat].en = (REPLIES[cat].en || []).concat(pools.en);
+  } else {
+    REPLIES[cat] = { ja: pools.ja.slice(), en: pools.en.slice() };
+  }
+}
+REPLY_RULES.splice(REPLY_RULES.length - 1, 0,
+  ['puzzle', /パズル|遺跡|ステージ.?[0-9０-９]|puzzle|ruins/i],
+  ['dig', /採掘|鉱石|クリスタル|深度|虹鉱石|掘り|掘っ|\bdig\b|\bmine|\bore\b/i],
 );

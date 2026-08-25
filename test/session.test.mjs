@@ -18,7 +18,7 @@ const j = async (p, opt = {}, token) => {
 
 let proc = null;
 async function start(secret) {
-  proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, SESSION_SECRET: secret, POP_SCALE: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, SESSION_SECRET: secret, POP_SCALE: '0', SEED_RESTORE: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   proc.stdout.on('data', d => { log += d; });
   proc.stderr.on('data', d => { log += d; });

@@ -74,7 +74,7 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
@@ -120,6 +120,7 @@ const MODE_LABEL = {
   boss_rush: ['ボスラッシュ', 'Boss Rush'], weekly: ['ウィークリー', 'Weekly'],
   chaos: ['カオス', 'Chaos'], pvp: ['オンライン', 'Online'], tournament: ['トーナメント', 'Tournament'],
   meltdown: ['メルトダウン', 'Meltdown'], chimera: ['キメラ工房', 'Chimera Lab'],
+  puzzle: ['パズル遺跡', 'Puzzle Ruins'], dig: ['採掘場', 'The Mines'],
   royale: ['バトルロイヤル', 'Royale'], dungeon: ['ダンジョン', 'Dungeon'],
   dungeon_under: ['地下', 'Underworld'], dungeon_heaven: ['天界', 'Heavens'],
   ai_easy: ['AI戦', 'VS AI'], ai_normal: ['AI戦', 'VS AI'], ai_hard: ['AI戦', 'VS AI'],
@@ -663,7 +664,7 @@ export async function openLeaderboard(board = 'score') {
       }).join('');
       rewardHead = `<div class="lb-rewards">🎁 <b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
     }
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️' };
     list.innerHTML = rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
@@ -675,6 +676,8 @@ export async function openLeaderboard(board = 'score') {
         <div class="lb-score">${board === 'dungeon' ? `F${fmt(r.dungeonMax || 0)}`
           : board === 'weekly' ? fmt(r.weeklyBest || 0)
           : board === 'sprint' ? fmt(r.sprintBest || 0)
+          : board === 'puzzle' ? tr(`ステージ${fmt(r.puzzleStage || 0)}`, `Stage ${fmt(r.puzzleStage || 0)}`)
+          : board === 'dig' ? `${fmt(r.digDepth || 0)}m`
           : board === 'rating' ? `${rankOf(r.rating).icon}${fmt(r.rating)}` : fmt(r.bestScore)}</div>
       </div>`).join('');
   } catch (err) {

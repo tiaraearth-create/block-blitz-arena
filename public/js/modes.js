@@ -1,6 +1,6 @@
 // Game mode controllers: Solo, VS AI, Online (1v1 / 2v2 team / custom rooms),
 // plus the admin-only autopilot.
-import { Engine, shapeSize } from './engine.js';
+import { Engine, shapeSize, Rng, SHAPES } from './engine.js';
 import { GameView, MiniBoard } from './game.js';
 import { chooseMove, AI_LEVELS, planImmortalMove } from './ai.js';
 import { audio } from './audio.js';
@@ -521,7 +521,7 @@ function autoUseItems(m) {
 // qualify — the whitelist below is deliberate.
 // ---------------------------------------------------------------------------
 
-const RESCUE_MODES = new Set(['solo', 'boss', 'dungeon', 'chaos', 'survival', 'sprint']);
+const RESCUE_MODES = new Set(['solo', 'boss', 'dungeon', 'chaos', 'survival', 'sprint', 'dig']);
 let rescueBusy = false;
 
 function autoRescue() {
@@ -1113,6 +1113,411 @@ class ChimeraMode {
     this.ended = true;
     if (view) { view.onIntentPlace = null; view.onTrayDrop = null; }
   }
+}
+
+// ---------------------------------------------------------------------------
+// 🧩 パズル遺跡 (v2.6) — stage-based puzzle rooms. Each stage is built by
+// REVERSE CONSTRUCTION: fill a band of rows (or columns), then carve whole
+// pieces out of it. The player gets exactly those carved pieces, so placing
+// each piece back in its home completes every line — a solution always
+// exists. Win = every ORIGINAL cell cleared (leftover player cells are fine;
+// this is what keeps mid-solve line clears from ever dead-locking a stage).
+// ---------------------------------------------------------------------------
+
+function puzzleStars() {
+  try { return JSON.parse(localStorage.getItem('bba_puzzle_stars') || '{}'); } catch { return {}; }
+}
+export function puzzleBestStage() {
+  const local = Number(localStorage.getItem('bba_puzzle_stage') || 0);
+  return session.user ? Math.max(local, session.user.stats.puzzleStage || 0) : local;
+}
+
+// Deterministic stage layout — every player gets the same ruins.
+function genPuzzleStage(stage) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const rng = new Rng(((stage * 2654435761) ^ (attempt * 40503) ^ 0x9e3779) >>> 0);
+    const vertical = rng.next() < 0.5;
+    const band = Math.min(5, 2 + Math.floor((stage - 1) / 8));      // 2..5 lines
+    const p0 = rng.int(8 - band + 1);
+    const wantPieces = Math.min(10, 3 + Math.floor((stage - 1) / 4)); // 3..10 pieces
+    const grid = new Array(64).fill(0);
+    const inBand = (r, c) => vertical ? (c >= p0 && c < p0 + band) : (r >= p0 && r < p0 + band);
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      if (inBand(r, c)) grid[r * 8 + c] = 1 + ((vertical ? c : r) % 8);
+    }
+    const pieces = [];
+    let guard = 260;
+    while (pieces.length < wantPieces && guard-- > 0) {
+      const si = rng.int(SHAPES.length);
+      const cells = SHAPES[si].cells;
+      const { rows, cols } = shapeSize(cells);
+      const r0 = rng.int(Math.max(1, 8 - rows + 1));
+      const c0 = rng.int(Math.max(1, 8 - cols + 1));
+      let ok = true;
+      for (const [dr, dc] of cells) {
+        const r = r0 + dr, c = c0 + dc;
+        if (r >= 8 || c >= 8 || !inBand(r, c) || grid[r * 8 + c] === 0) { ok = false; break; }
+      }
+      if (!ok) continue;
+      for (const [dr, dc] of cells) grid[(r0 + dr) * 8 + (c0 + dc)] = 0;
+      pieces.push({ shape: si, cells, color: SHAPES[si].color });
+    }
+    if (pieces.length < 2) continue;   // degenerate carve — reroll deterministically
+    // A fully-carved line would clear as soon as an unrelated line completes
+    // nothing — more importantly it has no originals, which is fine. But a
+    // band line with only 1-2 originals left is a nice puzzle; no extra work.
+    for (let i = pieces.length - 1; i > 0; i--) {   // deterministic shuffle
+      const k = rng.int(i + 1);
+      [pieces[i], pieces[k]] = [pieces[k], pieces[i]];
+    }
+    const targets = new Set();
+    for (let k = 0; k < 64; k++) if (grid[k] !== 0) targets.add(k);
+    return { grid, pieces, targets, band, vertical };
+  }
+  // Unreachable in practice; a 1-piece fallback stage keeps the mode alive.
+  const grid = new Array(64).fill(0);
+  for (let c = 0; c < 7; c++) grid[7 * 8 + c] = 1 + (c % 8);
+  return { grid, pieces: [{ shape: 0, cells: SHAPES[0].cells, color: SHAPES[0].color }], targets: new Set([56, 57, 58, 59, 60, 61, 62]), band: 1, vertical: false };
+}
+
+class PuzzleMode {
+  constructor(stage = 1) {
+    this.mode = 'puzzle';
+    this.usesIntent = true;
+    this.stage = Math.max(1, Math.floor(stage));
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    $('#chaosBar').classList.add('hidden');
+    showItemBar(false);   // 固定ピースのパズル — アイテム/奥義は無効
+    $('#btnReroll').classList.add('hidden');   // リロールも遺跡では禁止
+    this.startedAt = Date.now();
+    this.ended = false;
+    const st = genPuzzleStage(this.stage);
+    this.targets = st.targets;
+    this.queue = st.pieces.slice();
+    this.total = st.pieces.length;
+    const v = getView();
+    this.engine = new Engine();
+    this.engine.grid = st.grid.slice();
+    this.engine.rerolls = 0;
+    this.engine.refillHand = () => {};        // the queue is the only source
+    this.engine.reroll = () => false;
+    this.engine.hand = [this.queue.shift() || null, this.queue.shift() || null, this.queue.shift() || null];
+    v.setEngine(this.engine);
+    v.glowCells = this.targets;               // originals shimmer = what to clear
+    v.inputLocked = false;
+    v.onIntentPlace = (i, r, c) => this.intent(i, r, c);
+    v.onPlace = null;
+    v.onGameOver = () => this.finish(false);
+    this.updateHud();
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('solo');
+    toast(t(`🧩 ステージ${this.stage}：光るブロックをすべて消そう！ピースは使い切り！`,
+      `🧩 Stage ${this.stage}: clear every glowing block — no piece refills!`), 'announce', 3200);
+  }
+
+  remaining() { return this.queue.length + this.engine.hand.filter(Boolean).length; }
+
+  intent(index, row, col) {
+    const e = this.engine;
+    const piece = e.hand[index];
+    if (!piece || this.ended || !e.canPlace(piece, row, col)) return true;
+    const result = e.place(index, row, col);
+    if (!result) return true;
+    e.hand[index] = this.queue.shift() || null;   // fixed queue, no random refills
+    for (const [r, c] of result.clearedCells) this.targets.delete(r * 8 + c);
+    // place() judged "no moves" against the pre-refill hand — re-judge after
+    // the queue refill so applyResult doesn't fire a phantom game over.
+    e.over = false;
+    result.over = false;
+    getView().applyResult(result);
+    this.updateHud();
+    if (this.ended) return true;
+    if (this.targets.size === 0) { this.finish(true); return true; }
+    if (!e.hasAnyMove()) {
+      e.over = true;
+      this.finish(false);
+    }
+    return true;
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    $('#hudSub').textContent = t(`ステージ${this.stage} ・ 残り${this.targets.size}マス`, `Stage ${this.stage} — ${this.targets.size} left`);
+    $('#hudTimer').textContent = `🧩${this.remaining()}`;
+  }
+
+  async finish(won) {
+    if (this.ended) return;
+    this.ended = true;
+    getView().inputLocked = true;
+    const e = this.engine;
+    const secs = (Date.now() - this.startedAt) / 1000;
+    const stars = won ? (secs <= 45 ? 3 : secs <= 90 ? 2 : 1) : 0;
+    let firstClear = false;
+    if (won) {
+      const all = puzzleStars();
+      if ((all[this.stage] || 0) < stars) { all[this.stage] = stars; localStorage.setItem('bba_puzzle_stars', JSON.stringify(all)); }
+      const localBest = Number(localStorage.getItem('bba_puzzle_stage') || 0);
+      firstClear = this.stage > localBest;
+      if (firstClear) localStorage.setItem('bba_puzzle_stage', String(this.stage));
+      confettiBurst(stars >= 3 ? 60 : 30);
+      audio.victory();
+    }
+    const rewards = await submitResult({
+      mode: 'puzzle', score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
+      duration: secs, won, stage: this.stage,
+    });
+    const starStr = won ? '★'.repeat(stars) + '☆'.repeat(3 - stars) : '';
+    const m = showModal(`
+      <div class="result-banner ${won ? 'win' : 'lose'}">${won ? `${t('遺跡クリア！', 'ROOM CLEARED!')} ${starStr}` : t('❌ 失敗…', '❌ FAILED…')}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('ステージ', 'Stage')}</span><b>${this.stage}</b></div>
+        <div class="rs-row"><span>${t('タイム', 'Time')}</span><b>${secs.toFixed(1)}s</b></div>
+        ${won ? '' : `<div class="rs-row"><span>${t('残りブロック', 'Blocks left')}</span><b>${this.targets.size}</b></div>`}
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-primary" id="rAgain">${won ? t('▶ 次のステージ', '▶ Next stage') : t('リトライ', 'Retry')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => {
+      closeModal();
+      this.destroy();
+      startPuzzle(won ? this.stage + 1 : this.stage);
+    };
+  }
+
+  quit() { this.finish(false); }
+
+  destroy() {
+    this.ended = true;
+    $('#hudTimer').classList.add('hidden');
+    if (view) { view.onIntentPlace = null; view.glowCells = null; }
+  }
+}
+
+export function startPuzzle(stage = 1) {
+  if (currentMode) currentMode.destroy();
+  currentMode = new PuzzleMode(stage);
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+// ---------------------------------------------------------------------------
+// ⛏️ 採掘場 (v2.6) — the ground rises. Every few placements the whole board
+// shifts up one row and a fresh rock layer (with ore) slides in at the bottom.
+// Clear lines through the rock to collect 🪙金鉱石 / 💠クリスタル / 🌈虹鉱石
+// for score. Anything touching the ceiling when the ground moves = crushed.
+// ---------------------------------------------------------------------------
+
+const DIG_ORES = {
+  gold:    { icon: '🪙', tint: '#ffd75e', base: 150 },
+  crystal: { icon: '💠', tint: '#4dd0ff', base: 400 },
+  rainbow: { icon: '🌈', tint: '#ff6bd4', base: 1200 },
+};
+const DIG_STEP = 4;   // placements per layer rise
+
+class DigMode {
+  constructor() {
+    this.mode = 'dig';
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    $('#chaosBar').classList.remove('hidden');   // 地層の上昇ゲージとして流用
+    showItemBar(false);
+    this.startedAt = Date.now();
+    this.ended = false;
+    this.depth = 0;
+    this.placedSince = 0;
+    this.ores = new Map();
+    this.mined = { gold: 0, crystal: 0, rainbow: 0 };
+    this.rng = new Rng((Math.random() * 2 ** 31) | 0);
+    const v = getView();
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.oreCells = this.ores;
+    v.inputLocked = false;
+    v.onIntentPlace = null;
+    v.onPlace = r => this.onPlace(r);
+    v.onGameOver = () => this.finish();
+    for (let i = 0; i < 3; i++) this.pushLayer(false);   // starting strata
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('hard');
+    toast(t('⛏️ 地層がせり上がる！ラインを消して鉱石を回収しろ！天井に触れたら終わり！',
+      '⛏️ The ground is rising! Clear lines to mine ore — touch the ceiling and it\'s over!'), 'announce', 3400);
+  }
+
+  oreValue(type) {
+    return Math.round(DIG_ORES[type].base * (1 + this.depth / 25));
+  }
+
+  // A fresh stratum enters at the bottom row (rows shift up when rising=true).
+  pushLayer(rising = true) {
+    const e = this.engine;
+    if (rising) {
+      for (let c = 0; c < 8; c++) {
+        if (e.grid[c] !== 0) { this.crushed(); return; }   // top row occupied = crushed
+      }
+      e.grid.copyWithin(0, 8);
+      const shifted = new Map();
+      for (const [k, type] of this.ores) if (k >= 8) shifted.set(k - 8, type);
+      this.ores.clear();
+      for (const [k, type] of shifted) this.ores.set(k, type);
+    }
+    const density = Math.min(7, 5 + (this.depth >= 15 ? 1 : 0) + (this.depth >= 40 ? 1 : 0));
+    const cols = [0, 1, 2, 3, 4, 5, 6, 7];
+    for (let i = cols.length - 1; i > 0; i--) { const k = this.rng.int(i + 1); [cols[i], cols[k]] = [cols[k], cols[i]]; }
+    const v = getView();
+    for (let c = 0; c < 8; c++) e.grid[56 + c] = 0;
+    for (const c of cols.slice(0, density)) {
+      const k = 56 + c;
+      e.grid[k] = 9;
+      const roll = this.rng.next();
+      const crystalP = 0.05 + Math.min(0.06, this.depth * 0.0015);
+      if (roll < 0.012) this.ores.set(k, 'rainbow');
+      else if (roll < 0.012 + crystalP) this.ores.set(k, 'crystal');
+      else if (roll < 0.012 + crystalP + 0.13) this.ores.set(k, 'gold');
+      v.spawnAnim.set(k, v.time);
+    }
+    if (rising) {
+      this.depth++;
+      v.shake = Math.max(v.shake, 6);
+      audio.countdown(false);
+      if (this.depth % 10 === 0) {
+        toast(t(`⛏️ 深度${this.depth}m 到達！鉱石が濃くなってきた…`, `⛏️ Depth ${this.depth}m! The veins are getting richer…`), 'announce', 2200);
+        confettiBurst(20);
+      }
+      if (!e.hasAnyMove()) { e.over = true; handleEngineOver(); }
+    }
+  }
+
+  crushed() {
+    if (this.ended) return;
+    const v = getView();
+    v.shake = 20;
+    v.screenFlash = 0.5;
+    audio.bossAttack();
+    toast(t('⛏️ 天井に押しつぶされた…', '⛏️ Crushed against the ceiling…'), 'err', 2400);
+    this.finish();
+  }
+
+  onPlace(result) {
+    if (this.ended) return;
+    const e = this.engine;
+    const v = getView();
+    // Collect ore that was inside the cleared lines.
+    let bonus = 0;
+    for (const [r, c] of result.clearedCells) {
+      const k = r * 8 + c;
+      const type = this.ores.get(k);
+      if (!type) continue;
+      this.ores.delete(k);
+      this.mined[type]++;
+      const val = this.oreValue(type);
+      bonus += val;
+      v.addFloatText(v.boardX + (c + 0.5) * v.cell, v.boardY + (r + 0.5) * v.cell,
+        `${DIG_ORES[type].icon} +${fmt(val)}`, DIG_ORES[type].tint, type === 'rainbow' ? 1.8 : 1.3);
+    }
+    if (bonus) {
+      e.score += bonus;
+      audio.coin();
+    }
+    // Items/ults may wipe cells without a "clear" — drop orphaned ore markers.
+    for (const k of [...this.ores.keys()]) if (e.grid[k] === 0) this.ores.delete(k);
+    // Cadence: each placement pushes toward the next rise; clears buy time.
+    this.placedSince += 1 - Math.min(1, result.lineCount);
+    if (this.placedSince >= DIG_STEP) {
+      this.placedSince = 0;
+      setTimeout(() => { if (!this.ended) { this.pushLayer(true); this.updateHud(); } }, 260);
+    }
+    this.updateHud();
+  }
+
+  best() {
+    const local = Number(localStorage.getItem('bba_dig_best') || 0);
+    return session.user ? Math.max(local, session.user.stats.digDepth || 0) : local;
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    $('#hudSub').textContent = `🪙${this.mined.gold} 💠${this.mined.crystal} 🌈${this.mined.rainbow} ・ BEST ${this.best()}m`;
+    $('#hudTimer').textContent = `⛏️${this.depth}m`;
+    const fill = $('#chaosBarFill');
+    const pct = Math.round((this.placedSince / DIG_STEP) * 100);
+    fill.style.width = `${pct}%`;
+    fill.style.background = pct >= 75 ? '#ff9d3b' : '#a7793b';
+  }
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    getView().inputLocked = true;
+    const e = this.engine;
+    const localBest = Number(localStorage.getItem('bba_dig_best') || 0);
+    const isBest = this.depth > 0 && this.depth >= Math.max(localBest, this.best());
+    if (this.depth > localBest) localStorage.setItem('bba_dig_best', String(this.depth));
+    const rewards = await submitResult({
+      mode: 'dig', score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
+      duration: (Date.now() - this.startedAt) / 1000, won: false, depth: this.depth,
+    });
+    if (isBest) confettiBurst();
+    const m = showModal(`
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : 'GAME OVER'}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('⛏️ 到達深度', '⛏️ Depth reached')}</span><b>${this.depth}m</b></div>
+        <div class="rs-row"><span>${t('🪙 金鉱石', '🪙 Gold ore')}</span><b>${this.mined.gold}</b></div>
+        <div class="rs-row"><span>${t('💠 クリスタル', '💠 Crystal')}</span><b>${this.mined.crystal}</b></div>
+        ${this.mined.rainbow ? `<div class="rs-row"><span>${t('🌈 虹鉱石', '🌈 Rainbow ore')}</span><b>${this.mined.rainbow}</b></div>` : ''}
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
+  }
+
+  quit() { this.finish(); }
+
+  destroy() {
+    this.ended = true;
+    const timer = $('#hudTimer');
+    timer.classList.add('hidden');
+    $('#chaosBar').classList.add('hidden');
+    const fill = $('#chaosBarFill');
+    fill.style.background = '';
+    fill.style.width = '0%';
+    if (view) { view.onPlace = null; view.oreCells = null; }
+  }
+}
+
+export function startDig() {
+  if (currentMode) currentMode.destroy();
+  currentMode = new DigMode();
+  window.__bbaMode = currentMode;
+  currentMode.start();
 }
 
 // ---------------------------------------------------------------------------
@@ -4073,6 +4478,7 @@ function endToMenu() {
     view.glowCells = null;
     view.dangerCells = null;
     view.coolCells = null;
+    view.oreCells = null;
   }
   if (view) view.stop();
   stopAutopilot();

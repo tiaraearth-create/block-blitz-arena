@@ -14,6 +14,7 @@ import {
   archetype, ARCHETYPES, jstHour, jstWeekday, unit, mulberry32, strHash, JA_NAMES, EN_NAMES,
 } from './residents.js';
 import { composeLine, chooseReplies as crowdReplies, buildCtx } from './crowd.js';
+import { speakerDamp } from './chatgen.js';
 
 export const POP_SCALE = process.env.POP_SCALE === undefined ? 1 : Math.max(0, Number(process.env.POP_SCALE) || 0);
 
@@ -293,12 +294,15 @@ export function residentLine(resident = null, now = Date.now()) {
   return { name: r.name, text: composeLine(r, ctx, custom.lines), resident: r };
 }
 
-// Chattier residents speak more often; lurkers mostly lurk.
-function weightedByChat(list) {
+// Chattier residents speak more often; lurkers mostly lurk. Chat 3.0 adds a
+// rotation damp: whoever just spoke goes quiet for a bit, so the lobby never
+// sounds like one person narrating.
+function weightedByChat(list, now = Date.now()) {
   if (!list.length) return null;
-  const total = list.reduce((a, r) => a + r.chatty, 0);
+  const weights = list.map(r => r.chatty * speakerDamp(r.id, now));
+  const total = weights.reduce((a, b) => a + b, 0);
   let x = Math.random() * total;
-  for (const r of list) { x -= r.chatty; if (x <= 0) return r; }
+  for (let i = 0; i < list.length; i++) { x -= weights[i]; if (x <= 0) return list[i]; }
   return list[list.length - 1];
 }
 
@@ -347,6 +351,10 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
     weeklyBest: st.weeklyBest,
     sprintBest: st.sprintBest,
     sprint180: st.sprint180,
+    // v2.6 boards — derived from tower progress so they track each resident's
+    // skill drift without new stat plumbing.
+    puzzleStage: Math.max(1, Math.round((st.dungeonMax || 8) * 0.55)),
+    digDepth: Math.max(3, Math.round((st.dungeonMax || 8) * 0.75)),
     badges: st.badges,
     title: st.title,
   });
@@ -381,6 +389,8 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
       weeklyBest: Math.floor(Math.pow(mix(0.5), 2) * 30000 + 800),
       sprintBest: Math.floor(Math.pow(mix(0.6), 2) * 14000 + 600),
       sprint180: Math.floor(Math.pow(mix(0.6), 2) * 46000 + 2000),
+      puzzleStage: 1 + Math.floor(Math.pow(mix(0.6), 1.5) * 44),
+      digDepth: 3 + Math.floor(Math.pow(mix(0.6), 1.5) * 60),
       badges: [],
       title: null,
     });

@@ -123,6 +123,10 @@ const CATALOG_EN = {
   weeklyking: { name: 'Weekly Sovereign', desc: 'Finish #1 in the weekly challenge' },
   bossmaster: { name: 'Perfect Slayer', desc: 'S-rank every boss' },
   hellrunner: { name: 'Hell Runner', desc: 'Reach depth 12 in Infinite Hell Rush' },
+  ruinsage: { name: 'Ancient Sage', desc: 'Clear Puzzle Ruins stage 30' },
+  miner: { name: 'Master Miner', desc: 'Reach depth 50 in the Mines' },
+  gachaprince: { name: 'Gacha Prodigy', desc: 'Pull the gacha 100 times' },
+  lobbyface: { name: 'Lobby Regular', desc: 'Send 300 chat messages' },
   mecha: { name: 'Deus Ex Machina', desc: '' },
   frost: { name: 'Frost Queen Frione', desc: '' },
 };
@@ -229,6 +233,8 @@ export function applyStaticI18n() {
   set('#btnSurvival', '💀 Survival');
   set('#btnMeltdown', '☢️ Meltdown');
   set('#btnChimera', '🧬 Chimera Lab');
+  set('#btnPuzzle', '🧩 Puzzle Ruins');
+  set('#btnDig', '⛏️ The Mines');
   set('#btnChaos', '🌪️ Chaos Mode');
   set('#btnOnline', '🌐 Online Battle');
 

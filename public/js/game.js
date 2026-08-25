@@ -64,6 +64,7 @@ export class GameView {
     this.glowCells = null;
     this.dangerCells = null;
     this.coolCells = null;
+    this.oreCells = null;
   }
 
   setTheme({ skinId, boardId, fxId }) {
@@ -325,6 +326,7 @@ export class GameView {
       this.drawBlocks();
       this.drawDanger();
       this.drawCool();
+      this.drawOre();
       this.drawDying();
       this.drawFlashes();
       if (this.drag) this.drawDrag();
@@ -480,6 +482,29 @@ export class GameView {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('❄️', x + cell / 2, y + cell / 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Dig-mode ore: a Map(cellKey → 'gold'|'crystal'|'rainbow') drawn as a
+  // glinting icon over the rock block underneath.
+  drawOre() {
+    if (!this.oreCells || !this.oreCells.size) return;
+    const { ctx, cell } = this;
+    const TINT = { gold: '#ffd75e', crystal: '#4dd0ff', rainbow: '#ff6bd4' };
+    const ICON = { gold: '🪙', crystal: '💠', rainbow: '🌈' };
+    const glint = 0.16 + 0.12 * Math.sin(this.time * 3);
+    for (const [k, type] of this.oreCells) {
+      const r = (k / SIZE) | 0, c = k % SIZE;
+      const x = this.boardX + c * cell, y = this.boardY + r * cell;
+      ctx.globalAlpha = glint;
+      ctx.fillStyle = TINT[type] || '#ffd75e';
+      ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
+      ctx.globalAlpha = 1;
+      ctx.font = `${cell * 0.52}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(ICON[type] || '🪙', x + cell / 2, y + cell / 2);
     }
     ctx.globalAlpha = 1;
   }

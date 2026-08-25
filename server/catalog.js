@@ -145,6 +145,10 @@ export const TITLES = [
   { id: 'weeklyking', name: '週間王者',       color: '#ffd75e', desc: '週間チャレンジで週間1位に輝く' },
   { id: 'bossmaster', name: '完全討伐者',     color: '#ff5d5d', desc: '全ボスをSランクで討伐する' },
   { id: 'hellrunner', name: '地獄を駆ける者', color: '#c026d3', desc: '無限地獄ラッシュで深度12に到達' },
+  { id: 'ruinsage',  name: '古代の賢者',      color: '#a3e635', desc: 'パズル遺跡でステージ30をクリア' },
+  { id: 'miner',     name: 'マスター採掘士',  color: '#f59e0b', desc: '採掘場で深度50に到達' },
+  { id: 'gachaprince', name: 'ガチャの申し子', color: '#ff6bd4', desc: 'ガチャを100回引く' },
+  { id: 'lobbyface', name: 'ロビーの顔',      color: '#43d9e8', desc: 'チャットで300回発言する' },
 ];
 
 export function earnedTitles(user) {
@@ -197,6 +201,10 @@ export function earnedTitles(user) {
   if (has('weekly1')) out.push('weeklyking');
   if (BOSSES.every(b => (s.bossRanks || {})[b.id] === 'S')) out.push('bossmaster');
   if ((s.rushDepth || 0) >= 12) out.push('hellrunner');
+  if ((s.puzzleStage || 0) >= 30) out.push('ruinsage');
+  if ((s.digDepth || 0) >= 50) out.push('miner');
+  if ((s.gachaPulls || 0) >= 100) out.push('gachaprince');
+  if ((s.chatMessages || 0) >= 300) out.push('lobbyface');
   return out;
 }
 

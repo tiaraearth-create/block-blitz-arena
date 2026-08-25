@@ -95,6 +95,56 @@ export const ACHIEVEMENTS = [
   a('ach_mis10',    '📋', 'legend', 10,   600,  5,  '任務開始',     'On Duty',          'ミッション10個クリア',  'Complete 10 missions',    u => S(u).missionsDone || 0),
   a('ach_mis50',    '📋', 'legend', 50,   2200, 18, '任務遂行者',   'Mission Runner',   'ミッション50個クリア',  'Complete 50 missions',    u => S(u).missionsDone || 0),
   a('ach_mis300',   '📋', 'legend', 300,  9000, 80, 'ミッションの鬼', 'Mission Demon',  'ミッション300個クリア', 'Complete 300 missions',   u => S(u).missionsDone || 0),
+
+  // ==== v2.6 不滅アップデート: +37種で全100種 ====================================
+  // ---- プレイ ----
+  a('ach_play1000', '🎮', 'play', 1000,  8000, 60, '千戦の勇者',   'Thousand Battles', '1,000回プレイする',     'Play 1,000 games',          u => S(u).gamesPlayed || 0),
+  a('ach_pieces50k','🧱', 'play', 50000, 2000, 15, 'ブロックの海',  'Sea of Blocks',    '累計50,000ピース設置',  'Place 50,000 pieces',        u => S(u).piecesPlaced || 0),
+  a('ach_time24h',  '⏳', 'play', 86400, 3000, 25, 'まる一日',      'A Full Day',       '累計プレイ24時間',      'Play for 24 hours total',    u => S(u).playSecs || 0),
+  a('ach_wins100',  '🏅', 'play', 100,   1500, 12, '勝利の常連',    'Winning Regular',  '累計100勝する',         'Win 100 games total',        u => S(u).totalWins || 0),
+  a('ach_login100', '📅', 'play', 100,   5000, 45, '百日の旅路',    'Hundred Days',     '通算100日ログイン',     'Log in on 100 different days', u => S(u).dailyLogins || 0),
+
+  // ---- スコア ----
+  a('ach_score500k','🌠', 'score', 500000,   8000,  70,  '五十万の彼方', 'Beyond 500K',     '1ゲームで500,000点',    'Score 500,000 in one game',  u => S(u).bestScore || 0),
+  a('ach_total10m', '💰', 'score', 10000000, 9000,  80,  '一千万の軌跡', 'Ten Million Trail', '累計スコア10,000,000', 'Reach 10,000,000 total score', u => S(u).totalScore || 0),
+  a('ach_combo30',  '💥', 'score', 30,       12000, 100, 'コンボの化身', 'Combo Incarnate',  '30コンボ達成',         'Land a 30 combo',            u => S(u).maxCombo || 0),
+
+  // ---- 対戦 ----
+  a('ach_pvp100',   '⚔️', 'battle', 100,  6000,  50,  '闘神',         'War God',          'オンラインで100勝',     'Win 100 online battles',    u => S(u).pvpWins || 0),
+  a('ach_streak10', '🔗', 'battle', 10,   4000,  35,  '無敗の風',     'Unbeaten Wind',    'ランクマ10連勝',        'Win 10 ranked in a row',    u => S(u).winStreakBest || S(u).winStreak || 0),
+  a('ach_rate1900', '🏔️', 'battle', 1900, 12000, 100, '孤高の頂',     'Lonely Summit',    'レート1900到達',        'Reach 1900 rating',         u => S(u).rating || 0),
+  a('ach_weekly1',  '🏆', 'battle', 1,    3000,  25,  '週間王者',     'Weekly Champion',  '週間ランキング1位',     'Take #1 in the weekly ranking', u => has(u, 'weekly1') ? 1 : 0),
+
+  // ---- 探索 ----
+  a('ach_melt100k', '☢️', 'explore', 100000, 1200, 9,  '臨界寸前',     'Near Critical',    'メルトダウンで100,000点', 'Score 100,000 in Meltdown', u => S(u).meltdownBest || 0),
+  a('ach_melt500k', '☢️', 'explore', 500000, 4000, 35, '炉心の支配者', 'Core Master',      'メルトダウンで500,000点', 'Score 500,000 in Meltdown', u => S(u).meltdownBest || 0),
+  a('ach_chimera30k','🧬','explore', 30000,  1200, 9,  '合成の初歩',   'First Fusion',     'キメラ工房で30,000点',   'Score 30,000 in Chimera Lab', u => S(u).chimeraBest || 0),
+  a('ach_chimera100k','🧬','explore',100000, 4000, 35, 'キメラの父',   'Chimera Father',   'キメラ工房で100,000点',  'Score 100,000 in Chimera Lab', u => S(u).chimeraBest || 0),
+  a('ach_rush5',    '🔥', 'explore', 5,      1500, 12, '地獄の五合目',  'Halfway to Hell',  '無限地獄ラッシュ深度5',  'Reach depth 5 in Hell Rush', u => S(u).rushDepth || 0),
+  a('ach_rush12',   '🌋', 'explore', 12,     6000, 50, '地獄を駆ける者','Hellrunner',       '無限地獄ラッシュ深度12', 'Reach depth 12 in Hell Rush', u => S(u).rushDepth || 0),
+  a('ach_allS',     '🎖️', 'explore', 6,      8000, 70, '完全討伐',     'Perfect Hunter',   '全6ボスでSランク',      'Earn S rank on all 6 bosses', u => Object.values(S(u).bossRanks || {}).filter(r => r === 'S').length),
+  a('ach_wave30',   '☠️', 'explore', 30,     6000, 50, '不死身',       'Deathless',        'サバイバルW30到達',     'Reach Survival wave 30',    u => S(u).survivalWave || 0),
+  a('ach_sprint180','⏱️', 'explore', 30000,  2600, 20, '持久走の覇者',  'Marathon Champ',   'TA 180秒で30,000点',    'Score 30,000 in a 180s run', u => (S(u).sprint && S(u).sprint.s180) || 0),
+  a('ach_puzzle10', '🧩', 'explore', 10,     800,  6,  '遺跡の入口',    'Ruins Gate',       'パズル遺跡 ステージ10',  'Clear Puzzle Ruins stage 10', u => S(u).puzzleStage || 0),
+  a('ach_puzzle30', '🧩', 'explore', 30,     2500, 20, '遺跡の解読者',  'Ruins Decoder',    'パズル遺跡 ステージ30',  'Clear Puzzle Ruins stage 30', u => S(u).puzzleStage || 0),
+  a('ach_puzzle60', '🗿', 'explore', 60,     8000, 70, '古代の賢者',    'Ancient Sage',     'パズル遺跡 ステージ60',  'Clear Puzzle Ruins stage 60', u => S(u).puzzleStage || 0),
+  a('ach_dig25',    '⛏️', 'explore', 25,     800,  6,  '見習い採掘士',  'Rookie Miner',     '採掘場で深度25',        'Reach depth 25 in the Mines', u => S(u).digDepth || 0),
+  a('ach_dig60',    '⛏️', 'explore', 60,     2800, 22, 'ベテラン採掘士','Veteran Miner',    '採掘場で深度60',        'Reach depth 60 in the Mines', u => S(u).digDepth || 0),
+  a('ach_dig100',   '💎', 'explore', 100,    9000, 80, '地底の王',      'King Underground', '採掘場で深度100',       'Reach depth 100 in the Mines', u => S(u).digDepth || 0),
+
+  // ---- 収集 ----
+  a('ach_gacha10',  '🎰', 'collect', 10,  600,  5,  'ガチャデビュー', 'Gacha Debut',     'ガチャを10回引く',      'Pull the gacha 10 times',    u => S(u).gachaPulls || 0),
+  a('ach_gacha100', '🎰', 'collect', 100, 3000, 25, 'ガチャの申し子', 'Gacha Prodigy',   'ガチャを100回引く',     'Pull the gacha 100 times',   u => S(u).gachaPulls || 0),
+  a('ach_ssr',      '🌈', 'collect', 1,   1500, 12, '虹色の奇跡',    'Rainbow Miracle',  'SSR以上を引き当てる',   'Pull an SSR or better',      u => S(u).gachaSSR || 0),
+  a('ach_own45',    '🏵️', 'collect', 45,  8000, 70, '伝説の収集家',  'Legendary Collector', 'アイテムを45種所持',  'Own 45 catalog items',       u => (u.owned || []).length),
+  a('ach_lv50',     '⬆️', 'collect', 50,  6000, 55, 'レベル50',      'Level 50',         'レベル50に到達',        'Reach level 50',             u => 1 + Math.floor((u.xp || 0) / 1000)),
+
+  // ---- 伝説 ----
+  a('ach_ult1000',  '🌌', 'legend', 1000, 15000, 120, '奥義の化身',   'Ultimate Incarnate', 'アルティメット1,000回', 'Use 1,000 ultimates',       u => S(u).ultsUsed || 0),
+  a('ach_items100', '🎒', 'legend', 100,  2000,  16,  '道具マスター', 'Item Master',      'アイテムを100回使う',    'Use 100 boosters',          u => S(u).itemsUsed || 0),
+  a('ach_chat100',  '💬', 'legend', 100,  1000,  8,   'ロビーの顔',   'Lobby Regular',    'チャットで100回発言',    'Send 100 chat messages',    u => S(u).chatMessages || 0),
+  a('ach_react50',  '👍', 'legend', 50,   800,   6,   'リアクション名人', 'Reaction Artist', 'リアクションを50回送る', 'Send 50 reactions',       u => S(u).reactionsGiven || 0),
+  a('ach_ach50',    '🏅', 'legend', 50,   5000,  45,  '実績ハンター', 'Achievement Hunter', '実績を50個受け取る',   'Claim 50 achievements',     u => (u.achievements || []).length),
 ];
 
 export function achievementsView(user) {

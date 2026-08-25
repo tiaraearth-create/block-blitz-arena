@@ -2,7 +2,7 @@
 import { session, api, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, staffExtras } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
 import { confettiBurst } from './dom.js';
@@ -551,6 +551,60 @@ $('#btnChimera').onclick = () => {
     </div>`);
   m.querySelector('#chCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#chStart').onclick = () => { audio.click(); closeModal(); startChimera(); };
+};
+
+// ---- puzzle ruins (ステージ制パズル) ----
+$('#btnPuzzle').onclick = () => {
+  audio.click();
+  const cleared = puzzleBestStage();
+  let stars = {};
+  try { stars = JSON.parse(localStorage.getItem('bba_puzzle_stars') || '{}'); } catch { /* fresh */ }
+  const next = cleared + 1;
+  const show = Math.max(next, 10);
+  let grid = '';
+  for (let s2 = 1; s2 <= show; s2++) {
+    const done = s2 <= cleared;
+    const isNext = s2 === next;
+    const st = stars[s2] || 0;
+    grid += `<button class="pz-stage ${isNext ? 'next' : done ? '' : 'locked'}" data-stage="${s2}" ${done || isNext ? '' : 'disabled'}>
+      ${s2}<span class="pz-stars">${done ? '★'.repeat(st) + '☆'.repeat(Math.max(0, 3 - st)) : isNext ? 'NEW' : '🔒'}</span></button>`;
+  }
+  const m = showModal(`
+    <h2>🧩 ${t('パズル遺跡', 'Puzzle Ruins')}</h2>
+    <p class="muted center" style="margin-bottom:10px">
+      ${t('古代遺跡のパズル部屋に挑戦！<b>光るブロックをすべて消せばクリア</b>。<br><small>ピースは決められた分だけ — 全ステージ必ず解けるように封印されている。速く解くほど★が増える（45秒以内で★3）。10ステージごとに💎ボーナス！</small>',
+          'Take on the ancient puzzle rooms! <b>Clear every glowing block to win.</b><br><small>You get a fixed set of pieces — every room is sealed with a guaranteed solution. Solve fast for more stars (under 45s = ★3). Gem bonus every 10 stages!</small>')}
+    </p>
+    <div class="pz-grid">${grid}</div>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="pzCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-puzzle" id="pzStart">🧩 ${t(`ステージ${next}に挑む`, `Enter stage ${next}`)}</button>
+    </div>`);
+  m.querySelector('#pzCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#pzStart').onclick = () => { audio.click(); closeModal(); startPuzzle(next); };
+  m.querySelectorAll('.pz-stage:not(.locked)').forEach(b => {
+    b.onclick = () => { audio.click(); closeModal(); startPuzzle(Number(b.dataset.stage)); };
+  });
+};
+
+// ---- the mines (せり上がる地層) ----
+$('#btnDig').onclick = () => {
+  audio.click();
+  const best = Math.max(Number(localStorage.getItem('bba_dig_best') || 0),
+    session.user ? (session.user.stats.digDepth || 0) : 0);
+  const m = showModal(`
+    <h2>⛏️ ${t('採掘場', 'The Mines')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('数手ごとに<b>地層がせり上がる</b>！岩盤ラインを消して<b>🪙金鉱石・💠クリスタル・🌈虹鉱石</b>を回収しろ。<br><small>深く潜るほど鉱石は高価に、岩は分厚くなる。ブロックが天井に触れたら圧死 — ライン消しで上昇を遅らせろ！</small>',
+          'Every few moves <b>the ground rises</b>! Clear through the rock to mine <b>🪙 gold, 💠 crystal and 🌈 rainbow ore</b>.<br><small>Deeper = richer veins but thicker rock. Touch the ceiling and you get crushed — line clears slow the rise!</small>')}
+    </p>
+    ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`最高深度 ${best}m`, `Best depth ${best}m`)}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="dgCancel2">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-dig" id="dgStart2">⛏️ ${t('採掘開始', 'Start digging')}</button>
+    </div>`);
+  m.querySelector('#dgCancel2').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#dgStart2').onclick = () => { audio.click(); closeModal(); startDig(); };
 };
 
 // ---- time attack ----

@@ -1391,6 +1391,10 @@ export function initBattle(server, deps) {
             return;
           }
           const role = u ? u.role : 'guest';
+          if (u) {
+            u.stats = u.stats || {};
+            u.stats.chatMessages = (u.stats.chatMessages || 0) + 1;   // 実績用の生涯カウンター
+          }
           const entry = { type: 'chat', id: crypto.randomUUID(), from: sockName(ws), role, text, at: Date.now(), tag: tagOf(sockName(ws), u) };
           // 返信: 引用元のスニペットを載せる。相手が住人なら必ず返事が来る。
           const replyTarget = msg.replyTo ? chatHistory.find(e2 => e2.id === String(msg.replyTo)) : null;
@@ -1421,6 +1425,10 @@ export function initBattle(server, deps) {
           const who = sockName(ws);
           const entry = chatHistory.find(e2 => e2.id === String(msg.msgId || ''));
           if (!who || !entry) return;
+          if (ru) {
+            ru.stats = ru.stats || {};
+            ru.stats.reactionsGiven = (ru.stats.reactionsGiven || 0) + 1;
+          }
           applyReaction(entry, reactOwnerKey(ws), who, emoji);
           break;
         }
