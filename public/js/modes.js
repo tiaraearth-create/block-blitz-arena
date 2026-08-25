@@ -2993,7 +2993,7 @@ class DungeonMode {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = `${this.realm.icon} ${this.realm.prefix}${this.floor}/${this.realm.floors} ・ ❤️×${this.lives}${this.engine.scoreMult > 1 ? ` ・ 💪×${this.engine.scoreMult.toFixed(1)}` : ''}${this.curse ? ' ・ ☠️' + (ABYSS_CURSES.find(c => c.id === this.curse) || {}).name : ''}`;
+    $('#hudSub').textContent = `${this.realm.icon} ${this.realm.prefix}${this.floor}/${this.realm.floors} ・ ❤️×${this.lives}${this.engine.scoreMult > 1 ? ` ・ 💪×${this.engine.scoreMult.toFixed(1)}` : ''}${this.curse ? ' ・ ☠️' + (cu => cu ? t(cu.name, cu.nameEn || cu.name) : '')(ABYSS_CURSES.find(c => c.id === this.curse)) : ''}`;
   }
 
   updateHpBar() {
@@ -3623,6 +3623,15 @@ class OnlineMode extends VersusBase {
       .on('room_error', msg => { audio.error(); toast(trServer(msg.error), 'err'); })
       .on('raid_state', msg => this.onRaidState(msg))
       .on('raid_attack', msg => this.onRaidAttack(msg))
+      .on('garbage', msg => this.onGarbage(msg))
+      .on('rematch_offer', msg => toast(t(`🔁 ${msg.from} が再戦を希望しています！`, `🔁 ${msg.from} wants a rematch!`), 'announce', 4000))
+      .on('rematch_gone', () => {
+        if (this.inMatch) return;   // 進行中の試合には古いオファー失効を触らせない
+        this.ended = true;          // 再戦不成立 — 結果画面の待機状態に戻す
+        toast(t('再戦の相手はもういません', 'Your opponent has left — no rematch'), 'err', 2500);
+        const b = document.querySelector('#rRematch');
+        if (b) { b.disabled = true; b.textContent = t('🔁 相手が離脱', '🔁 Opponent left'); }
+      })
       .on('coop_state', msg => this.onCoopState(msg))
       .on('coop_reject', msg => this.onCoopReject(msg))
       .on('coop_partner_left', () => toast(t('相棒が離脱しました。残りはサーバーが代打します！', 'Your partner left — the server will play their turns!'), 'err', 4000))
@@ -3660,6 +3669,8 @@ class OnlineMode extends VersusBase {
         ? t('バトルロイヤル参加者を募集しています…', 'Gathering battle-royale contenders…')
         : this.kind === 'coop'
         ? t('いっしょに遊ぶ相棒を探しています…', 'Looking for a co-op partner…')
+        : this.kind === 'attack'
+        ? t('💥 アタック戦の相手を探しています…', '💥 Looking for an attack-duel opponent…')
         : t('対戦相手を探しています…', 'Looking for an opponent…');
       $('#mmSub').innerHTML = t('オンライン: <span id="mmOnline">-</span>人 ・ 対戦相手を検索中…',
         'Online: <span id="mmOnline">-</span> players ・ searching…');
@@ -3999,6 +4010,7 @@ class OnlineMode extends VersusBase {
     closeModal();                             // clear the bracket between rounds
     this.inMatch = true;
     this.matchInfo = msg;
+    this.matchMode = msg.mode;
     this.you = msg.you;
     this.isTeam = msg.mode === 'team';
     this.isRaid = msg.mode === 'raid';
@@ -4047,6 +4059,9 @@ class OnlineMode extends VersusBase {
     emoteBtn.onclick = () => this.toggleEmotePicker();
 
     countdownOverlay(msg.countdown || 3, () => {
+      // カウントダウン中に不戦勝などで終わった試合を蘇らせない（タイマー/interval漏れ防止）
+      if (this.ended || !this.inMatch) return;
+      clearInterval(this.stateInt);
       v.inputLocked = false;
       this.startTimer(() => this.timeUp());
       this.stateInt = setInterval(() => this.pushState(), 900);
@@ -4127,10 +4142,18 @@ class OnlineMode extends VersusBase {
     this.client.sendState(this.engine.score, this.engine.streak, this.engine.linesCleared, this.engine.snapshot());
   }
 
-  onPlace() {
+  onPlace(result) {
     this.updateMyHud(this.engine);
     this.refreshTeamHud();
     this.pushState();
+    // 💥 アタック戦: 2ライン以上の消去は相手への攻撃になる
+    if (this.matchMode === 'attack' && result && result.lineCount >= 2 && this.inMatch && !this.ended) {
+      this.client.send({ type: 'attack', lines: result.lineCount, combo: result.streak });
+      const v = getView();
+      v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.18,
+        t('💥 攻撃！', '💥 ATTACK!'), '#ff8a5c', 1.5);
+      audio.combo(2);
+    }
   }
 
   onOppState(msg) {
@@ -4168,6 +4191,22 @@ class OnlineMode extends VersusBase {
     }
     view.shake = 12;
     toast(t(`${this.raidBoss.emoji} ${this.raidBoss.name}の攻撃！`, `${this.raidBoss.emoji} ${catName(this.raidBoss)} attacks!`), 'err', 1300);
+    if (this.engine.over) this.onTopOut();
+  }
+
+  // 💥 アタック戦: 相手からのお邪魔ブロックが降ってくる
+  onGarbage(msg) {
+    if (this.matchMode !== 'attack' || this.ended || !this.inMatch || !this.engine || !view) return;
+    const cells = this.engine.addGarbage(Math.max(1, Math.min(9, Number(msg.cells) || 2)));
+    audio.bossAttack();
+    for (const [r, c] of cells) {
+      view.spawnAnim.set(r * 8 + c, view.time);
+      view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
+    }
+    view.shake = 10;
+    view.addFloatText(view.boardX + view.boardSize / 2, view.boardY + view.boardSize * 0.3,
+      t(`💥 妨害 +${cells.length}！`, `💥 +${cells.length} garbage!`), '#ff5d5d', 1.5);
+    this.pushState();
     if (this.engine.over) this.onTopOut();
   }
 
@@ -4266,6 +4305,16 @@ class OnlineMode extends VersusBase {
     getView().inputLocked = true;
     if (msg.user) { session.user = msg.user; updateTopbar(); }
     if (msg.outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
+    // 📈 段位の昇格/降格
+    if (msg.tierChange && msg.tierChange.up) {
+      setTimeout(() => {
+        confettiBurst(80);
+        audio.levelUp();
+        toast(t(`${msg.tierChange.to.icon} ${msg.tierChange.to.name}帯に昇格！！`, `${msg.tierChange.to.icon} Promoted to ${msg.tierChange.to.nameEn}!!`), 'announce', 5000);
+      }, 700);
+    } else if (msg.tierChange) {
+      setTimeout(() => toast(t(`${msg.tierChange.to.icon} ${msg.tierChange.to.name}帯に降格…`, `${msg.tierChange.to.icon} Demoted to ${msg.tierChange.to.nameEn}…`), 'err', 3500), 700);
+    }
 
     const banners = msg.tourney
       ? { win: t('👑 トーナメント優勝！！', '👑 TOURNAMENT CHAMPION!!'), lose: t('敗退…', 'Eliminated…'), draw: 'DRAW' }
@@ -4318,10 +4367,21 @@ class OnlineMode extends VersusBase {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        ${msg.rematchId && (msg.mode === 'duel' || msg.mode === 'attack') ? `<button class="btn btn-gold" id="rRematch">${t('🔁 再戦', '🔁 Rematch')}</button>` : ''}
         <button class="btn btn-primary" id="rAgain">${this.kind === 'custom' ? t('ルームへ', 'To room') : t('もう一戦', 'Play again')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline(this.kind); };
+    const rBtn = m.querySelector('#rRematch');
+    if (rBtn) rBtn.onclick = () => {
+      // 🔁 接続を保ったまま同じ相手に再挑戦（destroyするとWSが切れる）
+      rBtn.disabled = true;
+      rBtn.textContent = t('🔁 相手を待っています…', '🔁 Waiting for opponent…');
+      this.ended = false;
+      this.inMatch = false;
+      this.client.send({ type: 'rematch', rematchId: msg.rematchId });
+      audio.click();
+    };
   }
 
   quit() {

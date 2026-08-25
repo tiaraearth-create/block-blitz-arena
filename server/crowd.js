@@ -99,7 +99,7 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'combo': v = r ? Math.max(3, Math.round(3 + r.skill * 12 + rint(-1, 1))) : 6; break;
     case 'score': v = r ? Math.round((4000 + r.skill * r.skill * 60000) / 100) * 100 + rint(0, 99) * 10 : 12000; break;
     case 'sprint': v = r ? Math.round((1500 + r.skill * r.skill * 14000) / 100) * 100 : 6000; break;
-    case 'event': v = ctx.event ? ctx.event.name : null; break;
+    case 'event': v = ctx.event || null; break;   // オブジェクトごと保持し言語別に描画
     case 'ai': v = r ? Math.min(3, Math.floor(r.skill * 4.2)) : 1; break;
     case 'name': {
       const others = (ctx.active || []).filter(x => !r || x.id !== r.id);
@@ -107,13 +107,13 @@ function resolveSlot(key, r, ctx, extra, cache) {
       break;
     }
     case 'you': v = null; break;
-    case 'opt': v = ctx.poll && ctx.poll.options && ctx.poll.options.length ? pick(ctx.poll.options).text : ''; break;
+    case 'opt': v = ctx.poll && ctx.poll.options && ctx.poll.options.length ? pick(ctx.poll.options) : ''; break;   // オブジェクトごと保持し言語別に描画
     case 'winner': v = ''; break;
     case 'item': v = cosmeticName(); break;
     case 'boss': v = pick(BOSSES).name; break;
     case 'title': v = pick(TITLES).name; break;
     case 'ach': v = pick(ACHIEVEMENTS); break;
-    case 'question': v = ctx.poll ? ctx.poll.question : ''; break;
+    case 'question': v = ctx.poll || ''; break;   // pollオブジェクトごと保持し言語別に描画
     // v2.6 新モードの進行度 — 塔の進みからそれっぽい数字を出す
     case 'depth': v = Math.max(3, Math.round(((st ? st.dungeonMax : 20) || 8) * 0.75) + rint(-4, 3)); break;
     case 'stage': v = Math.max(1, Math.round(((st ? st.dungeonMax : 15) || 8) * 0.55) + rint(-3, 2)); break;
@@ -132,8 +132,12 @@ function renderSlot(key, v, lang) {
     // extra からは整形済み文字列（'12,000'）が来ることがある — Number() に
     // 通すと NaN になるので、数値のときだけフォーマットする。
     case 'score': case 'sprint': return typeof v === 'number' ? v.toLocaleString('en-US') : String(v);
-    case 'event': return v === null ? (L ? 'the event' : 'イベント') : String(v);
+    case 'event': return v === null ? (L ? 'the event' : 'イベント')
+      : typeof v === 'object' ? (L ? (v.nameEn || v.name) : v.name) : String(v);
     case 'name': return v === null ? (L ? 'someone' : '誰か') : String(v);
+    // 投票の選択肢/勝者/質問文: オブジェクトなら textEn/questionEn を英語面に使う
+    case 'opt': case 'winner': return v && typeof v === 'object' ? String((L && v.textEn) || v.text || '') : String(v == null ? '' : v);
+    case 'question': return v && typeof v === 'object' ? String((L && v.questionEn) || v.question || '') : String(v == null ? '' : v);
     case 'you': return v === null ? (L ? 'you' : 'きみ') : String(v);
     case 'ach': return v && typeof v === 'object' ? (L ? v.nameEn : v.name) : String(v);
     default: return v === null || v === undefined ? '' : String(v);
@@ -419,33 +423,64 @@ const CHAMPION_LINES = [
   { ja: '次に狙われてるのはたぶん自分', en: 'pretty sure I am the next target' },
 ];
 
+// バイリンガル合成: 選んだ素材の ja/en 両面を「同じスロット値」で描画し、
+// 相手言語の面をネイティブ翻訳（tr）として同梱する。辞書の後付け翻訳より
+// はるかに自然 — 素材にはもともと人間が書いた英語がある。
+// 返り値: { text, tr: {lang, text, engine:'native'} | null }
+function renderBoth(r, ctx, src, extra = {}, opener = null, tail = null) {
+  const primaryEn = r.lang === 'en';
+  const cache = {};   // 数字やスロット値は両言語で一致させる
+  const assemble = lang => {
+    const core = lang === 'en' ? src.en : src.ja;
+    if (!core) return null;
+    let s = fill(core, { ...r, lang }, ctx, extra, cache);
+    if (opener) s = lang === 'en' ? `${opener.en}, ${s}` : `${opener.ja}、${s}`;
+    else if (tail) s = lang === 'en' ? `${s} — ${tail.en}` : `${s}。${tail.ja}`;
+    return s;
+  };
+  const ja = assemble('ja');
+  const en = assemble('en');
+  const text = primaryEn ? (en || ja) : (ja || en);
+  if (!text) return null;
+  const other = primaryEn ? ja : en;
+  return {
+    text: stylize(text, r),
+    tr: other ? { lang: primaryEn ? 'ja' : 'en', text: other, engine: 'native' } : null,
+  };
+}
+
+// 返信/リアクション用の対訳: これらのプールは ja/en が「対」ではなく等価な
+// 言い回しの集合なので、反対言語のプールから1本選んで同じスロット値で描画し、
+// ネイティブ tr として添える。辞書置換のエセ翻訳よりずっと自然に読める。
+function pairTr(r, ctx, extra, cache, otherLines, otherLang, poolKey) {
+  if (!otherLines || !otherLines.length) return null;
+  const tpl = gen.smartPick(`${poolKey}.${otherLang}.tr`, otherLines, { now: ctx.now });
+  if (!tpl) return null;
+  return { lang: otherLang, text: fill(tpl, { ...r, lang: otherLang }, ctx, extra, cache), engine: 'native' };
+}
+
 // 1本の発言を合成する。トピック本文 / フォロー / 生活雑談 / 旧LINESの
 // どれかを核にして、たまに前置きや締めの断片を継ぎ足す。
 function buildLine3(r, ctx) {
-  const en = r.lang === 'en';
-  let core = null;
+  let src = null;
   // 王座持ちは16%で王者ムーブ（話題より優先 — キャラが立つ）。
   if ((ctx.thrones || []).includes(r.name) && rnd() < 0.16) {
-    const e = gen.smartPick('champion', CHAMPION_LINES, { now: ctx.now, rid: r.id });
-    if (e) core = en ? e.en : e.ja;
+    src = gen.smartPick('champion', CHAMPION_LINES, { now: ctx.now, rid: r.id });
   }
-  const t = core ? null : gen.tickTopic(ctx);
+  const t = src ? null : gen.tickTopic(ctx);
   if (t && TOPICS[t.id]) {
     if (t.role === 'follow' && rnd() < 0.9) {
       const kind = pickFollowKind(r);
-      const e = gen.smartPick(`follow.${kind}`, (FOLLOWS[kind] || []).filter(archOkFor(r)), { now: ctx.now, rid: r.id });
-      if (e) core = en ? e.en : e.ja;
+      src = gen.smartPick(`follow.${kind}`, (FOLLOWS[kind] || []).filter(archOkFor(r)), { now: ctx.now, rid: r.id });
     }
-    if (!core) {
-      const e = gen.smartPick(`topic.${t.id}`, TOPICS[t.id].filter(archOkFor(r)), { now: ctx.now, rid: r.id });
-      if (e) core = en ? e.en : e.ja;
+    if (!src) {
+      src = gen.smartPick(`topic.${t.id}`, TOPICS[t.id].filter(archOkFor(r)), { now: ctx.now, rid: r.id });
     }
   }
-  if (!core && rnd() < 0.3) {
-    const e = gen.smartPick('life', lifePool(r, ctx), { now: ctx.now, rid: r.id });
-    if (e) core = en ? e.en : e.ja;
+  if (!src && rnd() < 0.3) {
+    src = gen.smartPick('life', lifePool(r, ctx), { now: ctx.now, rid: r.id });
   }
-  if (!core) {
+  if (!src) {
     // 旧LINES資産もローテーションの一部として生きる（再出防止つき）。
     const pool = eligibleLines(r, ctx);
     if (!pool.length) return null;
@@ -456,43 +491,44 @@ function buildLine3(r, ctx) {
       if (l.ctx && l.ctx === ctx.period) w *= 1.3;
       return w;
     });
-    const line = gen.smartPick('lines', pool, { now: ctx.now, rid: r.id, weightFn: (_, i) => weights[i] });
-    if (!line) return null;
-    core = en ? line.en : line.ja;
+    src = gen.smartPick('lines', pool, { now: ctx.now, rid: r.id, weightFn: (_, i) => weights[i] });
   }
-  if (!core) return null;
-  let s = fill(core, r, ctx);
-  // 断片の継ぎ足し: 短文なら前置き、それ以外はたまに締め。
-  if (s.length < 30 && rnd() < 0.28) {
-    const o = gen.smartPick('openers', OPENERS.filter(archOkFor(r)), { now: ctx.now, rid: r.id });
-    if (o) s = en ? `${o.en}, ${s}` : `${o.ja}、${s}`;
+  if (!src) return null;
+  // 断片の継ぎ足し: 短文なら前置き、それ以外はたまに締め（両言語で同じ断片）。
+  const probe = (r.lang === 'en' ? (src.en || src.ja) : src.ja) || '';
+  let opener = null, tail = null;
+  if (probe.length < 30 && rnd() < 0.28) {
+    opener = gen.smartPick('openers', OPENERS.filter(archOkFor(r)), { now: ctx.now, rid: r.id });
   } else if (rnd() < 0.2) {
-    const tl = gen.smartPick('tails', TAILS.filter(archOkFor(r)), { now: ctx.now, rid: r.id });
-    if (tl) s = en ? `${s} — ${tl.en}` : `${s}。${tl.ja}`;
+    tail = gen.smartPick('tails', TAILS.filter(archOkFor(r)), { now: ctx.now, rid: r.id });
   }
-  return stylize(s, r);
+  // opener/tail が片言語しか使えない素材（旧LINESのja-only等）は renderBoth が
+  // その言語の面だけ返す — tr なしで自然に劣化する。
+  return renderBoth(r, ctx, src, {}, opener, tail);
 }
 
 // A fresh line for this resident. customLines (admin) are mixed in.
+// Returns { text, tr } — tr はネイティブ対訳（無い素材は null → postChat が辞書翻訳）。
 export function composeLine(r, ctx, customLines = []) {
-  if (customLines.length && rnd() < 0.3) return stylize(fill(pick(customLines), r, ctx), r);
+  if (customLines.length && rnd() < 0.3) {
+    return { text: stylize(fill(pick(customLines), r, ctx), r), tr: null };
+  }
   // 完成文レベルの重複も拒否 — 直近6時間に流れた文とは一致させない。
   for (let attempt = 0; attempt < 4; attempt++) {
-    const s = buildLine3(r, ctx);
-    if (s && gen.surfaceFresh(s, ctx.now)) {
-      gen.noteSurface(s, ctx.now);
+    const out = buildLine3(r, ctx);
+    if (out && gen.surfaceFresh(out.text, ctx.now)) {
+      gen.noteSurface(out.text, ctx.now);
       gen.noteSpoken(r.id, ctx.now);
-      return s;
+      return out;
     }
   }
   const pool = eligibleLines(r, ctx);
-  if (!pool.length) return stylize(r.lang === 'en' ? 'gg' : 'こんにちは〜', r);
+  if (!pool.length) return { text: stylize(r.lang === 'en' ? 'gg' : 'こんにちは〜', r), tr: null };
   const line = weightedLine(pool, r, ctx);
-  const tpl = r.lang === 'en' ? line.en : line.ja;
-  const s = stylize(fill(tpl, r, ctx), r);
-  gen.noteSurface(s, ctx.now);
+  const out = renderBoth(r, ctx, line) || { text: stylize(r.lang === 'en' ? 'gg' : 'こんにちは〜', r), tr: null };
+  gen.noteSurface(out.text, ctx.now);
   gen.noteSpoken(r.id, ctx.now);
-  return s;
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -501,30 +537,32 @@ export function composeLine(r, ctx, customLines = []) {
 // roles: 'a' / 'b'. archA / archB constrain who can play each role.
 
 const DIALOGUES = [
-  { lang: 'ja', lines: [['a', '誰か{mode}いかない？'], ['b', 'いくいく'], ['a', '部屋建てたよ'], ['b', 'おけ！']], archA: ['casual', 'tryhard', 'kid', 'senpai'] },
-  { lang: 'ja', lines: [['a', 'ダンジョン{floor}Fで死んだ…'], ['b', 'そこ鬼門よな'], ['a', 'シールド取っとけばよかった'], ['b', '次はいける']], archA: ['explorer', 'casual', 'newbie'], archB: ['explorer', 'senpai', 'nightowl'] },
-  { lang: 'ja', lines: [['a', '今週のウィークリーむずくない？'], ['b', 'ピース運わるすぎ'], ['a', 'あと2000点で自己べなのに'], ['b', 'がんば']], ctx: 'mondayish' },
-  { lang: 'ja', lines: [['a', '初心者なんですけど何から始めればいいですか？'], ['b', 'まずソロで角を埋める練習がおすすめ！'], ['a', 'ありがとうございます！'], ['b', 'わからんことあったら聞いてね']], archA: ['newbie', 'kid'], archB: ['senpai', 'tryhard', 'explorer'] },
-  { lang: 'ja', lines: [['a', 'ガチャ10連した'], ['b', '結果は？'], ['a', 'コインだけ…'], ['b', '爆死仲間がここにも']], archA: ['gacha', 'casual', 'kid'], archB: ['gacha', 'casual'] },
-  { lang: 'ja', lines: [['a', 'ガチャで{item}出た！'], ['b', 'まじか！いいなあ'], ['a', '装備して自慢する']], archA: ['gacha', 'casual', 'kid'] },
-  { lang: 'ja', lines: [['a', 'レート{rating}なった'], ['b', 'つよ'], ['a', '{tier}帯キープしたい'], ['b', '対戦しよ']], archA: ['tryhard', 'nightowl'], archB: ['tryhard', 'senpai', 'nightowl'] },
-  { lang: 'ja', lines: [['a', '奥義どれ使ってる？'], ['b', '神の裁き一択'], ['a', 'ジェムたりない…'], ['b', '浄化の波動もコスパいいよ']], archA: ['casual', 'newbie'], archB: ['tryhard', 'senpai', 'explorer'] },
-  { lang: 'ja', lines: [['a', 'レイド行く？'], ['b', '行く！'], ['a', 'ハデス出たら泣く'], ['b', 'クラーケン来い']], archA: ['explorer', 'senpai'], archB: ['explorer', 'casual', 'tryhard'] },
-  { lang: 'ja', lines: [['a', '協力プレイ誰か組も'], ['b', '組む！'], ['a', 'お互いの置き方で全消し狙お'], ['b', 'いいね']], archA: ['casual', 'senpai', 'kid'] },
-  { lang: 'ja', lines: [['a', 'タイムアタック60秒で{sprint}点いった'], ['b', 'はや'], ['a', '3分のほうが伸びる気がする'], ['b', '集中力もたんw']], archA: ['tryhard', 'morning', 'global'], archB: ['casual', 'tryhard', 'lurker'] },
-  { lang: 'ja', lines: [['a', 'サバイバルWAVE{wave}で埋まった'], ['b', 'そこから加速えぐいよね'], ['a', '不落の城塞装備していけばよかった']], archA: ['explorer', 'casual', 'nightowl'] },
-  { lang: 'ja', lines: [['a', 'コンボ{combo}いった！'], ['b', 'えぐ'], ['b', '動画見たい'], ['a', '配信で見せるわ']], archA: ['streamer'], archB: ['casual', 'kid', 'tryhard'] },
-  { lang: 'ja', lines: [['a', 'もう寝る…'], ['b', 'おやすみ〜'], ['a', 'おやすみ']], ctx: 'night' },
-  { lang: 'ja', lines: [['a', 'おはよ'], ['b', 'おはようございます'], ['a', '朝ウィークリー行ってくる']], ctx: 'morning' },
-  { lang: 'ja', lines: [['a', '{event}きてる！'], ['b', 'やるしかない'], ['a', '今日は寝れん']], ctx: 'event' },
-  { lang: 'ja', lines: [['a', '投票どれにした？'], ['b', '{opt}'], ['a', 'おれもそれ']], ctx: 'poll' },
-  { lang: 'ja', lines: [['a', 'ママに怒られるからおちる！'], ['b', 'またね〜'], ['a', 'ばいばい！']], archA: ['kid'], ctx: 'evening' },
-  { lang: 'ja', lines: [['a', 'さっき{name}さんに負けた'], ['b', 'あの人強いよね'], ['a', 'リベンジしたい']], archA: ['tryhard', 'casual', 'nightowl'] },
-  { lang: 'ja', lines: [['a', 'ミッション全部終わった'], ['b', 'はや'], ['a', 'コンプボーナスまで取った'], ['b', 'うらやま']] },
-  { lang: 'en', lines: [['a', 'anyone up for ranked?'], ['b', 'queueing now'], ['a', 'see you there']], archA: ['global'], archB: ['global'] },
-  { lang: 'en', lines: [['a', 'the raid boss is brutal'], ['b', 'bring the fortress ultimate'], ['a', 'oh that actually works?'], ['b', 'trust me']], archA: ['global'], archB: ['global'] },
-  { lang: 'en', lines: [['a', 'good night all'], ['b', 'night!']], archA: ['global'], archB: ['global'] },
-  { lang: 'en', lines: [['a', 'just hit {tier} rank!'], ['b', 'gz!'], ['a', 'took me forever']], archA: ['global'], archB: ['global'] },
+  // 3要素目は対訳面（ja台本ならen、en台本ならja）。renderBoth系と同じく
+  // 同一スロット値で描画され、ネイティブ tr として同梱される。
+  { lang: 'ja', lines: [['a', '誰か{mode}いかない？', 'anyone up for {mode}?'], ['b', 'いくいく', "i'm in!"], ['a', '部屋建てたよ', 'room is up'], ['b', 'おけ！', 'ok!']], archA: ['casual', 'tryhard', 'kid', 'senpai'] },
+  { lang: 'ja', lines: [['a', 'ダンジョン{floor}Fで死んだ…', 'died on dungeon F{floor}…'], ['b', 'そこ鬼門よな', 'that floor is cursed'], ['a', 'シールド取っとけばよかった', 'should have taken the shield perk'], ['b', '次はいける', 'next run for sure']], archA: ['explorer', 'casual', 'newbie'], archB: ['explorer', 'senpai', 'nightowl'] },
+  { lang: 'ja', lines: [['a', '今週のウィークリーむずくない？', "this week's weekly is rough, right?"], ['b', 'ピース運わるすぎ', 'the piece luck is awful'], ['a', 'あと2000点で自己べなのに', '2000 points off my best too'], ['b', 'がんば', 'good luck!']], ctx: 'mondayish' },
+  { lang: 'ja', lines: [['a', '初心者なんですけど何から始めればいいですか？', "i'm new here — where should I start?"], ['b', 'まずソロで角を埋める練習がおすすめ！', 'practice filling corners in solo first!'], ['a', 'ありがとうございます！', 'thank you!'], ['b', 'わからんことあったら聞いてね', 'ask any time!']], archA: ['newbie', 'kid'], archB: ['senpai', 'tryhard', 'explorer'] },
+  { lang: 'ja', lines: [['a', 'ガチャ10連した', 'did a 10-pull'], ['b', '結果は？', 'and??'], ['a', 'コインだけ…', 'coins. only coins…'], ['b', '爆死仲間がここにも', 'another victim of the gacha']], archA: ['gacha', 'casual', 'kid'], archB: ['gacha', 'casual'] },
+  { lang: 'ja', lines: [['a', 'ガチャで{item}出た！', 'pulled {item} from the gacha!'], ['b', 'まじか！いいなあ', 'no way! lucky'], ['a', '装備して自慢する', 'equipping it to show off']], archA: ['gacha', 'casual', 'kid'] },
+  { lang: 'ja', lines: [['a', 'レート{rating}なった', 'just hit {rating} rating'], ['b', 'つよ', 'strong'], ['a', '{tier}帯キープしたい', 'trying to hold {tier} now'], ['b', '対戦しよ', 'fight me sometime!']], archA: ['tryhard', 'nightowl'], archB: ['tryhard', 'senpai', 'nightowl'] },
+  { lang: 'ja', lines: [['a', '奥義どれ使ってる？', 'which ultimate do you run?'], ['b', '神の裁き一択', 'divine judgment, no contest'], ['a', 'ジェムたりない…', 'not enough gems…'], ['b', '浄化の波動もコスパいいよ', 'the purge wave is great value too']], archA: ['casual', 'newbie'], archB: ['tryhard', 'senpai', 'explorer'] },
+  { lang: 'ja', lines: [['a', 'レイド行く？', 'raid?'], ['b', '行く！', "i'm in!"], ['a', 'ハデス出たら泣く', 'if we get Hades I will cry'], ['b', 'クラーケン来い', 'give us the Kraken']], archA: ['explorer', 'senpai'], archB: ['explorer', 'casual', 'tryhard'] },
+  { lang: 'ja', lines: [['a', '協力プレイ誰か組も', 'anyone for co-op?'], ['b', '組む！', 'me!'], ['a', 'お互いの置き方で全消し狙お', "let's set up a full clear together"], ['b', 'いいね', 'nice']], archA: ['casual', 'senpai', 'kid'] },
+  { lang: 'ja', lines: [['a', 'タイムアタック60秒で{sprint}点いった', 'got {sprint} in the 60s time attack'], ['b', 'はや', 'so fast'], ['a', '3分のほうが伸びる気がする', 'the 3 min one scores higher I think'], ['b', '集中力もたんw', 'my focus dies lol']], archA: ['tryhard', 'morning', 'global'], archB: ['casual', 'tryhard', 'lurker'] },
+  { lang: 'ja', lines: [['a', 'サバイバルWAVE{wave}で埋まった', 'got buried on survival wave {wave}'], ['b', 'そこから加速えぐいよね', 'the speed-up after that is brutal'], ['a', '不落の城塞装備していけばよかった', 'should have equipped the fortress']], archA: ['explorer', 'casual', 'nightowl'] },
+  { lang: 'ja', lines: [['a', 'コンボ{combo}いった！', 'hit a {combo} combo!'], ['b', 'えぐ', 'insane'], ['b', '動画見たい', 'clip it please'], ['a', '配信で見せるわ', 'catch it on stream']], archA: ['streamer'], archB: ['casual', 'kid', 'tryhard'] },
+  { lang: 'ja', lines: [['a', 'もう寝る…', 'off to bed…'], ['b', 'おやすみ〜', 'good night~'], ['a', 'おやすみ', 'night']], ctx: 'night' },
+  { lang: 'ja', lines: [['a', 'おはよ', 'morning'], ['b', 'おはようございます', 'good morning!'], ['a', '朝ウィークリー行ってくる', 'morning weekly run, here I go']], ctx: 'morning' },
+  { lang: 'ja', lines: [['a', '{event}きてる！', '{event} is live!'], ['b', 'やるしかない', 'no choice but to grind'], ['a', '今日は寝れん', 'not sleeping tonight']], ctx: 'event' },
+  { lang: 'ja', lines: [['a', '投票どれにした？', 'what did you vote for?'], ['b', '{opt}', '{opt}'], ['a', 'おれもそれ', 'same here']], ctx: 'poll' },
+  { lang: 'ja', lines: [['a', 'ママに怒られるからおちる！', 'mom is calling, gotta go!'], ['b', 'またね〜', 'see ya~'], ['a', 'ばいばい！', 'bye bye!']], archA: ['kid'], ctx: 'evening' },
+  { lang: 'ja', lines: [['a', 'さっき{name}さんに負けた', 'just lost to {name}'], ['b', 'あの人強いよね', 'they are really good'], ['a', 'リベンジしたい', 'I want a rematch']], archA: ['tryhard', 'casual', 'nightowl'] },
+  { lang: 'ja', lines: [['a', 'ミッション全部終わった', 'finished all my missions'], ['b', 'はや', 'so fast'], ['a', 'コンプボーナスまで取った', 'got the completion bonus too'], ['b', 'うらやま', 'jealous']] },
+  { lang: 'en', lines: [['a', 'anyone up for ranked?', 'ランクマ誰か行かない？'], ['b', 'queueing now', '今から潜る'], ['a', 'see you there', 'じゃあマッチで会お']], archA: ['global'], archB: ['global'] },
+  { lang: 'en', lines: [['a', 'the raid boss is brutal', 'レイドボスえぐくない？'], ['b', 'bring the fortress ultimate', '城塞の奥義持っていくといいよ'], ['a', 'oh that actually works?', 'それ効くの？'], ['b', 'trust me', '信じて']], archA: ['global'], archB: ['global'] },
+  { lang: 'en', lines: [['a', 'good night all', 'みんなおやすみ！'], ['b', 'night!', 'おやすみ〜']], archA: ['global'], archB: ['global'] },
+  { lang: 'en', lines: [['a', 'just hit {tier} rank!', '{tier}帯に上がった！'], ['b', 'gz!', 'おめ！'], ['a', 'took me forever', 'めっちゃ時間かかった']], archA: ['global'], archB: ['global'] },
 ];
 
 function fits(r, roles) { return !roles || roles.includes(r.arch); }
@@ -549,22 +587,22 @@ function genTopicDialogue(ctx) {
   if (!fB) return null;
   // {name} in a follow-up must address the person being answered — never a
   // random third resident from the lobby.
-  const script = [[a, coreE.ja, { name: b.name }], [b, fB.ja, { name: a.name }]];
+  const script = [[a, coreE, { name: b.name }], [b, fB, { name: a.name }]];
   if (rnd() < 0.55) {
     const kindA = rnd() < 0.5 ? 'relate' : 'tip';
     const fA = gen.smartPick(`follow.${kindA}`, (FOLLOWS[kindA] || []).filter(archOkFor(a)), { now: ctx.now, rid: a.id });
-    if (fA) script.push([a, fA.ja, { name: b.name }]);
+    if (fA) script.push([a, fA, { name: b.name }]);
   }
   gen.adoptTopic(id, ctx);
   let delay = 0;
   const out = [];
-  for (const [r, tpl, extra] of script) {
+  for (const [r, srcE, extra] of script) {
     delay += 3000 + rnd() * 9000;
-    const s = stylize(fill(tpl, r, ctx, extra), r);
-    if (!gen.surfaceFresh(s, ctx.now)) return null;   // rare — just skip this tick
-    gen.noteSurface(s, ctx.now);
+    const rendered = renderBoth(r, ctx, srcE, extra);
+    if (!rendered || !gen.surfaceFresh(rendered.text, ctx.now)) return null;   // rare — just skip this tick
+    gen.noteSurface(rendered.text, ctx.now);
     gen.noteSpoken(r.id, ctx.now);
-    out.push({ resident: r, text: s, delay });
+    out.push({ resident: r, text: rendered.text, tr: rendered.tr, delay });
   }
   return out;
 }
@@ -592,13 +630,18 @@ export function composeDialogue(ctx) {
     const b = pick(bs);
     let delay = 0;
     const ctxB = { ...ctx, active: active.filter(r => r.id !== b.id) };
-    return d.lines.map(([role, tpl]) => {
+    const otherLang = d.lang === 'ja' ? 'en' : 'ja';
+    return d.lines.map(([role, tpl, tplOther]) => {
       const r = role === 'a' ? a : b;
+      const useCtx = role === 'a' ? ctx : ctxB;
       delay += 3000 + rnd() * 9000;
-      const s = stylize(fill(tpl, r, role === 'a' ? ctx : ctxB), r);
+      const cache = {};
+      const s = stylize(fill(tpl, r, useCtx, {}, cache), r);
+      // 台本に対訳面（3要素目）があればネイティブtrとして同梱
+      const tr = tplOther ? { lang: otherLang, text: fill(tplOther, { ...r, lang: otherLang }, useCtx, {}, cache), engine: 'native' } : null;
       gen.noteSurface(s, ctx.now);
       gen.noteSpoken(r.id, ctx.now);
-      return { resident: r, text: s, delay };
+      return { resident: r, text: s, tr, delay };
     });
   }
   return null;
@@ -787,9 +830,11 @@ export function composeReaction(kind, ctx, extra = {}, count = 1) {
     const lines = useEn ? pool.en : pool.ja;
     const tpl = gen.smartPick(`react.${poolKey}.${useEn ? 'en' : 'ja'}`, lines, { now: ctx.now, rid: r.id });
     if (!tpl) break;
-    const s = stylize(fill(tpl, r, ctx, extra), r);
+    const cache = {};
+    const s = stylize(fill(tpl, r, ctx, extra, cache), r);
+    const tr = pairTr(r, ctx, extra, cache, useEn ? pool.ja : pool.en, useEn ? 'ja' : 'en', `react.${poolKey}`);
     gen.noteSpoken(r.id, ctx.now);
-    out.push({ resident: r, text: s, delay });
+    out.push({ resident: r, text: s, tr, delay });
     delay += 5000 + rnd() * 20000;
   }
   return out;
@@ -913,23 +958,33 @@ export function chooseReplies(text, ctx, forcedName = null) {
     const useEn = r.lang === 'en' && spec.en;
     const lines = useEn ? spec.en : spec.ja;
     gen.noteSpoken(r.id, ctx.now);
-    out.push({ resident: r, text: stylize(fill(replyPick(r, lines, `${category}.${useEn ? 'en' : 'ja'}`), r, ctx), r), delay: 2500 + rnd() * 5000 });
+    const mCache = {};
+    const mText = stylize(fill(replyPick(r, lines, `${category}.${useEn ? 'en' : 'ja'}`), r, ctx, {}, mCache), r);
+    const mTr = pairTr(r, ctx, {}, mCache, useEn ? spec.ja : spec.en, useEn ? 'ja' : 'en', `reply.${category}`);
+    out.push({ resident: r, text: mText, tr: mTr, delay: 2500 + rnd() * 5000 });
   }
   const r1 = pickResident(used);
   if (r1) {
     used.add(r1.id);
     const first = replyPick(r1, pool, `${category}.${lang}`);
     gen.noteSpoken(r1.id, ctx.now);
-    out.push({ resident: r1, text: stylize(fill(first, r1, ctx), r1), delay: (out.length ? out[0].delay : 0) + 3500 + rnd() * 8500 });
+    const cache1 = {};
+    const text1 = stylize(fill(first, r1, ctx, {}, cache1), r1);
+    const tr1 = pairTr(r1, ctx, {}, cache1, lang === 'en' ? spec.ja : spec.en, lang === 'en' ? 'ja' : 'en', `reply.${category}`);
+    out.push({ resident: r1, text: text1, tr: tr1, delay: (out.length ? out[0].delay : 0) + 3500 + rnd() * 8500 });
     // Sometimes a second voice chimes in.
     if (rnd() < 0.28) {
       const r2 = pickResident(used);
       if (r2) {
-        const pool2 = rnd() < 0.5 ? pool : ((lang === 'en' && REPLIES.generic.en) || REPLIES.generic.ja);
+        const spec2 = rnd() < 0.5 ? spec : REPLIES.generic;
+        const pool2 = (lang === 'en' && spec2.en) ? spec2.en : spec2.ja;
         let second = replyPick(r2, pool2, `${category}2.${lang}`);
-        if (second === first) second = REPLIES.generic.ja[0];
+        if (second === first) second = (lang === 'en' ? REPLIES.generic.en : REPLIES.generic.ja)[0];
         gen.noteSpoken(r2.id, ctx.now);
-        out.push({ resident: r2, text: stylize(fill(second, r2, ctx), r2), delay: out[out.length - 1].delay + 4000 + rnd() * 7000 });
+        const cache2 = {};
+        const text2 = stylize(fill(second, r2, ctx, {}, cache2), r2);
+        const tr2 = pairTr(r2, ctx, {}, cache2, lang === 'en' ? spec2.ja : spec2.en, lang === 'en' ? 'ja' : 'en', `reply.${category}2`);
+        out.push({ resident: r2, text: text2, tr: tr2, delay: out[out.length - 1].delay + 4000 + rnd() * 7000 });
       }
     }
   }
@@ -1046,26 +1101,26 @@ const EXTRA_LINES = [
 LINES.push(...EXTRA_LINES);
 
 const EXTRA_DIALOGUES = [
-  { lang: "ja", lines: [["a", "無限地獄で不死鳥の羽引けた"], ["b", "1回復活のやつか 強い"], ["a", "おかげで深度更新できた"], ["b", "遺物運も実力よ"]], archA: ["explorer","tryhard","nightowl"], archB: ["senpai","explorer"] },
-  { lang: "ja", lines: [["a", "無限地獄の2周目、HP倍増きつすぎない？"], ["b", "火薬と雷そろえてからが本番"], ["a", "なるほど 遺物ゲーか"], ["b", "慈悲も地味に助かる"]], archA: ["casual","explorer"], archB: ["tryhard","explorer","nightowl"] },
-  { lang: "ja", lines: [["a", "予告の赤マス消してCOUNTER!出すの気持ちよすぎる"], ["b", "あの音いいよね"], ["a", "全カットで討伐ランクS狙ってる"], ["b", "第二形態の発狂からが本番"]], archA: ["casual","kid","explorer"], archB: ["tryhard","explorer","senpai"] },
-  { lang: "ja", lines: [["a", "エクスマキナの縦レーザーどう対処するの"], ["b", "避けるんじゃなくて予告の列を先に消す"], ["a", "それが間に合わないんよ…"], ["b", "細長いピース温存しとくと楽"]], archA: ["newbie","casual"], archB: ["tryhard","senpai","explorer"] },
-  { lang: "ja", lines: [["a", "フリオーネの二重呪縛えげつない"], ["b", "手札凍ってる間に盤面詰むのよね"], ["a", "まおうより意地悪じゃん"], ["b", "凍る前に盤面軽くしとくしかない"]], archA: ["casual","nightowl","explorer"], archB: ["tryhard","explorer"] },
-  { lang: "ja", lines: [["a", "週間チャレンジ1位いけそう"], ["b", "週間王者狙い？"], ["a", "🏅バッジ欲しい 月曜まで逃げ切る"], ["b", "追い上げるからよろしくw"]], archA: ["tryhard","nightowl"], archB: ["casual","tryhard"] },
-  { lang: "ja", lines: [["a", "ジュークボックスでPIXEL RUSH 182ループ固定にした"], ["b", "あれテンション上がるよね"], ["a", "作業がはかどりすぎる"], ["b", "おれはやすらぎのロビー派"]], archA: ["casual","streamer","nightowl"], archB: ["casual","morning"] },
-  { lang: "ja", lines: [["a", "ねえねえ神AI勝てた？！"], ["b", "まだ"], ["a", "ぼく創造神やったら3手でまけた！！"], ["b", "創造神はそういうもん"], ["a", "ガチ勢でもむずいんだ！！"]], archA: ["kid"], archB: ["tryhard"] },
-  { lang: "ja", lines: [["a", "UR狙いで30連した"], ["b", "結果は聞かないほうがいい？"], ["a", "SR被り3枚"], ["b", "昨日のおれと同じで草"]], archA: ["gacha"], archB: ["gacha"] },
-  { lang: "ja", lines: [["a", "深淵クリアした"], ["b", "えっ喋った"], ["b", "しかも報告がえぐい"], ["a", "以上"]], archA: ["lurker"], archB: ["casual","streamer","kid"] },
-  { lang: "ja", lines: [["a", "今夜バトロワ100人配信する 生き残るとこ見せるよ"], ["b", "見る！何時から？！"], ["a", "21時 初手から端で立ち回る予定"], ["b", "宿題おわらせて待機します！"]], archA: ["streamer"], archB: ["kid","casual"] },
-  { lang: "ja", lines: [["a", "2v2組も 気楽にやろ"], ["b", "勝ちにいくなら"], ["a", "負けても笑えればよくない？w"], ["b", "よくない"], ["a", "そういうとこ好きだよw"]], archA: ["casual"], archB: ["tryhard"] },
-  { lang: "ja", lines: [["a", "おはよ〜 朝活タイムアタック行くよ〜"], ["b", "こっちは今から寝るとこ"], ["a", "徹夜？！"], ["b", "ラッシュで深度盛ってたら朝だった"]], archA: ["morning"], archB: ["nightowl"], ctx: "morning" },
-  { lang: "ja", lines: [["a", "レイドって初心者が行っても迷惑じゃないですか…？"], ["b", "全然大丈夫よ〜 ライン消せるだけで戦力なの"], ["a", "じゃあティアマト行ってみます"], ["b", "初レイドがティアマトは根性あるわね〜"]], archA: ["newbie"], archB: ["senpai"] },
-  { lang: "ja", lines: [["a", "この時間の無限地獄がいちばん集中できる"], ["b", "通知も来ないしね"], ["a", "今日は深度{n}まで潜る"], ["b", "朝日を見ることになるぞ"]], archA: ["nightowl"], archB: ["nightowl","tryhard"], ctx: "late" },
-  { lang: "ja", lines: [["a", "おはよ ログインストリーク{n}日目"], ["b", "続いてるね〜"], ["a", "歯磨きより先にログインしてる"], ["b", "それはそれでどうなのw"]], archA: ["morning","casual"], archB: ["casual","senpai"], ctx: "morning" },
-  { lang: "ja", lines: [["a", "土曜は朝からトーナメント三昧"], ["b", "8人戦の連戦きつくない？"], ["a", "週末しかがっつりできんから"], ["b", "わかる 平日は2戦で寝てる"]], archA: ["casual","tryhard"], archB: ["casual","nightowl"], ctx: "weekend" },
-  { lang: "ja", lines: [["a", "{event}の報酬どこまで取った？"], ["b", "まだ半分"], ["a", "期間中に走り切らんと"], ["b", "仕事が邪魔すぎる"]], ctx: "event" },
-  { lang: "ja", lines: [["a", "明日休みだから朝までランクマ回す"], ["b", "レート溶かすやつじゃんそれw"], ["a", "今日は勝てる気がするんよ"], ["b", "フラグやめろw"]], archA: ["nightowl","tryhard","casual"], archB: ["casual","nightowl"], ctx: "friday" },
-  { lang: "en", lines: [["a", "weekly reset in 2 hours and i'm 300 points off first"], ["b", "grind time"], ["a", "if i lose the champion title to a last minute snipe i'm done"], ["b", "get in there lol"]], archA: ["global"], archB: ["global"] },
+  { lang: "ja", lines: [["a", "無限地獄で不死鳥の羽引けた", "got the phoenix feather in Infinite Hell"], ["b", "1回復活のやつか 強い", "the one-revive relic? strong"], ["a", "おかげで深度更新できた", "set a new depth record thanks to it"], ["b", "遺物運も実力よ", "relic luck is a skill too"]], archA: ["explorer","tryhard","nightowl"], archB: ["senpai","explorer"] },
+  { lang: "ja", lines: [["a", "無限地獄の2周目、HP倍増きつすぎない？", "loop 2 of Infinite Hell doubles HP, brutal right?"], ["b", "火薬と雷そろえてからが本番", "it really starts once you have powder and lightning"], ["a", "なるほど 遺物ゲーか", "so it's a relic game after all"], ["b", "慈悲も地味に助かる", "mercy quietly saves runs too"]], archA: ["casual","explorer"], archB: ["tryhard","explorer","nightowl"] },
+  { lang: "ja", lines: [["a", "予告の赤マス消してCOUNTER!出すの気持ちよすぎる", "clearing the telegraphed red cells for a COUNTER! feels so good"], ["b", "あの音いいよね", "that sound effect is great"], ["a", "全カットで討伐ランクS狙ってる", "going for rank S by cutting every attack"], ["b", "第二形態の発狂からが本番", "phase two enrage is where it really starts"]], archA: ["casual","kid","explorer"], archB: ["tryhard","explorer","senpai"] },
+  { lang: "ja", lines: [["a", "エクスマキナの縦レーザーどう対処するの", "how do you deal with Ex Machina's vertical laser?"], ["b", "避けるんじゃなくて予告の列を先に消す", "don't dodge it — clear the telegraphed column first"], ["a", "それが間に合わないんよ…", "that's the part I can't do in time…"], ["b", "細長いピース温存しとくと楽", "saving the long thin pieces makes it easy"]], archA: ["newbie","casual"], archB: ["tryhard","senpai","explorer"] },
+  { lang: "ja", lines: [["a", "フリオーネの二重呪縛えげつない", "Furione's double curse is nasty"], ["b", "手札凍ってる間に盤面詰むのよね", "the board clogs up while your hand is frozen"], ["a", "まおうより意地悪じゃん", "meaner than the demon king honestly"], ["b", "凍る前に盤面軽くしとくしかない", "you have to thin the board before the freeze"]], archA: ["casual","nightowl","explorer"], archB: ["tryhard","explorer"] },
+  { lang: "ja", lines: [["a", "週間チャレンジ1位いけそう", "I might take #1 in the weekly challenge"], ["b", "週間王者狙い？", "going for weekly champion?"], ["a", "🏅バッジ欲しい 月曜まで逃げ切る", "I want the 🏅 badge — just have to hold until Monday"], ["b", "追い上げるからよろしくw", "I'm coming for you lol"]], archA: ["tryhard","nightowl"], archB: ["casual","tryhard"] },
+  { lang: "ja", lines: [["a", "ジュークボックスでPIXEL RUSH 182ループ固定にした", "locked the jukebox on PIXEL RUSH 182 loop"], ["b", "あれテンション上がるよね", "that track hypes me up"], ["a", "作業がはかどりすぎる", "my focus goes way up"], ["b", "おれはやすらぎのロビー派", "I'm a Peaceful Lobby person myself"]], archA: ["casual","streamer","nightowl"], archB: ["casual","morning"] },
+  { lang: "ja", lines: [["a", "ねえねえ神AI勝てた？！", "hey hey, did you beat the God AI?!"], ["b", "まだ", "not yet"], ["a", "ぼく創造神やったら3手でまけた！！", "I tried the Creator God and lost in 3 moves!!"], ["b", "創造神はそういうもん", "that's just what the Creator God is"], ["a", "ガチ勢でもむずいんだ！！", "so it's hard even for the pros!!"]], archA: ["kid"], archB: ["tryhard"] },
+  { lang: "ja", lines: [["a", "UR狙いで30連した", "did 30 pulls chasing the UR"], ["b", "結果は聞かないほうがいい？", "should I even ask?"], ["a", "SR被り3枚", "three duplicate SRs"], ["b", "昨日のおれと同じで草", "same as me yesterday lol"]], archA: ["gacha"], archB: ["gacha"] },
+  { lang: "ja", lines: [["a", "深淵クリアした", "cleared the Abyss"], ["b", "えっ喋った", "wait, they talked"], ["b", "しかも報告がえぐい", "and what a report too"], ["a", "以上", "that is all"]], archA: ["lurker"], archB: ["casual","streamer","kid"] },
+  { lang: "ja", lines: [["a", "今夜バトロワ100人配信する 生き残るとこ見せるよ", "streaming the 100-player royale tonight — watch me survive"], ["b", "見る！何時から？！", "watching! what time?!"], ["a", "21時 初手から端で立ち回る予定", "9pm — planning to hug the edge from move one"], ["b", "宿題おわらせて待機します！", "finishing my homework and standing by!"]], archA: ["streamer"], archB: ["kid","casual"] },
+  { lang: "ja", lines: [["a", "2v2組も 気楽にやろ", "let's do 2v2, keep it chill"], ["b", "勝ちにいくなら", "only if we play to win"], ["a", "負けても笑えればよくない？w", "isn't losing fine if we get a laugh? lol"], ["b", "よくない", "it is not"], ["a", "そういうとこ好きだよw", "that's what I like about you lol"]], archA: ["casual"], archB: ["tryhard"] },
+  { lang: "ja", lines: [["a", "おはよ〜 朝活タイムアタック行くよ〜", "morning~ time for my sunrise time attack~"], ["b", "こっちは今から寝るとこ", "I'm just heading to bed"], ["a", "徹夜？！", "all-nighter?!"], ["b", "ラッシュで深度盛ってたら朝だった", "was farming depth in Rush and suddenly it was morning"]], archA: ["morning"], archB: ["nightowl"], ctx: "morning" },
+  { lang: "ja", lines: [["a", "レイドって初心者が行っても迷惑じゃないですか…？", "is it okay for a beginner to join raids…?"], ["b", "全然大丈夫よ〜 ライン消せるだけで戦力なの", "totally fine~ just clearing lines makes you useful"], ["a", "じゃあティアマト行ってみます", "then I'll try Tiamat"], ["b", "初レイドがティアマトは根性あるわね〜", "Tiamat as your first raid — that's brave~"]], archA: ["newbie"], archB: ["senpai"] },
+  { lang: "ja", lines: [["a", "この時間の無限地獄がいちばん集中できる", "Infinite Hell at this hour is peak focus"], ["b", "通知も来ないしね", "no notifications either"], ["a", "今日は深度{n}まで潜る", "going down to depth {n} tonight"], ["b", "朝日を見ることになるぞ", "you're going to see the sunrise"]], archA: ["nightowl"], archB: ["nightowl","tryhard"], ctx: "late" },
+  { lang: "ja", lines: [["a", "おはよ ログインストリーク{n}日目", "morning — day {n} of my login streak"], ["b", "続いてるね〜", "still going strong~"], ["a", "歯磨きより先にログインしてる", "I log in before brushing my teeth"], ["b", "それはそれでどうなのw", "not sure that's healthy lol"]], archA: ["morning","casual"], archB: ["casual","senpai"], ctx: "morning" },
+  { lang: "ja", lines: [["a", "土曜は朝からトーナメント三昧", "Saturday means tournaments all morning"], ["b", "8人戦の連戦きつくない？", "back-to-back 8-player brackets, rough right?"], ["a", "週末しかがっつりできんから", "the weekend is my only real play time"], ["b", "わかる 平日は2戦で寝てる", "same — on weekdays I sleep after 2 games"]], archA: ["casual","tryhard"], archB: ["casual","nightowl"], ctx: "weekend" },
+  { lang: "ja", lines: [["a", "{event}の報酬どこまで取った？", "how far are you on the {event} rewards?"], ["b", "まだ半分", "only halfway"], ["a", "期間中に走り切らんと", "gotta finish before it ends"], ["b", "仕事が邪魔すぎる", "work keeps getting in the way"]], ctx: "event" },
+  { lang: "ja", lines: [["a", "明日休みだから朝までランクマ回す", "day off tomorrow, ranked till sunrise"], ["b", "レート溶かすやつじゃんそれw", "that's how ratings melt lol"], ["a", "今日は勝てる気がするんよ", "I just feel like I'll win today"], ["b", "フラグやめろw", "stop jinxing it lol"]], archA: ["nightowl","tryhard","casual"], archB: ["casual","nightowl"], ctx: "friday" },
+  { lang: "en", lines: [["a", "weekly reset in 2 hours and i'm 300 points off first", "週間リセットまで2時間、1位まであと300点"], ["b", "grind time", "走る時間だ"], ["a", "if i lose the champion title to a last minute snipe i'm done", "最後のスナイプで王者称号取られたら立ち直れない"], ["b", "get in there lol", "行ってこいw"]], archA: ["global"], archB: ["global"] },
 ];
 DIALOGUES.push(...EXTRA_DIALOGUES);
 
@@ -1264,3 +1319,21 @@ REPLIES.secret.en.push(
   'the logo… thirteen… forget I said anything',
   'if you can see the 👻 achievement you are already halfway there',
 );
+
+// 📈 昇格への住民リアクション（{you}=昇格者、{tier}=新しい段位名）
+REACTIONS.rankup = {
+  ja: [
+    '{you}さん{tier}昇格おめでとう！！',
+    'うわ、{you}さん{tier}いったの！？すご',
+    '{tier}帯に{you}さんが来たか…気を引き締めないと',
+    '{you}さんの昇格、フィード見て知った。おめ！',
+    '次に昇格するのは俺の番ね',
+    '{tier}か〜。遠いなあ',
+  ],
+  en: [
+    'congrats on {tier}, {you}!!',
+    'wait {you} hit {tier}?! huge',
+    'welcome to the {tier} bracket {you}… now I gotta lock in',
+    'my promotion is next, calling it',
+  ],
+};

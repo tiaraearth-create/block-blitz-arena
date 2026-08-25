@@ -217,7 +217,7 @@ function appendMsg(msg, scroll = true) {
     <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''} ${Number(msg.crown) ? `crowned${Math.min(3, Number(msg.crown))}` : ''}">${msg.crown ? '👑' : ''}${isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${hh}:${mm}</span>
     ${reply}
     <span class="cm-bubble">${escapeHtml(useTr ? msg.tr.text : msg.text)}</span>
-    ${useTr ? `<button class="cm-tr" title="${t('原文を表示', 'Show original')}">🌐 ${msg.tr.engine === 'api' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}</button>` : ''}
+    ${useTr ? `<button class="cm-tr" title="${t('原文を表示', 'Show original')}">🌐 ${msg.tr.engine !== 'table' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}</button>` : ''}
     <span class="cm-reacts hidden"></span>`;
   if (useTr) {
     const btn = el.querySelector('.cm-tr');
@@ -311,7 +311,7 @@ function connect() {
       const el = document.querySelector(`.chat-msg[data-id="${msg.msgId}"]`);
       if (el) renderReacts(el, msg.reacts);
     } else if (msg.type === 'announce') {
-      appendMsg({ from: msg.from || '運営', role: 'admin', text: `📢 ${msg.message}`, at: Date.now() });
+      appendMsg({ from: msg.from || t('運営', 'Staff'), role: 'admin', text: `📢 ${LANG === 'en' && msg.messageEn ? msg.messageEn : msg.message}`, at: Date.now() });
     } else if (msg.type === 'error') {
       toast(trServer(msg.error), 'err', 1800);
     }

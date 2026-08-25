@@ -41,7 +41,12 @@ for (const period of Object.keys(PERIOD_HOURS)) {
     const ctx = ctxFor(period, event, poll);
     for (const a of ARCHETYPES) {
       const r = byArch(a.id)[0];
-      for (let i = 0; i < 25; i++) { scan(composeLine(r, ctx), `line/${a.id}/${period}`); lineCount++; }
+      for (let i = 0; i < 25; i++) {
+        const out = composeLine(r, ctx);
+        scan(out.text, `line/${a.id}/${period}`);
+        if (out.tr) scan(out.tr.text, `line-tr/${a.id}/${period}`);
+        lineCount++;
+      }
     }
   }
 }
@@ -49,18 +54,25 @@ check(`composeLine fuzz (${lineCount} samples)`, bad.length === 0, bad.slice(0, 
 
 // ---- composeDialogue ----
 bad.length = 0;
-let dlgCount = 0, dlgNull = 0;
+let dlgCount = 0, dlgNull = 0, dlgTr = 0;
 for (const period of Object.keys(PERIOD_HOURS)) {
   for (const [event, poll] of [[null, null], [EVENT, null], [null, POLL]]) {
     const ctx = ctxFor(period, event, poll);
     for (let i = 0; i < 40; i++) {
       const s = composeDialogue(ctx);
       if (!s) { dlgNull++; continue; }
-      for (const step of s) { scan(step.text, `dlg/${period}`); dlgCount++; }
+      for (const step of s) {
+        scan(step.text, `dlg/${period}`);
+        if (step.tr) scan(step.tr.text, `dlg-tr/${period}`);
+        dlgCount++;
+        if (step.tr && step.tr.engine === 'native') dlgTr++;
+      }
     }
   }
 }
 check(`composeDialogue fuzz (${dlgCount} texts)`, bad.length === 0 && dlgCount > 100, bad.slice(0, 3).join(' | ') || `nulls=${dlgNull}`);
+// 台本会話も生成会話もネイティブ対訳つき（エセ翻訳への転落を防ぐ）
+check(`dialogue native-tr coverage ≥ 90%`, dlgTr / Math.max(1, dlgCount) >= 0.9, `${dlgTr}/${dlgCount}`);
 
 // ---- composeFeed ----
 bad.length = 0;
@@ -80,12 +92,19 @@ check(`composeFeed fuzz (${feedCount} items, ${feedIds.size} distinct kinds)`, b
 bad.length = 0;
 const KINDS = ['greet_named', 'greet_plain', 'lost_to', 'beat', 'drew', 'coop_done', 'event_start', 'event_end', 'poll_open', 'poll_close', 'poll_voted', 'poll_swing', 'poll_lastcall', 'champion', 'royale_win', 'record', 'badge'];
 const extra = { you: 'テスト太郎', opt: 'ガチャ祭', winner: 'ガチャ祭', score: '12,000', badge: '鬼討伐バッジ' };
+let reactN = 0, reactTr = 0;
 for (const kind of KINDS) {
   for (let i = 0; i < 25; i++) {
-    for (const step of composeReaction(kind, ctxFor('evening', EVENT, POLL), extra, 2)) scan(step.text, `react/${kind}`);
+    for (const step of composeReaction(kind, ctxFor('evening', EVENT, POLL), extra, 2)) {
+      scan(step.text, `react/${kind}`);
+      if (step.tr) scan(step.tr.text, `react-tr/${kind}`);
+      reactN++;
+      if (step.tr && step.tr.engine === 'native') reactTr++;
+    }
   }
 }
 check('composeReaction fuzz (all kinds)', bad.length === 0, bad.slice(0, 3).join(' | '));
+check('reaction native-tr coverage ≥ 95%', reactTr / Math.max(1, reactN) >= 0.95, `${reactTr}/${reactN}`);
 
 // ---- chooseReplies: new topic categories answer reliably ----
 bad.length = 0;
@@ -95,16 +114,23 @@ const TRIGGERS = [
   'gg', 'ダンジョン50Fむずい', 'ガチャ爆死した', 'ねむい', '初心者です！よろしく',
 ];
 const ctx = ctxFor('evening', null, null);
+let replyN = 0, replyTr = 0;
 for (const trigger of TRIGGERS) {
   let answered = 0;
   for (let i = 0; i < 30; i++) {
     const replies = chooseReplies(trigger, ctx);
     if (replies.length) answered++;
-    for (const rep of replies) scan(rep.text, `reply/"${trigger.slice(0, 12)}"`);
+    for (const rep of replies) {
+      scan(rep.text, `reply/"${trigger.slice(0, 12)}"`);
+      if (rep.tr) scan(rep.tr.text, `reply-tr/"${trigger.slice(0, 12)}"`);
+      replyN++;
+      if (rep.tr && rep.tr.engine === 'native') replyTr++;
+    }
   }
   if (!answered) bad.push(`no replies ever for "${trigger}"`);
 }
 check('chooseReplies fuzz (new + old topics)', bad.length === 0, bad.slice(0, 3).join(' | '));
+check('reply native-tr coverage ≥ 95%', replyTr / Math.max(1, replyN) >= 0.95, `${replyTr}/${replyN}`);
 
 // ---- forced reply target (chat replies to a specific resident) ----
 const quiet = roster.find(r => r.chatty <= 0.3);
@@ -127,7 +153,7 @@ _resetForTest();
     const now = base + i * 30000;
     const ctx = buildCtx({ now, event: i % 3 === 0 ? EVENT : null, poll: null, active: speakers, humans: [] });
     const r = speakers[i % speakers.length];
-    const s = composeLine(r, ctx);
+    const s = composeLine(r, ctx).text;
     scan(s, 'rep/line');
     if (seen.has(s)) dup++;
     seen.set(s, i);
@@ -183,7 +209,7 @@ _resetForTest();
   const N = 120;
   for (let i = 0; i < N; i++) {
     const ctx2 = buildCtx({ now: atHour(20) + i * 30000, event: null, poll: null, thrones: [champ.name], active: roster.slice(0, 20), humans: [] });
-    const s = composeLine(champ, ctx2);
+    const s = composeLine(champ, ctx2).text;
     scan(s, 'champ/line');
     if (/王座|玉座|王冠|防衛|挑戦者|頂点|throne|crown|defend|challenger/i.test(s)) championy++;
   }

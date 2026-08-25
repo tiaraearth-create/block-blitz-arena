@@ -44,7 +44,7 @@ export function initBattle(server, deps) {
   const rooms = new Map();                 // code -> room
   const tourneys = new Map();              // id -> tournament
   const royales = new Map();               // id -> battle royale
-  const queues = { duel: [], team: [], raid: [], tourney: [], royale: [], coop: [] };   // entries: { ws, since, botAt }
+  const queues = { duel: [], attack: [], team: [], raid: [], tourney: [], royale: [], coop: [] };   // entries: { ws, since, botAt }
 
   function send(sock, msg) {
     if (sock.isBot) return;
@@ -86,10 +86,12 @@ export function initBattle(server, deps) {
     // 👑 王座を持つ住人（AIプレイヤー）の発言にも王冠（名前は一意・なりすまし不可）
     const crowns = db.meta.thrones ? Object.values(db.meta.thrones).filter(t => t && t.username === name).length : 0;
     if (crowns) entry.crown = crowns;
-    // Residents' lines come from ja/en templates — the table translates them
-    // almost verbatim, so every crowd message ships with its translation.
-    const tr = translateLocal(text, detectLang(text) === 'ja' ? 'en' : 'ja');
-    if (tr) entry.tr = tr;
+    // 翻訳: 会話エンジンが「人間が書いたネイティブ対訳」を同梱してきたら
+    // それを最優先。無い素材（旧ja-only行など）だけ辞書翻訳で補う。
+    if (!entry.tr) {
+      const tr = translateLocal(text, detectLang(text) === 'ja' ? 'en' : 'ja');
+      if (tr) entry.tr = tr;
+    }
     pushHistory(entry);
     broadcastAll(entry);
     return entry;
@@ -174,7 +176,7 @@ export function initBattle(server, deps) {
   // Legacy entry point (admin "say"): a resident says `text`, or improvises.
   function postAmbient(text) {
     const line = residentLine();
-    return postChat(line.name, text || line.text);
+    return postChat(line.name, text || line.text, !text && line.tr ? { tr: line.tr } : {});
   }
 
   // Run a scripted list of [{ resident|name, text, delay }] with its timing.
@@ -182,7 +184,7 @@ export function initBattle(server, deps) {
     for (const s of script) {
       setTimeout(() => {
         if (!crowdOn(key)) return;
-        postChat(s.resident ? s.resident.name : s.name, s.text);
+        postChat(s.resident ? s.resident.name : s.name, s.text, s.tr ? { tr: s.tr } : {});
       }, s.delay);
     }
   }
@@ -195,6 +197,7 @@ export function initBattle(server, deps) {
       t += (1.5 + Math.random() * 3) * 60 * 1000;
       const line = residentLine(null, t);
       const entry = { type: 'chat', id: crypto.randomUUID(), from: line.name, role: 'user', text: line.text, at: Math.min(t, Date.now() - 30000) };
+      if (line.tr) entry.tr = line.tr;
       // 起動時のシード履歴でも王者には王冠を（ライブ発言と見た目を揃える）
       const crowns = db.meta.thrones ? Object.values(db.meta.thrones).filter(th => th && th.username === line.name).length : 0;
       if (crowns) entry.crown = crowns;
@@ -218,7 +221,7 @@ export function initBattle(server, deps) {
             performScript(script, 'chat');
           } else {
             const line = residentLine();
-            postChat(line.name, line.text);
+            postChat(line.name, line.text, line.tr ? { tr: line.tr } : {});
           }
         }
       } catch (err) { console.error('[crowd] chat tick failed:', err.message); }
@@ -298,7 +301,8 @@ export function initBattle(server, deps) {
     deps.saveDb();
     if (Math.random() < 0.18) {
       const opt = poll.options.find(o => o.id === optionId);
-      performScript(composeReaction(kind, ctx, { opt: opt ? opt.text : '', only: [r.id] }, 1), 'chat');
+      // opt はオブジェクトで渡す — renderSlot が言語別に text/textEn を選ぶ
+      performScript(composeReaction(kind, ctx, { opt: opt || '', only: [r.id] }, 1), 'chat');
     }
     return true;
   };
@@ -481,6 +485,14 @@ export function initBattle(server, deps) {
           const p = match.players[slot];
           p.score = this.engine.score;
           p.lines = this.engine.linesCleared;
+          // ⚔️ アタック戦ではボットも攻撃してくる
+          if (r && match.mode === 'attack' && r.lineCount >= 2 && !match.ended) {
+            const cells = attackCells(r.lineCount, r.streak);
+            for (const q of match.players) {
+              if (q.slot === slot || q.team === p.team) continue;
+              deliverAttack(match, slot, q, cells);
+            }
+          }
           broadcastState(match, slot, {
             score: this.engine.score,
             combo: r ? r.streak : 0,
@@ -715,6 +727,78 @@ export function initBattle(server, deps) {
     const ea = 1 / (1 + Math.pow(10, (rb - ra) / 400));
     return Math.round(K * (scoreA - ea));
   }
+  // -------------------------------------------------------------------------
+  // ⚔️ アタック戦 — ライン消しが相手へのお邪魔ブロックになる
+  // -------------------------------------------------------------------------
+
+  // 2ライン=2個 / 3ライン=4個 / 4ライン以上=6個、コンボで最大+3。1ラインは攻撃なし。
+  function attackCells(lines, combo) {
+    if (lines < 2) return 0;
+    const base = lines >= 4 ? 6 : lines === 3 ? 4 : 2;
+    return Math.min(9, base + Math.min(3, Math.floor(combo / 3)));
+  }
+
+  function deliverAttack(match, fromSlot, p, cells) {
+    if (!cells || match.ended) return;
+    if (p.sock.isBot) {
+      if (p.sock.engine) {
+        p.sock.engine.addGarbage(cells);
+        // 攻撃が刺さった盤面を即ミニボードへ（ボットの次ティックを待たない）
+        broadcastState(match, p.slot, {
+          score: p.sock.engine.score,
+          combo: p.sock.engine.streak,
+          lines: p.sock.engine.linesCleared,
+          grid: p.sock.engine.snapshot(),
+        });
+      }
+    } else {
+      send(p.sock, { type: 'garbage', from: fromSlot, cells });
+    }
+  }
+
+  // 段位（クライアント dom.js rankOf と同じしきい値）
+  const RANK_TIERS = [
+    { min: 0, icon: '🥉', name: 'ブロンズ', nameEn: 'Bronze' },
+    { min: 950, icon: '🥈', name: 'シルバー', nameEn: 'Silver' },
+    { min: 1100, icon: '🥇', name: 'ゴールド', nameEn: 'Gold' },
+    { min: 1300, icon: '💠', name: 'プラチナ', nameEn: 'Platinum' },
+    { min: 1500, icon: '💎', name: 'ダイヤ', nameEn: 'Diamond' },
+    { min: 1700, icon: '👑', name: 'マスター', nameEn: 'Master' },
+  ];
+  function tierOfRating(r) {
+    let out = RANK_TIERS[0];
+    for (const t of RANK_TIERS) if (r >= t.min) out = t;
+    return out;
+  }
+
+  // -------------------------------------------------------------------------
+  // 🔁 再戦（リマッチ） — 対戦直後に同じ相手へ再挑戦
+  // -------------------------------------------------------------------------
+  const rematchOffers = new Map();   // id -> { mode, duration, until, sides: [{sock|null(bot), level, team, ready}] }
+
+  function sweepRematches() {
+    const now = Date.now();
+    for (const [id, o] of rematchOffers) if (o.until < now) {
+      // 待ちっぱなしの側に失効を通知（ボタンが永遠に「相手を待っています…」にならない）
+      for (const sd of o.sides) {
+        if (sd.ready && sd.sock && sd.sock.readyState === sd.sock.OPEN) send(sd.sock, { type: 'rematch_gone' });
+      }
+      rematchOffers.delete(id);
+    }
+  }
+
+  function dropRematchesFor(ws, notifyOther = true) {
+    for (const [id, o] of rematchOffers) {
+      if (o.sides.some(sd => sd.sock === ws)) {
+        if (notifyOther) {
+          const other = o.sides.find(sd => sd.sock && sd.sock !== ws);
+          if (other) send(other.sock, { type: 'rematch_gone' });
+        }
+        rematchOffers.delete(id);
+      }
+    }
+  }
+
 
   function endMatch(match, reason) {
     if (match.ended) return;
@@ -744,9 +828,32 @@ export function initBattle(server, deps) {
 
     const humanUsers = match.players.map(p =>
       (!p.sock.isBot && p.sock.user) ? db.users[p.sock.user.id] : null);
+    // 🔁 デュエル/アタックの2人戦は再戦オファーを用意（30秒有効）。
+    let rematchId = null;
+    if ((match.mode === 'duel' || match.mode === 'attack') && match.players.length === 2
+        && !match.tourney && match.players.some(p => !p.sock.isBot && !p.forfeited)
+        // 相手が切断/棄権済みなら成立し得ないオファーは出さない（死んだ🔁ボタン防止）
+        && match.players.every(p => p.sock.isBot || (!p.forfeited && p.sock.readyState === p.sock.OPEN))) {
+      rematchId = crypto.randomUUID();
+      rematchOffers.set(rematchId, {
+        mode: match.mode, rated: !!match.rated, duration: match.duration, until: Date.now() + 30000,
+        sides: match.players.map(p => ({
+          sock: p.sock.isBot ? null : p.sock,
+          isBot: !!p.sock.isBot, level: p.sock.level || null,
+          name: sockName(p.sock), team: p.team, ready: false,
+        })),
+      });
+    }
     // Rated 1v1: vs another account, or vs a "registered" AI player (its fake
     // rating drives a real Elo update so ranked works even when nobody's on).
-    const duel2 = match.rated && match.mode === 'duel' && match.players.length === 2;
+    const duel2 = match.rated && (match.mode === 'duel' || match.mode === 'attack') && match.players.length === 2;
+    // Elo は「試合前」のレート同士で対称に計算する（1人目を先に更新した後の
+    // 新レートで2人目を計算すると deltas がゼロサムにならない）
+    const preRatings = [];
+    for (const p of match.players) {
+      preRatings[p.slot] = humanUsers[p.slot] ? humanUsers[p.slot].stats.rating
+        : (p.sock.rating != null ? p.sock.rating : null);
+    }
 
     for (const p of match.players) {
       if (p.sock.isBot) continue;
@@ -758,15 +865,32 @@ export function initBattle(server, deps) {
         : p.team === winTeam ? 1 : 0;
       let ratingDelta = 0;
       let rewards = null;
+      let tierChange = null;
       if (me) {
         if (duel2) {
           const oppUser = humanUsers[1 - p.slot];
           const oppSock = match.players[1 - p.slot].sock;
-          const oppRating = oppUser && oppUser.id !== me.id ? oppUser.stats.rating
+          const oppRating = oppUser && oppUser.id !== me.id ? preRatings[1 - p.slot]
             : oppSock.isBot && oppSock.rating != null ? oppSock.rating : null;
           if (oppRating != null) {
+            const beforeTier = tierOfRating(me.stats.rating);
             ratingDelta = eloUpdate(me.stats.rating, oppRating, outcome);
             me.stats.rating = Math.max(0, me.stats.rating + ratingDelta);
+            const afterTier = tierOfRating(me.stats.rating);
+            if (afterTier !== beforeTier) {
+              tierChange = { up: afterTier.min > beforeTier.min, from: beforeTier, to: afterTier };
+              // 📈 昇格はゴールド以上で全体アナウンス + 住人が祝う
+              if (tierChange.up && afterTier.min >= 1100) {
+                broadcastAll({
+                  type: 'announce',
+                  message: `${afterTier.icon} 「${me.username}」が${afterTier.name}帯に昇格！`,
+                  messageEn: `${afterTier.icon} "${me.username}" was promoted to ${afterTier.nameEn}!`,
+                  from: '大会運営',
+                });
+                // tier はオブジェクトで渡す — renderSlot が言語別に name/nameEn を選ぶ
+                react('rankup', { you: me.username, tier: afterTier, notName: me.username });
+              }
+            }
           }
         }
         if (match.rated && match.mode !== 'raid') {
@@ -805,12 +929,12 @@ export function initBattle(server, deps) {
           : null,
         you: { slot: p.slot, team: p.team },
         players: playersInfo,
-        ratingDelta, rewards,
+        ratingDelta, rewards, tierChange, rematchId,
         user: me ? publicUser(me) : null,
       });
     }
     // A resident who played as a bot may talk about the human afterwards.
-    if (match.mode === 'duel' || match.mode === 'coop') {
+    if (match.mode === 'duel' || match.mode === 'attack' || match.mode === 'coop') {
       const human = match.players.find(p => !p.sock.isBot && !p.forfeited);
       const bot = match.players.find(p => p.sock.isBot && p.sock.resident);
       if (human && bot) {
@@ -833,7 +957,7 @@ export function initBattle(server, deps) {
   function joinQueue(ws, mode) {
     if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId) return;
     leaveQueues(ws);
-    const wait = mode === 'duel' ? duelBotWait() : mode === 'coop' ? coopBotWait() : teamBotWait();
+    const wait = mode === 'duel' || mode === 'attack' ? duelBotWait() : mode === 'coop' ? coopBotWait() : teamBotWait();
     queues[mode].push({ ws, since: Date.now(), botAt: Date.now() + wait });
     send(ws, { type: 'queued', mode });
     sweepQueues();
@@ -847,7 +971,7 @@ export function initBattle(server, deps) {
   }
 
   function sweepQueues() {
-    for (const mode of ['duel', 'team', 'raid', 'tourney', 'royale', 'coop']) {
+    for (const mode of ['duel', 'attack', 'team', 'raid', 'tourney', 'royale', 'coop']) {
       queues[mode] = queues[mode].filter(e => e.ws.readyState === e.ws.OPEN && !e.ws.matchId);
     }
     // tournament: start with up to 8 humans once the first entrant has waited
@@ -871,6 +995,15 @@ export function initBattle(server, deps) {
     if (queues.duel.length === 1 && Date.now() >= queues.duel[0].botAt) {
       const [a] = queues.duel.splice(0, 1);
       createMatch({ mode: 'duel', entries: [{ sock: a.ws, team: 0 }, { sock: new Bot('random'), team: 1 }] });
+    }
+    // ⚔️ アタック戦: デュエルと同じ組み方（攻撃の飛び交うランクマッチ）
+    while (queues.attack.length >= 2) {
+      const [a, b] = queues.attack.splice(0, 2);
+      createMatch({ mode: 'attack', entries: [{ sock: a.ws, team: 0 }, { sock: b.ws, team: 1 }] });
+    }
+    if (queues.attack.length === 1 && Date.now() >= queues.attack[0].botAt) {
+      const [a] = queues.attack.splice(0, 1);
+      createMatch({ mode: 'attack', entries: [{ sock: a.ws, team: 0 }, { sock: new Bot('random'), team: 1 }] });
     }
     while (queues.team.length >= 4) {
       const four = queues.team.splice(0, 4);
@@ -911,7 +1044,7 @@ export function initBattle(server, deps) {
       createMatch({ mode: 'raid', entries, rated: false });
     }
   }
-  setInterval(sweepQueues, 2000);
+  setInterval(() => { sweepQueues(); sweepRematches(); }, 2000);
 
   // -------------------------------------------------------------------------
   // Custom rooms
@@ -1108,6 +1241,7 @@ export function initBattle(server, deps) {
       broadcastAll({
         type: 'announce',
         message: `🏆 オンライントーナメントで「${sockName(champ)}」が優勝！`,
+        messageEn: `🏆 "${sockName(champ)}" wins the online tournament!`,
         from: '大会運営',
       });
       return;
@@ -1231,6 +1365,7 @@ export function initBattle(server, deps) {
         broadcastAll({
           type: 'announce',
           message: `💯 バトルロイヤルで「${winner.name}」が100人の頂点に！`,
+          messageEn: `💯 "${winner.name}" is the last one standing out of 100 in Battle Royale!`,
           from: '大会運営',
         });
       }
@@ -1297,7 +1432,7 @@ export function initBattle(server, deps) {
           break;
         }
         case 'queue': {
-          const mode = ['team', 'raid', 'tourney', 'royale', 'coop'].includes(msg.mode) ? msg.mode : 'duel';
+          const mode = ['team', 'raid', 'tourney', 'royale', 'coop', 'attack'].includes(msg.mode) ? msg.mode : 'duel';
           joinQueue(ws, mode);
           break;
         }
@@ -1330,6 +1465,65 @@ export function initBattle(server, deps) {
             lines: me.lines,
             grid: Array.isArray(msg.grid) ? msg.grid.slice(0, 64) : null,
           });
+          break;
+        }
+        case 'attack': {
+          // ⚔️ アタック戦: 2ライン以上の消去が相手へのお邪魔ブロックになる。
+          if (!match || !me || match.mode !== 'attack' || match.ended) return;
+          if (me.finished || Date.now() - match.startedAt < COUNTDOWN * 1000) return;
+          if (!sockRate(ws, 'atkTimes', 12, 10000)) return;
+          const aLines = Math.max(0, Math.min(8, Math.floor(Number(msg.lines) || 0)));
+          const aCombo = Math.max(0, Math.min(60, Math.floor(Number(msg.combo) || 0)));
+          // 主張ライン数は state で申告済みの累計ライン数を超えられない（捏造攻撃対策。
+          // クライアントは pushState → attack の順で送るので lines は常に先着している）
+          me.atkLinesUsed = me.atkLinesUsed || 0;
+          if (me.atkLinesUsed + aLines > me.lines) return;
+          me.atkLinesUsed += aLines;
+          const cells = attackCells(aLines, aCombo);
+          if (!cells) return;
+          for (const p of match.players) {
+            if (p.slot === me.slot || p.team === me.team) continue;
+            deliverAttack(match, me.slot, p, cells);
+          }
+          break;
+        }
+        case 'rematch': {
+          if (!sockRate(ws, 'rmTimes', 6, 10000)) return;
+          const offer = rematchOffers.get(String(msg.rematchId || ''));
+          if (!offer || offer.until < Date.now()) { send(ws, { type: 'rematch_gone' }); return; }
+          // joinQueue と同じガード — ルーム/トーナメント/ロイヤル在籍中の再戦受諾は
+          // rooms Map にゴースト部屋を残す（createMatch が roomCode を黙って消すため）
+          if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId) return;
+          const mine = offer.sides.find(sd => sd.sock === ws);
+          if (!mine) return;
+          mine.ready = true;
+          const other = offer.sides.find(sd => sd !== mine);
+          if (other.isBot) {
+            // ボット相手は即再戦（同じ強さのボットを新しく座らせる）
+            rematchOffers.delete(String(msg.rematchId));
+            createMatch({ mode: offer.mode, rated: offer.rated, duration: offer.duration, entries: [
+              { sock: ws, team: 0 },
+              { sock: new Bot(other.level || 'random', new Set([sockName(ws)])), team: 1 },
+            ] });
+            return;
+          }
+          if (!other.sock || other.sock.readyState !== other.sock.OPEN || other.sock.matchId) {
+            rematchOffers.delete(String(msg.rematchId));
+            send(ws, { type: 'rematch_gone' });
+            return;
+          }
+          if (other.ready) {
+            rematchOffers.delete(String(msg.rematchId));
+            createMatch({ mode: offer.mode, rated: offer.rated, duration: offer.duration, entries: [
+              { sock: mine.sock, team: 0 }, { sock: other.sock, team: 1 },
+            ] });
+          } else {
+            send(other.sock, { type: 'rematch_offer', from: mine.name });
+          }
+          break;
+        }
+        case 'rematch_decline': {
+          dropRematchesFor(ws);
           break;
         }
         case 'finish': {
@@ -1464,6 +1658,7 @@ export function initBattle(server, deps) {
       clients.delete(ws);
       leaveQueues(ws);
       leaveRoom(ws);
+      dropRematchesFor(ws);   // 🔁 相手が消えたら再戦オファーも消える
       // Battle royale: leaving = instant elimination at the current rank.
       if (ws.royaleId) {
         const r = royales.get(ws.royaleId);
@@ -1496,7 +1691,7 @@ export function initBattle(server, deps) {
           p.forfeited = true;
           p.finished = true;
           const otherHumans = match.players.filter(q => q !== p && !q.sock.isBot && !q.forfeited);
-          if (match.mode === 'duel' && match.players.length === 2 && otherHumans.length === 1) {
+          if ((match.mode === 'duel' || match.mode === 'attack') && match.players.length === 2 && otherHumans.length === 1) {
             endMatch(match, 'forfeit');
           } else if (otherHumans.length === 0) {
             endMatch(match, 'abandoned');
@@ -1570,7 +1765,7 @@ export function initBattle(server, deps) {
           return { lines: s.map(x => `${x.resident.name}: ${x.text}`) };
         }
         const line = residentLine();
-        postChat(line.name, line.text);
+        postChat(line.name, line.text, line.tr ? { tr: line.tr } : {});
         return { lines: [`${line.name}: ${line.text}`] };
       },
       activeCount: () => worldCtx().active.length,

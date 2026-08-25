@@ -33,7 +33,7 @@ $('#btnVsAi').onclick = () => {
         .filter(([key]) => unlocked(key))
         .map(([key, cfg]) => `
         <button class="btn ${btnClass[key]}" data-ai="${key}">
-          ${cfg.avatar} ${cfg.name}
+          ${cfg.avatar} ${t(cfg.name, cfg.nameEn || cfg.name)}
         </button>`).join('')}
     </div>`);
   const wire = () => m.querySelectorAll('[data-ai]').forEach(btn => {
@@ -50,7 +50,7 @@ $('#btnVsAi').onclick = () => {
     const btn = document.createElement('button');
     btn.className = 'btn btn-kami reveal';
     btn.dataset.ai = 'kami';
-    btn.textContent = `${AI_LEVELS.kami.avatar} ${AI_LEVELS.kami.name}`;
+    btn.textContent = `${AI_LEVELS.kami.avatar} ${t(AI_LEVELS.kami.name, AI_LEVELS.kami.nameEn || AI_LEVELS.kami.name)}`;
     m.querySelector('#aiLevelList').appendChild(btn);
     wire();
   });
@@ -206,6 +206,7 @@ $('#btnOnline').onclick = () => {
     <h2>${t('🌐 オンライン対戦', '🌐 Online Battle')}</h2>
     <div class="form-col">
       <button class="btn btn-primary btn-big" data-online="duel">${t('⚔️ 1v1 ランクマッチ', '⚔️ 1v1 Ranked')}</button>
+      <button class="btn btn-melt btn-big" data-online="attack">${t('💥 アタック戦（NEW! 妨害あり）', '💥 Attack Duel (NEW! send garbage)')}</button>
       <button class="btn btn-online btn-big" data-online="team">${t('👥 2v2 チーム戦', '👥 2v2 Team Battle')}</button>
       <button class="btn btn-gold btn-big" data-online="tourney">${t('🏆 トーナメント（8人制）', '🏆 Tournament (8 players)')}</button>
       <button class="btn btn-oni btn-big" data-online="royale">${t('💯 バトルロイヤル（100人）', '💯 Battle Royale (100 players)')}</button>
@@ -381,7 +382,7 @@ function updateEventBanner() {
   if (ev && ev.endsAt > Date.now()) {
     const icon = ev.icon || '🌪️';
     banner.textContent = t(`${icon} 期間限定「${ev.name}」開催中！ — 残り${fmtRemain(ev.endsAt - Date.now())}`,
-      `${icon} Limited event "${ev.name}" is live! — ${fmtRemain(ev.endsAt - Date.now())} left`);
+      `${icon} Limited event "${ev.nameEn || ev.name}" is live! — ${fmtRemain(ev.endsAt - Date.now())} left`);
     banner.classList.remove('hidden');
     // Only the chaos event opens the chaos button for everyone.
     const chaosLive = ev.type === 'chaos';
@@ -855,7 +856,7 @@ function showRestoreFailedModal() {
         }
         break;
       } catch (err) {
-        if (String(err.message).includes('凍結')) { toast(err.message, 'err'); break; }
+        if (err.status === 403 || String(err.message).includes('凍結') || /suspended/i.test(String(err.message))) { toast(err.message, 'err'); break; }
         // The session is fine but the account data is missing on the server
         // (a redeploy wiped it, restore pending): keep the token and keep
         // checking — the login comes back by itself once the data is restored.
@@ -892,7 +893,7 @@ function showRestoreFailedModal() {
     const days = Math.max(0, Math.ceil((session.season.endsAt - Date.now()) / 86400000));
     const banner = $('#seasonBanner');
     banner.textContent = t(`✨ ${session.season.name} 開催中 — 残り${days}日`,
-      `✨ ${session.season.name} — ${days} days left`);
+      `✨ ${session.season.nameEn || session.season.name} — ${days} days left`);
     banner.classList.remove('hidden');
   }
 })();

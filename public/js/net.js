@@ -67,7 +67,7 @@ export class BattleClient {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${location.host}/ws`);
       this.ws = ws;
-      const timeout = setTimeout(() => { try { ws.close(); } catch {} ; reject(new Error('接続タイムアウト')); }, 8000);
+      const timeout = setTimeout(() => { try { ws.close(); } catch {} ; reject(new Error(trServer('接続タイムアウト'))); }, 8000);
 
       ws.onopen = () => {
         ws.send(JSON.stringify({ type: 'hello', token: session.token, guestName }));
@@ -89,7 +89,7 @@ export class BattleClient {
       };
       ws.onerror = () => {
         clearTimeout(timeout);
-        if (!this.connected) reject(new Error('サーバーに接続できません'));
+        if (!this.connected) reject(new Error(trServer('サーバーに接続できません')));
       };
     });
   }

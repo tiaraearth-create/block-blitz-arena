@@ -16,12 +16,20 @@ function clean(s, max) {
   return String(s || '').trim().replace(/[<>]/g, '').slice(0, max);
 }
 
-export function createPoll({ question, options, minutes, kind, createdBy }) {
+export function createPoll({ question, questionEn, options, minutes, kind, createdBy }) {
   const q = clean(question, MAX_QUESTION);
   if (!q) return { error: '質問を入力してください' };
   const opts = (Array.isArray(options) ? options : [])
     .map(o => (typeof o === 'string' ? { text: o } : o || {}))
-    .map(o => ({ text: clean(o.text, MAX_OPTION_TEXT), eventType: o.eventType ? String(o.eventType) : null }))
+    .map(o => {
+      const evType = o.eventType ? eventType(String(o.eventType)) : null;
+      return {
+        text: clean(o.text, MAX_OPTION_TEXT),
+        // イベント選択肢はEVENT_TYPESのネイティブ英語名を使う
+        textEn: clean(o.textEn, MAX_OPTION_TEXT) || (evType ? `${evType.icon} ${evType.nameEn}` : null),
+        eventType: o.eventType ? String(o.eventType) : null,
+      };
+    })
     .filter(o => o.text)
     .slice(0, MAX_OPTIONS);
   if (opts.length < 2) return { error: '選択肢は2つ以上必要です' };
@@ -31,7 +39,8 @@ export function createPoll({ question, options, minutes, kind, createdBy }) {
       id: crypto.randomUUID(),
       kind: kind === 'event' ? 'event' : 'plain',
       question: q,
-      options: opts.map((o, i) => ({ id: `o${i}`, text: o.text, eventType: o.eventType, votes: 0 })),
+      questionEn: clean(questionEn, MAX_QUESTION) || null,
+      options: opts.map((o, i) => ({ id: `o${i}`, text: o.text, textEn: o.textEn || null, eventType: o.eventType, votes: 0 })),
       voters: {},              // userId -> optionId
       createdAt: Date.now(),
       endsAt: Date.now() + mins * 60 * 1000,
@@ -238,8 +247,9 @@ export function pollView(poll, userId, admin = false) {
     id: poll.id,
     kind: poll.kind,
     question: poll.question,
+    questionEn: poll.questionEn || null,
     options: poll.options.map(o => ({
-      id: o.id, text: o.text, eventType: o.eventType,
+      id: o.id, text: o.text, textEn: o.textEn || null, eventType: o.eventType,
       votes: reveal ? o.votes : null,
       pct: reveal && total ? Math.round((o.votes / total) * 100) : null,
       ...(split ? { ai: split[o.id].ai, real: split[o.id].real } : {}),

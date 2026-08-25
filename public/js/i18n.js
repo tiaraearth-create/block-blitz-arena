@@ -123,6 +123,10 @@ const CATALOG_EN = {
   sprinter: { name: 'Gale-Force Blocker', desc: 'Score 20,000 in a 60s Time Attack' },
   buddy: { name: 'Great Duo', desc: 'Play 10 co-op runs' },
   soulmate: { name: 'In Perfect Sync', desc: 'Reach 20,000 in co-op' },
+  abysswalker: { name: 'Abyss Gazer', desc: 'Reach A50 in the Abyss Dungeon' },
+  abysslord: { name: 'Lord of the Abyss', desc: 'Conquer A100 in the Abyss Dungeon' },
+  guildfounder: { name: 'Guild Founder', desc: 'Found a guild' },
+  guildace: { name: 'Guild Ace', desc: 'Contribute 2,000 guild points in a week' },
   weeklyking: { name: 'Weekly Sovereign', desc: 'Finish #1 in the weekly challenge' },
   bossmaster: { name: 'Perfect Slayer', desc: 'S-rank every boss' },
   hellrunner: { name: 'Hell Runner', desc: 'Reach depth 12 in Infinite Hell Rush' },
@@ -201,12 +205,49 @@ const SERVER_MSG_EN = {
   '購入リクエストが多すぎます': 'Too many purchase requests',
   'パックが見つかりません': 'Pack not found',
   'ユーザーが見つかりません': 'User not found',
+  // ---- v2.10 完全対応: セッション/プロフィール/バグ報告/ガチャ/ギルド ----
+  'アカウントのデータが見つかりません（データ復元待ち）': 'Account data not found (restore pending)',
+  'セッションが終了しました。もう一度ログインしてください': 'Your session has ended — please log in again',
+  'その名前はアリーナの住人が使っています。別の名前でどうぞ': 'That name belongs to an Arena resident — please pick another',
+  '少し待ってください': 'Please wait a moment',
+  'プレイヤーが見つかりません': 'Player not found',
+  '報告が多すぎます。少し待ってください': 'Too many reports — please wait a bit',
+  'もう少し詳しく書いてください': 'Please add a little more detail',
+  '受け取れるランキング報酬はありません': 'No ranking rewards to claim',
+  '🎰 ガチャ限定の装備です（SSRで入手）': '🎰 Gacha-exclusive gear (SSR pull only)',
+  'ギルド名は2〜16文字（英数字・日本語）で入力してください': 'Guild name must be 2–16 characters (letters, numbers, Japanese)',
+  'タグは1〜4文字（英数字・カタカナ・漢字）で入力してください': 'Tag must be 1–4 characters (A–Z, 0–9, katakana, kanji)',
+  'すでにギルドに所属しています': 'You are already in a guild',
+  'すでにギルドに所属しています。先に脱退してください': 'You are already in a guild — leave it first',
+  'そのギルド名は使われています': 'That guild name is taken',
+  'そのタグは使われています': 'That tag is taken',
+  'このギルドは招待制です（ルームコードが必要）': 'This guild is invite-only (code required)',
+  '脱退から1時間はギルドに参加できません': 'You must wait 1 hour after leaving before joining a guild',
+  'ギルドリーダーのみ操作できます': 'Only the guild leader can do that',
+  'リーダーは除名できません': 'The leader cannot be kicked',
+  'そのメンバーはいません': 'That member is not in the guild',
+  'ギルドが見つかりません': 'Guild not found',
+  'そのコードのギルドは見つかりません': 'No guild with that code',
+  'ギルドに所属していません': 'You are not in a guild',
+  'ギルドリーダーのみ変更できます': 'Only the guild leader can change settings',
+  '管理者専用のアイテムです（非売品）': 'Staff-only item (not for sale)',
+  '管理者専用のアイテムです': 'Staff-only item',
+  '管理者専用の装備です（非売品）': 'Staff-only gear (not for sale)',
+  '管理者専用の装備です': 'Staff-only gear',
+  'ファイルが大きすぎます（最大64MB）': 'File is too large (max 64MB)',
+  'JSONとして読み取れませんでした': 'Could not parse the file as JSON',
+  '接続タイムアウト': 'Connection timed out',
+  '対戦相手が見つかりません': 'Opponent not found',
+  '再戦の相手はもういません': 'Your opponent has left — no rematch',
 };
 
 const SERVER_MSG_PATTERNS = [
   [/^名前変更は1日1回までです（あと約(\d+)時間）$/, (m) => `You can rename once per day (about ${m[1]}h left)`],
   [/^あと(\d+)人必要です（ボット補充をONにもできます）$/, (m) => `Need ${m[1]} more player(s) — or enable bot fill`],
   [/^この設定では最大(\d+)人です（チーム戦に変更してください）$/, (m) => `Max ${m[1]} players for this setup — switch to team mode`],
+  [/^コインが足りません（([\d,]+)必要）$/, (m) => `Not enough coins (need ${m[1]})`],
+  [/^ギルドは満員です（最大(\d+)人）$/, (m) => `The guild is full (max ${m[1]} members)`],
+  [/^ギルド設立には🪙(\d+)必要です$/, (m) => `Founding a guild costs 🪙${m[1]}`],
 ];
 
 export function trServer(msg) {
@@ -282,6 +323,15 @@ export function applyStaticI18n() {
   set('[data-lb="sprint"]', '⏱️Time Attack');
   set('[data-lb="dungeon"]', 'Dungeon');
   set('[data-lb="weekly"]', 'Weekly');
+  set('[data-lb="puzzle"]', '🧩Puzzle Ruins');
+  set('[data-lb="dig"]', '⛏️The Mines');
+  // tooltips + document title
+  const attr = (sel, name, val) => { const el = document.querySelector(sel); if (el) el.setAttribute(name, val); };
+  attr('#btnSettings', 'title', 'Settings');
+  attr('#liveFeed', 'title', 'Live feed');
+  attr('#chaosBar', 'title', 'Until the next rule change');
+  attr('#chatReplyCancel', 'title', 'Cancel reply');
+  document.title = 'Block Blitz Arena — Block Puzzle × Online Battles';
   set('#screen-shop .sub-header h2', '🛍️ Shop');
   set('[data-shop="skin"]', 'Blocks');
   set('[data-shop="board"]', 'Boards');

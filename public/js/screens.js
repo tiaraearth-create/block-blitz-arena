@@ -724,9 +724,9 @@ export async function openLeaderboard(board = 'score') {
     list.innerHTML = rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
-        <div class="lb-name ${r.crowns ? `crowned${Math.min(3, r.crowns)}` : ''}">${r.throne ? '<span class="lb-crown" title="現王者">👑</span>' : ''}${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
+        <div class="lb-name ${r.crowns ? `crowned${Math.min(3, r.crowns)}` : ''}">${r.throne ? `<span class="lb-crown" title="${tr('現王者', 'Reigning champion')}">👑</span>` : ''}${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
           <span class="lb-badges">${(r.badges || []).map(b => badgeIcons[b] || '').join('')}</span>
-          ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.name)}》</span>` : ''}
+          ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.id ? catName(r.title) : r.title.name)}》</span>` : ''}
           <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}${board === 'sprint' && r.sprint180 ? ` ・ ${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? ` ・ 🌑A${fmt(r.abyssMax)}` : ''}</div>
         </div>
         <div class="lb-score">${board === 'dungeon' ? `F${fmt(r.dungeonMax || 0)}`
@@ -1319,7 +1319,7 @@ function renderBattlePass(data) {
 
   header.innerHTML = `
     <div class="bp-row">
-      <h3>✨ ${escapeHtml(data.season.name)}</h3>
+      <h3>✨ ${escapeHtml(LANG === 'en' && data.season.nameEn ? data.season.nameEn : data.season.name)}</h3>
       <span class="muted" style="font-size:13px">${tr(`残り ${daysLeft}日`, `${daysLeft} days left`)}</span>
     </div>
     <div class="bp-xpbar"><div style="width:${pct}%"></div></div>
@@ -2182,7 +2182,7 @@ function renderPollModal(poll) {
   const closed = poll.closed;
   const canVote = !!session.user && !closed;
   const m = showModal(`
-    <h2>🗳️ ${escapeHtml(poll.question)}</h2>
+    <h2>🗳️ ${escapeHtml(LANG === 'en' && poll.questionEn ? poll.questionEn : poll.question)}</h2>
     <p class="muted center" style="margin-bottom:12px;font-size:12px">
       ${closed
         ? tr('この投票は終了しました', 'This poll has closed')
@@ -2199,12 +2199,12 @@ function renderPollModal(poll) {
         <button class="poll-option ${mine ? 'mine' : ''} ${poll.reveal ? 'revealed' : ''}"
                 data-opt="${o.id}" ${canVote ? '' : 'disabled'}>
           ${poll.reveal ? `<span class="poll-fill" style="width:${pct}%"></span>` : ''}
-          <span class="poll-text">${mine ? '✅ ' : ''}${escapeHtml(o.text)}</span>
+          <span class="poll-text">${mine ? '✅ ' : ''}${escapeHtml(LANG === 'en' && o.textEn ? o.textEn : o.text)}</span>
           ${poll.reveal ? `<span class="poll-pct">${pct}% <small>(${fmt(o.votes)})</small></span>` : ''}
         </button>`;
       }).join('')}
     </div>
-    ${closed && poll.winner ? `<p class="center" style="margin-top:12px;font-weight:800">🏆 ${tr('1位', 'Winner')}: ${escapeHtml(poll.winner.text)}${poll.winner.tied ? tr('（同率）', ' (tied)') : ''}</p>` : ''}
+    ${closed && poll.winner ? `<p class="center" style="margin-top:12px;font-weight:800">🏆 ${tr('1位', 'Winner')}: ${escapeHtml(LANG === 'en' && poll.winner.textEn ? poll.winner.textEn : poll.winner.text)}${poll.winner.tied ? tr('（同率）', ' (tied)') : ''}</p>` : ''}
     <div class="modal-buttons">
       ${!session.user && !closed ? `<button class="btn btn-primary" id="plLogin">${tr('ログイン', 'Log in')}</button>` : ''}
       <button class="btn btn-ghost" id="plClose">${tr('閉じる', 'Close')}</button>
@@ -2244,7 +2244,7 @@ export async function refreshPollBanner() {
       voted = !!(p && p.myVote);
     } catch { /* keep nudging */ }
   }
-  el.innerHTML = `🗳️ <b>${escapeHtml(brief.question)}</b> — ${voted
+  el.innerHTML = `🗳️ <b>${escapeHtml(LANG === 'en' && brief.questionEn ? brief.questionEn : brief.question)}</b> — ${voted
     ? tr('投票済み・結果を見る', 'Voted — see results')
     : tr('投票受付中！', 'Vote now!')} <small>(${tr(`残り${pollRemainText(brief.endsAt - Date.now())}`, `${pollRemainText(brief.endsAt - Date.now())} left`)})</small>`;
   el.classList.toggle('unvoted', !voted && !!session.user);
@@ -2261,7 +2261,7 @@ export async function showPollAdminModal() {
   if (poll) {
     const m = showModal(`
       <h2>🗳️ 投票の管理</h2>
-      <p class="center" style="margin-bottom:10px"><b>${escapeHtml(poll.question)}</b><br>
+      <p class="center" style="margin-bottom:10px"><b>${escapeHtml(LANG === 'en' && poll.questionEn ? poll.questionEn : poll.question)}</b><br>
         <small class="muted">${poll.closed ? '終了済み' : `受付中 ・ 残り${pollRemainText(poll.endsAt - Date.now())}`} ・ ${poll.voterCount}人が投票${poll.aiVoters !== undefined ? `（👤実人 ${poll.realVoters} ／ 🤖AI住人 ${poll.aiVoters}）` : ''}</small></p>
       <div class="poll-options">
         ${poll.options.map(o => `
@@ -2379,7 +2379,7 @@ export async function showPollAdminModal() {
         method: 'POST',
         body: { action: 'create', kind, question: m.querySelector('#plQ').value, options, minutes },
       });
-      window.__bbaPoll = { id: res.poll.id, question: res.poll.question, endsAt: res.poll.endsAt, voterCount: 0 };
+      window.__bbaPoll = { id: res.poll.id, question: res.poll.question, questionEn: res.poll.questionEn || null, endsAt: res.poll.endsAt, voterCount: 0 };
       closeModal();
       audio.coin();
       confettiBurst(30);
@@ -2838,10 +2838,10 @@ export async function openNews() {
   body.innerHTML = data.news.length ? data.news.map(n => `
     <article class="news-card ${n.pinned ? 'pinned' : ''}">
       <div class="news-head">
-        <h3>${n.pinned ? '📌 ' : ''}${escapeHtml(n.title)}</h3>
+        <h3>${n.pinned ? '📌 ' : ''}${escapeHtml(LANG === 'en' && n.titleEn ? n.titleEn : n.title)}</h3>
         <span class="news-date">${new Date(n.at).toLocaleDateString(LANG === 'en' ? 'en-US' : 'ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })}</span>
       </div>
-      <p class="news-body">${escapeHtml(n.body).replace(/\n/g, '<br>')}</p>
+      <p class="news-body">${escapeHtml(LANG === 'en' && n.bodyEn ? n.bodyEn : n.body).replace(/\n/g, '<br>')}</p>
       <div class="news-foot"><span class="muted">— ${escapeHtml(n.by || '運営')}</span>
         ${isAdmin ? `<span><button class="btn btn-sm btn-ghost" data-pin="${escapeHtml(n.id)}">${n.pinned ? '📌解除' : '📌固定'}</button> <button class="btn btn-sm btn-ghost" data-del="${escapeHtml(n.id)}" style="color:var(--red)">削除</button></span>` : ''}
       </div>

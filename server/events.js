@@ -73,6 +73,8 @@ export function makeEvent(typeId, name, minutes, username) {
     type: type.id,
     icon: type.icon,
     name: name || type.name,
+    // 管理者が独自名を付けたときはそれを両言語で使う（誤訳よりマシ）。
+    nameEn: name && name !== type.name ? name : type.nameEn,
     desc: type.desc,
     descEn: type.descEn,
     bonus: type.bonus,

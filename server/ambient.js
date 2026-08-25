@@ -301,8 +301,9 @@ export function crowdMood(now = Date.now()) {
 export function residentLine(resident = null, now = Date.now()) {
   const ctx = worldCtx({ now });
   const r = resident || weightedByChat(ctx.active);
-  if (!r) return { name: pickPersona({ guestChance: 0.15 }).name, text: randomChatLine(), resident: null };
-  return { name: r.name, text: composeLine(r, ctx, custom.lines), resident: r };
+  if (!r) return { name: pickPersona({ guestChance: 0.15 }).name, text: randomChatLine(), tr: null, resident: null };
+  const out = composeLine(r, ctx, custom.lines);
+  return { name: r.name, text: out.text, tr: out.tr, resident: r };
 }
 
 // Chattier residents speak more often; lurkers mostly lurk. Chat 3.0 adds a
@@ -332,7 +333,7 @@ export function randomChatLine() {
 export function chooseReplies(text, now = Date.now(), forcedName = null) {
   if (!custom.toggles.reactions) return [];
   const ctx = worldCtx({ now });
-  return crowdReplies(text, ctx, forcedName).map(x => ({ name: x.resident.name, text: x.text, delay: x.delay, resident: x.resident }));
+  return crowdReplies(text, ctx, forcedName).map(x => ({ name: x.resident.name, text: x.text, tr: x.tr || null, delay: x.delay, resident: x.resident }));
 }
 
 // ---------------------------------------------------------------------------

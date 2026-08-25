@@ -35,7 +35,7 @@ import {
   addGuildPoints, guildView, guildLevel, guildCoinBonus, ghostGuildViews, tagOfName, validateGuildInput,
   ghostGuildOfResident,
 } from './guilds.js';
-import { TRANSLATE_ENGINE } from './translate.js';
+import { TRANSLATE_ENGINE, translateChat } from './translate.js';
 import {
   validateBackup, applyRestore, snapshot, listSnapshots, readSnapshot, BACKUP_VERSION,
 } from './backup.js';
@@ -200,6 +200,7 @@ function currentSeason() {
     id: `s${effIdx}${gen ? '-' + gen : ''}`,
     number,
     name: custom ? o.name : `シーズン ${number}`,
+    nameEn: custom ? o.name : `Season ${number}`,
     startedAt: extended && o.startedAt ? o.startedAt : SEASON_EPOCH + (effIdx - 1) * SEASON_MS,
     endsAt: extended ? o.endsAt : SEASON_EPOCH + effIdx * SEASON_MS,
   };
@@ -838,7 +839,7 @@ app.get('/api/status', (_req, res) => {
     // Menu badge only — the full poll (and the caller's own vote) comes from
     // /api/poll, which needs auth to know who is asking.
     poll: db.meta.poll && pollOpen(db.meta.poll)
-      ? { id: db.meta.poll.id, question: db.meta.poll.question, endsAt: db.meta.poll.endsAt, voterCount: Object.keys(db.meta.poll.voters).length }
+      ? { id: db.meta.poll.id, question: db.meta.poll.question, questionEn: db.meta.poll.questionEn || null, endsAt: db.meta.poll.endsAt, voterCount: Object.keys(db.meta.poll.voters).length }
       : null,
   });
 });
@@ -913,9 +914,12 @@ function syncPoll() {
       message: w
         ? `🗳️ 投票「${poll.question}」終了！ 1位は「${w.text}」（${w.votes}票）${w.tied ? '…同率でした！' : ''}`
         : `🗳️ 投票「${poll.question}」は投票ゼロで終了しました`,
+      messageEn: w
+        ? `🗳️ Poll "${poll.questionEn || poll.question}" closed! Winner: "${w.textEn || w.text}" (${w.votes} votes)${w.tied ? ' — a tie!' : ''}`
+        : `🗳️ Poll "${poll.questionEn || poll.question}" closed with no votes`,
       from: '大会運営',
     });
-    if (w) battle.crowd.react('poll_close', { winner: w.text });
+    if (w) battle.crowd.react('poll_close', { winner: w });   // renderSlot が言語別に text/textEn を選ぶ
     saveDb();
   }
   return poll;
@@ -946,9 +950,10 @@ app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
     battle.broadcastAll({
       type: 'announce',
       message: w ? `🗳️ 投票終了！ 1位は「${w.text}」（${w.votes}票）` : '🗳️ 投票を締め切りました',
+      messageEn: w ? `🗳️ Poll closed! Winner: "${w.textEn || w.text}" (${w.votes} votes)` : '🗳️ The poll has been closed',
       from: req.user.username,
     });
-    if (w) battle.crowd.react('poll_close', { winner: w.text });
+    if (w) battle.crowd.react('poll_close', { winner: w });   // renderSlot が言語別に text/textEn を選ぶ
     saveDb();
     return res.json({ poll: pollView(db.meta.poll, req.user.id, true) });
   }
@@ -973,10 +978,11 @@ app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
     battle.broadcastAll({
       type: 'announce',
       message: `🗳️→${ev.icon} 投票で選ばれた「${ev.name}」を開催します！ ${ev.desc}`,
+      messageEn: `🗳️→${ev.icon} The vote has spoken — "${ev.nameEn || ev.name}" is now live! ${ev.descEn || ''}`,
       from: req.user.username,
     });
     battle.crowd.feed({ icon: ev.icon, real: true, who: '運営', text: `投票で選ばれたイベント「${ev.name}」が開幕！`, textEn: `The voted event "${ev.name}" has begun!` });
-    battle.crowd.react('poll_close', { winner: w.text });
+    battle.crowd.react('poll_close', { winner: w });   // renderSlot が言語別に text/textEn を選ぶ
     setTimeout(() => battle.crowd.react('event_start'), 25000);
     saveDb();
     return res.json({ event: currentEvent(), poll: pollView(poll, req.user.id, true) });
@@ -995,12 +1001,33 @@ app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
   });
   if (out.error) return res.status(400).json({ error: out.error });
   db.meta.poll = out.poll;
-  battle.broadcastAll({
-    type: 'announce',
-    message: `🗳️ 投票受付中：「${out.poll.question}」 メニューの「🗳️ 投票」から参加しよう！`,
-    from: req.user.username,
-  });
-  battle.crowd.react('poll_open');
+  // 英語版を自動補完（イベント選択肢はcreatePollがネイティブ英語名を付与済み）。
+  const pollRef = out.poll;
+  let qReady = null;
+  if (!pollRef.questionEn) {
+    const qTr = translateChat(pollRef.question).then(tr2 => {
+      if (tr2 && tr2.lang === 'en' && db.meta.poll && db.meta.poll.id === pollRef.id) { pollRef.questionEn = tr2.text; saveDb(); }
+    }).catch(() => {});
+    // アナウンスの英語文に日本語の質問文が残らないよう、翻訳を最大2秒だけ待つ
+    qReady = Promise.race([qTr, new Promise(r => setTimeout(r, 2000))]);
+  }
+  for (const o of pollRef.options) {
+    if (o.textEn) continue;
+    translateChat(o.text).then(tr2 => {
+      if (tr2 && tr2.lang === 'en' && db.meta.poll && db.meta.poll.id === pollRef.id) { o.textEn = tr2.text; saveDb(); }
+    }).catch(() => {});
+  }
+  const announcePoll = () => {
+    if (!db.meta.poll || db.meta.poll.id !== pollRef.id) return;   // 待機中に締切/削除されたら黙る
+    battle.broadcastAll({
+      type: 'announce',
+      message: `🗳️ 投票受付中：「${pollRef.question}」 メニューの「🗳️ 投票」から参加しよう！`,
+      messageEn: `🗳️ New poll: "${pollRef.questionEn || pollRef.question}" — vote from the 🗳️ Poll menu!`,
+      from: req.user.username,
+    });
+    battle.crowd.react('poll_open');
+  };
+  if (qReady) qReady.then(announcePoll); else announcePoll();
   saveDb();
   res.json({ poll: pollView(out.poll, req.user.id, true) });
 });
@@ -1106,50 +1133,70 @@ app.delete('/api/admin/guilds/:id', requireAuth, requireAdmin, (req, res) => {
 // News (お知らせ)
 // ---------------------------------------------------------------------------
 
+// Fixed ids: a re-seeded post is THE SAME post, so backup merges dedupe it
+// instead of multiplying the launch announcements on every restore. Every seed
+// post is fully bilingual; boot also BACKFILLS titleEn/bodyEn onto copies that
+// were stored before the fields existed (so production news heals itself).
+const SEED_NEWS = [
+  { id: 'seed-1', pinned: true,
+    title: '🎉 v2.0 超進化アップデート！', titleEn: '🎉 The v2.0 Mega Evolution Update!',
+    body: '⚡アルティメットスキル（9種・ショップの「奥義」タブ）／📋デイリー・ウィークリーミッション／🏅実績58種／📊戦績ダッシュボード／⏱️タイムアタック／🤝協力プレイ（2人で1盤面）を追加しました。ラインを消して⚡ゲージを溜め、必殺技を撃とう！',
+    bodyEn: 'Added: ⚡ Ultimate Skills (9 kinds — see the Ultimates tab in the shop), 📋 daily & weekly missions, 🏅 58 achievements, 📊 a stats dashboard, ⏱️ Time Attack, and 🤝 co-op (two players, one board). Clear lines to charge the ⚡ gauge and unleash your ultimate!' },
+  { id: 'seed-2',
+    title: '🎪 イベント＆🗳️投票スタート', titleEn: '🎪 Events & 🗳️ Polls are here',
+    body: '期間限定イベントが8種類に！コイン祭り・経験値ブースト・ジェムラッシュ・ボス襲来・奥義祭・ラッキーデー…開催中はメニューにバナーが出ます。投票機能では次のイベントをみんなで決められます（投票するまで結果は秘密）。',
+    bodyEn: 'Eight kinds of limited-time events: Coin Festival, XP Boost, Gem Rush, Boss Invasion, Ultimate Festival, Lucky Day and more — a banner appears on the menu while one is live. With polls, everyone decides the next event together (results stay hidden until you vote).' },
+  { id: 'seed-3',
+    title: '🏰 ギルド機能・🌑 深淵ダンジョン・📰 ニュース', titleEn: '🏰 Guilds, 🌑 the Abyss Dungeon & 📰 News',
+    body: 'ギルドを作って週間ポイントを競おう（ギルドレベルでコインボーナス）。塔を制覇した猛者には過去最難関「深淵」が待っています。このニュース欄には運営からのお知らせが届きます。',
+    bodyEn: 'Found a guild and race for weekly points (guild levels grant coin bonuses). For those who conquered the Tower, the hardest challenge yet — the Abyss — awaits. This news feed is where announcements from the team arrive.' },
+  { id: 'seed-4',
+    title: '🎭 にぎわい2.0 ＆ チャット自動翻訳', titleEn: '🎭 Crowd 2.0 & chat auto-translation',
+    body: 'ロビーの住人たちが性格を持ちました。イベントや投票に反応し、対戦した相手はあとでチャットで話しかけてくることも。チャットは日本語⇄英語を自動翻訳します（設定でOFFにできます）。',
+    bodyEn: 'The lobby residents now have personalities. They react to events and polls, and someone you just fought might message you afterwards. Chat auto-translates between Japanese and English (you can turn it off in Settings).' },
+  { id: 'seed-v26', pinned: true,
+    title: '🛡️ v2.6 不滅アップデート！', titleEn: '🛡️ The v2.6 Immortal Update!',
+    body: 'アップデートでデータが消える時代は終わりです。シーズン・バトルパス・実績の受け取り状況・イベント・投票がすべて更新後も引き継がれるようになりました。さらに🏅実績が全100種に大増量、新モード「🧩パズル遺跡」（ステージ制パズル・星3評価）と「⛏️採掘場」（せり上がる地層を掘って鉱石を集めろ）が登場！チャットの住人たちも会話エンジン3.0に進化して、同じセリフの繰り返しがほぼなくなりました。',
+    bodyEn: 'The era of updates wiping your data is over: seasons, battle pass, claimed achievements, events and polls all carry over now. Achievements grew to 100, and two new modes arrived — 🧩 Puzzle Ruins (stage-based puzzles with 3-star ratings) and ⛏️ The Mines (dig through rising strata for ore)! The chat residents also evolved to conversation engine 3.0 — repeated lines are nearly gone.' },
+  { id: 'seed-throne', pinned: true,
+    title: '👑 王座システム登場！', titleEn: '👑 The Throne System is here!',
+    body: '各ランキング（スコア・レート・タイムアタック・ダンジョン・ウィークリー・パズル遺跡・採掘場）の現在1位は「王座」を保持します。王者はランキング・チャット・プロフィールに👑が輝き、王座1つにつき毎日のログインボーナスに+150🪙+2💎の俸給が上乗せ！王座が奪われるとライブフィードで全プレイヤーに速報が流れます。頂点を獲れ！',
+    bodyEn: 'The current #1 of every leaderboard (Score, Rating, Time Attack, Dungeon, Weekly, Puzzle Ruins, The Mines) holds a Throne. Champions get a shining 👑 on rankings, in chat and on their profile — plus a daily stipend of +150🪙 +2💎 per throne! When a throne changes hands, the live feed announces it to everyone. Take the top!' },
+  { id: 'seed-ghost',
+    title: '👻 奇妙な報告が届いています', titleEn: '👻 Strange reports are coming in',
+    body: '複数のプレイヤーから「メニューで何かに見られている気がする」という報告が届いています。運営で調査したところ、ロゴの周辺で不可解な現象を確認しました。じっと見つめていると、不吉な数字が頭に浮かぶそうです。……くれぐれも、その回数だけ触れたりしないように。実績欄に見慣れない👻が現れた方は、運営までご一報ください。',
+    bodyEn: 'Several players report feeling watched on the menu screen. Our investigation confirmed something inexplicable near the logo. Those who stare at it say an unlucky number comes to mind… Whatever you do, please do not touch it that many times. If an unfamiliar 👻 has appeared in your achievements, contact the team immediately.' },
+  { id: 'seed-v272', pinned: true,
+    title: '🎰 ガチャ2.0 ＆ 👑多冠報酬アップデート！', titleEn: '🎰 Gacha 2.0 & 👑 Multi-Crown Rewards!',
+    body: '【🎰ガチャ2.0】✨天井システム登場 — 40連以内にSSR以上が必ず出ます！10連はSR以上1枠確定。さらに🌈ガチャ限定装備3種（プリズム／オーロラ／彗星）が追加 — SSRからのみ入手できます。【👑多冠報酬】王座を2つ以上同時に持つと永久バッジ＋俸給ボーナス（二冠+200🪙3💎〜全冠+1,600🪙24💎）、名前の色も冠の数で豪華に（3冠以上は虹色！）。王者の住人はチャットに常駐するようになりました。【🐛バグ報告】設定→「バグ報告」から不具合を直接送れます！',
+    bodyEn: '[🎰 Gacha 2.0] The ✨pity system is here — an SSR or better is guaranteed within 40 pulls, and every 10-pull guarantees at least one SR+. Three 🌈 gacha-exclusive items were added (Prism / Aurora / Comet) — SSR pulls only. [👑 Multi-Crown] Hold 2+ thrones at once for permanent badges and bigger stipends (up to +1,600🪙 24💎 for all seven) — and your name color gets fancier with each crown (3+ crowns = rainbow!). Champion residents now hang out in chat. [🐛 Bug Reports] Report issues directly from Settings → Report a bug!' },
+  { id: 'seed-throne2', pinned: true,
+    title: '👑 王座戦線にAIプレイヤーが参戦！', titleEn: '👑 AI players join the throne race!',
+    body: 'ロビーの住人たち（AIプレイヤー）も王座を持つようになりました。いま各ランキングの👑は住人が守っています — 彼らの実力は日々変化するので、王座も自然に動きます。スコアで追い抜けばその瞬間あなたが王者。AIから王座を奪還して、俸給と栄光を手にしましょう！（住人はログインボーナスを受け取れないので、俸給はいつでも人間のもの）',
+    bodyEn: 'The lobby residents (AI players) can now hold thrones too. Right now the 👑 on each leaderboard is defended by a resident — their skills drift daily, so thrones naturally change hands. Beat their score and the crown is yours that instant. Reclaim the thrones from the AI for stipends and glory! (Residents can’t collect login bonuses, so the stipend always belongs to humans.)' },
+  { id: 'seed-v210', pinned: true,
+    title: '💥 オンライン対戦 超絶大型アップデート ＆ 🌐完全翻訳！', titleEn: '💥 Online Battle MEGA Update & 🌐 Full Translation!',
+    body: '【💥アタック戦】新モード登場！2ライン以上を同時消しすると相手の盤面にお邪魔ブロックを送り込めます（3ライン=4個、4ライン+コンボで最大9個）。攻撃も防御も自分の腕次第 — オンラインメニューの「💥アタック戦」から！【🔁再戦】デュエル/アタック戦の結果画面に再戦ボタンが付きました。30秒以内なら同じ相手にリベンジできます。【📈昇格演出】レートが新しい帯（🥈シルバー〜👑グランドマスター）に到達すると紙吹雪でお祝い＋ゴールド以上は全体アナウンス！【🌐翻訳大型アップデート】ニュース・投票・イベント・チャットの住人の会話まで、英語表示が全面ネイティブ品質になりました。',
+    bodyEn: '[💥 Attack Duel] New mode! Clear 2+ lines at once to send garbage blocks onto your opponent\'s board (3 lines = 4 cells, up to 9 with combos). Attack and defend with pure skill — find it under "💥 Attack Duel" in the online menu! [🔁 Rematch] Duel and Attack results now have a rematch button — get your revenge against the same opponent within 30 seconds. [📈 Promotions] Reaching a new rank tier (🥈 Silver through 👑 Grandmaster) triggers a confetti celebration, and Gold+ promotions are announced to everyone! [🌐 Translation Overhaul] News, polls, events and even the residents\' chat are now native-quality in English.' },
+];
+
 function seedNews() {
-  // Fixed ids: a re-seeded post is THE SAME post, so backup merges dedupe it
-  // instead of multiplying the launch announcements on every restore.
-  const mk = (id, title, body, daysAgo, pinned = false) => ({
-    id, title, body, pinned, by: 'るみまき',
-    at: Date.now() - daysAgo * 86400000,
-  });
-  if (!db.news.length) {
-    db.news.push(
-      mk('seed-1', '🎉 v2.0 超進化アップデート！', '⚡アルティメットスキル（9種・ショップの「奥義」タブ）／📋デイリー・ウィークリーミッション／🏅実績58種／📊戦績ダッシュボード／⏱️タイムアタック／🤝協力プレイ（2人で1盤面）を追加しました。ラインを消して⚡ゲージを溜め、必殺技を撃とう！', 0, true),
-      mk('seed-2', '🎪 イベント＆🗳️投票スタート', '期間限定イベントが8種類に！コイン祭り・経験値ブースト・ジェムラッシュ・ボス襲来・奥義祭・ラッキーデー…開催中はメニューにバナーが出ます。投票機能では次のイベントをみんなで決められます（投票するまで結果は秘密）。', 0),
-      mk('seed-3', '🏰 ギルド機能・🌑 深淵ダンジョン・📰 ニュース', 'ギルドを作って週間ポイントを競おう（ギルドレベルでコインボーナス）。塔を制覇した猛者には過去最難関「深淵」が待っています。このニュース欄には運営からのお知らせが届きます。', 0),
-      mk('seed-4', '🎭 にぎわい2.0 ＆ チャット自動翻訳', 'ロビーの住人たちが性格を持ちました。イベントや投票に反応し、対戦した相手はあとでチャットで話しかけてくることも。チャットは日本語⇄英語を自動翻訳します（設定でOFFにできます）。', 0),
-    );
-  }
-  const V26_TITLE = '🛡️ v2.6 不滅アップデート！';
-  if (!db.news.some(n => n && (n.id === 'seed-v26' || n.title === V26_TITLE))) {
-    db.news.push(mk('seed-v26', V26_TITLE,
-      'アップデートでデータが消える時代は終わりです。シーズン・バトルパス・実績の受け取り状況・イベント・投票がすべて更新後も引き継がれるようになりました。さらに🏅実績が全100種に大増量、新モード「🧩パズル遺跡」（ステージ制パズル・星3評価）と「⛏️採掘場」（せり上がる地層を掘って鉱石を集めろ）が登場！チャットの住人たちも会話エンジン3.0に進化して、同じセリフの繰り返しがほぼなくなりました。',
-      0, true));
-  }
-  const THRONE_TITLE = '👑 王座システム登場！';
-  if (!db.news.some(n => n && (n.id === 'seed-throne' || n.title === THRONE_TITLE))) {
-    db.news.push(mk('seed-throne', THRONE_TITLE,
-      '各ランキング（スコア・レート・タイムアタック・ダンジョン・ウィークリー・パズル遺跡・採掘場）の現在1位は「王座」を保持します。王者はランキング・チャット・プロフィールに👑が輝き、王座1つにつき毎日のログインボーナスに+150🪙+2💎の俸給が上乗せ！王座が奪われるとライブフィードで全プレイヤーに速報が流れます。頂点を獲れ！',
-      0, true));
-  }
-  const GHOST_TITLE = '👻 奇妙な報告が届いています';
-  if (!db.news.some(n => n && (n.id === 'seed-ghost' || n.title === GHOST_TITLE))) {
-    db.news.push(mk('seed-ghost', GHOST_TITLE,
-      '複数のプレイヤーから「メニューで何かに見られている気がする」という報告が届いています。運営で調査したところ、ロゴの周辺で不可解な現象を確認しました。じっと見つめていると、不吉な数字が頭に浮かぶそうです。……くれぐれも、その回数だけ触れたりしないように。実績欄に見慣れない👻が現れた方は、運営までご一報ください。',
-      0, false));
-  }
-  const V272_TITLE = '🎰 ガチャ2.0 ＆ 👑多冠報酬アップデート！';
-  if (!db.news.some(n => n && (n.id === 'seed-v272' || n.title === V272_TITLE))) {
-    db.news.push(mk('seed-v272', V272_TITLE,
-      '【🎰ガチャ2.0】✨天井システム登場 — 40連以内にSSR以上が必ず出ます！10連はSR以上1枠確定。さらに🌈ガチャ限定装備3種（プリズム／オーロラ／彗星）が追加 — SSRからのみ入手できます。【👑多冠報酬】王座を2つ以上同時に持つと永久バッジ＋俸給ボーナス（二冠+200🪙3💎〜全冠+1,600🪙24💎）、名前の色も冠の数で豪華に（3冠以上は虹色！）。王者の住人はチャットに常駐するようになりました。【🐛バグ報告】設定→「バグ報告」から不具合を直接送れます！',
-      0, true));
-  }
-  const THRONE2_TITLE = '👑 王座戦線にAIプレイヤーが参戦！';
-  if (!db.news.some(n => n && (n.id === 'seed-throne2' || n.title === THRONE2_TITLE))) {
-    db.news.push(mk('seed-throne2', THRONE2_TITLE,
-      'ロビーの住人たち（AIプレイヤー）も王座を持つようになりました。いま各ランキングの👑は住人が守っています — 彼らの実力は日々変化するので、王座も自然に動きます。スコアで追い抜けばその瞬間あなたが王者。AIから王座を奪還して、俸給と栄光を手にしましょう！（住人はログインボーナスを受け取れないので、俸給はいつでも人間のもの）',
-      0, true));
+  // ループ内で push すると2件目以降の判定が狂うので「元から空だったか」を先に確定
+  const hadNews = db.news.length > 0;
+  for (const p of SEED_NEWS) {
+    const existing = db.news.find(n => n && (n.id === p.id || n.title === p.title));
+    if (existing) {
+      // 既存の日本語のみの投稿に英語を後から補完（本番が自己修復する）
+      if (!existing.titleEn) existing.titleEn = p.titleEn;
+      if (!existing.bodyEn) existing.bodyEn = p.bodyEn;
+      continue;
+    }
+    // seed-1..4 は初期ロビー用 — ニュースが既に流れているサーバーには足さない
+    if (['seed-1', 'seed-2', 'seed-3', 'seed-4'].includes(p.id) && hadNews) continue;
+    db.news.push({
+      id: p.id, title: p.title, titleEn: p.titleEn, body: p.body, bodyEn: p.bodyEn,
+      pinned: !!p.pinned, by: 'るみまき', at: Date.now(),
+    });
   }
 }
 
@@ -1207,7 +1254,7 @@ function newsView() {
     .slice()
     .sort((a, b) => (b.pinned - a.pinned) || (b.at - a.at))
     .slice(0, 40)
-    .map(n => ({ id: n.id, title: n.title, body: n.body, pinned: !!n.pinned, at: n.at, by: n.by }));
+    .map(n => ({ id: n.id, title: n.title, titleEn: n.titleEn || null, body: n.body, bodyEn: n.bodyEn || null, pinned: !!n.pinned, at: n.at, by: n.by }));
 }
 
 app.get('/api/news', (_req, res) => {
@@ -1221,10 +1268,13 @@ app.post('/api/admin/news', requireAuth, requireAdmin, (req, res) => {
   if (!title || !body) return res.status(400).json({ error: 'タイトルと本文を入力してください' });
   const n = { id: crypto.randomUUID(), title, body, pinned: !!req.body.pinned, by: req.user.username, at: Date.now() };
   db.news.push(n);
+  // 英語版を自動翻訳で補完（外部エンジン設定時は高品質、なければ辞書）。
+  translateChat(title).then(tr2 => { if (tr2 && tr2.lang === 'en') { n.titleEn = tr2.text; saveDb(); } }).catch(() => {});
+  translateChat(body).then(tr2 => { if (tr2 && tr2.lang === 'en') { n.bodyEn = tr2.text; saveDb(); } }).catch(() => {});
   if (db.news.length > 200) db.news.shift();
   saveDb();
   if (req.body.announce !== false) {
-    battle.broadcastAll({ type: 'announce', message: `📰 お知らせ「${title}」を公開しました。メニューの「ニュース」から読めます`, from: req.user.username });
+    battle.broadcastAll({ type: 'announce', message: `📰 お知らせ「${title}」を公開しました。メニューの「ニュース」から読めます`, messageEn: `📰 News posted: "${title}" — read it from the News menu`, from: req.user.username });
     battle.crowd.feed({ icon: '📰', real: true, who: '運営', text: `お知らせ「${title}」が公開された`, textEn: `News posted: "${title}"` });
   }
   battle.broadcastAll({ type: 'news', latestAt: n.at });
@@ -1234,8 +1284,23 @@ app.post('/api/admin/news', requireAuth, requireAdmin, (req, res) => {
 app.post('/api/admin/news/:id', requireAuth, requireAdmin, (req, res) => {
   const n = db.news.find(x => x.id === req.params.id);
   if (!n) return res.status(404).json({ error: 'お知らせが見つかりません' });
-  if (typeof req.body.title === 'string') n.title = req.body.title.trim().replace(/[<>]/g, '').slice(0, 60) || n.title;
-  if (typeof req.body.body === 'string') n.body = req.body.body.trim().replace(/[<>]/g, '').slice(0, 2000) || n.body;
+  if (typeof req.body.title === 'string') {
+    const v = req.body.title.trim().replace(/[<>]/g, '').slice(0, 60);
+    if (v && v !== n.title) {
+      n.title = v;
+      // 本文が変わったら英語版も作り直す（古い自動翻訳が残り続けないように）
+      n.titleEn = null;
+      translateChat(v).then(tr2 => { if (tr2 && tr2.lang === 'en') { n.titleEn = tr2.text; saveDb(); } }).catch(() => {});
+    }
+  }
+  if (typeof req.body.body === 'string') {
+    const v = req.body.body.trim().replace(/[<>]/g, '').slice(0, 2000);
+    if (v && v !== n.body) {
+      n.body = v;
+      n.bodyEn = null;
+      translateChat(v).then(tr2 => { if (tr2 && tr2.lang === 'en') { n.bodyEn = tr2.text; saveDb(); } }).catch(() => {});
+    }
+  }
   if (typeof req.body.pinned === 'boolean') n.pinned = req.body.pinned;
   saveDb();
   res.json({ news: newsView() });
@@ -1281,6 +1346,7 @@ app.post('/api/admin/event', requireAuth, requireAdmin, (req, res) => {
     battle.broadcastAll({
       type: 'announce',
       message: `${ev.icon} 期間限定イベント「${ev.name}」開催！ ${ev.desc}`,
+      messageEn: `${ev.icon} Limited-time event "${ev.nameEn || ev.name}" is live! ${ev.descEn || ''}`,
       from: req.user.username,
     });
     battle.crowd.feed({ icon: ev.icon, real: true, who: '運営', text: `イベント「${ev.name}」が始まった！ ${ev.desc}`, textEn: `Event "${ev.name}" is live! ${ev.descEn}` });
@@ -1291,6 +1357,7 @@ app.post('/api/admin/event', requireAuth, requireAdmin, (req, res) => {
     battle.broadcastAll({
       type: 'announce',
       message: `${was ? was.icon : '🌪️'} 期間限定イベントは終了しました。また次回！`,
+      messageEn: `${was ? was.icon : '🌪️'} The limited-time event has ended — see you next time!`,
       from: req.user.username,
     });
     battle.crowd.react('event_end');
@@ -1396,7 +1463,9 @@ function finalizeWeeklyRankings() {
     db.news.push({
       id: crypto.randomUUID(),
       title: `🏆 週間チャレンジ結果発表（${week}）`,
+      titleEn: `🏆 Weekly Challenge results (${week})`,
       body: `先週の週間チャレンジの結果です（参加${players.length}人）！\n${top.join('\n')}\n\n参加者全員に順位に応じたコイン＆ジェムをお届けしました。ゲームを開くと受け取れます。今週のチャレンジも開催中！`,
+      bodyEn: `Last week's Weekly Challenge results (${players.length} entrants)!\n${top.join('\n')}\n\nEveryone received coins & gems for their placement — open the game to claim. This week's challenge is already live!`,
       pinned: false, by: '運営', at: Date.now(),
     });
     if (db.news.length > 200) db.news.shift();
@@ -2287,6 +2356,7 @@ app.post('/api/admin/restore', (req, res) => {
   battle.broadcastAll({
     type: 'announce',
     message: '💾 データを復元しました。ページを再読み込みすると反映されます',
+    messageEn: '💾 Data restored — reload the page to see it',
     from: actor.username,
   });
   // Backup-password restores log the admin straight in with the restored account.
@@ -2332,6 +2402,7 @@ app.post('/api/admin/maintenance', requireAuth, requireAdmin, (req, res) => {
   battle.broadcastAll({
     type: 'announce',
     message: db.meta.maintenance ? '🛠 まもなくメンテナンスを開始します' : '✅ メンテナンスが終了しました',
+    messageEn: db.meta.maintenance ? '🛠 Maintenance is starting shortly' : '✅ Maintenance is over',
     from: req.user.username,
   });
   res.json({ maintenance: db.meta.maintenance });
@@ -2388,6 +2459,7 @@ app.post('/api/admin/grant-all', requireAuth, requireAdmin, (req, res) => {
   battle.broadcastAll({
     type: 'announce',
     message: `🎁 運営から全員に ${parts} をプレゼント！（再ログインまたは画面更新で反映）`,
+    messageEn: `🎁 A gift for everyone from the team: ${parts}! (relog or refresh to receive)`,
     from: req.user.username,
   });
   res.json({ ok: true, affected, coins, gems });
