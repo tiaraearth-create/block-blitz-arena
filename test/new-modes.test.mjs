@@ -130,6 +130,20 @@ try {
   // v2.6 lifetime counters tick.
   check('totalWins counter ticks', me.user.stats.totalWins >= 3, `totalWins=${me.user.stats.totalWins}`);
   check('playSecs accumulates', me.user.stats.playSecs > 0, `playSecs=${me.user.stats.playSecs}`);
+
+  // ---- 👑 王座 (thrones) ----
+  check('sole real player holds the score/puzzle/dig thrones', ['score', 'puzzle', 'dig'].every(b => (me.user.thrones || []).includes(b)), JSON.stringify(me.user.thrones));
+  check('rating throne needs >1000 (never handed out at the floor)', !(me.user.thrones || []).includes('rating'), JSON.stringify(me.user.thrones));
+  check('leaderboard marks the throne row', !!meRowP && (lbP.rows.find(r => r.username === 'モードテスト') || {}).throne === true, '');
+  // A stronger player takes the score throne → announced on the live feed.
+  const u2 = await j('/api/register', { method: 'POST', body: { username: '簒奪者', password: 'pass1234' } });
+  await j('/api/game/result', { method: 'POST', body: { mode: 'solo', score: 90000, lines: 60, maxCombo: 8, duration: 300, won: true } }, u2.token);
+  const me2t = await j('/api/me', {}, u2.token);
+  check('score throne transfers to the new #1', (me2t.user.thrones || []).includes('score'), JSON.stringify(me2t.user.thrones));
+  const meAfter = await j('/api/me', {}, tok);
+  check('dethroned player keeps the other thrones only', !(meAfter.user.thrones || []).includes('score') && (meAfter.user.thrones || []).includes('puzzle'), JSON.stringify(meAfter.user.thrones));
+  const feed = await j('/api/feed');
+  check('takeover announced on the live feed', (feed.feed || []).some(f => f.real && /王座/.test(f.text || '')), JSON.stringify((feed.feed || []).filter(f => f.real).map(f => f.text).slice(-3)));
 } catch (err) {
   check('test harness', false, err.stack || String(err));
 } finally {

@@ -769,8 +769,9 @@ function waitForRestore() {
         refreshPollBanner();
         if (data.dailyBonus) {
           const st = data.dailyBonus.streak || 1;
-          toast(t(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? `（🔥${st}日連続！）` : ''}`,
-            `🎁 Daily bonus +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? ` (🔥${st}-day streak!)` : ''}`), 'ok', 3500);
+          const tb = data.dailyBonus.throneBonus;
+          toast(t(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? `（🔥${st}日連続！）` : ''}${tb ? `（👑王座の俸給 +${tb.coins}🪙+${tb.gems}💎込み）` : ''}`,
+            `🎁 Daily bonus +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? ` (🔥${st}-day streak!)` : ''}${tb ? ` (incl. 👑 throne stipend +${tb.coins}🪙+${tb.gems}💎)` : ''}`), 'ok', tb ? 4500 : 3500);
           audio.coin();
         }
         // 週明け: ランキング報酬が待っていたら受け取りダイアログを出す。

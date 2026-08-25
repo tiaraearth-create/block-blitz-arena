@@ -142,7 +142,13 @@ function cancelReply() {
   $('#chatReplyBar').classList.add('hidden');
 }
 
-const PROFILE_BADGES = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅' };
+const PROFILE_BADGES = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️' };
+// 👑 王座のボード名（プロフィールカード表示用）
+const THRONE_LABELS = {
+  score: ['スコア', 'Score'], rating: ['レート', 'Rating'], sprint: ['タイムアタック', 'Time Attack'],
+  dungeon: ['ダンジョン', 'Dungeon'], weekly: ['ウィークリー', 'Weekly'],
+  puzzle: ['パズル遺跡', 'Puzzle Ruins'], dig: ['採掘場', 'The Mines'],
+};
 
 async function showProfileCard(name) {
   audio.click();
@@ -183,6 +189,7 @@ async function showProfileCard(name) {
         <div class="pc-stat"><b>${fmtNum(p.pvpWins)}${t('勝', 'W')}${fmtNum(p.pvpLosses)}${t('敗', 'L')}</b><span>${t('オンライン対戦', 'Online battles')}</span></div>
         <div class="pc-stat"><b>F${fmtNum(p.dungeonMax)}</b><span>${t('ダンジョン', 'Dungeon')}</span></div>
       </div>
+      ${(p.thrones || []).length ? `<p class="center pc-thrones">👑 ${p.thrones.map(b => THRONE_LABELS[b] ? t(THRONE_LABELS[b][0], THRONE_LABELS[b][1]) : b).join(' ・ ')} ${t('王者', 'Champion')}</p>` : ''}
       ${(p.badges || []).length ? `<p class="center pc-badges">${p.badges.map(b => PROFILE_BADGES[b] || '🎖️').join(' ')}</p>` : ''}
       ${p.kind === 'resident' ? `<p class="muted center" style="font-size:11px">${t('この住人はアリーナのAIプレイヤーです', 'This resident is one of the arena AI players')}</p>` : ''}
     </div>
@@ -207,7 +214,7 @@ function appendMsg(msg, scroll = true) {
   const tag = msg.tag ? `<span class="cm-tag">[${escapeHtml(msg.tag)}]</span>` : '';
   const reply = msg.reply ? `<span class="cm-reply">↩ <b>${escapeHtml(msg.reply.from)}</b> ${escapeHtml(msg.reply.text)}</span>` : '';
   el.innerHTML = `
-    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''}">${isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${hh}:${mm}</span>
+    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''}">${msg.crown ? '👑' : ''}${isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${hh}:${mm}</span>
     ${reply}
     <span class="cm-bubble">${escapeHtml(useTr ? msg.tr.text : msg.text)}</span>
     ${useTr ? `<button class="cm-tr" title="${t('原文を表示', 'Show original')}">🌐 ${msg.tr.engine === 'api' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}</button>` : ''}

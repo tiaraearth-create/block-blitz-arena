@@ -1396,6 +1396,8 @@ export function initBattle(server, deps) {
             u.stats.chatMessages = (u.stats.chatMessages || 0) + 1;   // 実績用の生涯カウンター
           }
           const entry = { type: 'chat', id: crypto.randomUUID(), from: sockName(ws), role, text, at: Date.now(), tag: tagOf(sockName(ws), u) };
+          // 👑 王座ホルダーはチャットでも王冠つき（db.meta.thrones は index.js が管理）
+          if (u && db.meta.thrones && Object.values(db.meta.thrones).some(t2 => t2 && t2.userId === u.id)) entry.crown = true;
           // 返信: 引用元のスニペットを載せる。相手が住人なら必ず返事が来る。
           const replyTarget = msg.replyTo ? chatHistory.find(e2 => e2.id === String(msg.replyTo)) : null;
           if (replyTarget) {

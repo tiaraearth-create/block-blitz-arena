@@ -246,6 +246,7 @@ function publicUser(user) {
     equippedTitle: user.equippedTitle || null,
     achievements: user.achievements,
     rankRewards: user.rankRewards || [],
+    thrones: thronesOf(user.id),
     guild: user.guildId && db.guilds[user.guildId]
       ? { id: user.guildId, name: db.guilds[user.guildId].name, tag: db.guilds[user.guildId].tag, icon: db.guilds[user.guildId].icon, owner: db.guilds[user.guildId].ownerId === user.id }
       : null,
@@ -574,6 +575,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     ults, items, pieces,
   });
   saveDb();
+  refreshThrones(true);   // 👑 did this run take (or defend) a #1 spot?
   return {
     coins, bpXp, accXp, score, badge, gems: gems + eventGems,
     streak: s.winStreak || 0, streakBonus,
@@ -650,12 +652,18 @@ function grantDaily(user) {
   s.dailyLogins = (s.dailyLogins || 0) + 1;   // lifetime total, streak-independent
   user.lastDaily = today;
   const mult = Math.min(3, 1 + (s.loginStreak - 1) * 0.35);
-  const coins = Math.round(DAILY_COINS * mult);
-  const gems = Math.round(DAILY_GEMS * mult);
+  let coins = Math.round(DAILY_COINS * mult);
+  let gems = Math.round(DAILY_GEMS * mult);
+  // 👑 王座の俸給 — a throne holder collects extra with every daily bonus.
+  const thrones = thronesOf(user.id);
+  const throneBonus = thrones.length
+    ? { coins: THRONE_DAILY_COINS * thrones.length, gems: THRONE_DAILY_GEMS * thrones.length, boards: thrones }
+    : null;
+  if (throneBonus) { coins += throneBonus.coins; gems += throneBonus.gems; }
   user.coins += coins;
   user.gems += gems;
   saveDb();
-  return { coins, gems, streak: s.loginStreak };
+  return { coins, gems, streak: s.loginStreak, throneBonus };
 }
 
 function sanitizeName(name) {
@@ -787,6 +795,7 @@ function currentEvent() {
 
 // Public lightweight status (menu online counter + event).
 app.get('/api/status', (_req, res) => {
+  refreshThrones();   // polled every ~25s by clients — keeps 👑 takeovers timely
   res.json({
     online: battle.displayOnline(),
     activeMatches: battle.displayMatches(),
@@ -837,6 +846,7 @@ app.get('/api/profile/:name', (req, res) => {
       pvpWins: s.pvpWins, pvpLosses: s.pvpLosses, dungeonMax: s.dungeonMax || 0,
       badges: u.badges, title: tl ? { id: tl.id, name: tl.name, color: tl.color } : null,
       guildTag: u.guildId && db.guilds[u.guildId] ? db.guilds[u.guildId].tag : null,
+      thrones: thronesOf(u.id),
     } });
   }
   const r = residentByName(name);
@@ -1086,6 +1096,12 @@ function seedNews() {
       'アップデートでデータが消える時代は終わりです。シーズン・バトルパス・実績の受け取り状況・イベント・投票がすべて更新後も引き継がれるようになりました。さらに🏅実績が全100種に大増量、新モード「🧩パズル遺跡」（ステージ制パズル・星3評価）と「⛏️採掘場」（せり上がる地層を掘って鉱石を集めろ）が登場！チャットの住人たちも会話エンジン3.0に進化して、同じセリフの繰り返しがほぼなくなりました。',
       0, true));
   }
+  const THRONE_TITLE = '👑 王座システム登場！';
+  if (!db.news.some(n => n && (n.id === 'seed-throne' || n.title === THRONE_TITLE))) {
+    db.news.push(mk('seed-throne', THRONE_TITLE,
+      '各ランキング（スコア・レート・タイムアタック・ダンジョン・ウィークリー・パズル遺跡・採掘場）の現在1位は「王座」を保持します。王者はランキング・チャット・プロフィールに👑が輝き、王座1つにつき毎日のログインボーナスに+150🪙+2💎の俸給が上乗せ！王座が奪われるとライブフィードで全プレイヤーに速報が流れます。頂点を獲れ！',
+      0, true));
+  }
 }
 
 function newsView() {
@@ -1296,6 +1312,87 @@ function finalizeWeeklyRankings() {
   saveDb();
 }
 
+// ---------------------------------------------------------------------------
+// 👑 王座 (Thrones) — the CURRENT #1 real player of each leaderboard.
+// Derived from stats on demand (memoized); db.meta.thrones only snapshots the
+// holders so takeovers can be detected and announced. Holding a throne shows a
+// crown on the leaderboard / in chat / on the profile, and pays a stipend on
+// top of the daily login bonus. Admins, banned players and ghost residents
+// can never hold one — this is for real players.
+// ---------------------------------------------------------------------------
+
+const THRONE_BOARDS = {
+  score:   { name: 'スコア',         nameEn: 'Score',       value: u => u.stats.bestScore || 0 },
+  rating:  { name: 'レート',         nameEn: 'Rating',      value: u => u.stats.rating || 0, min: 1001 },
+  sprint:  { name: 'タイムアタック', nameEn: 'Time Attack', value: u => (u.stats.sprint && u.stats.sprint.s60) || 0 },
+  dungeon: { name: 'ダンジョン',     nameEn: 'Dungeon',     value: u => u.stats.dungeonMax || 0 },
+  weekly:  { name: 'ウィークリー',   nameEn: 'Weekly',      value: u => (u.stats.weekly && u.stats.weekly.week === weekIdOf(currentWeekNum()) ? u.stats.weekly.best : 0) },
+  puzzle:  { name: 'パズル遺跡',     nameEn: 'Puzzle Ruins', value: u => u.stats.puzzleStage || 0 },
+  dig:     { name: '採掘場',         nameEn: 'The Mines',   value: u => u.stats.digDepth || 0 },
+};
+const THRONE_DAILY_COINS = 150;
+const THRONE_DAILY_GEMS = 2;
+
+let thronesMemo = { at: 0, map: null };
+
+function computeThrones() {
+  const now = Date.now();
+  if (thronesMemo.map && now - thronesMemo.at < 5000) return thronesMemo.map;
+  const map = {};
+  const players = Object.values(db.users).filter(u => !u.banned && u.role !== 'admin' && u.stats && u.stats.gamesPlayed > 0);
+  for (const [board, def] of Object.entries(THRONE_BOARDS)) {
+    let best = null, bestV = 0;
+    for (const u of players) {
+      const v = Number(def.value(u)) || 0;
+      if (v < (def.min || 1)) continue;
+      // Ties go to the older account — the incumbent defends the throne.
+      if (v > bestV || (v === bestV && best && u.createdAt < best.createdAt)) { best = u; bestV = v; }
+    }
+    if (best) map[board] = { userId: best.id, username: best.username, value: bestV };
+  }
+  thronesMemo = { at: now, map };
+  return map;
+}
+
+// Diff against the stored holders and announce takeovers. The very first
+// computation (fresh DB / just restored) seeds silently — no boot spam.
+// force=true bypasses the memo — callers that just CHANGED stats use it, or a
+// freshly-cached pre-change map would hide the takeover for a few seconds.
+function refreshThrones(force = false) {
+  if (force) thronesMemo.at = 0;
+  const cur = computeThrones();
+  const prev = db.meta.thrones;
+  const next = {};
+  let moved = false;
+  for (const [board, t] of Object.entries(cur)) {
+    const old = prev && prev[board];
+    next[board] = { userId: t.userId, username: t.username, value: t.value, at: old && old.userId === t.userId ? old.at : Date.now() };
+    if (!old || old.userId !== t.userId) moved = true;
+  }
+  if (prev && Object.keys(prev).some(b => !next[b])) moved = true;
+  if (!prev) { db.meta.thrones = next; saveDb(); return; }
+  if (!moved) return;
+  for (const [board, t] of Object.entries(next)) {
+    const old = prev[board];
+    if (old && old.userId === t.userId) continue;
+    const def = THRONE_BOARDS[board];
+    battle.crowd.feed({
+      icon: '👑', real: true, who: t.username,
+      text: old ? `${t.username} が ${old.username} から${def.name}の王座を奪取！！` : `${t.username} が${def.name}の王座に就いた！`,
+      textEn: old ? `${t.username} seized the ${def.nameEn} throne from ${old.username}!!` : `${t.username} claimed the ${def.nameEn} throne!`,
+    });
+    battle.crowd.react('throne', { you: t.username, board: def.name });
+  }
+  db.meta.thrones = next;
+  saveDb();
+}
+
+function thronesOf(userId) {
+  if (!userId) return [];
+  const map = db.meta.thrones || computeThrones();
+  return Object.keys(map).filter(b => map[b] && map[b].userId === userId);
+}
+
 // Claim every pending ranking reward at once.
 app.post('/api/rank/claim', requireAuth, maintenanceGuard, (req, res) => {
   migrateUser(req.user);
@@ -1328,6 +1425,7 @@ app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
 
 app.get('/api/leaderboard', (req, res) => {
   finalizeWeeklyRankings();
+  refreshThrones();   // Elo changes happen over websockets — catch up here
   const board = ['rating', 'dungeon', 'weekly', 'sprint', 'puzzle', 'dig'].includes(req.query.board) ? req.query.board : 'score';
   const week = weekIdOf(currentWeekNum());
   const weeklyBestOf = u => (u.stats.weekly && u.stats.weekly.week === week ? u.stats.weekly.best : 0);
@@ -1374,8 +1472,11 @@ app.get('/api/leaderboard', (req, res) => {
       : board === 'dig' ? (b.digDepth || 0) - (a.digDepth || 0)
       : b.bestScore - a.bestScore)
     .slice(0, 100);
+  // 👑 mark the throne holder's row (real players only — ghosts never reign).
+  const throne = (db.meta.thrones || {})[board];
+  if (throne) for (const r of rows) if (r.username === throne.username) r.throne = true;
   // The weekly board pays prizes at the Monday reset — send the tier table.
-  res.json({ board, rows, ...(board === 'weekly' ? { rewards: rankRewardsTable() } : {}) });
+  res.json({ board, rows, throne: throne ? { username: throne.username, since: throne.at } : null, ...(board === 'weekly' ? { rewards: rankRewardsTable() } : {}) });
 });
 
 // ---------------------------------------------------------------------------
@@ -2376,7 +2477,10 @@ function autoRestoreFromSeed() {
     db.meta.seedHash = seedHash;
     setLiveScale(db.meta.popScale ?? 1);
     setCustom(db.meta.ambient);
-    saveDb();
+    // Synchronous write, not the debounced saveDb: if the process dies before
+    // a debounced write lands (SIGTERM flush doesn't run on every platform),
+    // the seedHash is lost and the next boot re-applies the whole seed.
+    flushDb();
     console.log(`[seed] 同梱バックアップを自動復元: 追加${report.added} 更新${report.updated} 維持${report.kept} → 合計${report.after}人${adopted ? `（バトルパス引き継ぎ${adopted}件）` : ''}`);
   } catch (err) {
     console.error('[seed] 自動復元に失敗:', err.message);

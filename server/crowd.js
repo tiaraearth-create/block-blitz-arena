@@ -1192,6 +1192,27 @@ for (const [cat, pools] of Object.entries(REPLY_EXP)) {
     REPLIES[cat] = { ja: pools.ja.slice(), en: pools.en.slice() };
   }
 }
+// 👑 王座の奪取・戴冠への住民リアクション（{you}=新王者、{board}=ボード名）
+REACTIONS.throne = {
+  ja: [
+    '{you}さんが{board}の王座とったの！？やば',
+    'うわ、{board}の1位変わってる…{you}さん強すぎ',
+    '{you}さん戴冠おめでとう！！',
+    '{board}王者{you}さんか…次は俺が奪う',
+    '王座戦えぐいことになってるな',
+    '{you}さんの👑見た？本物じゃん',
+    '{board}の頂点、ついに動いたか',
+    '俺も王座ほしい…毎日ボーナスもらえるんでしょ',
+  ],
+  en: [
+    'wait {you} took the {board} throne?!',
+    'the crown moved — gg {you}!',
+    'congrats on the coronation {you} 👑',
+    'enjoy the throne {you}, I\'m coming for it',
+    'throne race is heating up fr',
+  ],
+};
+
 // 深度/depth は先行する rush ルールが取るので、採掘固有の語だけで判定する
 // （\bmine は "mine"(所有代名詞) を誤爆するため不使用）。
 REPLY_RULES.splice(REPLY_RULES.length - 1, 0,

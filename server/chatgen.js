@@ -154,7 +154,7 @@ export function tickTopic(ctx) {
 const REACTION_TOPIC = {
   event_start: 'event', event_end: 'event',
   poll_open: 'poll', poll_close: 'poll', poll_voted: 'poll', poll_swing: 'poll', poll_lastcall: 'poll',
-  champion: 'ranking', royale_win: 'royale', coop_done: 'coop',
+  champion: 'ranking', royale_win: 'royale', coop_done: 'coop', throne: 'ranking',
 };
 
 export function adoptTopic(id, ctx = {}) {

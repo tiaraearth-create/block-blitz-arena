@@ -666,9 +666,9 @@ export async function openLeaderboard(board = 'score') {
     }
     const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️' };
     list.innerHTML = rewardHead + data.rows.map((r, i) => `
-      <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
+      <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
-        <div class="lb-name">${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
+        <div class="lb-name">${r.throne ? '<span class="lb-crown" title="現王者">👑</span>' : ''}${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
           <span class="lb-badges">${(r.badges || []).map(b => badgeIcons[b] || '').join('')}</span>
           ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.name)}》</span>` : ''}
           <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}${board === 'sprint' && r.sprint180 ? ` ・ ${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? ` ・ 🌑A${fmt(r.abyssMax)}` : ''}</div>
