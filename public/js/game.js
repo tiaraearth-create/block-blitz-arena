@@ -351,6 +351,27 @@ export class GameView {
     ctx.fillStyle = g;
     ctx.fillRect(-20, -20, this.W + 40, this.H + 40);
 
+    // Aurora board: translucent light ribbons waving across the upper sky.
+    if (theme.aurora) {
+      const hues = [160, 200, 285];
+      for (let b = 0; b < 3; b++) {
+        ctx.globalAlpha = 0.10 + 0.05 * Math.sin(this.time * 0.7 + b * 2.1);
+        ctx.fillStyle = `hsl(${hues[b] + 12 * Math.sin(this.time * 0.3 + b)}, 90%, 60%)`;
+        ctx.beginPath();
+        const baseY = this.H * (0.10 + b * 0.09);
+        ctx.moveTo(-20, baseY);
+        for (let px = -20; px <= this.W + 20; px += 24) {
+          ctx.lineTo(px, baseY + Math.sin(px * 0.012 + this.time * (0.8 + b * 0.25) + b * 3) * this.H * 0.05);
+        }
+        for (let px = this.W + 20; px >= -20; px -= 24) {
+          ctx.lineTo(px, baseY + this.H * (0.10 + b * 0.02) + Math.sin(px * 0.010 + this.time * 0.6 + b) * this.H * 0.04);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
     // animated decorations
     for (const d of this.deco) {
       let x = d.x * this.W;

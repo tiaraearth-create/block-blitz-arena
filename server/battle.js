@@ -84,7 +84,8 @@ export function initBattle(server, deps) {
   function postChat(name, text, extra = {}) {
     const entry = { type: 'chat', id: crypto.randomUUID(), from: name, role: 'user', text, at: Date.now(), tag: tagOf(name, null), ...extra };
     // 👑 王座を持つ住人（AIプレイヤー）の発言にも王冠（名前は一意・なりすまし不可）
-    if (db.meta.thrones && Object.values(db.meta.thrones).some(t => t && t.username === name)) entry.crown = true;
+    const crowns = db.meta.thrones ? Object.values(db.meta.thrones).filter(t => t && t.username === name).length : 0;
+    if (crowns) entry.crown = crowns;
     // Residents' lines come from ja/en templates — the table translates them
     // almost verbatim, so every crowd message ships with its translation.
     const tr = translateLocal(text, detectLang(text) === 'ja' ? 'en' : 'ja');
@@ -193,7 +194,11 @@ export function initBattle(server, deps) {
     for (let i = 0; i < 8; i++) {
       t += (1.5 + Math.random() * 3) * 60 * 1000;
       const line = residentLine(null, t);
-      chatHistory.push({ type: 'chat', id: crypto.randomUUID(), from: line.name, role: 'user', text: line.text, at: Math.min(t, Date.now() - 30000) });
+      const entry = { type: 'chat', id: crypto.randomUUID(), from: line.name, role: 'user', text: line.text, at: Math.min(t, Date.now() - 30000) };
+      // 起動時のシード履歴でも王者には王冠を（ライブ発言と見た目を揃える）
+      const crowns = db.meta.thrones ? Object.values(db.meta.thrones).filter(th => th && th.username === line.name).length : 0;
+      if (crowns) entry.crown = crowns;
+      chatHistory.push(entry);
     }
     void ctx;
   }
@@ -1398,8 +1403,11 @@ export function initBattle(server, deps) {
             u.stats.chatMessages = (u.stats.chatMessages || 0) + 1;   // 実績用の生涯カウンター
           }
           const entry = { type: 'chat', id: crypto.randomUUID(), from: sockName(ws), role, text, at: Date.now(), tag: tagOf(sockName(ws), u) };
-          // 👑 王座ホルダーはチャットでも王冠つき（db.meta.thrones は index.js が管理）
-          if (u && db.meta.thrones && Object.values(db.meta.thrones).some(t2 => t2 && t2.userId === u.id)) entry.crown = true;
+          // 👑 王座ホルダーはチャットでも王冠つき — 個数で名前の色も変わる
+          if (u && db.meta.thrones) {
+            const cn = Object.values(db.meta.thrones).filter(t2 => t2 && t2.userId === u.id).length;
+            if (cn) entry.crown = cn;
+          }
           // 返信: 引用元のスニペットを載せる。相手が住人なら必ず返事が来る。
           const replyTarget = msg.replyTo ? chatHistory.find(e2 => e2.id === String(msg.replyTo)) : null;
           if (replyTarget) {
@@ -1525,6 +1533,16 @@ export function initBattle(server, deps) {
       react,
       feed: (item) => postFeed(item),
       feedHistory: () => feedHistory.slice(),
+      // Boot ordering: the seeded history is built BEFORE the seed auto-restore
+      // computes thrones — index.js calls this afterwards so the 8 seed
+      // messages get their crowns too.
+      restampCrowns: () => {
+        for (const e of chatHistory) {
+          if (!e || !e.from) continue;
+          const n = db.meta.thrones ? Object.values(db.meta.thrones).filter(th => th && th.username === e.from).length : 0;
+          if (n) e.crown = n; else delete e.crown;
+        }
+      },
       // Admin test hooks: fire one thing right now, bypassing the cadence.
       test: (what) => {
         const ctx = worldCtx({ humans: humanNames() });

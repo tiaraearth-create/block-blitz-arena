@@ -138,7 +138,18 @@ export function popFactor(now = Date.now()) {
 
 export function activeResidents(now = Date.now()) {
   if (!effectiveScale()) return [];
-  return onlineResidents(getRoster(), now, popFactor(now));
+  const list = onlineResidents(getRoster(), now, popFactor(now));
+  // 👑 王座持ちの住人は時間帯に関係なく「王座を守りに」常駐する — ランキングの
+  // 顔ぶれ（王者）がチャットにもちゃんと現れる。
+  const world = worldProvider ? worldProvider() : null;
+  if (world && Array.isArray(world.thrones) && world.thrones.length) {
+    const have = new Set(list.map(r => r.id));
+    for (const name of world.thrones) {
+      const r = getRoster().find(x => x.name === name);
+      if (r && !have.has(r.id)) { list.push(r); have.add(r.id); }
+    }
+  }
+  return list;
 }
 
 export function residentById(id) { return getRoster().find(r => r.id === id) || null; }
@@ -153,7 +164,7 @@ export function setWorldProvider(fn) { worldProvider = fn; }
 export function worldCtx(extra = {}) {
   const w = worldProvider() || {};
   const now = extra.now || Date.now();
-  return buildCtx({ now, event: w.event, poll: w.poll, active: activeResidents(now), humans: extra.humans || [] });
+  return buildCtx({ now, event: w.event, poll: w.poll, thrones: w.thrones || [], active: activeResidents(now), humans: extra.humans || [] });
 }
 
 // ---------------------------------------------------------------------------

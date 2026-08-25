@@ -79,6 +79,15 @@ export const BOARDS = {
     accent: '#5ee86e',
     digital: true,
   },
+  // ガチャ限定ステージ
+  board_aurora: {
+    bg: ['#0a2438', '#050914'],
+    cell: 'rgba(140,255,220,0.08)',
+    cellLine: 'rgba(140,255,220,0.11)',
+    accent: '#7cf5c8',
+    aurora: true,
+    stars: true,
+  },
   // Admin-exclusive stage
   board_admin: {
     bg: ['#3c2a58', '#120a20'],
@@ -336,6 +345,44 @@ function drawDot(ctx, x, y, s, ci, alpha = 1) {
   ctx.globalAlpha = 1;
 }
 
+// ガチャ限定: 光を分解するプリズム — 面ごとに色相のずれた輝面を持つ宝石カット
+function drawPrism(ctx, x, y, s, ci, alpha = 1) {
+  const [light, dark] = PALETTE[ci];
+  const pad = s * 0.06, r = s * 0.14;
+  const hue = Math.round(((x * 0.9 + y * 1.3) / 2.6) % 360);
+  ctx.globalAlpha = alpha;
+  const g = ctx.createLinearGradient(x, y, x + s, y + s);
+  g.addColorStop(0, dark);
+  g.addColorStop(1, '#1a1030');
+  ctx.fillStyle = g;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  // three refracted facets, hue-shifted like split light
+  const facets = [
+    [[0.5, 0.12], [0.88, 0.5], [0.5, 0.5]],
+    [[0.5, 0.5], [0.88, 0.5], [0.5, 0.88]],
+    [[0.12, 0.5], [0.5, 0.12], [0.5, 0.88]],
+  ];
+  facets.forEach((f, i) => {
+    ctx.fillStyle = `hsla(${(hue + i * 55) % 360}, 90%, 62%, 0.55)`;
+    ctx.beginPath();
+    ctx.moveTo(x + s * f[0][0], y + s * f[0][1]);
+    ctx.lineTo(x + s * f[1][0], y + s * f[1][1]);
+    ctx.lineTo(x + s * f[2][0], y + s * f[2][1]);
+    ctx.closePath();
+    ctx.fill();
+  });
+  // piece-color rim keeps shapes readable
+  ctx.strokeStyle = light;
+  ctx.lineWidth = Math.max(1.4, s * 0.055);
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  roundRect(ctx, x + pad + s * 0.08, y + pad + s * 0.05, s - pad * 2 - s * 0.16, s * 0.14, r * 0.6);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
 function drawAdminRainbow(ctx, x, y, s, ci, alpha = 1) {
   const pad = s * 0.05, r = s * 0.2;
   ctx.globalAlpha = alpha;
@@ -371,6 +418,7 @@ export const SKINS = {
   skin_pastel: drawPastel,
   skin_magma: drawMagma,
   skin_dot: drawDot,
+  skin_prism: drawPrism,
   skin_admin: drawAdminRainbow,
 };
 

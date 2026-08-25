@@ -142,7 +142,7 @@ function cancelReply() {
   $('#chatReplyBar').classList.add('hidden');
 }
 
-const PROFILE_BADGES = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️' };
+const PROFILE_BADGES = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈' };
 // 👑 王座のボード名（プロフィールカード表示用）
 const THRONE_LABELS = {
   score: ['スコア', 'Score'], rating: ['レート', 'Rating'], sprint: ['タイムアタック', 'Time Attack'],
@@ -176,7 +176,7 @@ async function showProfileCard(name) {
       <div class="pc-head">
         <span class="pc-avatar">${p.kind === 'resident' ? '🎭' : p.role === 'admin' ? '🛡️' : '😀'}</span>
         <div class="pc-id">
-          <b>${p.guildTag ? `<span class="lb-tag">[${escapeHtml(p.guildTag)}]</span>` : ''}${escapeHtml(p.name)}</b>
+          <b class="${(p.thrones || []).length ? `crowned${Math.min(3, p.thrones.length)}` : ''}">${p.guildTag ? `<span class="lb-tag">[${escapeHtml(p.guildTag)}]</span>` : ''}${escapeHtml(p.name)}</b>
           ${p.title ? `<span class="pc-title" style="color:${escapeHtml(p.title.color || '#fff')}">《${escapeHtml(p.title.id ? catName(p.title) : p.title.name)}》</span>` : ''}
           <small class="muted">${p.kind === 'resident'
             ? `${escapeHtml((LANG === 'en' && p.archLabelEn) || p.archLabel || '')} ・ ${p.online ? t('🟢 オンライン', '🟢 online') : t(`⚫ ${p.hours ? `${p.hours[0]}時〜${p.hours[1] % 24}時に出現` : 'オフライン'}`, '⚫ offline')}`
@@ -214,7 +214,7 @@ function appendMsg(msg, scroll = true) {
   const tag = msg.tag ? `<span class="cm-tag">[${escapeHtml(msg.tag)}]</span>` : '';
   const reply = msg.reply ? `<span class="cm-reply">↩ <b>${escapeHtml(msg.reply.from)}</b> ${escapeHtml(msg.reply.text)}</span>` : '';
   el.innerHTML = `
-    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''}">${msg.crown ? '👑' : ''}${isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${hh}:${mm}</span>
+    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''} ${Number(msg.crown) ? `crowned${Math.min(3, Number(msg.crown))}` : ''}">${msg.crown ? '👑' : ''}${isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${hh}:${mm}</span>
     ${reply}
     <span class="cm-bubble">${escapeHtml(useTr ? msg.tr.text : msg.text)}</span>
     ${useTr ? `<button class="cm-tr" title="${t('原文を表示', 'Show original')}">🌐 ${msg.tr.engine === 'api' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}</button>` : ''}

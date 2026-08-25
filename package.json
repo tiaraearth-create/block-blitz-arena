@@ -8,7 +8,7 @@
     "start": "node server/index.js",
     "dev": "node server/index.js",
     "backup:pull": "node scripts/pull-backup.mjs",
-    "test": "node test/session.test.mjs && node test/rank-rewards.test.mjs && node test/new-modes.test.mjs && node test/crowd.test.mjs && node test/persist.test.mjs"
+    "test": "node test/session.test.mjs && node test/rank-rewards.test.mjs && node test/new-modes.test.mjs && node test/crowd.test.mjs && node test/persist.test.mjs && node test/gacha.test.mjs"
   },
   "engines": {
     "node": ">=18"

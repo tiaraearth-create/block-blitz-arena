@@ -33,6 +33,7 @@ export async function api(path, { method = 'GET', body } = {}) {
     const e = new Error(trServer(data.error) || `Error (${res.status})`);
     e.status = res.status;
     e.code = data.code || null;   // e.g. NO_USER (restore pending) / SESSION_ENDED
+    e.settled = !!data.settled;   // NO_USER + settled: the restore ran and the account isn't in it
     throw e;
   }
   if (data.user !== undefined) session.user = data.user;

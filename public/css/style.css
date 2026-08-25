@@ -897,6 +897,21 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
   box-shadow: 0 6px 0 #3f2c1a, 0 8px 24px rgba(180,83,9,0.42);
   text-shadow: 0 2px 4px rgba(0,0,0,0.4);
 }
+/* 🎰 ガチャ2.0: 天井/コレクションバー + 限定カード */
+.gc-pity { margin: 4px 0 10px; padding: 8px 10px; border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; background: rgba(255,255,255,0.04); }
+.gc-pity-head { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 3px; }
+.gc-pity-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.10); overflow: hidden; }
+.gc-pity-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #ffd75e, #ff6bd4); transition: width 0.4s ease; }
+.gc-pity-fill.col { background: linear-gradient(90deg, #43d9e8, #7cf5c8); }
+.gacha-card.gc-limited {
+  border: 1px solid transparent;
+  background-image: linear-gradient(rgba(20,16,40,0.92), rgba(20,16,40,0.92)), linear-gradient(90deg, #ffd75e, #ff6bd4, #4dd0ff, #7cf5c8, #ffd75e);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow: 0 0 18px rgba(255,107,212,0.45);
+}
+.shop-gachaonly { font-size: 11px; color: #ff6bd4; font-weight: 800; }
+
 /* 👑 王座: leaderboard highlight + profile chips */
 .lb-row.throne {
   border: 1px solid rgba(255, 215, 94, 0.55);
@@ -905,6 +920,19 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
 }
 .lb-crown { margin-right: 3px; filter: drop-shadow(0 0 4px rgba(255, 215, 94, 0.8)); }
 .pc-thrones { color: #ffd75e; font-weight: 800; font-size: 13px; margin: 6px 0 2px; }
+/* 冠の数で名前が輝く: 1冠=金 / 2冠=橙金+光 / 3冠以上=流れる虹 */
+.crowned1 { color: #ffd75e !important; }
+.crowned2 { color: #ffb02e !important; text-shadow: 0 0 8px rgba(255, 176, 46, 0.55); }
+.crowned3 {
+  background: linear-gradient(90deg, #ffd75e, #ff6bd4, #4dd0ff, #7cf5c8, #ffd75e);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent !important;
+  animation: crownShift 3s linear infinite;
+  text-shadow: none;
+}
+@keyframes crownShift { to { background-position: 300% 0; } }
 
 /* パズル遺跡: stage-select grid */
 .pz-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; max-height: 46vh; overflow-y: auto; padding: 4px 2px; }

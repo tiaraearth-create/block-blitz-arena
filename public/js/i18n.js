@@ -35,6 +35,9 @@ const CATALOG_EN = {
   skin_pastel: { name: 'Pastel', desc: 'Soft flat design' },
   skin_magma: { name: 'Magma', desc: 'Rock blocks with molten cracks' },
   skin_dot: { name: 'Polka Dot', desc: 'Pop polka-dot blocks' },
+  skin_prism: { name: 'Prism [Gacha]', desc: 'Light-splitting crystal blocks — gacha exclusive' },
+  board_aurora: { name: 'Aurora [Gacha]', desc: 'Northern lights stage — gacha exclusive' },
+  fx_comet: { name: 'Comet [Gacha]', desc: 'Streaking comets — gacha exclusive' },
   // boards
   board_default: { name: 'Midnight', desc: 'The standard night-sky theme' },
   board_ocean: { name: 'Deep Ocean', desc: 'Deep-sea gradient' },

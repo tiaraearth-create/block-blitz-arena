@@ -146,6 +146,7 @@ function migrateUser(user) {
   if (!Array.isArray(s.history)) s.history = [];
   if (!Array.isArray(user.achievements)) user.achievements = [];
   if (!Array.isArray(user.rankRewards)) user.rankRewards = [];   // pending ランキング報酬
+  if (typeof user.gachaPity !== 'number') user.gachaPity = 0;    // ガチャ天井カウンター
   if (!user.equipped) user.equipped = { ...DEFAULT_EQUIPPED };
   // Ultimate-skill slot (v2.0): everyone starts with the free 破壊の衝撃波.
   if (!user.equipped.ult) user.equipped.ult = DEFAULT_EQUIPPED.ult;
@@ -588,8 +589,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
 
 // Real players' notable moments go on the live feed (starred), and the crowd
 // may react. Capped per user so a hot streak doesn't flood the ticker.
-const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', weekly1: '🏅', puzzle: '🧩', dig: '⛏️' };
-const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner' };
+const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈' };
+const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination' };
 const feedAt = new Map();   // userId -> last feed timestamp
 function postRealFeed(user, notes) {
   if (!notes.length) return;
@@ -656,11 +657,23 @@ function grantDaily(user) {
   let coins = Math.round(DAILY_COINS * mult);
   let gems = Math.round(DAILY_GEMS * mult);
   // 👑 王座の俸給 — a throne holder collects extra with every daily bonus.
+  // 多冠は段階ボーナス上乗せ（2冠+200🪙3💎 / 3冠+400🪙6💎 / 5冠+800🪙12💎 / 7冠+1600🪙24💎）。
   const thrones = thronesOf(user.id);
-  const throneBonus = thrones.length
-    ? { coins: THRONE_DAILY_COINS * thrones.length, gems: THRONE_DAILY_GEMS * thrones.length, boards: thrones }
-    : null;
-  if (throneBonus) { coins += throneBonus.coins; gems += throneBonus.gems; }
+  let throneBonus = null;
+  if (thrones.length) {
+    const n = thrones.length;
+    const tier = n >= 7 ? { coins: 1600, gems: 24, name: '全冠制覇' }
+      : n >= 5 ? { coins: 800, gems: 12, name: '五冠' }
+      : n >= 3 ? { coins: 400, gems: 6, name: '三冠' }
+      : n >= 2 ? { coins: 200, gems: 3, name: '二冠' } : null;
+    throneBonus = {
+      coins: THRONE_DAILY_COINS * n + (tier ? tier.coins : 0),
+      gems: THRONE_DAILY_GEMS * n + (tier ? tier.gems : 0),
+      boards: thrones, tier: tier ? tier.name : null,
+    };
+    coins += throneBonus.coins;
+    gems += throneBonus.gems;
+  }
   user.coins += coins;
   user.gems += gems;
   saveDb();
@@ -736,7 +749,11 @@ app.get('/api/me', (req, res) => {
     // A signed session whose account is not here (yet): the client keeps the
     // token and re-attaches by itself once the data is restored.
     if (req.tokenStatus === 'missing') {
-      return res.status(401).json({ error: 'アカウントのデータが見つかりません（データ復元待ち）', code: 'NO_USER', season: currentSeason() });
+      // settled: the seed auto-restore has ALREADY run and this account still
+      // isn't in it — it was created after the last backup and is not coming
+      // back. The client stops waiting and offers a fresh start instead of
+      // showing 復元待ち forever.
+      return res.status(401).json({ error: 'アカウントのデータが見つかりません（データ復元待ち）', code: 'NO_USER', settled: !!db.meta.seedHash, season: currentSeason() });
     }
     // Logged out elsewhere, deleted, expired, or signed with another secret.
     return res.status(401).json({ error: 'セッションが終了しました。もう一度ログインしてください', code: 'SESSION_ENDED', season: currentSeason() });
@@ -1104,6 +1121,12 @@ function seedNews() {
       '各ランキング（スコア・レート・タイムアタック・ダンジョン・ウィークリー・パズル遺跡・採掘場）の現在1位は「王座」を保持します。王者はランキング・チャット・プロフィールに👑が輝き、王座1つにつき毎日のログインボーナスに+150🪙+2💎の俸給が上乗せ！王座が奪われるとライブフィードで全プレイヤーに速報が流れます。頂点を獲れ！',
       0, true));
   }
+  const V272_TITLE = '🎰 ガチャ2.0 ＆ 👑多冠報酬アップデート！';
+  if (!db.news.some(n => n && (n.id === 'seed-v272' || n.title === V272_TITLE))) {
+    db.news.push(mk('seed-v272', V272_TITLE,
+      '【🎰ガチャ2.0】✨天井システム登場 — 40連以内にSSR以上が必ず出ます！10連はSR以上1枠確定。さらに🌈ガチャ限定装備3種（プリズム／オーロラ／彗星）が追加 — SSRからのみ入手できます。【👑多冠報酬】王座を2つ以上同時に持つと永久バッジ＋俸給ボーナス（二冠+200🪙3💎〜全冠+1,600🪙24💎）、名前の色も冠の数で豪華に（3冠以上は虹色！）。王者の住人はチャットに常駐するようになりました。【🐛バグ報告】設定→「バグ報告」から不具合を直接送れます！',
+      0, true));
+  }
   const THRONE2_TITLE = '👑 王座戦線にAIプレイヤーが参戦！';
   if (!db.news.some(n => n && (n.id === 'seed-throne2' || n.title === THRONE2_TITLE))) {
     db.news.push(mk('seed-throne2', THRONE2_TITLE,
@@ -1111,6 +1134,55 @@ function seedNews() {
       0, true));
   }
 }
+
+// ---------------------------------------------------------------------------
+// 🐛 バグ報告 — ゲストでも送れる。管理者パネルで確認・処理。
+// ---------------------------------------------------------------------------
+
+app.post('/api/bugreport', (req, res) => {
+  if (!rateLimit(`bug:${req.ip}`, 3, 10 * 60 * 1000)) {
+    return res.status(429).json({ error: '報告が多すぎます。少し待ってください' });
+  }
+  const text = String((req.body || {}).text || '').trim().slice(0, 1000);
+  if (text.length < 5) return res.status(400).json({ error: 'もう少し詳しく書いてください' });
+  db.bugreports = db.bugreports || [];
+  db.bugreports.push({
+    id: crypto.randomUUID(),
+    text,
+    by: req.user ? req.user.username : 'ゲスト',
+    role: req.user ? req.user.role : 'guest',
+    ua: String(req.headers['user-agent'] || '').slice(0, 160),
+    at: Date.now(),
+    status: 'open',
+  });
+  // Cap eviction: processed reports go first — a spammer must not be able to
+  // push the operator's PENDING reports out of the box.
+  if (db.bugreports.length > 300) {
+    const doneIdx = db.bugreports.findIndex(b => b && b.status === 'done');
+    if (doneIdx !== -1) db.bugreports.splice(doneIdx, 1);
+    else db.bugreports.shift();
+  }
+  saveDb();
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/bugreports', requireAuth, requireAdmin, (_req, res) => {
+  res.json({ reports: (db.bugreports || []).slice().reverse() });
+});
+
+app.post('/api/admin/bugreports/:id', requireAuth, requireAdmin, (req, res) => {
+  const b = (db.bugreports || []).find(x => x.id === req.params.id);
+  if (!b) return res.status(404).json({ error: '報告が見つかりません' });
+  b.status = req.body.status === 'open' ? 'open' : 'done';
+  saveDb();
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/bugreports/:id', requireAuth, requireAdmin, (req, res) => {
+  db.bugreports = (db.bugreports || []).filter(x => x.id !== req.params.id);
+  saveDb();
+  res.json({ ok: true });
+});
 
 function newsView() {
   return db.news
@@ -1407,6 +1479,10 @@ function refreshThrones(force = false) {
     const old = prev && prev[board];
     next[board] = { userId: t.userId, username: t.username, value: t.value, resident: !!t.resident, at: old && old.userId === t.userId ? old.at : Date.now() };
     if (!old || old.userId !== t.userId) moved = true;
+    // Same holder under a NEW name (rename): persist the fresh snapshot so the
+    // username-keyed displays (leaderboard crowns, chat presence) follow along
+    // — but don't announce a takeover that didn't happen.
+    else if (old.username !== t.username || old.value !== t.value) moved = true;
   }
   if (prev && Object.keys(prev).some(b => !next[b])) moved = true;
   if (!prev) { db.meta.thrones = next; saveDb(); return; }
@@ -1424,8 +1500,29 @@ function refreshThrones(force = false) {
     battle.crowd.react('throne', { you: t.username, board: def.name, notName: t.username });
   }
   db.meta.thrones = next;
+  // 多冠の節目（2/3/5/7冠）に達した実プレイヤーへ永久バッジ。冠を失っても
+  // バッジは残る — 「あの時代の王」の証。
+  const counts = new Map();
+  for (const t of Object.values(next)) if (!t.resident) counts.set(t.userId, (counts.get(t.userId) || 0) + 1);
+  for (const [userId, n] of counts) {
+    const u = db.users[userId];
+    if (!u) continue;
+    for (const [need, id] of [[2, 'crown2'], [3, 'crown3'], [5, 'crown5'], [7, 'crown7']]) {
+      if (n >= need && !u.badges.includes(id)) {
+        u.badges.push(id);
+        battle.crowd.feed({
+          icon: '👑', real: true, who: u.username,
+          text: `${u.username} が${CROWN_TIER_NAMES[id]}を達成！バッジ獲得！`,
+          textEn: `${u.username} earned the ${CROWN_TIER_NAMES_EN[id]} badge!`,
+        });
+      }
+    }
+  }
   saveDb();
 }
+
+const CROWN_TIER_NAMES = { crown2: '二冠', crown3: '三冠', crown5: '五冠', crown7: '全冠制覇' };
+const CROWN_TIER_NAMES_EN = { crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination' };
 
 function thronesOf(userId) {
   if (!userId) return [];
@@ -1519,9 +1616,12 @@ app.get('/api/leaderboard', (req, res) => {
       : board === 'dig' ? (b.digDepth || 0) - (a.digDepth || 0)
       : b.bestScore - a.bestScore)
     .slice(0, 100);
-  // 👑 mark the throne holder's row (real players only — ghosts never reign).
+  // 👑 mark the throne holder's row + total crown counts (name colors scale).
   const throne = (db.meta.thrones || {})[board];
   if (throne) for (const r of rows) if (r.username === throne.username) r.throne = true;
+  const crownCounts = new Map();
+  for (const t of Object.values(db.meta.thrones || {})) if (t) crownCounts.set(t.username, (crownCounts.get(t.username) || 0) + 1);
+  for (const r of rows) { const c = crownCounts.get(r.username); if (c) r.crowns = c; }
   // The weekly board pays prizes at the Monday reset — send the tier table.
   res.json({ board, rows, throne: throne ? { username: throne.username, since: throne.at } : null, ...(board === 'weekly' ? { rewards: rankRewardsTable() } : {}) });
 });
@@ -1690,7 +1790,8 @@ app.get('/api/admin/transactions', requireAuth, requireAdmin, (_req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get('/api/shop', (req, res) => {
-  // Admin-exclusive cosmetics are invisible to everyone else.
+  // Admin-exclusive cosmetics are invisible to everyone else. Gacha-exclusive
+  // gear is listed (so players know it exists) but marked and unbuyable.
   const isAdmin = req.user && req.user.role === 'admin';
   res.json({ items: SHOP_ITEMS.filter(i => !i.adminOnly || isAdmin), boosters: BOOST_ITEMS.filter(i => !i.adminOnly || isAdmin) });
 });
@@ -1735,17 +1836,21 @@ app.post('/api/items/use', requireAuth, (req, res) => {
 const GACHA_COST_1 = 500;
 const GACHA_COST_10 = 4500;
 
-function gachaPull(user, lucky = false) {
+// ガチャ2.0: floor で下限レアリティを底上げできる（87=SSR以上確定、72=SR以上確定）。
+const GACHA_PITY = 40;   // 天井 — 40連以内にSSR以上が必ず出る
+
+function gachaPull(user, lucky = false, floor = 0) {
   // 🍀 Lucky Day skews every roll upward (exponent < 1), so the rare tiers at
   // the top of the range come up more often: N 50%→37%, SSR+ 13%→18%.
-  const roll = (lucky ? Math.pow(Math.random(), 0.7) : Math.random()) * 100;
+  const roll = floor + (lucky ? Math.pow(Math.random(), 0.7) : Math.random()) * (100 - floor);
   if (roll < 50) {   // N: coins
     const amount = 150 + Math.floor(Math.random() * 6) * 50;
     user.coins += amount;
     return { type: 'coins', amount, rarity: 'N' };
   }
-  if (roll < 72) {   // R: booster item
-    const it = BOOST_ITEMS[Math.floor(Math.random() * BOOST_ITEMS.length)];
+  if (roll < 72) {   // R: booster item (staff-only god items must never drop)
+    const pool = BOOST_ITEMS.filter(i => !i.adminOnly);
+    const it = pool[Math.floor(Math.random() * pool.length)];
     user.items[it.id] = (user.items[it.id] || 0) + 1;
     return { type: 'item', id: it.id, name: it.name, icon: it.icon, rarity: 'R' };
   }
@@ -1755,14 +1860,15 @@ function gachaPull(user, lucky = false) {
     return { type: 'gems', amount, rarity: 'SR' };
   }
   if (roll < 97) {   // SSR: unowned cosmetic (or big gems when complete)
-    const unowned = SHOP_ITEMS.filter(i => !i.default && !user.owned.includes(i.id));
+    // adminOnly gear must never drop; gachaOnly gear drops ONLY here.
+    const unowned = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !user.owned.includes(i.id));
     if (unowned.length === 0) {
       user.gems += 50;
       return { type: 'gems', amount: 50, rarity: 'SSR', complete: true };
     }
     const it = unowned[Math.floor(Math.random() * unowned.length)];
     user.owned.push(it.id);
-    return { type: 'cosmetic', id: it.id, name: it.name, cat: it.cat, rarity: 'SSR' };
+    return { type: 'cosmetic', id: it.id, name: it.name, cat: it.cat, rarity: 'SSR', limited: !!it.gachaOnly };
   }
   // UR: jackpot gems
   user.gems += 150;
@@ -1780,8 +1886,18 @@ app.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
     user.coins -= cost;
   }
   user.items = user.items || {};
-  const results = Array.from({ length: count }, () => gachaPull(user, !!bonus.gachaLuck));
   migrateUser(user);
+  // ガチャ2.0: 天井（40連でSSR以上確定）＋ 10連はSR以上1枠確定。
+  const isSRplus = r => r.rarity === 'SR' || r.rarity === 'SSR' || r.rarity === 'UR';
+  const results = [];
+  for (let i = 0; i < count; i++) {
+    let floor = 0;
+    if ((user.gachaPity || 0) >= GACHA_PITY - 1) floor = 87;                       // 天井到達: SSR以上
+    else if (count === 10 && i === 9 && !results.some(isSRplus)) floor = 72;      // 10連保証: SR以上
+    const r = gachaPull(user, !!bonus.gachaLuck, floor);
+    user.gachaPity = (r.rarity === 'SSR' || r.rarity === 'UR') ? 0 : (user.gachaPity || 0) + 1;
+    results.push(r);
+  }
   user.stats.gachaPulls = (user.stats.gachaPulls || 0) + count;
   user.stats.gachaSSR = (user.stats.gachaSSR || 0) + results.filter(r => r.rarity === 'SSR' || r.rarity === 'UR').length;
   saveDb();
@@ -1790,19 +1906,30 @@ app.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
   const ssr = results.find(r => r.rarity === 'SSR' && r.type === 'cosmetic');
   if (ur) postRealFeed(user, [{ icon: '🌟', ja: `${user.username} が UR を引き当てた！！`, en: `${user.username} hit the UR jackpot!!`, react: null }]);
   else if (ssr) postRealFeed(user, [{ icon: '🎰', ja: `${user.username} がガチャで SSR「${ssr.name}」を引いた！`, en: `${user.username} pulled SSR "${ssr.name}"!` }]);
-  res.json({ results, user: publicUser(user), cost, lucky: !!bonus.gachaLuck });
+  const collectibles = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly);
+  res.json({
+    results, user: publicUser(user), cost, lucky: !!bonus.gachaLuck,
+    pity: { count: user.gachaPity || 0, max: GACHA_PITY },
+    collection: { owned: collectibles.filter(i => user.owned.includes(i.id)).length, total: collectibles.length },
+  });
 });
 
 // Public gacha pricing so the UI can show the discounted cost.
-app.get('/api/gacha/info', (_req, res) => {
+app.get('/api/gacha/info', (req, res) => {
   const bonus = eventBonus(currentEvent());
   const mult = bonus.gachaDiscount || 1;
+  const collectibles = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly);
   res.json({
     cost1: Math.round(GACHA_COST_1 * mult),
     cost10: Math.round(GACHA_COST_10 * mult),
     base1: GACHA_COST_1, base10: GACHA_COST_10,
     lucky: !!bonus.gachaLuck,
     discounted: mult !== 1,
+    pityMax: GACHA_PITY,
+    ...(req.user ? {
+      pity: { count: req.user.gachaPity || 0, max: GACHA_PITY },
+      collection: { owned: collectibles.filter(i => req.user.owned.includes(i.id)).length, total: collectibles.length },
+    } : {}),
   });
 });
 
@@ -1812,6 +1939,7 @@ app.post('/api/shop/buy', requireAuth, maintenanceGuard, (req, res) => {
   const item = SHOP_ITEMS.find(i => i.id === req.body.itemId);
   if (!item) return res.status(404).json({ error: 'アイテムが見つかりません' });
   if (item.adminOnly) return res.status(403).json({ error: '管理者専用の装備です（非売品）' });
+  if (item.gachaOnly) return res.status(403).json({ error: '🎰 ガチャ限定の装備です（SSRで入手）' });
   const user = req.user;
   if (user.owned.includes(item.id)) return res.status(409).json({ error: 'すでに所持しています' });
   if (user[item.currency] < item.price) {
@@ -1983,7 +2111,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     // force re-login everywhere with the new password
     revokeAllTokens(target.id);
   }
-  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'abyss', 'weekly1', 'puzzle', 'dig'];
+  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'abyss', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7'];
   if (typeof b.grantBadge === 'string') {
     if (!KNOWN_BADGES.includes(b.grantBadge)) return res.status(400).json({ error: `バッジIDが不正です（${KNOWN_BADGES.join(' / ')}）` });
     if (!target.badges.includes(b.grantBadge)) target.badges.push(b.grantBadge);
@@ -2419,6 +2547,8 @@ const battle = initBattle(server, {
 setWorldProvider(() => ({
   event: currentEvent(),
   poll: db.meta.poll && pollOpen(db.meta.poll) ? db.meta.poll : null,
+  // 👑 王座保持者の名前 — 王者住人はチャットに常駐し、王者らしい発言をする
+  thrones: Object.values(db.meta.thrones || {}).filter(Boolean).map(t => t.username),
 }));
 
 // ---------------------------------------------------------------------------
@@ -2546,6 +2676,10 @@ seedAdmin();
 pinAdminPassword();
 seedNews();
 finalizeWeeklyRankings();   // pay out any week that ended while we were down
+// 👑 Thrones exist from second zero (silent first computation), and the seeded
+// chat history — built before the restore above — gets its crowns stamped.
+refreshThrones();
+battle.crowd.restampCrowns();
 console.log(`[chat] 自動翻訳エンジン: ${TRANSLATE_ENGINE === 'api' ? '外部API (TRANSLATE_URL)' : '内蔵フレーズ辞書'}`);
 
 // A boot snapshot means a bad restore is always one click away from undo.

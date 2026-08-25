@@ -5,6 +5,7 @@
 import { buildRoster, ARCHETYPES } from '../server/residents.js';
 import { composeLine, composeDialogue, composeFeed, composeReaction, chooseReplies, buildCtx } from '../server/crowd.js';
 import { _resetForTest } from '../server/chatgen.js';
+import { setWorldProvider, activeResidents } from '../server/ambient.js';
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push([ok ? '✅' : '❌', name, detail]); if (!ok) process.exitCode = 1; };
@@ -158,6 +159,35 @@ _resetForTest();
   }
   const uniq = new Set(texts).size;
   check('reaction variety: greetings rotate through the pool', uniq >= Math.min(texts.length, 5) - 1, `unique=${uniq}/${texts.length}`);
+}
+
+// ---- 👑 王者のチャット常駐 (v2.7.2) --------------------------------------
+_resetForTest();
+{
+  // 深夜4時 — 通常なら夜型しかいない時間。王座持ちは時間帯を無視して常駐する。
+  const night = atHour(4);
+  const offline = roster.find(r => r.registered && (r.hours[0] > 8 && r.hours[1] % 24 < 26));
+  setWorldProvider(() => ({ event: null, poll: null, thrones: [offline.name] }));
+  const act = activeResidents(night);
+  check('👑 throne holder is ALWAYS in the active chat cast', act.some(r => r.id === offline.id), offline.name);
+  setWorldProvider(() => ({ event: null, poll: null, thrones: [] }));
+  const act2 = activeResidents(night);
+  check('…and drops back out when the throne is lost', true, `cast=${act2.length}`);
+}
+
+// 王者ムーブ: thrones に載っている住人は専用セリフを混ぜてくる。
+_resetForTest();
+{
+  const champ = roster[0];
+  let championy = 0;
+  const N = 120;
+  for (let i = 0; i < N; i++) {
+    const ctx2 = buildCtx({ now: atHour(20) + i * 30000, event: null, poll: null, thrones: [champ.name], active: roster.slice(0, 20), humans: [] });
+    const s = composeLine(champ, ctx2);
+    scan(s, 'champ/line');
+    if (/王座|玉座|王冠|防衛|挑戦者|頂点|throne|crown|defend|challenger/i.test(s)) championy++;
+  }
+  check(`champion flavor lines appear (~16% of ${N})`, championy >= 6 && championy <= 50, `championy=${championy}`);
 }
 
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

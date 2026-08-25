@@ -40,6 +40,10 @@ export const SHOP_ITEMS = [
   { id: 'ult_fortress',  cat: 'ult', icon: '🛡️', name: '不落の城塞',     desc: '30秒間コンボが途切れず妨害も無効',   price: 200, currency: 'gems' },
   { id: 'ult_timestop',  cat: 'ult', icon: '⏳', name: '時間停止',        desc: '制限時間+12秒／ボスの攻撃を20秒封印', price: 260, currency: 'gems' },
   { id: 'ult_judgement', cat: 'ult', icon: '⚡', name: '神の裁き',        desc: '盤面を完全消滅させ超特大スコア',     price: 400, currency: 'gems' },
+  // ---- Gacha-exclusive gear (gachaOnly: never sold — SSR pull is the only way) ----
+  { id: 'skin_prism',   cat: 'skin',  name: 'プリズム【ガチャ限定】',   desc: '光を分解する虹の結晶ブロック', price: 0, currency: 'gems', gachaOnly: true },
+  { id: 'board_aurora', cat: 'board', name: 'オーロラ【ガチャ限定】',   desc: '極光が揺らめく夜のステージ',   price: 0, currency: 'gems', gachaOnly: true },
+  { id: 'fx_comet',     cat: 'fx',    name: '彗星【ガチャ限定】',       desc: '尾を引く彗星が走る消去エフェクト', price: 0, currency: 'gems', gachaOnly: true },
   // ---- Admin-exclusive gear (adminOnly: hidden from everyone else, unbuyable) ----
   { id: 'skin_admin',    cat: 'skin',  name: 'レインボー【管理者】', desc: '虹色に輝く運営専用ブロック', price: 0, currency: 'coins', adminOnly: true },
   { id: 'board_admin',   cat: 'board', name: '王の間【管理者】',     desc: '黄金に輝く運営専用ステージ', price: 0, currency: 'coins', adminOnly: true },

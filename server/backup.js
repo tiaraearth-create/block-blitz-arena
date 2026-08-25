@@ -147,6 +147,7 @@ export function applyRestore(db, data, mode = 'merge') {
     if (Array.isArray(data.transactions)) db.transactions = data.transactions;
     if (data.guilds && typeof data.guilds === 'object') db.guilds = data.guilds;
     if (Array.isArray(data.news)) db.news = data.news;
+    if (Array.isArray(data.bugreports)) db.bugreports = data.bugreports;
     if (data.revoked && typeof data.revoked === 'object') db.revoked = data.revoked;
     if (data.deleted && typeof data.deleted === 'object') db.deleted = data.deleted;
     if (data.meta && typeof data.meta === 'object') db.meta = { ...db.meta, ...data.meta };
@@ -270,6 +271,15 @@ export function applyRestore(db, data, mode = 'merge') {
     const seen = new Set(db.transactions.map(t => t && t.id).filter(Boolean));
     for (const t of data.transactions) {
       if (t && t.id && !seen.has(t.id)) { db.transactions.push(t); seen.add(t.id); }
+    }
+  }
+
+  // Bug reports: union by id so player reports survive a wipe too.
+  if (Array.isArray(data.bugreports)) {
+    db.bugreports = db.bugreports || [];
+    const seen = new Set(db.bugreports.map(b => b && b.id).filter(Boolean));
+    for (const b of data.bugreports) {
+      if (b && b.id && !seen.has(b.id)) { db.bugreports.push(b); seen.add(b.id); }
     }
   }
 

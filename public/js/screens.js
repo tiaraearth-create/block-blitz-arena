@@ -74,7 +74,7 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
@@ -242,6 +242,37 @@ function showRenameModal() {
 // ---------------------------------------------------------------------------
 // Credits
 // ---------------------------------------------------------------------------
+
+// 🐛 バグ報告 — ゲストでも送れる。管理者パネルの「🐛 バグ報告」に届く。
+export function showBugReportModal() {
+  const m = showModal(`
+    <h2>🐛 ${tr('バグ報告', 'Report a Bug')}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">
+      ${tr('見つけたバグや気になったことを教えてください！<br><small>「どのモードで・何をしたら・どうなったか」を書いてもらえると直しやすいです。</small>',
+          'Tell us about any bug you found!<br><small>Mode, what you did, and what happened — the more detail the faster the fix.</small>')}
+    </p>
+    <textarea id="bugText" maxlength="1000" rows="6" style="width:100%;resize:vertical"
+      placeholder="${tr('例）採掘場で地層が上がった瞬間にピースを置いたら、スコアが…', 'e.g. In the Mines, when I placed a piece right as the ground rose…')}"></textarea>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="bugCancel">${tr('やめる', 'Cancel')}</button>
+      <button class="btn btn-primary" id="bugSend">${tr('📮 送信', '📮 Send')}</button>
+    </div>`);
+  m.querySelector('#bugCancel').onclick = closeModal;
+  m.querySelector('#bugSend').onclick = async () => {
+    const text = m.querySelector('#bugText').value.trim();
+    if (text.length < 5) { toast(tr('もう少し詳しく書いてください', 'Please add a little more detail'), 'err', 2000); return; }
+    m.querySelector('#bugSend').disabled = true;
+    try {
+      await api('/api/bugreport', { method: 'POST', body: { text } });
+      closeModal();
+      audio.coin();
+      toast(tr('🐛 報告ありがとうございます！運営が確認します', '🐛 Thank you! The team will take a look'), 'ok', 3500);
+    } catch (err) {
+      m.querySelector('#bugSend').disabled = false;
+      toast(err.message, 'err', 2500);
+    }
+  };
+}
 
 function showCreditsModal() {
   const m = showModal(`
@@ -424,6 +455,10 @@ export function showSettingsModal() {
         <input id="setGuestName" type="text" maxlength="16" value="${escapeHtml(guestName)}" placeholder="${tr('ゲスト1234', 'Guest1234')}" style="width:130px">
       </div>`}
       <div class="settings-row">
+        <label>${tr('🐛 バグ報告', '🐛 Report a bug')}</label>
+        <button class="btn btn-sm btn-ghost" id="setBugReport">${tr('報告する', 'Report')}</button>
+      </div>
+      <div class="settings-row">
         <label>${tr('📜 クレジット', '📜 Credits')}</label>
         <button class="btn btn-sm btn-ghost" id="setCredits">${tr('見る', 'View')}</button>
       </div>
@@ -450,6 +485,7 @@ export function showSettingsModal() {
   });
 
   m.querySelector('#setCredits').onclick = () => showCreditsModal();
+  m.querySelector('#setBugReport').onclick = () => { audio.click(); closeModal(); showBugReportModal(); };
   m.querySelector('#setJukebox').onclick = () => { audio.click(); closeModal(); showJukeboxModal(); };
 
   const renameBtn = m.querySelector('#setRename');
@@ -664,11 +700,11 @@ export async function openLeaderboard(board = 'score') {
       }).join('');
       rewardHead = `<div class="lb-rewards">🎁 <b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
     }
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈' };
     list.innerHTML = rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
-        <div class="lb-name">${r.throne ? '<span class="lb-crown" title="現王者">👑</span>' : ''}${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
+        <div class="lb-name ${r.crowns ? `crowned${Math.min(3, r.crowns)}` : ''}">${r.throne ? '<span class="lb-crown" title="現王者">👑</span>' : ''}${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
           <span class="lb-badges">${(r.badges || []).map(b => badgeIcons[b] || '').join('')}</span>
           ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.name)}》</span>` : ''}
           <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}${board === 'sprint' && r.sprint180 ? ` ・ ${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? ` ・ 🌑A${fmt(r.abyssMax)}` : ''}</div>
@@ -751,7 +787,9 @@ function renderShop() {
           ? `<button class="btn btn-sm btn-primary" data-act="equip">${tr('装備する', 'Equip')}</button>`
           : item.adminOnly
             ? `<button class="btn btn-sm btn-ghost" disabled>${tr('👑 運営専用', '👑 Staff only')}</button>`
-            : `<button class="btn btn-sm btn-gold" data-act="buy">${cur} ${fmt(item.price)}</button>`}
+            : item.gachaOnly
+              ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${tr('🎰 ガチャ限定', '🎰 Gacha only')}</button>`
+              : `<button class="btn btn-sm btn-gold" data-act="buy">${cur} ${fmt(item.price)}</button>`}
     `;
     grid.appendChild(el);
     renderPreview(el.querySelector('.shop-preview'), item);
@@ -849,18 +887,37 @@ const RARITY_LABEL = { N: tr('ノーマル', 'Normal'), R: tr('レア', 'Rare'),
 export function openGacha() {
   if (!session.user) { showAuthModal(); return; }
   audio.click();
+  const pityMax = 40;
   const m = showModal(`
     <h2>${tr('🎰 カプセルマシン', '🎰 Capsule Machine')}</h2>
     <p class="muted center" style="margin-bottom:4px">${tr('コインで回して お宝ゲット！', 'Spin with coins and win treasure!')}</p>
-    <p class="center" style="margin-bottom:10px">${tr('所持コイン', 'Your coins')}: <b id="gcCoins">🪙 ${fmt(session.user.coins)}</b></p>
+    <p class="center" style="margin-bottom:6px">${tr('所持コイン', 'Your coins')}: <b id="gcCoins">🪙 ${fmt(session.user.coins)}</b></p>
+    <div class="gc-pity">
+      <div class="gc-pity-head"><span>✨ ${tr('天井', 'Pity')}</span><b id="gcPityText">…</b></div>
+      <div class="gc-pity-bar"><div id="gcPityFill" class="gc-pity-fill" style="width:0%"></div></div>
+      <div class="gc-pity-head" style="margin-top:4px"><span>📚 ${tr('コレクション', 'Collection')}</span><b id="gcColText">…</b></div>
+      <div class="gc-pity-bar"><div id="gcColFill" class="gc-pity-fill col" style="width:0%"></div></div>
+    </div>
     <div id="gcResults" class="gacha-results"></div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="gcClose">${tr('閉じる', 'Close')}</button>
       <button class="btn btn-primary" id="gcPull1">${tr('1回 🪙500', '1 pull 🪙500')}</button>
-      <button class="btn btn-gold" id="gcPull10">${tr('10連 🪙4,500', '10 pulls 🪙4,500')}</button>
+      <button class="btn btn-gold" id="gcPull10">${tr('10連 🪙4,500', '10 pulls 🪙4,500')}<small style="display:block;font-size:9px">${tr('SR以上1枠確定', '1 SR+ guaranteed')}</small></button>
     </div>
-    <p class="muted center" style="font-size:10px;margin-top:8px">${tr('N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム150 3%', 'N Coins 50% ・ R Items 22% ・ SR Gems 15% ・ SSR Cosmetics 10% ・ UR 150 Gems 3%')}<br>${tr('スキン等をコンプ済みの場合はジェムに変換されます', 'Duplicate cosmetics are converted to gems')}</p>`);
+    <p class="muted center" style="font-size:10px;margin-top:8px">${tr('N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム150 3%', 'N Coins 50% ・ R Items 22% ・ SR Gems 15% ・ SSR Cosmetics 10% ・ UR 150 Gems 3%')}<br>${tr(`✨ ${pityMax}連以内にSSR以上が必ず出ます（天井） ・ 🌈 ガチャ限定装備はSSRからのみ入手`, `✨ SSR+ guaranteed within ${pityMax} pulls (pity) ・ 🌈 Gacha-exclusive gear drops only from SSR`)}<br>${tr('スキン等をコンプ済みの場合はジェムに変換されます', 'Duplicate cosmetics are converted to gems')}</p>`);
   m.querySelector('#gcClose').onclick = closeModal;
+  const setBars = (pity, collection) => {
+    if (pity) {
+      const left = Math.max(0, pity.max - pity.count);
+      m.querySelector('#gcPityText').textContent = tr(`SSR確定まで あと${left}連`, `${left} pulls to guaranteed SSR`);
+      m.querySelector('#gcPityFill').style.width = `${Math.min(100, Math.round((pity.count / pity.max) * 100))}%`;
+    }
+    if (collection) {
+      m.querySelector('#gcColText').textContent = `${collection.owned} / ${collection.total}`;
+      m.querySelector('#gcColFill').style.width = `${Math.min(100, Math.round((collection.owned / collection.total) * 100))}%`;
+    }
+  };
+  api('/api/gacha/info').then(d => setBars(d.pity, d.collection)).catch(() => {});
   const pull = async count => {
     const b1 = m.querySelector('#gcPull1'), b10 = m.querySelector('#gcPull10');
     b1.disabled = b10.disabled = true;
@@ -869,24 +926,27 @@ export function openGacha() {
       session.user = data.user;
       updateTopbar();
       m.querySelector('#gcCoins').textContent = `🪙 ${fmt(data.user.coins)}`;
+      setBars(data.pity, data.collection);
       const box = m.querySelector('#gcResults');
       box.innerHTML = '';
       audio.coin();
-      let bigWin = false;
+      let bigWin = false, limited = false;
       data.results.forEach((r, i) => {
         const card = document.createElement('div');
-        card.className = `gacha-card gr-${r.rarity}`;
+        card.className = `gacha-card gr-${r.rarity} ${r.limited ? 'gc-limited' : ''}`;
         card.style.animationDelay = `${i * 120}ms`;
         const icon = r.type === 'coins' ? '🪙' : r.type === 'gems' ? '💎' : r.type === 'item' ? r.icon : r.cat === 'skin' ? '🧊' : r.cat === 'board' ? '🖼️' : '✨';
         const label = r.type === 'coins' ? tr(`コイン +${fmt(r.amount)}`, `Coins +${fmt(r.amount)}`)
           : r.type === 'gems' ? tr(`ジェム +${fmt(r.amount)}${r.complete ? '（コンプ済）' : ''}`, `Gems +${fmt(r.amount)}${r.complete ? ' (all collected)' : ''}`)
           : r.type === 'item' ? catName(r)
           : catName(r);
-        card.innerHTML = `<span class="gc-rarity">${r.rarity}</span><span class="gc-icon">${icon}</span><span class="gc-label">${escapeHtml(label)}</span>`;
+        card.innerHTML = `<span class="gc-rarity">${r.limited ? '🌈' : ''}${r.rarity}</span><span class="gc-icon">${icon}</span><span class="gc-label">${escapeHtml(label)}</span>`;
         box.appendChild(card);
         if (r.rarity === 'SSR' || r.rarity === 'UR') bigWin = true;
+        if (r.limited) limited = true;
       });
-      if (bigWin) { setTimeout(() => { audio.victory(); confetti(); }, count * 120 + 300); }
+      if (bigWin) { setTimeout(() => { audio.victory(); confettiBurst(limited ? 90 : 50); }, count * 120 + 300); }
+      if (limited) setTimeout(() => toast(tr('🌈 ガチャ限定装備を引き当てた！！', '🌈 You pulled GACHA-EXCLUSIVE gear!!'), 'announce', 4000), count * 120 + 500);
     } catch (err) {
       audio.error();
       toast(err.message, 'err');
@@ -1527,6 +1587,44 @@ function fmtBytes(n) {
   return n > 1024 * 1024 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
 }
 
+// 🐛 管理者用バグ報告ビューア — プレイヤーからの報告を確認・処理・削除。
+async function showBugReportsAdminModal() {
+  let reports = [];
+  try {
+    reports = (await api('/api/admin/bugreports')).reports || [];
+  } catch (err) { toast(err.message, 'err'); return; }
+  const row = b => `
+    <div class="feed-row ${b.status === 'done' ? '' : 'real'}" data-bug="${b.id}" style="align-items:flex-start">
+      <span class="feed-icon">${b.status === 'done' ? '✅' : '🐛'}</span>
+      <span class="feed-text" style="white-space:pre-wrap">${escapeHtml(b.text)}
+        <small class="muted" style="display:block;margin-top:2px">${escapeHtml(b.by)}${b.role === 'guest' ? '（ゲスト）' : ''} ・ ${new Date(b.at).toLocaleString('ja-JP')}</small></span>
+      <span style="display:flex;flex-direction:column;gap:4px">
+        ${b.status === 'done' ? '' : `<button class="btn btn-sm btn-ghost" data-done="${b.id}">✅</button>`}
+        <button class="btn btn-sm btn-ghost" data-del="${b.id}" style="color:var(--red)">🗑</button>
+      </span>
+    </div>`;
+  const open = reports.filter(b => b.status !== 'done').length;
+  const m = showModal(`
+    <h2>🐛 バグ報告（未処理 ${open} / 全 ${reports.length}）</h2>
+    <div class="feed-list" style="max-height:52vh">
+      ${reports.length ? reports.map(row).join('') : '<p class="muted center">報告はまだありません</p>'}
+    </div>
+    <div class="modal-buttons"><button class="btn btn-primary" id="bugAdmClose">閉じる</button></div>`);
+  m.querySelector('#bugAdmClose').onclick = closeModal;
+  m.querySelectorAll('[data-done]').forEach(b => {
+    b.onclick = async () => {
+      try { await api(`/api/admin/bugreports/${b.dataset.done}`, { method: 'POST', body: { status: 'done' } }); closeModal(); showBugReportsAdminModal(); }
+      catch (err) { toast(err.message, 'err'); }
+    };
+  });
+  m.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      try { await api(`/api/admin/bugreports/${b.dataset.del}`, { method: 'DELETE' }); closeModal(); showBugReportsAdminModal(); }
+      catch (err) { toast(err.message, 'err'); }
+    };
+  });
+}
+
 export async function showRestoreModal() {
   const isAdmin = !!session.user && session.user.role === 'admin';
 
@@ -1778,6 +1876,7 @@ export function bindAdminActions() {
   };
 
   $('#btnRestore').onclick = () => showRestoreModal();
+  $('#btnBugReports').onclick = () => { audio.click(); showBugReportsAdminModal(); };
   $('#btnPoll').onclick = () => { audio.click(); showPollAdminModal(); };
 
   const selfGrant = async (kind) => {

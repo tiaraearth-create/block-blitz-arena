@@ -28,8 +28,25 @@ export class ParticleSystem {
       case 'fx_bubble': this.bubbles(x, y, size); break;
       case 'fx_star': this.stars(x, y, size); break;
       case 'fx_flame': this.flames(x, y, size); break;
+      case 'fx_comet': this.comet(x, y, size); break;
       case 'fx_admin': this.rainbow(x, y, size); break;
       default: this.spark(x, y, size, light, dark);
+    }
+  }
+
+  // ガチャ限定: 長い尾を引く彗星が斜めに走り抜ける
+  comet(x, y, size) {
+    const hues = ['#9be8ff', '#d0f4ff', '#7cc8ff', '#fff3c4'];
+    for (let i = 0; i < this.n(7); i++) {
+      const a = -Math.PI * (0.15 + Math.random() * 0.25);   // up-right streaks
+      const sp = (1.2 + Math.random() * 1.6) * size * 5;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp * (Math.random() < 0.5 ? 1 : -1), vy: Math.sin(a) * sp,
+        g: size * 1.5, life: 1, decay: 1.0 + Math.random() * 0.8,
+        size: size * (0.06 + Math.random() * 0.09),
+        color: hues[(Math.random() * hues.length) | 0],
+        kind: 'glow', trail: true,
+      });
     }
   }
 

@@ -144,6 +144,13 @@ try {
   check('dethroned player keeps the other thrones only', !(meAfter.user.thrones || []).includes('score') && (meAfter.user.thrones || []).includes('puzzle'), JSON.stringify(meAfter.user.thrones));
   const feed = await j('/api/feed');
   check('takeover announced on the live feed', (feed.feed || []).some(f => f.real && /王座/.test(f.text || '')), JSON.stringify((feed.feed || []).filter(f => f.real).map(f => f.text).slice(-3)));
+
+  // ---- 👑 多冠バッジ: 同時2冠/3冠で永久バッジ、冠を失っても残る ----
+  check('三冠時に crown2+crown3 バッジを獲得済み', ['crown2', 'crown3'].every(b2 => meAfter.user.badges.includes(b2)), JSON.stringify(meAfter.user.badges));
+  check('王座を失ってもバッジは残る(2冠に落ちてもcrown3保持)', meAfter.user.badges.includes('crown3') && meAfter.user.thrones.length === 2, `thrones=${meAfter.user.thrones.length}`);
+  const lbC = await j('/api/leaderboard?board=puzzle');
+  const rowC = (lbC.rows || []).find(r => r.username === 'モードテスト');
+  check('ランキング行に冠数(crowns)が載る', !!rowC && rowC.crowns === 2, JSON.stringify(rowC && { crowns: rowC.crowns }));
 } catch (err) {
   check('test harness', false, err.stack || String(err));
 } finally {

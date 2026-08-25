@@ -15,8 +15,9 @@ const DEFAULT_DB = {
   deleted: {},      // userId -> deletedAt (so a stale session knows the account is gone)
   guilds: {},       // guildId -> guild
   news: [],         // announcements [{ id, title, body, at, pinned, by }]
-  season: null,     // { id, name, number, endsAt }
+  season: null,     // legacy — the season derives from SEASON_EPOCH since v2.6
   transactions: [], // gem purchases (demo)
+  bugreports: [],   // player bug reports [{ id, text, by, role, ua, at, status }]
   meta: { createdAt: Date.now() },
 };
 

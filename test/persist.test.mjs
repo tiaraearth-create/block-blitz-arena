@@ -138,6 +138,17 @@ try {
   const reLog = await start({ SEED_RESTORE: '1', SEED_BACKUP_FILE: SEED_FILE, ADMIN_PASSWORD: seedPw });
   check('same seed on a persistent disk is applied AT MOST once', !reLog.includes('自動復元'), reLog.split('\n').find(l => l.includes('seed')) || 'no seed log = skipped');
 
+  // ---- 「復元待ち」で永遠に止まる人の救済 (settled) ----
+  // シード取得後に登録されたアカウントは復元に含まれない — 復元完了後は
+  // settled:true を返し、クライアントは待つのをやめて新規作成を案内する。
+  const lost = await j('/api/register', { method: 'POST', body: { username: '迷子ちゃん', password: 'pass1234' } });
+  check('post-seed user registers fine', lost.status === 200);
+  await stop();
+  wipeDb();   // deploy wipe — 迷子ちゃん was never in the seed
+  await start({ SEED_RESTORE: '1', SEED_BACKUP_FILE: SEED_FILE, ADMIN_PASSWORD: seedPw });
+  const lostMe = await j('/api/me', {}, lost.token);
+  check('restore-orphan gets NO_USER + settled:true (stop waiting)', lostMe.status === 401 && lostMe.code === 'NO_USER' && lostMe.settled === true, JSON.stringify({ code: lostMe.code, settled: lostMe.settled }));
+
   // wrong password → no restore, but boot still succeeds
   await stop();
   wipeDb();

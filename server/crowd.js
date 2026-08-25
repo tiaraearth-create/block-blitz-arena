@@ -59,6 +59,7 @@ export function buildCtx(base) {
     mondayish: (wd === 1 && hour < 12) || (wd === 0 && hour >= 21),
     event: base.event || null,
     poll: base.poll || null,
+    thrones: base.thrones || [],   // 👑 王座保持者の名前（住人含む）
     active: base.active || [],
     humans: base.humans || [],
   };
@@ -404,12 +405,31 @@ function lifePool(r, ctx) {
   return mix.filter(archOkFor(r));
 }
 
+// 👑 王座持ち住人の「王者ムーブ」— 玉座から語る専用セリフ。
+const CHAMPION_LINES = [
+  { ja: '王座は今日も渡さないよ', en: 'the throne stays mine today' },
+  { ja: '挑戦者、いつでも受け付けてます', en: 'challengers welcome, any time' },
+  { ja: '王座防衛って地味にプレッシャーある', en: 'defending a throne is lowkey stressful' },
+  { ja: 'この景色は頂点からしか見えないんだよね', en: 'the view from the top is something else' },
+  { ja: '👑維持のために今日も1回は回す', en: 'gotta play at least one run to keep the crown' },
+  { ja: '俸給もらえないのに王座守ってるの偉くない？', en: 'defending a throne with no stipend — respect me' },
+  { ja: '最近スコア詰めてくる人いて震えてる', en: 'someone is closing in on my score and I feel it' },
+  { ja: '王冠、名前の横で光るのちょっと自慢', en: 'ngl the crown next to my name looks good' },
+  { ja: '玉座は快適。降りる気はない', en: 'the throne is comfy. not moving' },
+  { ja: '次に狙われてるのはたぶん自分', en: 'pretty sure I am the next target' },
+];
+
 // 1本の発言を合成する。トピック本文 / フォロー / 生活雑談 / 旧LINESの
 // どれかを核にして、たまに前置きや締めの断片を継ぎ足す。
 function buildLine3(r, ctx) {
   const en = r.lang === 'en';
   let core = null;
-  const t = gen.tickTopic(ctx);
+  // 王座持ちは16%で王者ムーブ（話題より優先 — キャラが立つ）。
+  if ((ctx.thrones || []).includes(r.name) && rnd() < 0.16) {
+    const e = gen.smartPick('champion', CHAMPION_LINES, { now: ctx.now, rid: r.id });
+    if (e) core = en ? e.en : e.ja;
+  }
+  const t = core ? null : gen.tickTopic(ctx);
   if (t && TOPICS[t.id]) {
     if (t.role === 'follow' && rnd() < 0.9) {
       const kind = pickFollowKind(r);
@@ -736,6 +756,7 @@ export const BADGE_NAMES = {
   oni: '鬼討伐バッジ', kami: '神殺しバッジ', souzou: '創造神討伐バッジ', maou: '魔王討伐バッジ',
   rush: 'ボスラッシュ制覇', dungeon: '百塔踏破', tourney: '大会優勝', royale: 'バトロワ1位',
   weekly1: '週間チャンピオン', puzzle: '遺跡マスター', dig: 'マスター採掘士',
+  crown2: '二冠バッジ', crown3: '三冠バッジ', crown5: '五冠バッジ', crown7: '全冠制覇バッジ',
 };
 
 // Pick one or more residents to react. Returns [{ resident, text, delay }].

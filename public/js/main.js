@@ -744,6 +744,11 @@ function waitForRestore() {
       toast(t(`✅ おかえりなさい、${session.user.username}さん！データが復元されました`,
         `✅ Welcome back, ${session.user.username}! Your data has been restored`), 'ok', 5000);
     } catch (err) {
+      if (err.code === 'NO_USER' && err.settled) {
+        clearInterval(restoreWaitTimer);
+        showRestoreFailedModal();
+        return;
+      }
       if (err.code !== 'NO_USER' && (err.status === 401 || err.status === 403)) {
         clearInterval(restoreWaitTimer);
         setToken(null);
@@ -751,6 +756,27 @@ function waitForRestore() {
       }
     }
   }, 30000);
+}
+
+// 復元が終わったのにアカウントが戻らなかった人への正直な案内。
+// （最後のバックアップ以降に作られたアカウントは復元に含まれない）
+function showRestoreFailedModal() {
+  const m = showModal(`
+    <h2>😢 ${t('データを復元できませんでした', 'Your data could not be restored')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('サーバーの復元は完了しましたが、このアカウントは直前のバックアップに含まれていませんでした。<br>本当にごめんなさい…！お手数ですが、新しくアカウントを作成してください。<b>同じ名前をもう一度使えます。</b>',
+          'The server restore finished, but this account was not in the latest backup.<br>We are really sorry! Please create a new account — <b>you can use the same name again.</b>')}
+    </p>
+    <div class="modal-buttons">
+      <button class="btn btn-primary" id="rfRestart">${t('🌱 新しく始める', '🌱 Start fresh')}</button>
+    </div>`, { dismissable: false });
+  m.querySelector('#rfRestart').onclick = () => {
+    closeModal();
+    setToken(null);
+    session.user = null;
+    updateTopbar();
+    showAuthModal();
+  };
 }
 
 (async () => {
@@ -787,6 +813,11 @@ function waitForRestore() {
         if (err.code === 'NO_USER') {
           session.user = null;
           updateTopbar();
+          if (err.settled) {
+            // 復元はもう終わっている — 待っても戻らないので正直に案内する。
+            showRestoreFailedModal();
+            break;
+          }
           toast(t('⚠️ サーバーのアカウントデータが復元待ちです。復元が終わると自動でログインに戻ります',
             '⚠️ Your account data is waiting to be restored on the server — you will be logged back in automatically'), 'err', 7000);
           waitForRestore();
