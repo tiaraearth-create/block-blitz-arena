@@ -1223,7 +1223,7 @@ class PuzzleMode {
     this.updateHud();
     updateAutoBtn();
     v.start();
-    audio.playTrack('solo');
+    audio.playTrack('ruins');
     toast(t(`🧩 ステージ${this.stage}：光るブロックをすべて消そう！ピースは使い切り！`,
       `🧩 Stage ${this.stage}: clear every glowing block — no piece refills!`), 'announce', 3200);
   }
@@ -1366,7 +1366,7 @@ class DigMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('hard');
+    audio.playTrack('mine');
     toast(t('⛏️ 地層がせり上がる！ラインを消して鉱石を回収しろ！天井に触れたら終わり！',
       '⛏️ The ground is rising! Clear lines to mine ore — touch the ceiling and it\'s over!'), 'announce', 3400);
   }

@@ -8,6 +8,7 @@ import { reconnectChat, markNewsSeen } from './chat.js';
 import { t as tr, setLang, LANG, catName, catDesc } from './i18n.js';
 import { equippedUlt, setGuestUlt } from './modes.js';
 import { ultIcon, ultColor } from './skills.js';
+import { showYouTubeStudio } from './ytexport.js';
 
 // ---------------------------------------------------------------------------
 // Auth modal
@@ -411,13 +412,15 @@ export function showSettingsModal() {
         </div>
       </div>
       <div class="settings-row">
-        <label>${tr('🔊 効果音', '🔊 Sound FX')}</label>
-        <input type="range" id="setSfxVol" min="0" max="100" value="${Math.round(s.sfxVol * 100)}">
+        <label>${tr('🔊 効果音', '🔊 Sound FX')}<br><small class="muted" style="font-weight:600">${tr('最大200%（音割れ防止リミッター内蔵）', 'Up to 200% (built-in limiter)')}</small></label>
+        <input type="range" id="setSfxVol" min="0" max="200" value="${Math.round(s.sfxVol * 100)}">
+        <b id="setSfxPct" style="min-width:44px;text-align:right;font-variant-numeric:tabular-nums">${Math.round(s.sfxVol * 100)}%</b>
         <input type="checkbox" id="setSfxOn" ${s.sfxOn ? 'checked' : ''}>
       </div>
       <div class="settings-row">
         <label>🎵 BGM</label>
-        <input type="range" id="setMusicVol" min="0" max="100" value="${Math.round(s.musicVol * 100)}">
+        <input type="range" id="setMusicVol" min="0" max="200" value="${Math.round(s.musicVol * 100)}">
+        <b id="setMusicPct" style="min-width:44px;text-align:right;font-variant-numeric:tabular-nums">${Math.round(s.musicVol * 100)}%</b>
         <input type="checkbox" id="setMusicOn" ${s.musicOn ? 'checked' : ''}>
       </div>
       <div class="settings-row">
@@ -512,8 +515,15 @@ export function showSettingsModal() {
     setStaffUi(e.target.checked);
     toast(e.target.checked ? '🛡️ 管理者専用ボタンを表示します' : '👤 プレイヤーと同じ表示にしました', 'ok');
   };
-  m.querySelector('#setSfxVol').oninput = e => { updateSettings({ sfxVol: e.target.value / 100 }); audio.click(); };
-  m.querySelector('#setMusicVol').oninput = e => updateSettings({ musicVol: e.target.value / 100 });
+  m.querySelector('#setSfxVol').oninput = e => {
+    updateSettings({ sfxVol: e.target.value / 100 });
+    m.querySelector('#setSfxPct').textContent = `${e.target.value}%`;
+    audio.click();
+  };
+  m.querySelector('#setMusicVol').oninput = e => {
+    updateSettings({ musicVol: e.target.value / 100 });
+    m.querySelector('#setMusicPct').textContent = `${e.target.value}%`;
+  };
   m.querySelectorAll('#setParticles button').forEach(b => {
     b.onclick = () => {
       m.querySelectorAll('#setParticles button').forEach(x => x.classList.remove('active'));
@@ -588,7 +598,7 @@ export function showJukeboxModal() {
     </p>
     <div class="settings-row">
       <label>🔊 ${tr('BGM音量', 'Music volume')}</label>
-      <input type="range" id="jbVol" min="0" max="100" value="${Math.round(s.musicVol * 100)}">
+      <input type="range" id="jbVol" min="0" max="200" value="${Math.round(s.musicVol * 100)}">
       <b id="jbVolPct" style="min-width:42px;text-align:right;font-variant-numeric:tabular-nums">${Math.round(s.musicVol * 100)}%</b>
     </div>
     <div class="settings-row">
@@ -596,7 +606,10 @@ export function showJukeboxModal() {
       <input type="checkbox" id="jbLock" ${lock ? 'checked' : ''}>
     </div>
     <div class="jb-list" id="jbList"></div>
-    <div class="modal-buttons"><button class="btn btn-primary" id="jbClose">${tr('閉じる', 'Close')}</button></div>`,
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="jbYt">🎬 ${tr('YouTube書き出し', 'YouTube export')}</button>
+      <button class="btn btn-primary" id="jbClose">${tr('閉じる', 'Close')}</button>
+    </div>`,
   // 背景タップで閉じると stopPreview が走らず試聴が鳴りっぱなしになるため、
   // 閉じるのは必ず「閉じる」ボタン経由にする。
   { dismissable: false });
@@ -663,6 +676,11 @@ export function showJukeboxModal() {
       ? tr('🔁 この曲をどの画面でもループ再生します', '🔁 This track now loops on every screen')
       : tr('🔄 画面ごとの自動BGMに戻しました', '🔄 Back to automatic per-screen music'), 'ok', 2200);
     render();
+  };
+  m.querySelector('#jbYt').onclick = () => {
+    audio.stopPreview();
+    closeModal();
+    showYouTubeStudio();
   };
   m.querySelector('#jbClose').onclick = () => {
     audio.stopPreview();   // 固定中はその曲が流れ続け、未固定なら元のBGMに戻る

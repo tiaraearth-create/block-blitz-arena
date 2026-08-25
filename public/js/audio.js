@@ -117,6 +117,49 @@ const TRACKS = {
       { chord: [N.E4, N.Gs4 || N.A4, N.B4], bass: N.E2 },
     ],
   },
+  // ---- v2.8 new-mode originals ----
+  // 🧩 遺跡の囁き — ancient puzzle chambers: slow dorian wander, marimba-ish
+  // triangle plucks echoing off stone, a raised-6th D major that keeps the
+  // mystery warm instead of sad.
+  ruins: {
+    bpm: 92, swing: 0.18, padType: 'sine', padVol: 0.13, arpType: 'triangle',
+    kick: [0], snare: [], hat: [4, 12], hatVol: 0.04,
+    bassSteps: [0, 10], bassLen: 2.2, bassType: 'sine', bassVol: 0.42,
+    arpSteps: [0, 3, 6, 8, 11, 14], arpVol: 0.15, arpDelay: true, melody: 0.22,
+    bars: [
+      { chord: [N.A3, N.C4, N.E4, N.G4], bass: N.A2, scale: [N.A4, N.B4, N.C5, N.E5, N.Fs5] },  // Am7
+      { chord: [N.C4, N.E4, N.G4, N.B4], bass: N.C3, scale: [N.A4, N.B4, N.C5, N.E5, N.G5] },   // Cmaj7
+      { chord: [N.D4, N.Fs4, N.A4],      bass: N.D3, scale: [N.A4, N.B4, N.D5, N.E5, N.Fs5] },  // D (dorian lift)
+      { chord: [N.A3, N.C4, N.E4],       bass: N.A2, scale: [N.E4, N.A4, N.B4, N.C5, N.E5] },   // Am
+    ],
+  },
+  // ⛏️ 地底のハンマー — the mines: pounding industrial hammer-work, a dark
+  // Em→Cm chromatic drop like a tunnel opening under your feet.
+  mine: {
+    bpm: 122, swing: 0, padType: 'sawtooth', padVol: 0.045, arpType: 'sawtooth',
+    kick: [0, 4, 8, 12], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14], hatVol: 0.08, openHat: [14],
+    bassType: 'sawtooth', bassVol: 0.58, bassFilter: 380, detune: 9,
+    riff: { 0: N.E2, 3: N.E2, 6: N.G2, 8: N.E2, 10: N.Bb2, 12: N.D2 * 2, 14: N.E2 },
+    drone: N.E1, stab: [0, 8], arpSteps: [], arpVol: 0,
+    bars: [
+      { chord: [N.E4, N.G4, N.B4],   bass: N.E2 },        // Em
+      { chord: [N.C4, N.Eb4, N.G4],  bass: N.C2 },        // Cm — the tunnel drops
+    ],
+  },
+  // 👑 王座の間 — the throne room: stately D-major procession, fanfare arps
+  // sparkling an octave up, quarter-note hats like guards keeping time.
+  royal: {
+    bpm: 108, swing: 0, padType: 'sine', padVol: 0.15, arpType: 'triangle',
+    kick: [0, 8], snare: [4, 12], hat: [0, 4, 8, 12], hatVol: 0.06,
+    bassSteps: [0, 6, 8, 14], bassLen: 1.4, bassType: 'triangle', bassVol: 0.5,
+    arpSteps: [0, 2, 4, 6, 8, 10, 12, 14], arpVol: 0.14, arpDelay: true, arpOctave: true, melody: 0.18,
+    bars: [
+      { chord: [N.D4, N.Fs4, N.A4],       bass: N.D2, scale: [N.D5, N.E5, N.Fs5, N.A5, N.B5] },  // D
+      { chord: [N.A3, N.Cs4, N.E4],       bass: N.A1, scale: [N.A4, N.B4, N.Cs5, N.E5, N.Fs5] }, // A
+      { chord: [N.B3, N.D4, N.Fs4],       bass: N.B1, scale: [N.B4, N.D5, N.E5, N.Fs5, N.A5] },  // Bm
+      { chord: [N.G3, N.B3, N.D4, N.E4],  bass: N.G2, scale: [N.G4, N.A4, N.B4, N.D5, N.E5] },   // G6
+    ],
+  },
   // ---- Guest tracks ported from ブロックブラスト (Block Blast) ----
   // Faithful to the original's sequencer: arp cycles root→3rd→5th→3rd an
   // octave above the chord on every 8th note, bass hits beats 1 & 3 an octave
@@ -209,6 +252,9 @@ export const TRACK_INFO = [
   { id: 'oni',    icon: '👹', name: '鬼の巣窟',         nameEn: "Oni's Den",       where: '鬼・深淵',                 whereEn: 'Oni / Abyss' },
   { id: 'pixel',  icon: '👾', name: 'PIXEL RUSH 182',   nameEn: 'PIXEL RUSH 182',  where: 'バトルロイヤル',           whereEn: 'Battle Royale' },
   { id: 'kami',   icon: '🔱', name: '天上の光',         nameEn: 'Celestial Light', where: '神・天国ダンジョン',       whereEn: 'Kami / Heaven' },
+  { id: 'ruins',  icon: '🗿', name: '遺跡の囁き',       nameEn: 'Whisper of Ruins', where: 'パズル遺跡',              whereEn: 'Puzzle Ruins' },
+  { id: 'mine',   icon: '⛏️', name: '地底のハンマー',   nameEn: 'Hammer Below',     where: '採掘場',                  whereEn: 'The Mines' },
+  { id: 'royal',  icon: '👑', name: '王座の間',         nameEn: 'Throne Room',      where: '王者のテーマ（ジュークボックス限定）', whereEn: 'Champions (jukebox exclusive)' },
   { id: 'blastMenu',  icon: '🧱', name: 'ブラスト・ホーム', nameEn: 'Blast Home',       where: 'ブロックブラストより：メニュー', whereEn: 'From Block Blast: menu' },
   { id: 'blastGame',  icon: '💠', name: 'ブラスト・パズル', nameEn: 'Blast Puzzle',     where: 'ブロックブラストより：ソロ',     whereEn: 'From Block Blast: solo' },
   { id: 'blastVs',    icon: '🤖', name: 'ブラスト・バトル', nameEn: 'Blast Battle',     where: 'ブロックブラストより：対戦',     whereEn: 'From Block Blast: versus' },
@@ -246,7 +292,16 @@ class AudioEngine {
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.8;
-      this.master.connect(this.ctx.destination);
+      // 🎚️ マスターリミッター（高音質化）— 音量が100%を超えてブーストされても
+      // 音割れせず、全体の音圧もまとまる。master → limiter → destination。
+      this.limiter = this.ctx.createDynamicsCompressor();
+      this.limiter.threshold.value = -6;
+      this.limiter.knee.value = 5;
+      this.limiter.ratio.value = 12;
+      this.limiter.attack.value = 0.002;
+      this.limiter.release.value = 0.16;
+      this.master.connect(this.limiter);
+      this.limiter.connect(this.ctx.destination);
       this.sfxGain = this.ctx.createGain();
       this.sfxGain.gain.value = this.sfxVol;
       this.sfxGain.connect(this.master);
@@ -269,8 +324,11 @@ class AudioEngine {
   setSfx(on) { this.sfxOn = on; }
 
   setVolumes(sfxVol, musicVol) {
-    this.sfxVol = sfxVol;
-    this.musicVol = musicVol;
+    // 200%までのブーストを許可（リミッターが音割れを防ぐ）。
+    this.sfxVol = Math.max(0, Math.min(2, Number(sfxVol) || 0));
+    this.musicVol = Math.max(0, Math.min(2, Number(musicVol) || 0));
+    sfxVol = this.sfxVol;
+    musicVol = this.musicVol;
     if (this.ctx) {
       this.sfxGain.gain.value = sfxVol;
       this.musicGain.gain.value = 0.45 * musicVol;

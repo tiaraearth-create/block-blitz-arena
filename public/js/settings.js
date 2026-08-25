@@ -20,6 +20,9 @@ try {
 // A pinned track id that no longer exists (renamed/removed in an update)
 // silently degrades to auto — the UI must never show a phantom pin.
 if (settings.bgmTrack && !TRACK_INFO.some(t => t.id === settings.bgmTrack)) settings.bgmTrack = null;
+// Volumes may boost to 200% (the engine's limiter keeps it clean).
+settings.sfxVol = Math.max(0, Math.min(2, Number(settings.sfxVol) || 0));
+settings.musicVol = Math.max(0, Math.min(2, Number(settings.musicVol) || 0));
 
 export function getSettings() { return settings; }
 
