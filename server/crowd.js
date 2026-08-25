@@ -749,7 +749,7 @@ export function composeReaction(kind, ctx, extra = {}, count = 1) {
   const used = new Set();
   let delay = 4000 + rnd() * 10000;
   for (let i = 0; i < count; i++) {
-    const cands = active.filter(r => !used.has(r.id) && (!extra.only || extra.only.includes(r.id)) && r.chatty > 0.3);
+    const cands = active.filter(r => !used.has(r.id) && (!extra.only || extra.only.includes(r.id)) && (!extra.notName || r.name !== extra.notName) && r.chatty > 0.3);
     if (!cands.length) break;
     const r = pick(cands);
     used.add(r.id);

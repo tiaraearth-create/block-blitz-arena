@@ -18,8 +18,8 @@ const j = async (p, opt = {}, token) => {
 };
 
 let proc = null;
-async function start() {
-  proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, SESSION_SECRET: 'rank-test-secret', POP_SCALE: '0', SEED_RESTORE: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+async function start(extraEnv = {}) {
+  proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: String(PORT), DATA_DIR: DIR, SESSION_SECRET: 'rank-test-secret', POP_SCALE: '0', SEED_RESTORE: '0', ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   proc.stdout.on('data', d => { log += d; });
   proc.stderr.on('data', d => { log += d; });
@@ -133,6 +133,26 @@ try {
   const beforeA = (await j('/api/me', {}, a.token)).user;
   const claimA = await j('/api/rank/claim', { method: 'POST', body: {} }, a.token);
   check('runner-up claim pays the rank-2 tier', claimA.status === 200 && claimA.reward.coins === 1200 && claimA.reward.badges.length === 0 && claimA.user.coins === beforeA.coins + 1200, JSON.stringify(claimA.reward));
+
+  // ---- 👑 AIプレイヤー（住人）の王座参戦 — にぎわいONのときだけ ----
+  // 前段の clamp テストが live scale を 0 に戻しているので、env と admin の
+  // 両方をONにして初めて residents が候補に入る（effectiveScale = env × live）。
+  await stop();
+  await start({ POP_SCALE: '1' });
+  const admin2 = await j('/api/login', { method: 'POST', body: { username: 'るみまき', password: adminPw } });
+  await j('/api/admin/pop', { method: 'POST', body: { scale: 1 } }, admin2.token);
+  const lbT = await j('/api/leaderboard?board=score');
+  check('with crowd ON the score throne is never vacant', lbT.throne && lbT.throne.username, JSON.stringify(lbT.throne));
+  check('…and an AI resident outranks the small real scores', lbT.throne && lbT.throne.username !== 'アリス' && lbT.throne.username !== 'ボブ', lbT.throne && lbT.throne.username);
+  const crowned = (lbT.rows || []).find(r => r.throne);
+  check('the crowned holder is a VISIBLE row on the board', !!crowned && crowned.username === lbT.throne.username, crowned && crowned.username);
+  const profT = await j('/api/profile/' + encodeURIComponent(lbT.throne.username));
+  check('AI throne holder has a resident profile listing the throne', profT.status === 200 && profT.profile.kind === 'resident' && (profT.profile.thrones || []).includes('score'), JSON.stringify(profT.profile && { kind: profT.profile.kind, thrones: profT.profile.thrones }));
+  // Crowd OFF (env 0) → residents lose eligibility, real players only.
+  await stop();
+  await start();
+  const lbT2 = await j('/api/leaderboard?board=score');
+  check('with crowd OFF the throne falls back to a real player', lbT2.throne && (lbT2.throne.username === 'アリス' || lbT2.throne.username === 'ボブ'), JSON.stringify(lbT2.throne));
 } catch (err) {
   check('test harness', false, err.stack || String(err));
 } finally {

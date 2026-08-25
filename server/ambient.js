@@ -332,6 +332,22 @@ export function chooseReplies(text, now = Date.now(), forcedName = null) {
 const GHOST_COUNT = { score: 40, rating: 30, dungeon: 24, weekly: 18, sprint: 22 };
 
 // `taken`: Set of real usernames — ghosts never shadow a real player.
+// The stable weekly subset of registered residents shown on a given board.
+// Exported because the 👑 throne computation must pick its AI champions from
+// the SAME subset — a crowned resident who isn't on the visible board would
+// look like the crown vanished.
+export function boardResidents(board, weekId) {
+  const scale = effectiveScale();
+  if (!scale || !custom.toggles.ghosts) return [];
+  const count = Math.min(100, Math.round((GHOST_COUNT[board] || 24) * Math.min(scale, 2.5)));
+  return getRoster()
+    .filter(r => r.registered)
+    .map(r => ({ r, k: unit(`${r.id}-${board}`, weekId) }))
+    .sort((a, b) => a.k - b.k)
+    .slice(0, count)
+    .map(x => x.r);
+}
+
 export function ghostRows(board, weekId, taken, now = Date.now()) {
   const scale = effectiveScale();
   if (!scale || !custom.toggles.ghosts) return [];
@@ -361,12 +377,7 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
 
   // Residents: only the registered ones appear on rankings. Which subset
   // shows on a given board is stable per week so the boards don't churn.
-  const residents = getRoster().filter(r => r.registered && !used.has(r.name));
-  const keyed = residents
-    .map(r => ({ r, k: unit(`${r.id}-${board}`, weekId) }))
-    .sort((a, b) => a.k - b.k)
-    .slice(0, count)
-    .map(x => x.r);
+  const keyed = boardResidents(board, weekId).filter(r => !used.has(r.name));
   for (const r of keyed) {
     used.add(r.name);
     rows.push(rowOf(r.name, residentStats(r, now, weekId)));

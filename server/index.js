@@ -27,6 +27,7 @@ import {
   ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider,
   rosterView, retiredResidents, crowdMood, ambientQueue, isQuietNow, DEFAULT_TOGGLES, ARCHETYPES,
   MAX_LIVE_SCALE, residentByName, activeResidents, residentStats, archetype,
+  boardResidents,
 } from './ambient.js';
 import { BADGE_NAMES } from './crowd.js';
 import {
@@ -862,6 +863,7 @@ app.get('/api/profile/:name', (req, res) => {
       archLabel: a.label, archLabelEn: a.labelEn,
       hours: r.hours, favMode: r.favMode,
       online: activeResidents().some(x => x.id === r.id),
+      thrones: thronesOfName(r.name),
     } });
   }
   if (r) return res.json({ profile: { kind: 'guest', name: r.name } });
@@ -1102,6 +1104,12 @@ function seedNews() {
       '各ランキング（スコア・レート・タイムアタック・ダンジョン・ウィークリー・パズル遺跡・採掘場）の現在1位は「王座」を保持します。王者はランキング・チャット・プロフィールに👑が輝き、王座1つにつき毎日のログインボーナスに+150🪙+2💎の俸給が上乗せ！王座が奪われるとライブフィードで全プレイヤーに速報が流れます。頂点を獲れ！',
       0, true));
   }
+  const THRONE2_TITLE = '👑 王座戦線にAIプレイヤーが参戦！';
+  if (!db.news.some(n => n && (n.id === 'seed-throne2' || n.title === THRONE2_TITLE))) {
+    db.news.push(mk('seed-throne2', THRONE2_TITLE,
+      'ロビーの住人たち（AIプレイヤー）も王座を持つようになりました。いま各ランキングの👑は住人が守っています — 彼らの実力は日々変化するので、王座も自然に動きます。スコアで追い抜けばその瞬間あなたが王者。AIから王座を奪還して、俸給と栄光を手にしましょう！（住人はログインボーナスを受け取れないので、俸給はいつでも人間のもの）',
+      0, true));
+  }
 }
 
 function newsView() {
@@ -1338,17 +1346,48 @@ let thronesMemo = { at: 0, map: null };
 function computeThrones() {
   const now = Date.now();
   if (thronesMemo.map && now - thronesMemo.at < 5000) return thronesMemo.map;
-  const map = {};
-  const players = Object.values(db.users).filter(u => !u.banned && u.role !== 'admin' && u.stats && u.stats.gamesPlayed > 0);
-  for (const [board, def] of Object.entries(THRONE_BOARDS)) {
-    let best = null, bestV = 0;
-    for (const u of players) {
-      const v = Number(def.value(u)) || 0;
-      if (v < (def.min || 1)) continue;
-      // Ties go to the older account — the incumbent defends the throne.
-      if (v > bestV || (v === bestV && best && u.createdAt < best.createdAt)) { best = u; bestV = v; }
+  const week = weekIdOf(currentWeekNum());
+  const realCands = [];
+  for (const u of Object.values(db.users)) {
+    if (u.banned || u.role === 'admin' || !u.stats || !(u.stats.gamesPlayed > 0)) continue;
+    realCands.push({ id: u.id, username: u.username, createdAt: u.createdAt || 0, resident: false, user: u });
+  }
+  // 👑 住人（AIプレイヤー）も王座戦線に参戦 — 王座が空位のまま眠らないように。
+  // 候補は「そのボードに実際に表示される住人サブセット」(boardResidents) 限定、
+  // 値はゴースト行と同じ式 — 王冠が見えない行に付くことは構造的にない。
+  // にぎわいOFF（scale 0 / ghostsトグルOFF）のときは従来どおり実プレイヤーのみ。
+  const stCache = new Map();
+  const residentValue = (r, board) => {
+    let st = stCache.get(r.id);
+    if (!st) { st = residentStats(r, now, week); stCache.set(r.id, st); }
+    switch (board) {
+      case 'score': return st.bestScore;
+      case 'rating': return st.rating;
+      case 'sprint': return st.sprintBest;
+      case 'dungeon': return st.dungeonMax;
+      case 'weekly': return st.weeklyBest;
+      case 'puzzle': return Math.max(1, Math.round((st.dungeonMax || 8) * 0.55));
+      case 'dig': return Math.max(3, Math.round((st.dungeonMax || 8) * 0.75));
+      default: return 0;
     }
-    if (best) map[board] = { userId: best.id, username: best.username, value: bestV };
+  };
+  // Equal values: a real player beats a resident; among equals the older
+  // account keeps the crown (the incumbent defends).
+  const beats = (a, aV, b, bV) => aV > bV
+    || (aV === bV && b && (b.resident && !a.resident || (b.resident === a.resident && a.createdAt < b.createdAt)));
+  const map = {};
+  for (const [board, def] of Object.entries(THRONE_BOARDS)) {
+    const cands = realCands.slice();
+    for (const r of boardResidents(board, week)) {
+      cands.push({ id: `res:${r.id}`, username: r.name, createdAt: 0, resident: true, r });
+    }
+    let best = null, bestV = 0;
+    for (const c of cands) {
+      const v = Number(c.resident ? residentValue(c.r, board) : def.value(c.user)) || 0;
+      if (v < (def.min || 1)) continue;
+      if (!best || beats(c, v, best, bestV)) { best = c; bestV = v; }
+    }
+    if (best) map[board] = { userId: best.id, username: best.username, value: bestV, resident: best.resident };
   }
   thronesMemo = { at: now, map };
   return map;
@@ -1366,7 +1405,7 @@ function refreshThrones(force = false) {
   let moved = false;
   for (const [board, t] of Object.entries(cur)) {
     const old = prev && prev[board];
-    next[board] = { userId: t.userId, username: t.username, value: t.value, at: old && old.userId === t.userId ? old.at : Date.now() };
+    next[board] = { userId: t.userId, username: t.username, value: t.value, resident: !!t.resident, at: old && old.userId === t.userId ? old.at : Date.now() };
     if (!old || old.userId !== t.userId) moved = true;
   }
   if (prev && Object.keys(prev).some(b => !next[b])) moved = true;
@@ -1381,7 +1420,8 @@ function refreshThrones(force = false) {
       text: old ? `${t.username} が ${old.username} から${def.name}の王座を奪取！！` : `${t.username} が${def.name}の王座に就いた！`,
       textEn: old ? `${t.username} seized the ${def.nameEn} throne from ${old.username}!!` : `${t.username} claimed the ${def.nameEn} throne!`,
     });
-    battle.crowd.react('throne', { you: t.username, board: def.name });
+    // 新王者が住人でも、当の本人が自分を祝わないように除外する。
+    battle.crowd.react('throne', { you: t.username, board: def.name, notName: t.username });
   }
   db.meta.thrones = next;
   saveDb();
@@ -1391,6 +1431,13 @@ function thronesOf(userId) {
   if (!userId) return [];
   const map = db.meta.thrones || computeThrones();
   return Object.keys(map).filter(b => map[b] && map[b].userId === userId);
+}
+
+// Residents have no account id — their thrones are looked up by (unique) name.
+function thronesOfName(username) {
+  if (!username) return [];
+  const map = db.meta.thrones || computeThrones();
+  return Object.keys(map).filter(b => map[b] && map[b].username === username);
 }
 
 // Claim every pending ranking reward at once.
@@ -2273,6 +2320,9 @@ app.post('/api/admin/pop', requireAuth, requireAdmin, (req, res) => {
     db.meta.ambient = getCustom();   // persist the sanitized version
   }
   saveDb();
+  // Scale / ghost-toggle / roster changes alter throne ELIGIBILITY — recompute
+  // now, or the 5s memo serves a stale champion map to the next request.
+  refreshThrones(true);
   res.json(crowdStatus());
 });
 

@@ -83,6 +83,8 @@ export function initBattle(server, deps) {
 
   function postChat(name, text, extra = {}) {
     const entry = { type: 'chat', id: crypto.randomUUID(), from: name, role: 'user', text, at: Date.now(), tag: tagOf(name, null), ...extra };
+    // 👑 王座を持つ住人（AIプレイヤー）の発言にも王冠（名前は一意・なりすまし不可）
+    if (db.meta.thrones && Object.values(db.meta.thrones).some(t => t && t.username === name)) entry.crown = true;
     // Residents' lines come from ja/en templates — the table translates them
     // almost verbatim, so every crowd message ships with its translation.
     const tr = translateLocal(text, detectLang(text) === 'ja' ? 'en' : 'ja');
