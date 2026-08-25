@@ -25,7 +25,20 @@ const MOODS = {
 };
 const moodOf = id => MOODS[id] || (id.startsWith('blast') ? ['#1c2440', '#0a0d1c', '#8ab4ff'] : MOODS.menu);
 
-let studioState = null;   // { raf, analyser, dest, rec, timer } — 掃除用
+let studioState = null;   // { raf, analyser, dest, rec, timer, worker, wakeLock, onVis } — 掃除用
+
+// バックグラウンドでも止まらないタイマー: rAFはタブが隠れると停止し、
+// ページのsetIntervalも1秒に制限されるが、Worker内のタイマーは動き続ける。
+// 録画中の描画とフレーム送出はこのWorkerが駆動する。
+function makeTickWorker(onTick) {
+  try {
+    const src = 'let iv=null;onmessage=e=>{if(e.data==="start"&&!iv)iv=setInterval(()=>postMessage(0),33);if(e.data==="stop"&&iv){clearInterval(iv);iv=null}}';
+    const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    w.onmessage = onTick;
+    w.postMessage('start');
+    return w;
+  } catch { return null; }
+}
 
 function stopStudio() {
   if (!studioState) return;
@@ -33,6 +46,10 @@ function stopStudio() {
   studioState = null;
   cancelAnimationFrame(s.raf);
   clearInterval(s.timer);
+  if (s.worker) { try { s.worker.postMessage('stop'); s.worker.terminate(); } catch { /* gone */ } }
+  if (s.wakeLock) { try { s.wakeLock.release(); } catch { /* released */ } }
+  if (s.onVis) document.removeEventListener('visibilitychange', s.onVis);
+  audio.lookahead = 0.35;
   try { if (s.rec && s.rec.state !== 'inactive') s.rec.stop(); } catch { /* already stopped */ }
   try { if (s.analyser) audio.musicGain.disconnect(s.analyser); } catch { /* not connected */ }
   try { if (s.dest) audio.musicGain.disconnect(s.dest); } catch { /* not connected */ }
@@ -153,10 +170,14 @@ export function showYouTubeStudio() {
   studioState = { raf: 0, analyser, dest: null, rec: null, timer: 0 };
   let recording = false, recStart = 0;
 
-  const loop = () => {
-    if (!studioState) return;
+  const draw = () => {
     const info = tracks.find(x => x.id === sel) || tracks[0];
     drawFrame(ctx2d, info, analyser, freqBuf, recording ? (performance.now() - recStart) / 1000 : 0, dur, recording);
+  };
+  // プレビュー中はrAFで滑らかに。録画中はWorkerが描画を駆動する（下記）。
+  const loop = () => {
+    if (!studioState) return;
+    if (!recording) draw();
     studioState.raf = requestAnimationFrame(loop);
   };
   loop();
@@ -214,12 +235,17 @@ export function showYouTubeStudio() {
     if (!studioState) return;
     const wasMusicOn = audio.musicOn;
     audio.setMusicEnabled(true);
-    preview();
     const dest = audio.ctx.createMediaStreamDestination();
     audio.musicGain.connect(dest);
     studioState.dest = dest;
+    // captureStream(0)+requestFrame: フレーム送出を自前のタイマーで駆動する。
+    // rAF任せの captureStream(30) はタブが隠れると映像が凍る（事故報告の原因）。
+    const vStream = canvas.captureStream(0);
+    const vTrack = vStream.getVideoTracks()[0];
+    const manualFrames = typeof vTrack.requestFrame === 'function';
+    if (!manualFrames) { vTrack.stop(); }
     const stream = new MediaStream([
-      ...canvas.captureStream(30).getVideoTracks(),
+      ...(manualFrames ? [vTrack] : canvas.captureStream(30).getVideoTracks()),
       ...dest.stream.getAudioTracks(),
     ]);
     const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus'
@@ -229,7 +255,13 @@ export function showYouTubeStudio() {
     const chunks = [];
     rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
     rec.onstop = () => {
-      clearInterval(studioState && studioState.timer);
+      if (studioState) {
+        clearInterval(studioState.timer);
+        if (studioState.worker) { try { studioState.worker.postMessage('stop'); studioState.worker.terminate(); } catch { /* gone */ } studioState.worker = null; }
+        if (studioState.wakeLock) { try { studioState.wakeLock.release(); } catch { /* released */ } studioState.wakeLock = null; }
+        if (studioState.onVis) { document.removeEventListener('visibilitychange', studioState.onVis); studioState.onVis = null; }
+      }
+      audio.lookahead = 0.35;
       const blob = new Blob(chunks, { type: 'video/webm' });
       if (blob.size > 0) {
         download(blob, `bba-ost-${sel}-${dur}s.webm`);
@@ -255,12 +287,40 @@ export function showYouTubeStudio() {
     recording = true;
     fadeArmed = false;
     recStart = performance.now();
+    // 🎯 頭出し: レコーダー始動の直後に曲を1小節目から流し直す。
+    // これで「音楽が途中から始まっている」動画にならない。
+    audio.preview(sel);
+    audio.restart();
+    // 📵 画面スリープ防止（モバイルで画面が消えると録画ごと止まるため）
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      navigator.wakeLock.request('screen').then(wl => { if (studioState) studioState.wakeLock = wl; }).catch(() => {});
+    }
+    // タブが隠れている間は音の先読みを4秒に拡大（背景ではタイマーが1秒間隔に
+    // 制限されるため、0.35秒先読みのままだと音が途切れる）。
+    const onVis = () => {
+      if (document.hidden) {
+        audio.lookahead = 4;
+        try { audio.scheduleAhead(); } catch { /* ok */ }
+      } else {
+        audio.lookahead = 0.35;
+        if (navigator.wakeLock && navigator.wakeLock.request && recording) {
+          navigator.wakeLock.request('screen').then(wl => { if (studioState) studioState.wakeLock = wl; }).catch(() => {});
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    studioState.onVis = onVis;
+    onVis();
     btnRec.textContent = `⏹ ${t('停止して保存', 'Stop & save')}`;
     m.querySelector('#ytClose').disabled = true;
-    studioState.timer = setInterval(() => {
+    // 録画中の描画・フレーム送出・進行管理はWorkerタイマーが駆動
+    // （タブを切り替えても止まらない）。Worker不可の環境はintervalに退避。
+    const tick = () => {
       if (!studioState || rec.state === 'inactive') return;
       const el = (performance.now() - recStart) / 1000;
-      status(t(`🔴 録画中… ${Math.floor(el)} / ${dur}秒（そのままお待ちください）`, `🔴 Recording… ${Math.floor(el)} / ${dur}s (please wait)`));
+      draw();
+      if (manualFrames) { try { vTrack.requestFrame(); } catch { /* track ended */ } }
+      status(t(`🔴 録画中… ${Math.floor(el)} / ${dur}秒（別の画面に切り替えてもOK）`, `🔴 Recording… ${Math.floor(el)} / ${dur}s (switching tabs is fine)`));
       // 最後の1.5秒はフェードアウト（動画の終わりがブツ切りにならない）
       if (!fadeArmed && el >= dur - 1.5) {
         fadeArmed = true;
@@ -270,7 +330,9 @@ export function showYouTubeStudio() {
         } catch { /* ok */ }
       }
       if (el >= dur) rec.stop();
-    }, 250);
+    };
+    studioState.worker = makeTickWorker(tick);
+    if (!studioState.worker) studioState.timer = setInterval(tick, 33);
   };
 
   btnRec.onclick = () => {

@@ -296,7 +296,13 @@ class AudioEngine {
     this.scheduler = null;
     this.step = 0;
     this.nextTime = 0;
+    // 先読み秒数。通常0.35秒。YouTubeスタジオが録画中にタブが隠れたとき、
+    // タイマーが1秒間隔に制限されても音が途切れないよう一時的に増やす。
+    this.lookahead = 0.35;
   }
+
+  // 再生中の曲を1小節目から流し直す（録画の頭出し用）。
+  restart() { this.syncTrack(true); }
 
   ensure() {
     if (this.ctx) {
@@ -399,7 +405,7 @@ class AudioEngine {
     if (!t || !this.ctx) return;
     const stepDur = 60 / t.bpm / 4;
     const total = t.bars.length * 16;
-    while (this.nextTime < this.ctx.currentTime + 0.35) {
+    while (this.nextTime < this.ctx.currentTime + (this.lookahead || 0.35)) {
       const stepInBar = this.step % 16;
       const bar = t.bars[Math.floor(this.step / 16) % t.bars.length];
       let when = this.nextTime;
