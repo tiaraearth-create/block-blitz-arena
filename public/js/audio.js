@@ -160,6 +160,20 @@ const TRACKS = {
       { chord: [N.G3, N.B3, N.D4, N.E4],  bass: N.G2, scale: [N.G4, N.A4, N.B4, N.D5, N.E5] },   // G6
     ],
   },
+  // 👻 幽霊屋敷のオルゴール — the hidden mode's music box: sparse high
+  // triangle plucks drifting over a B-diminished creep, barely any pulse.
+  ghost: {
+    bpm: 76, swing: 0.12, padType: 'sine', padVol: 0.09, arpType: 'triangle',
+    kick: [], snare: [], hat: [0], hatVol: 0.03,
+    bassSteps: [0], bassLen: 3.4, bassType: 'sine', bassVol: 0.34,
+    arpSteps: [0, 5, 9, 14], arpVol: 0.16, arpDelay: true, melody: 0.16,
+    bars: [
+      { chord: [N.A4, N.C5, N.E5], bass: N.A2, scale: [N.A4, N.B4, N.C5, N.E5, N.F5] },   // Am — the music box turns
+      { chord: [N.F4, N.A4, N.C5], bass: N.F2, scale: [N.A4, N.C5, N.D5, N.F5] },          // F
+      { chord: [N.B3, N.D4, N.F4], bass: N.B1, scale: [N.B4, N.D5, N.F5] },                // Bdim — something is here
+      { chord: [N.E4, N.B4, N.E5], bass: N.E2, scale: [N.E5, N.B4, N.A4, N.C5] },          // E5 hollow
+    ],
+  },
   // ---- Guest tracks ported from ブロックブラスト (Block Blast) ----
   // Faithful to the original's sequencer: arp cycles root→3rd→5th→3rd an
   // octave above the chord on every 8th note, bass hits beats 1 & 3 an octave
@@ -255,6 +269,7 @@ export const TRACK_INFO = [
   { id: 'ruins',  icon: '🗿', name: '遺跡の囁き',       nameEn: 'Whisper of Ruins', where: 'パズル遺跡',              whereEn: 'Puzzle Ruins' },
   { id: 'mine',   icon: '⛏️', name: '地底のハンマー',   nameEn: 'Hammer Below',     where: '採掘場',                  whereEn: 'The Mines' },
   { id: 'royal',  icon: '👑', name: '王座の間',         nameEn: 'Throne Room',      where: '王者のテーマ（ジュークボックス限定）', whereEn: 'Champions (jukebox exclusive)' },
+  { id: 'ghost',  icon: '👻', name: '幽霊屋敷のオルゴール', nameEn: 'Haunted Music Box', where: '？？？', whereEn: '???', hidden: true },
   { id: 'blastMenu',  icon: '🧱', name: 'ブラスト・ホーム', nameEn: 'Blast Home',       where: 'ブロックブラストより：メニュー', whereEn: 'From Block Blast: menu' },
   { id: 'blastGame',  icon: '💠', name: 'ブラスト・パズル', nameEn: 'Blast Puzzle',     where: 'ブロックブラストより：ソロ',     whereEn: 'From Block Blast: solo' },
   { id: 'blastVs',    icon: '🤖', name: 'ブラスト・バトル', nameEn: 'Blast Battle',     where: 'ブロックブラストより：対戦',     whereEn: 'From Block Blast: versus' },

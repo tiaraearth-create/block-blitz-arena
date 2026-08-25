@@ -757,6 +757,7 @@ export const BADGE_NAMES = {
   rush: 'ボスラッシュ制覇', dungeon: '百塔踏破', tourney: '大会優勝', royale: 'バトロワ1位',
   weekly1: '週間チャンピオン', puzzle: '遺跡マスター', dig: 'マスター採掘士',
   crown2: '二冠バッジ', crown3: '三冠バッジ', crown5: '五冠バッジ', crown7: '全冠制覇バッジ',
+  ghost: '幽霊屋敷の生還者',
 };
 
 // Pick one or more residents to react. Returns [{ resident, text, delay }].
@@ -1239,4 +1240,27 @@ REACTIONS.throne = {
 REPLY_RULES.splice(REPLY_RULES.length - 1, 0,
   ['puzzle', /パズル|遺跡|ステージ.?[0-9０-９]|puzzle|ruins/i],
   ['dig', /採掘|鉱石|クリスタル|虹鉱石|地層|掘り|掘っ|\bdig\b|mining|\bores?\b/i],
+);
+
+// ===========================================================================
+// v2.9 👻 幽霊屋敷 — 噂で広まる隠しモードのヒント（決して直接は教えない）
+// ===========================================================================
+
+LINES.push(
+  { ja: 'メニューのロゴ、じっと見てると数字が浮かぶ気がする…13、とか', arch: ['nightowl', 'explorer'] },
+  { ja: '昨日フレンドが「ロゴを連打してたら消えた」って言ってた。冗談だよね？', en: 'my friend said they vanished after tapping the logo a bunch… joking right?', arch: ['casual', 'kid'] },
+  { ja: '👻の実績、うちの実績欄にあるんだけど取り方が分からない', en: 'there is a 👻 achievement in my list and I have no idea how to get it', arch: ['newbie', 'casual', 'gacha'] },
+  { ja: '深夜にメニューでカタカタ音がした。空耳だと思いたい', arch: ['nightowl'] },
+  { ja: '幽霊屋敷？知らない子ですね…', arch: ['lurker', 'senpai'], w: 0.6 },
+);
+
+REPLIES.secret.ja.push(
+  'ロゴ…13回…いや、なんでもない',
+  '👻の実績が見えてるなら、もう半分見つけてるようなものだよ',
+  '不吉な数字の回数だけ、って聞いた',
+  'メニューで指が疲れるまでタップした人だけが知ってる',
+);
+REPLIES.secret.en.push(
+  'the logo… thirteen… forget I said anything',
+  'if you can see the 👻 achievement you are already halfway there',
 );

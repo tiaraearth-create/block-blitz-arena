@@ -139,6 +139,7 @@ function migrateUser(user) {
     chimeraPlays: 0, survivalPlays: 0, weeklyPlays: 0, dailyLogins: 1,
     gachaPulls: 0, gachaSSR: 0, chatMessages: 0, reactionsGiven: 0,
     weeklyWins: 0, puzzleStage: 0, puzzlePlays: 0, digDepth: 0, digPlays: 0,
+    ghostBest: 0, ghostPlays: 0,
   })) if (s[k] === undefined) s[k] = v;
   if (!s.bossRanks || typeof s.bossRanks !== 'object') s.bossRanks = {};
   if (user.guildId && !(db.guilds && db.guilds[user.guildId])) user.guildId = null;
@@ -449,6 +450,17 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
       }
     }
   }
+  // 👻 幽霊屋敷 (hidden): memory-mode best + badge at 15,000.
+  if (mode === 'ghost') {
+    s.ghostPlays = (s.ghostPlays || 0) + 1;
+    if (score > (s.ghostBest || 0)) s.ghostBest = score;
+    if (score >= 15000 && !user.badges.includes('ghost')) {
+      user.badges.push('ghost');
+      badge = 'ghost';
+      gems += 250;
+      user.gems += 250;
+    }
+  }
   // ⛏️ 採掘場: deepest dig + first-clear badge at 50m.
   if (mode === 'dig') {
     s.digPlays = (s.digPlays || 0) + 1;
@@ -589,8 +601,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
 
 // Real players' notable moments go on the live feed (starred), and the crowd
 // may react. Capped per user so a hot streak doesn't flood the ticker.
-const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈' };
-const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination' };
+const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
+const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination', ghost: 'Haunted House' };
 const feedAt = new Map();   // userId -> last feed timestamp
 function postRealFeed(user, notes) {
   if (!notes.length) return;
@@ -1120,6 +1132,12 @@ function seedNews() {
     db.news.push(mk('seed-throne', THRONE_TITLE,
       '各ランキング（スコア・レート・タイムアタック・ダンジョン・ウィークリー・パズル遺跡・採掘場）の現在1位は「王座」を保持します。王者はランキング・チャット・プロフィールに👑が輝き、王座1つにつき毎日のログインボーナスに+150🪙+2💎の俸給が上乗せ！王座が奪われるとライブフィードで全プレイヤーに速報が流れます。頂点を獲れ！',
       0, true));
+  }
+  const GHOST_TITLE = '👻 奇妙な報告が届いています';
+  if (!db.news.some(n => n && (n.id === 'seed-ghost' || n.title === GHOST_TITLE))) {
+    db.news.push(mk('seed-ghost', GHOST_TITLE,
+      '複数のプレイヤーから「メニューで何かに見られている気がする」という報告が届いています。運営で調査したところ、ロゴの周辺で不可解な現象を確認しました。じっと見つめていると、不吉な数字が頭に浮かぶそうです。……くれぐれも、その回数だけ触れたりしないように。実績欄に見慣れない👻が現れた方は、運営までご一報ください。',
+      0, false));
   }
   const V272_TITLE = '🎰 ガチャ2.0 ＆ 👑多冠報酬アップデート！';
   if (!db.news.some(n => n && (n.id === 'seed-v272' || n.title === V272_TITLE))) {
@@ -2111,7 +2129,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     // force re-login everywhere with the new password
     revokeAllTokens(target.id);
   }
-  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'abyss', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7'];
+  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'abyss', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
   if (typeof b.grantBadge === 'string') {
     if (!KNOWN_BADGES.includes(b.grantBadge)) return res.status(400).json({ error: `バッジIDが不正です（${KNOWN_BADGES.join(' / ')}）` });
     if (!target.badges.includes(b.grantBadge)) target.badges.push(b.grantBadge);

@@ -145,6 +145,10 @@ export const ACHIEVEMENTS = [
   a('ach_chat100',  '💬', 'legend', 100,  1000,  8,   'ロビーの顔',   'Lobby Regular',    'チャットで100回発言',    'Send 100 chat messages',    u => S(u).chatMessages || 0),
   a('ach_react50',  '👍', 'legend', 50,   800,   6,   'リアクション名人', 'Reaction Artist', 'リアクションを50回送る', 'Send 50 reactions',       u => S(u).reactionsGiven || 0),
   a('ach_ach50',    '🏅', 'legend', 50,   5000,  45,  '実績ハンター', 'Achievement Hunter', '実績を50個受け取る',   'Claim 50 achievements',     u => (u.achievements || []).length),
+
+  // ---- 👻 隠しモードのティーザー（実績欄そのものがヒントになる） ----
+  a('ach_ghost1',   '👻', 'explore', 1,     666,  6,  'ソレは存在する',   'It Exists',       '「幽霊屋敷」を見つけて1回遊ぶ', 'Find and play the "Haunted House"', u => S(u).ghostPlays || 0),
+  a('ach_ghost15k', '🕯️', 'explore', 15000, 3000, 25, '見えないものが見える', 'Sixth Sense', '幽霊屋敷で15,000点',          'Score 15,000 in the Haunted House', u => S(u).ghostBest || 0),
 ];
 
 export function achievementsView(user) {

@@ -153,6 +153,7 @@ export const TITLES = [
   { id: 'miner',     name: 'マスター採掘士',  color: '#f59e0b', desc: '採掘場で深度50に到達' },
   { id: 'gachaprince', name: 'ガチャの申し子', color: '#ff6bd4', desc: 'ガチャを100回引く' },
   { id: 'lobbyface', name: 'ロビーの顔',      color: '#43d9e8', desc: 'チャットで300回発言する' },
+  { id: 'ghostmaster', name: '幽霊使い',      color: '#a78bfa', desc: '幽霊屋敷で15,000点（見えない何かと心を通わせた）' },
 ];
 
 export function earnedTitles(user) {
@@ -209,6 +210,7 @@ export function earnedTitles(user) {
   if ((s.digDepth || 0) >= 50) out.push('miner');
   if ((s.gachaPulls || 0) >= 100) out.push('gachaprince');
   if ((s.chatMessages || 0) >= 300) out.push('lobbyface');
+  if ((s.ghostBest || 0) >= 15000) out.push('ghostmaster');
   return out;
 }
 

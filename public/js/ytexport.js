@@ -9,6 +9,7 @@
 import { audio, TRACK_INFO } from './audio.js';
 import { showModal, closeModal, toast } from './dom.js';
 import { t } from './i18n.js';
+import { ghostUnlocked } from './modes.js';
 
 const W = 1280, H = 720;
 const GAME_URL = 'https://block-blitz-arena.onrender.com';
@@ -20,7 +21,7 @@ const MOODS = {
   boss: ['#2a0d12', '#0d0306', '#ff5d5d'], oni: ['#33070f', '#100205', '#ff3b4d'],
   pixel: ['#0f2e18', '#04140a', '#5ee86e'], kami: ['#4a3a10', '#171004', '#ffd75e'],
   ruins: ['#20332a', '#0a1410', '#7cf5c8'], mine: ['#2e2013', '#120a04', '#ffb02e'],
-  royal: ['#3c2a58', '#140a22', '#ffd75e'],
+  royal: ['#3c2a58', '#140a22', '#ffd75e'], ghost: ['#1e1b4b', '#0b0a1a', '#a78bfa'],
 };
 const moodOf = id => MOODS[id] || (id.startsWith('blast') ? ['#1c2440', '#0a0d1c', '#8ab4ff'] : MOODS.menu);
 
@@ -106,8 +107,9 @@ export function showYouTubeStudio() {
     return;
   }
   const canRecord = typeof MediaRecorder !== 'undefined' && HTMLCanvasElement.prototype.captureStream;
+  const tracks = TRACK_INFO.filter(x => !x.hidden || ghostUnlocked());
 
-  let sel = TRACK_INFO[0].id;
+  let sel = tracks[0].id;
   let dur = 120;
   const m = showModal(`
     <h2>🎬 ${t('YouTube スタジオ', 'YouTube Studio')}</h2>
@@ -118,7 +120,7 @@ export function showYouTubeStudio() {
     <canvas id="ytCanvas" width="${W}" height="${H}" style="width:100%;border-radius:10px;border:1px solid rgba(255,255,255,0.15)"></canvas>
     <div class="settings-row" style="margin-top:8px">
       <label>🎵 ${t('曲', 'Track')}</label>
-      <select id="ytTrack" style="max-width:210px">${TRACK_INFO.map(x => `<option value="${x.id}">${x.icon} ${t(x.name, x.nameEn)}</option>`).join('')}</select>
+      <select id="ytTrack" style="max-width:210px">${tracks.map(x => `<option value="${x.id}">${x.icon} ${t(x.name, x.nameEn)}</option>`).join('')}</select>
     </div>
     <div class="settings-row">
       <label>⏱️ ${t('長さ', 'Length')}</label>
@@ -153,7 +155,7 @@ export function showYouTubeStudio() {
 
   const loop = () => {
     if (!studioState) return;
-    const info = TRACK_INFO.find(x => x.id === sel) || TRACK_INFO[0];
+    const info = tracks.find(x => x.id === sel) || tracks[0];
     drawFrame(ctx2d, info, analyser, freqBuf, recording ? (performance.now() - recStart) / 1000 : 0, dur, recording);
     studioState.raf = requestAnimationFrame(loop);
   };
@@ -186,7 +188,7 @@ export function showYouTubeStudio() {
   };
 
   m.querySelector('#ytCopy').onclick = async () => {
-    const info = TRACK_INFO.find(x => x.id === sel);
+    const info = tracks.find(x => x.id === sel);
     const text = `【Block Blitz Arena OST】${info.name} (${info.nameEn})\n\n` +
       `ブロックパズルゲーム「Block Blitz Arena」のオリジナルサウンドトラックです。\n` +
       `The original soundtrack of the puzzle game "Block Blitz Arena".\n\n` +

@@ -65,6 +65,7 @@ export class GameView {
     this.dangerCells = null;
     this.coolCells = null;
     this.oreCells = null;
+    this.ghostFx = null;
   }
 
   setTheme({ skinId, boardId, fxId }) {
@@ -462,7 +463,15 @@ export class GameView {
         let glow = 0;
         if (ghost && ghost.valid && (ghost.willRows.has(r) || ghost.willCols.has(c))) glow = 1;
         if (!glow && this.glowCells && this.glowCells.has(key)) glow = 1;
-        this.drawScaledBlock(skin, x, y, cell, v, 1, scale, glow);
+        // 👻 幽霊屋敷: 置いたブロックはやがて透明になる。ライン消しの瞬間
+        // (revealUntil) と消える予告グロー中だけは見える。
+        let alpha = 1;
+        if (this.ghostFx && !glow && this.time >= this.ghostFx.revealUntil) {
+          const h = this.ghostFx.hideAt.get(key);
+          if (h !== undefined) alpha = Math.max(0, Math.min(1, (h - this.time) / 0.35));
+        }
+        if (alpha <= 0.02) continue;
+        this.drawScaledBlock(skin, x, y, cell, v, alpha, scale, glow);
       }
     }
   }

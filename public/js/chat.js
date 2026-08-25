@@ -142,7 +142,7 @@ function cancelReply() {
   $('#chatReplyBar').classList.add('hidden');
 }
 
-const PROFILE_BADGES = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈' };
+const PROFILE_BADGES = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
 // 👑 王座のボード名（プロフィールカード表示用）
 const THRONE_LABELS = {
   score: ['スコア', 'Score'], rating: ['レート', 'Rating'], sprint: ['タイムアタック', 'Time Attack'],

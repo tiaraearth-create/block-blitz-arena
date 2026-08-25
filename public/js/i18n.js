@@ -130,6 +130,7 @@ const CATALOG_EN = {
   miner: { name: 'Master Miner', desc: 'Reach depth 50 in the Mines' },
   gachaprince: { name: 'Gacha Prodigy', desc: 'Pull the gacha 100 times' },
   lobbyface: { name: 'Lobby Regular', desc: 'Send 300 chat messages' },
+  ghostmaster: { name: 'Ghost Whisperer', desc: 'Score 15,000 in the Haunted House' },
   mecha: { name: 'Deus Ex Machina', desc: '' },
   frost: { name: 'Frost Queen Frione', desc: '' },
 };
@@ -238,6 +239,7 @@ export function applyStaticI18n() {
   set('#btnChimera', '🧬 Chimera Lab');
   set('#btnPuzzle', '🧩 Puzzle Ruins');
   set('#btnDig', '⛏️ The Mines');
+  set('#btnGhost', '👻 Haunted House');
   set('#btnChaos', '🌪️ Chaos Mode');
   set('#btnOnline', '🌐 Online Battle');
 

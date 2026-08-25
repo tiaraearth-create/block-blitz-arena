@@ -145,6 +145,19 @@ try {
   const feed = await j('/api/feed');
   check('takeover announced on the live feed', (feed.feed || []).some(f => f.real && /王座/.test(f.text || '')), JSON.stringify((feed.feed || []).filter(f => f.real).map(f => f.text).slice(-3)));
 
+  // ---- 👻 幽霊屋敷 (隠しモード) ----
+  await j('/api/game/result', { method: 'POST', body: { mode: 'ghost', score: 8000, lines: 12, maxCombo: 4, duration: 90, won: false } }, tok);
+  me = await j('/api/me', {}, tok);
+  check('ghostBest recorded', me.user.stats.ghostBest === 8000, `ghostBest=${me.user.stats.ghostBest}`);
+  check('15k未満はバッジなし', !me.user.badges.includes('ghost'));
+  const gemsBeforeGhost = me.user.gems;
+  await j('/api/game/result', { method: 'POST', body: { mode: 'ghost', score: 16000, lines: 20, maxCombo: 6, duration: 120, won: false } }, tok);
+  me = await j('/api/me', {}, tok);
+  check('15,000点で👻バッジ+💎250', me.user.badges.includes('ghost') && me.user.gems === gemsBeforeGhost + 250, `gems +${me.user.gems - gemsBeforeGhost}`);
+  check('ghost score counts toward global bestScore', me.user.stats.bestScore >= 16000, `bestScore=${me.user.stats.bestScore}`);
+  const titles2 = await j('/api/titles', {}, tok);
+  check('称号「幽霊使い」解放', (titles2.earned || []).includes('ghostmaster'));
+
   // ---- 👑 多冠バッジ: 同時2冠/3冠で永久バッジ、冠を失っても残る ----
   check('三冠時に crown2+crown3 バッジを獲得済み', ['crown2', 'crown3'].every(b2 => meAfter.user.badges.includes(b2)), JSON.stringify(meAfter.user.badges));
   check('王座を失ってもバッジは残る(2冠に落ちてもcrown3保持)', meAfter.user.badges.includes('crown3') && meAfter.user.thrones.length === 2, `thrones=${meAfter.user.thrones.length}`);

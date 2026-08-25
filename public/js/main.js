@@ -2,7 +2,7 @@
 import { session, api, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, staffExtras } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
 import { confettiBurst } from './dom.js';
@@ -74,6 +74,54 @@ function unlockSouzou() {
   confettiBurst(80);
   toast(t('🌌 宇宙の彼方から視線を感じる……真の隠し難易度「創造神」が姿を現した', '🌌 Something watches from beyond the cosmos… the true hidden difficulty "Creator God" has appeared!'), 'announce', 6000);
 }
+
+// ---- 👻 幽霊屋敷: メニューのロゴを13回連続タップで解放 ----
+function updateGhostButton() {
+  $('#btnGhost').classList.toggle('hidden', !ghostUnlocked());
+}
+
+function unlockGhost() {
+  if (localStorage.getItem('bba_ghost') === '1') return;
+  localStorage.setItem('bba_ghost', '1');
+  document.body.classList.add('ghost-flicker');
+  setTimeout(() => document.body.classList.remove('ghost-flicker'), 3500);
+  audio.gameOver();
+  setTimeout(() => audio.kamiDescend(), 900);
+  toast(t('👻 ……見つかってしまった。メニューに「幽霊屋敷」への扉が現れた', '👻 …it has noticed you. A door to the Haunted House has appeared on the menu'), 'announce', 6000);
+  updateGhostButton();
+}
+
+let ghostTaps = 0;
+let ghostTapTimer = null;
+document.querySelector('.logo').addEventListener('click', () => {
+  ghostTaps++;
+  clearTimeout(ghostTapTimer);
+  ghostTapTimer = setTimeout(() => { ghostTaps = 0; }, 2000);   // 2秒空いたらリセット
+  // 10回目から不穏な気配（音が少しずつ低く沈む）
+  if (ghostTaps >= 10 && ghostTaps < 13) audio.putback();
+  if (ghostTaps === 13) { ghostTaps = 0; unlockGhost(); }
+});
+
+$('#btnGhost').onclick = () => {
+  audio.click();
+  const best = Math.max(Number(localStorage.getItem('bba_ghost_best') || 0),
+    session.user ? (session.user.stats.ghostBest || 0) : 0);
+  const m = showModal(`
+    <h2>👻 ${t('幽霊屋敷', 'Haunted House')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('この屋敷では、置いたブロックが<b>約1秒で透明になる</b>。頼れるのは記憶だけ。<br><small>ラインを消した瞬間だけ、盤面のすべてが姿を現す。ドラッグ中の影が唯一の手がかり — 初回15,000点で👻バッジ＋💎250。</small>',
+          'In this house, placed blocks <b>turn invisible after a second</b>. Memory is all you have.<br><small>Every line clear reveals the whole board for a moment. Your drag shadow is the only other clue — first 15,000 earns the 👻 badge + 250💎.</small>')}
+    </p>
+    ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="ghCancel">${t('逃げる', 'Run away')}</button>
+      <button class="btn btn-ghostmode" id="ghStart">👻 ${t('屋敷に入る', 'Enter the house')}</button>
+    </div>`);
+  m.querySelector('#ghCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#ghStart').onclick = () => { audio.click(); closeModal(); startGhost(); };
+};
+
+updateGhostButton();   // 解放済み(またはadmin)なら最初から扉が見えている
 
 const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
 // 超絶コマンド: コナミコマンドの後に BABA↓↑↓↑ を続ける
@@ -789,6 +837,7 @@ function showRestoreFailedModal() {
         const data = await refreshMe();
         updateTopbar();
         refreshMissionDot();
+        updateGhostButton();   // adminは幽霊屋敷が常時開放
         // The first status poll usually lands before the session is restored,
         // so the banner still says "not voted" — re-check now that we know who
         // is logged in.

@@ -6,7 +6,7 @@ import { audio, TRACK_INFO } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
 import { reconnectChat, markNewsSeen } from './chat.js';
 import { t as tr, setLang, LANG, catName, catDesc } from './i18n.js';
-import { equippedUlt, setGuestUlt } from './modes.js';
+import { equippedUlt, setGuestUlt, ghostUnlocked } from './modes.js';
 import { ultIcon, ultColor } from './skills.js';
 import { showYouTubeStudio } from './ytexport.js';
 
@@ -75,7 +75,7 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
@@ -121,7 +121,7 @@ const MODE_LABEL = {
   boss_rush: ['ボスラッシュ', 'Boss Rush'], weekly: ['ウィークリー', 'Weekly'],
   chaos: ['カオス', 'Chaos'], pvp: ['オンライン', 'Online'], tournament: ['トーナメント', 'Tournament'],
   meltdown: ['メルトダウン', 'Meltdown'], chimera: ['キメラ工房', 'Chimera Lab'],
-  puzzle: ['パズル遺跡', 'Puzzle Ruins'], dig: ['採掘場', 'The Mines'],
+  puzzle: ['パズル遺跡', 'Puzzle Ruins'], dig: ['採掘場', 'The Mines'], ghost: ['幽霊屋敷', 'Haunted House'],
   royale: ['バトルロイヤル', 'Royale'], dungeon: ['ダンジョン', 'Dungeon'],
   dungeon_under: ['地下', 'Underworld'], dungeon_heaven: ['天界', 'Heavens'],
   ai_easy: ['AI戦', 'VS AI'], ai_normal: ['AI戦', 'VS AI'], ai_hard: ['AI戦', 'VS AI'],
@@ -615,11 +615,13 @@ export function showJukeboxModal() {
   { dismissable: false });
 
   const list = m.querySelector('#jbList');
+  // 隠しモードの曲は、その扉を見つけた者にしか聞こえない。
+  const visibleTracks = TRACK_INFO.filter(t2 => !t2.hidden || ghostUnlocked());
   const render = () => {
     const now = audio.playing;
     const autoActive = !lock && !audio.previewTrack;
     list.innerHTML = `
-      ${TRACK_INFO.map(t => `
+      ${visibleTracks.map(t => `
         <button class="jb-row ${now === t.id ? 'playing' : ''}" data-jb="${t.id}">
           <span class="jb-icon">${t.icon}</span>
           <span class="jb-meta">
@@ -718,7 +720,7 @@ export async function openLeaderboard(board = 'score') {
       }).join('');
       rewardHead = `<div class="lb-rewards">🎁 <b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
     }
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
     list.innerHTML = rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>

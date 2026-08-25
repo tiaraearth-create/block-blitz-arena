@@ -525,7 +525,7 @@ function autoUseItems(m) {
 // qualify — the whitelist below is deliberate.
 // ---------------------------------------------------------------------------
 
-const RESCUE_MODES = new Set(['solo', 'boss', 'dungeon', 'chaos', 'survival', 'sprint', 'dig']);
+const RESCUE_MODES = new Set(['solo', 'boss', 'dungeon', 'chaos', 'survival', 'sprint', 'dig', 'ghost']);
 let rescueBusy = false;
 
 function autoRescue() {
@@ -1538,6 +1538,119 @@ class DigMode {
 export function startDig() {
   if (currentMode) currentMode.destroy();
   currentMode = new DigMode();
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+// ---------------------------------------------------------------------------
+// 👻 幽霊屋敷 (HIDDEN — メニューのロゴを13回タップで解放)
+// 置いたブロックは約1.2秒で透明になる記憶力スコアアタック。ライン消しの
+// 瞬間だけ盤面全体が姿を現す。ドラッグ中の設置プレビュー(置けない場所は
+// 置けない)が唯一の手がかり。
+// ---------------------------------------------------------------------------
+
+export function ghostUnlocked() {
+  return localStorage.getItem('bba_ghost') === '1' || (session.user && session.user.role === 'admin');
+}
+
+class GhostMode {
+  constructor() {
+    this.mode = 'ghost';
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.add('hidden');
+    showItemBar(false);   // 記憶力の純粋勝負 — アイテム/奥義なし
+    this.startedAt = Date.now();
+    this.ended = false;
+    this.ghostFx = { hideAt: new Map(), revealUntil: 0 };
+    const v = getView();
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.ghostFx = this.ghostFx;
+    v.inputLocked = false;
+    v.onIntentPlace = null;
+    v.onPlace = r => this.onPlace(r);
+    v.onGameOver = () => this.finish();
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('ghost');
+    toast(t('👻 置いたブロックは消えていく…記憶だけが頼り。ラインを消せば一瞬だけ見える！',
+      '👻 Placed blocks fade away… memory is all you have. Clears reveal the board for a moment!'), 'announce', 3600);
+  }
+
+  onPlace(result) {
+    if (this.ended) return;
+    const v = getView();
+    for (const [r, c] of result.placedCells) this.ghostFx.hideAt.set(r * 8 + c, v.time + 1.2);
+    if (result.lineCount) {
+      for (const [r, c] of result.clearedCells) this.ghostFx.hideAt.delete(r * 8 + c);
+      this.ghostFx.revealUntil = v.time + 0.8;   // 全盤面リビール
+    }
+    // 神モードの盤面リセット等でグリッドが空いたセルの残骸を掃除
+    for (const k of [...this.ghostFx.hideAt.keys()]) if (this.engine.grid[k] === 0) this.ghostFx.hideAt.delete(k);
+    this.updateHud();
+  }
+
+  best() {
+    const local = Number(localStorage.getItem('bba_ghost_best') || 0);
+    return session.user ? Math.max(local, session.user.stats.ghostBest || 0) : local;
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = t(`👻 見えないブロック ${this.ghostFx.hideAt.size}個 ・ BEST ${fmt(this.best())}`,
+      `👻 ${this.ghostFx.hideAt.size} hidden blocks — BEST ${fmt(this.best())}`);
+  }
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    getView().inputLocked = true;
+    const e = this.engine;
+    const localBest = Number(localStorage.getItem('bba_ghost_best') || 0);
+    const isBest = e.score > 0 && e.score >= Math.max(localBest, this.best());
+    if (e.score > localBest) localStorage.setItem('bba_ghost_best', String(e.score));
+    const rewards = await submitResult({
+      mode: 'ghost', score: e.score, lines: e.linesCleared,
+      maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
+    });
+    if (isBest) confettiBurst();
+    const m = showModal(`
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : t('👻 屋敷に呑まれた…', '👻 The house claims you…')}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
+  }
+
+  quit() { this.finish(); }
+
+  destroy() {
+    this.ended = true;
+    if (view) { view.onPlace = null; view.ghostFx = null; }
+  }
+}
+
+export function startGhost() {
+  if (currentMode) currentMode.destroy();
+  currentMode = new GhostMode();
   window.__bbaMode = currentMode;
   currentMode.start();
 }
@@ -4501,6 +4614,7 @@ function endToMenu() {
     view.dangerCells = null;
     view.coolCells = null;
     view.oreCells = null;
+    view.ghostFx = null;
   }
   if (view) view.stop();
   stopAutopilot();
