@@ -172,7 +172,22 @@ function derivedSeasonIndex(now = Date.now()) {
 function currentSeason() {
   const now = Date.now();
   const idx = derivedSeasonIndex(now);
-  const o = db.meta.seasonOverride || null;
+  let o = db.meta.seasonOverride || null;
+  // An admin-shortened season whose endsAt passed BEFORE the natural 30-day
+  // boundary must actually end: roll it into a forced next season starting at
+  // that moment (gen bump = new id = battle passes reset), not silently resume
+  // the old one with a later end date. Lazy + idempotent, like the old rollover.
+  while (o && o.endsAt && o.endsAt <= now && (o.baseIndex || idx) === idx) {
+    o = db.meta.seasonOverride = {
+      baseIndex: idx,
+      gen: (o.gen || 0) + 1,
+      numberOffset: (o.numberOffset || 0) + 1,
+      name: null,
+      startedAt: o.endsAt,
+      endsAt: o.endsAt + SEASON_MS,
+    };
+    saveDb();
+  }
   const extended = !!(o && o.endsAt && o.endsAt > now);
   const effIdx = extended ? (o.baseIndex || idx) : idx;
   const gen = o ? (o.gen || 0) : 0;
@@ -410,16 +425,20 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   if (mode === 'meltdown' && score > (s.meltdownBest || 0)) s.meltdownBest = score;
   if (mode === 'chimera' && score > (s.chimeraBest || 0)) s.chimeraBest = score;
   // 🧩 パズル遺跡: highest stage cleared + first-clear badge at stage 50.
+  // stage/depth are client-declared (same trust level as floor/wave) — the gem
+  // faucet is bounded like the dungeon's: decade payouts stop at stage 100, and
+  // the stored stat is capped so a forged request can't own the leaderboard.
   if (mode === 'puzzle') {
     s.puzzlePlays = (s.puzzlePlays || 0) + 1;
-    if (won && stage > (s.puzzleStage || 0)) {
-      const decades = Math.floor(stage / 10) - Math.floor((s.puzzleStage || 0) / 10);
+    const st = Math.min(stage, 999);
+    if (won && st > (s.puzzleStage || 0)) {
+      const decades = Math.floor(Math.min(st, 100) / 10) - Math.floor(Math.min(s.puzzleStage || 0, 100) / 10);
       if (decades > 0) {
         gems += decades * 25;
         user.gems += decades * 25;
       }
-      s.puzzleStage = stage;
-      if (stage >= 50 && !user.badges.includes('puzzle')) {
+      s.puzzleStage = st;
+      if (st >= 50 && !user.badges.includes('puzzle')) {
         user.badges.push('puzzle');
         badge = 'puzzle';
         gems += 300;
@@ -430,9 +449,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // ⛏️ 採掘場: deepest dig + first-clear badge at 50m.
   if (mode === 'dig') {
     s.digPlays = (s.digPlays || 0) + 1;
-    if (depth > (s.digDepth || 0)) {
-      s.digDepth = depth;
-      if (depth >= 50 && !user.badges.includes('dig')) {
+    const dp = Math.min(depth, 999);
+    if (dp > (s.digDepth || 0)) {
+      s.digDepth = dp;
+      if (dp >= 50 && !user.badges.includes('dig')) {
         user.badges.push('dig');
         badge = 'dig';
         gems += 300;
@@ -2302,15 +2322,23 @@ function seedAdmin() {
 // Seed backup — automatic self-heal on boot. The repo carries a recent
 // production backup at server/seed-backup.json (refresh it with
 // `npm run backup:pull` before pushing); a fresh post-deploy instance merges
-// it in with no manual /?restore=1 step. Merge is idempotent and
-// progress-winner, so running this on every boot is safe.
+// it in with no manual /?restore=1 step.
+//
+// SAFETY: a given seed file is applied AT MOST ONCE (its hash is remembered in
+// db.meta.seedHash). Without that gate, a host whose disk survives restarts
+// would re-merge the stale seed on every boot — refunding spent currency,
+// reverting bans/password changes and resurrecting deleted accounts each time
+// the process bounced. Re-pulling a fresh seed (new hash) applies again.
 const SEED_BACKUP_FILE = process.env.SEED_BACKUP_FILE || path.join(__dirname, 'seed-backup.json');
 function autoRestoreFromSeed() {
   if (process.env.SEED_RESTORE === '0') return;
-  let data;
+  let data, seedHash;
   try {
     if (!fs.existsSync(SEED_BACKUP_FILE)) return;
-    data = JSON.parse(fs.readFileSync(SEED_BACKUP_FILE, 'utf8'));
+    const rawBytes = fs.readFileSync(SEED_BACKUP_FILE);
+    seedHash = crypto.createHash('sha256').update(rawBytes).digest('hex');
+    if (db.meta.seedHash === seedHash) return;   // this exact seed is already in
+    data = JSON.parse(rawBytes.toString('utf8'));
   } catch (err) {
     console.warn('[seed] seed-backup.json を読み込めませんでした:', err.message);
     return;
@@ -2338,10 +2366,14 @@ function autoRestoreFromSeed() {
   const check = validateBackup(data);
   if (!check.ok) { console.warn('[seed] seed-backup.json が不正です:', check.error); return; }
   try {
+    // The instance's OWN stored legacy season must be adopted before the merge
+    // can overwrite user records — and definitely before db.season is nulled.
+    const adoptedLocal = adoptLegacySeason(db.season);
     const report = applyRestore(db, data, 'merge');
     for (const u of Object.values(db.users)) migrateUser(u);
-    const adopted = adoptLegacySeason(data.season);
+    const adopted = adoptedLocal + adoptLegacySeason(data.season);
     db.season = null;   // stored seasons are legacy — everything derives from SEASON_EPOCH now
+    db.meta.seedHash = seedHash;
     setLiveScale(db.meta.popScale ?? 1);
     setCustom(db.meta.ambient);
     saveDb();

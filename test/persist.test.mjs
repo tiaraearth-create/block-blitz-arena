@@ -132,6 +132,12 @@ try {
   check('seed-restored user logs in with achievements intact', relog3.status === 200 && (relog3.user.achievements || []).includes('ach_play1'), JSON.stringify(relog3.user && relog3.user.achievements));
   check('seed restore adopted crowd scale from meta', seedLog.includes('自動復元'), '');
 
+  // Same seed + surviving disk → the seed must NOT re-apply (hash gate).
+  // Otherwise every restart would refund spent currency / revert moderation.
+  await stop();
+  const reLog = await start({ SEED_RESTORE: '1', SEED_BACKUP_FILE: SEED_FILE, ADMIN_PASSWORD: seedPw });
+  check('same seed on a persistent disk is applied AT MOST once', !reLog.includes('自動復元'), reLog.split('\n').find(l => l.includes('seed')) || 'no seed log = skipped');
+
   // wrong password → no restore, but boot still succeeds
   await stop();
   wipeDb();

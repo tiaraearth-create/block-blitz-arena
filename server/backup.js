@@ -58,6 +58,10 @@ function progressOf(u) {
 // them just because the other copy of the account had more raw progress.
 // (This was why "アップデートのたびに実績をもう一度受け取り" happened whenever
 // the losing side of a merge held the claimed list.)
+// Known tradeoff: if the LOSING copy bought something, the winner keeps its
+// own (pre-purchase) currency while the purchase is unioned in — a one-time
+// windfall for that player. Acceptable: losing purchases outright is worse,
+// and the boot-time seed merge only ever applies a given seed once.
 function mergeEarned(winner, loser) {
   if (!winner || !loser) return;
   for (const k of ['achievements', 'badges', 'owned']) {
@@ -158,6 +162,9 @@ export function applyRestore(db, data, mode = 'merge') {
   for (const u of Object.values(db.users)) byName.set(u.username.toLowerCase(), u);
 
   for (const inc of Object.values(data.users)) {
+    // Tombstone: an account the operator deleted stays deleted — a stale
+    // backup/seed must not resurrect it (db.deleted survives merges below).
+    if (db.deleted && db.deleted[inc.id]) continue;
     const live = db.users[inc.id] || byName.get(inc.username.toLowerCase());
     if (!live) {
       db.users[inc.id] = inc;
@@ -172,6 +179,18 @@ export function applyRestore(db, data, mode = 'merge') {
       // signed before the wipe references that id, so logins come straight
       // back. Only the few sessions issued in the wipe→restore window lose.
       mergeEarned(inc, live);
+      // Moderation and credentials are OPERATOR state, not player progress —
+      // they must not roll back just because the backup copy had more score.
+      // A newer sessionsSince marks newer credentials (password changes bump
+      // it); bans/mutes are unioned (an unbanned-then-restored account may be
+      // re-banned once — far safer than a ban silently reverting).
+      if ((live.sessionsSince || 0) > (inc.sessionsSince || 0)) {
+        inc.passHash = live.passHash;
+        inc.salt = live.salt;
+        inc.sessionsSince = live.sessionsSince;
+      }
+      if (live.banned) inc.banned = true;
+      if (live.muted) inc.muted = true;
       delete db.users[live.id];
       db.users[inc.id] = inc;
       byName.set(inc.username.toLowerCase(), inc);

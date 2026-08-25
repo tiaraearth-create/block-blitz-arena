@@ -527,18 +527,20 @@ function genTopicDialogue(ctx) {
   const kindB = pickFollowKind(b);
   const fB = gen.smartPick(`follow.${kindB}`, (FOLLOWS[kindB] || []).filter(archOkFor(b)), { now: ctx.now, rid: b.id });
   if (!fB) return null;
-  const script = [[a, coreE.ja], [b, fB.ja]];
+  // {name} in a follow-up must address the person being answered — never a
+  // random third resident from the lobby.
+  const script = [[a, coreE.ja, { name: b.name }], [b, fB.ja, { name: a.name }]];
   if (rnd() < 0.55) {
     const kindA = rnd() < 0.5 ? 'relate' : 'tip';
     const fA = gen.smartPick(`follow.${kindA}`, (FOLLOWS[kindA] || []).filter(archOkFor(a)), { now: ctx.now, rid: a.id });
-    if (fA) script.push([a, fA.ja]);
+    if (fA) script.push([a, fA.ja, { name: b.name }]);
   }
   gen.adoptTopic(id, ctx);
   let delay = 0;
   const out = [];
-  for (const [r, tpl] of script) {
+  for (const [r, tpl, extra] of script) {
     delay += 3000 + rnd() * 9000;
-    const s = stylize(fill(tpl, r, ctx), r);
+    const s = stylize(fill(tpl, r, ctx, extra), r);
     if (!gen.surfaceFresh(s, ctx.now)) return null;   // rare — just skip this tick
     gen.noteSurface(s, ctx.now);
     gen.noteSpoken(r.id, ctx.now);
@@ -1190,7 +1192,9 @@ for (const [cat, pools] of Object.entries(REPLY_EXP)) {
     REPLIES[cat] = { ja: pools.ja.slice(), en: pools.en.slice() };
   }
 }
+// 深度/depth は先行する rush ルールが取るので、採掘固有の語だけで判定する
+// （\bmine は "mine"(所有代名詞) を誤爆するため不使用）。
 REPLY_RULES.splice(REPLY_RULES.length - 1, 0,
   ['puzzle', /パズル|遺跡|ステージ.?[0-9０-９]|puzzle|ruins/i],
-  ['dig', /採掘|鉱石|クリスタル|深度|虹鉱石|掘り|掘っ|\bdig\b|\bmine|\bore\b/i],
+  ['dig', /採掘|鉱石|クリスタル|虹鉱石|地層|掘り|掘っ|\bdig\b|mining|\bores?\b/i],
 );

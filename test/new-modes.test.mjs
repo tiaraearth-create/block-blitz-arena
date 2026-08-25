@@ -109,13 +109,23 @@ try {
   me = await j('/api/me', {}, tok);
   check('depth 55 grants the ⛏️ dig badge', me.user.badges.includes('dig'), JSON.stringify(me.user.badges));
 
+  // Forged stage/depth: stat capped at 999 and the gem faucet stops at stage 100.
+  const gemsBefore = me.user.gems;
+  await j('/api/game/result', { method: 'POST', body: { mode: 'puzzle', score: 100, lines: 1, maxCombo: 1, duration: 30, won: true, stage: 9999 } }, tok);
+  me = await j('/api/me', {}, tok);
+  check('forged stage 9999 → stat capped at 999', me.user.stats.puzzleStage === 999, `puzzleStage=${me.user.stats.puzzleStage}`);
+  check('forged stage pays at most the remaining sub-100 decades', me.user.gems - gemsBefore <= 125, `gems +${me.user.gems - gemsBefore}`);
+  await j('/api/game/result', { method: 'POST', body: { mode: 'dig', score: 100, lines: 1, maxCombo: 1, duration: 30, won: false, depth: 9999 } }, tok);
+  me = await j('/api/me', {}, tok);
+  check('forged depth 9999 → stat capped at 999', me.user.stats.digDepth === 999, `digDepth=${me.user.stats.digDepth}`);
+
   // New leaderboards answer with the right value fields.
   const lbP = await j('/api/leaderboard?board=puzzle');
   const meRowP = (lbP.rows || []).find(r => r.username === 'モードテスト');
-  check('puzzle leaderboard lists the player at stage 50', !!meRowP && meRowP.puzzleStage === 50, JSON.stringify(meRowP && { s: meRowP.puzzleStage }));
+  check('puzzle leaderboard lists the player with the capped stat', !!meRowP && meRowP.puzzleStage === 999, JSON.stringify(meRowP && { s: meRowP.puzzleStage }));
   const lbD = await j('/api/leaderboard?board=dig');
   const meRowD = (lbD.rows || []).find(r => r.username === 'モードテスト');
-  check('dig leaderboard lists the player at 55m', !!meRowD && meRowD.digDepth === 55, JSON.stringify(meRowD && { d: meRowD.digDepth }));
+  check('dig leaderboard lists the player with the capped stat', !!meRowD && meRowD.digDepth === 999, JSON.stringify(meRowD && { d: meRowD.digDepth }));
 
   // v2.6 lifetime counters tick.
   check('totalWins counter ticks', me.user.stats.totalWins >= 3, `totalWins=${me.user.stats.totalWins}`);

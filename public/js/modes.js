@@ -181,6 +181,9 @@ function updateUltHud() {
 export function fireUltCurrent() {
   const m = currentMode;
   if (!m || !m.engine || !view || view.inputLocked || m.ended) return;
+  // パズル遺跡: 固定ピースの詰将棋 — 奥義は盤面契約を壊すので誰でも不可
+  // (スタッフ装備の強制表示や Space/q ショートカット経由もここで止める)。
+  if (m.noItems) { audio.error(); return; }
   if ($('#btnUlt').classList.contains('hidden')) return;
   const e = m.engine;
   if (e.ult < 100) {
@@ -299,6 +302,7 @@ export function updateItemBar() {
 export function useGameItem(id) {
   const m = currentMode;
   if (!m || !m.engine || !view || view.inputLocked || m.ended) return;
+  if (m.noItems) { audio.error(); return; }   // puzzle: fixed-piece contract
   if (!ITEM_DEFS[id]) return;
   if (ITEM_DEFS[id].admin && !(session.user && session.user.role === 'admin')) return;
   const counts = getItemCounts();
@@ -1184,6 +1188,7 @@ class PuzzleMode {
   constructor(stage = 1) {
     this.mode = 'puzzle';
     this.usesIntent = true;
+    this.noItems = true;   // fixed queue — items/ults would break solvability
     this.stage = Math.max(1, Math.floor(stage));
   }
 
@@ -1356,7 +1361,7 @@ class DigMode {
     v.onIntentPlace = null;
     v.onPlace = r => this.onPlace(r);
     v.onGameOver = () => this.finish();
-    for (let i = 0; i < 3; i++) this.pushLayer(false);   // starting strata
+    this.initStrata();
     this.updateHud();
     updateRerollHud(this.engine);
     updateAutoBtn();
@@ -1370,26 +1375,16 @@ class DigMode {
     return Math.round(DIG_ORES[type].base * (1 + this.depth / 25));
   }
 
-  // A fresh stratum enters at the bottom row (rows shift up when rising=true).
-  pushLayer(rising = true) {
+  // Fill one row with rock + ore rolls. Used for the starting strata (rows
+  // 5-7) and for every fresh stratum entering at the bottom.
+  fillLayerRow(row, density) {
     const e = this.engine;
-    if (rising) {
-      for (let c = 0; c < 8; c++) {
-        if (e.grid[c] !== 0) { this.crushed(); return; }   // top row occupied = crushed
-      }
-      e.grid.copyWithin(0, 8);
-      const shifted = new Map();
-      for (const [k, type] of this.ores) if (k >= 8) shifted.set(k - 8, type);
-      this.ores.clear();
-      for (const [k, type] of shifted) this.ores.set(k, type);
-    }
-    const density = Math.min(7, 5 + (this.depth >= 15 ? 1 : 0) + (this.depth >= 40 ? 1 : 0));
+    const v = getView();
     const cols = [0, 1, 2, 3, 4, 5, 6, 7];
     for (let i = cols.length - 1; i > 0; i--) { const k = this.rng.int(i + 1); [cols[i], cols[k]] = [cols[k], cols[i]]; }
-    const v = getView();
-    for (let c = 0; c < 8; c++) e.grid[56 + c] = 0;
+    for (let c = 0; c < 8; c++) { e.grid[row * 8 + c] = 0; this.ores.delete(row * 8 + c); }
     for (const c of cols.slice(0, density)) {
-      const k = 56 + c;
+      const k = row * 8 + c;
       e.grid[k] = 9;
       const roll = this.rng.next();
       const crystalP = 0.05 + Math.min(0.06, this.depth * 0.0015);
@@ -1398,16 +1393,40 @@ class DigMode {
       else if (roll < 0.012 + crystalP + 0.13) this.ores.set(k, 'gold');
       v.spawnAnim.set(k, v.time);
     }
-    if (rising) {
-      this.depth++;
-      v.shake = Math.max(v.shake, 6);
-      audio.countdown(false);
-      if (this.depth % 10 === 0) {
-        toast(t(`⛏️ 深度${this.depth}m 到達！鉱石が濃くなってきた…`, `⛏️ Depth ${this.depth}m! The veins are getting richer…`), 'announce', 2200);
-        confettiBurst(20);
-      }
-      if (!e.hasAnyMove()) { e.over = true; handleEngineOver(); }
+  }
+
+  layerDensity() {
+    return Math.min(7, 5 + (this.depth >= 15 ? 1 : 0) + (this.depth >= 40 ? 1 : 0));
+  }
+
+  // Three starting strata, loosest on top — the mine face you dig into.
+  initStrata() {
+    this.fillLayerRow(5, 3);
+    this.fillLayerRow(6, 4);
+    this.fillLayerRow(7, 5);
+  }
+
+  // The ground rises: rows shift up one, a fresh stratum enters at the bottom.
+  pushLayer() {
+    const e = this.engine;
+    for (let c = 0; c < 8; c++) {
+      if (e.grid[c] !== 0) { this.crushed(); return; }   // top row occupied = crushed
     }
+    e.grid.copyWithin(0, 8);
+    const shifted = new Map();
+    for (const [k, type] of this.ores) if (k >= 8) shifted.set(k - 8, type);
+    this.ores.clear();
+    for (const [k, type] of shifted) this.ores.set(k, type);
+    this.fillLayerRow(7, this.layerDensity());
+    this.depth++;
+    const v = getView();
+    v.shake = Math.max(v.shake, 6);
+    audio.countdown(false);
+    if (this.depth % 10 === 0) {
+      toast(t(`⛏️ 深度${this.depth}m 到達！鉱石が濃くなってきた…`, `⛏️ Depth ${this.depth}m! The veins are getting richer…`), 'announce', 2200);
+      confettiBurst(20);
+    }
+    if (!e.hasAnyMove()) { e.over = true; handleEngineOver(); }
   }
 
   crushed() {
@@ -1447,7 +1466,8 @@ class DigMode {
     this.placedSince += 1 - Math.min(1, result.lineCount);
     if (this.placedSince >= DIG_STEP) {
       this.placedSince = 0;
-      setTimeout(() => { if (!this.ended) { this.pushLayer(true); this.updateHud(); } }, 260);
+      clearTimeout(this.riseTimer);
+      this.riseTimer = setTimeout(() => { if (!this.ended) { this.pushLayer(); this.updateHud(); } }, 260);
     }
     this.updateHud();
   }
@@ -1471,6 +1491,7 @@ class DigMode {
   async finish() {
     if (this.ended) return;
     this.ended = true;
+    clearTimeout(this.riseTimer);
     getView().inputLocked = true;
     const e = this.engine;
     const localBest = Number(localStorage.getItem('bba_dig_best') || 0);
@@ -1503,6 +1524,7 @@ class DigMode {
 
   destroy() {
     this.ended = true;
+    clearTimeout(this.riseTimer);
     const timer = $('#hudTimer');
     timer.classList.add('hidden');
     $('#chaosBar').classList.add('hidden');
