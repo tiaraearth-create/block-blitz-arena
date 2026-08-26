@@ -85,8 +85,12 @@ const api = async (p, o = {}) => {
   const after = currentOccurrence(schedule, occ.closesAt + 1000);
   check('最終枠を過ぎたら翌週に繰り上がる', (after.opensAt - occ.opensAt) === 7 * 86400000, `+${(after.opensAt - occ.opensAt) / 86400000}日`);
 
-  const modes = [0, 1, 2, 3].map(w => weekModeId({ rotation: 'auto' }, occ.opensAt + w * 7 * 86400000));
-  check('モードは週替わりで3種を巡回する', new Set(modes.slice(0, 3)).size === 3 && modes[0] === modes[3], modes.join('→'));
+  // モードを足しても壊れないよう、数は決め打ちしない。
+  // 「全種類を1周してから最初に戻る」ことだけを見る。
+  const N = AE_MODES.length;
+  const modes = Array.from({ length: N + 1 }, (_, w) => weekModeId({ rotation: 'auto' }, occ.opensAt + w * 7 * 86400000));
+  check(`モードは週替わりで${N}種を巡回する`,
+    new Set(modes.slice(0, N)).size === N && modes[0] === modes[N], modes.join('→'));
 
   // Reserving, and who may actually play.
   const user = { id: 'u1', username: 'A', role: 'user' };
@@ -244,7 +248,8 @@ try {
   r = await api('/api/status', { token: t1 });
   check('OFFにすると誰にも見えなくなる', !r.d.adminEvent, JSON.stringify(r.d.adminEvent));
 
-  check('専用モードは3種そろっている', AE_MODES.length === 3 && AE_MODES.every(m => m.name && m.nameEn && m.desc && m.descEn),
+  check('専用モードがすべて日英そろっている',
+    AE_MODES.length >= 3 && AE_MODES.every(m => m.id && m.icon && m.name && m.nameEn && m.desc && m.descEn && m.tagline && m.taglineEn),
     AE_MODES.map(m => m.id).join(','));
 } catch (err) {
   check('test harness', false, err.stack || String(err));

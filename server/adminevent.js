@@ -92,6 +92,14 @@ export const AE_MODES = [
     desc: 'その日の参加者全員のスコアが1本のゲージに合流。段階目標を越えるたび、参加者全員に報酬が降ります。',
     descEn: 'Every participant’s score of the day flows into a single gauge. Each tier you clear pays out to everyone who took part.',
   },
+  {
+    id: 'zero', icon: '👁️',
+    name: '断罪', nameEn: 'Condemned',
+    tagline: '人間しか封印を割れない',
+    taglineEn: 'Only humans can break the seal',
+    desc: '管理者ゼロが七つの王座を人質に取った。段のHPは7割までしか点数で削れず、残り3割の「封印」を貫通できるのは、30秒ごとに来る【断罪】を斬った一撃だけ。住人は斬れない。鍵を持っているのは生身の人間だけです。',
+    descEn: 'Admin Zero has taken all seven thrones hostage. Only 70% of each stage can be worn down by score — the remaining 30% is sealed, and the seal yields only to a CONDEMNATION cut, which arrives every 30 seconds and which no resident can make. The key is held by living players alone.',
+  },
 ];
 
 export function aeMode(id) {

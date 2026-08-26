@@ -12,6 +12,11 @@ import {
 } from './ambient.js';
 import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
 import { zeroSay, moodFor } from './zero.js';
+import { createSession as createZeroSession, tick as tickZero, submitCut as zeroCut,
+  topOut as zeroTopOut, stateView as zeroStateView, ZERO_TICK } from './zero-session.js';
+import { danAt, DAN as ZERO_DAN } from './zero.js';
+import { getSchedule as getAeSchedule, liveSlotFor as aeLiveSlotFor,
+  ensureRun as aeEnsureRun, slotCounts as aeSlotCounts, entrantCount as aeEntrantCount } from './adminevent.js';
 import { translateChat, translateLocal, detectLang } from './translate.js';
 import { isOpen as pollIsOpen, vote as pollVote, residentChoice, residentVoteAt, isSwingVoter } from './polls.js';
 
@@ -127,6 +132,97 @@ export function initBattle(server, deps) {
     pushHistory(entry);
     broadcastAll(entry);
     return entry;
+  }
+
+  // ---- 👁️ 断罪 のセッション ----
+  //
+  // 進行そのものは server/zero-session.js（deps で受け取る形なので単体で
+  // テストできる）。ここは「ソケットと db をそこへ繋ぐ」だけを持つ。
+  //
+  // 段の状態は db.meta.adminEventRun にあり、枠をまたいで引き継がれる。
+  // セッションはこの枠の間だけのメモリなので、再デプロイされても
+  // 進行は失われない（ゼロの盤面だけ引き直して再開する）。
+  const zeroSessions = new Map();          // id -> session
+
+  // 共有 run（世界で1本の段の状態）。
+  // 以前は「あれば返す」だけだったので、その日まだ誰も結果を送っていない
+  // 最初の参加者がセッションを作れなかった（run は結果送信で初めて
+  // 作られる仕組みだったため）。ここでも作る。
+  function zeroRun(user) {
+    const schedule = getAeSchedule(db);
+    if (!schedule.enabled) return null;
+    const live = user ? aeLiveSlotFor(schedule, user) : null;
+    if (!live) return db.meta.adminEventRun || null;
+    const counts = aeSlotCounts(db, live.occ);
+    return aeEnsureRun(db, live.occ, Math.max(1, aeEntrantCount(counts)));
+  }
+
+  // そのソケットの持ち主が、いま自分の枠にいるか（＝断罪に参加できるか）
+  function zeroUserOf(ws) {
+    return ws.user ? db.users[ws.user.id] || null : null;
+  }
+
+  function zeroDeps(sess) {
+    return {
+      Engine, chooseMove, sockName,
+      pickResidentBot, pickPersona,
+      uuid: () => crypto.randomUUID(),
+      emit: (e, msg) => { if (e.human && e.ws && e.ws.readyState === e.ws.OPEN) send(e.ws, msg); },
+      say: (kind, danIndex, ctx) => zeroSpeak(kind, danIndex, ctx),
+      // ゼロが2列以上消したら、席にいる人間の盤面にゴミが降る。
+      // 既存の対戦の攻撃経路をそのまま使う。
+      attack: (sx, lines, combo) => {
+        const cells = attackCells(lines, combo);
+        if (!cells) return;
+        for (const e of sx.entrants) {
+          if (!e.human || !e.alive || !e.ws || e.ws.readyState !== e.ws.OPEN) continue;
+          send(e.ws, { type: 'zero_garbage', cells });
+        }
+      },
+      onDanBroken: (rec) => {
+        saveDb();
+        broadcastAll({
+          type: 'announce',
+          message: `👁️ 断罪 ── 第${rec.dan}段が陥落！ 王座がひとつ返ってきました${rec.by ? `（とどめ: ${rec.by}）` : ''}`,
+          messageEn: `👁️ CONDEMNED ── Stage ${rec.dan} has fallen. One throne returns${rec.by ? ` (finished by ${rec.by})` : ''}`,
+          from: '管理者ゼロ',
+        });
+      },
+    };
+  }
+
+  function startZeroSession(humanSocks, run) {
+    if (!run) return null;
+    const sess = createZeroSession(zeroDeps(null), humanSocks);
+    zeroSessions.set(sess.id, sess);
+    for (const e of sess.entrants) {
+      if (!e.human) continue;
+      e.ws.zeroId = sess.id;
+      // 状態を展開すると type:'zero_state' が入っているので、
+      // 後に置かないと zero_found が上書きされて消える（実際に消えた）。
+      send(e.ws, {
+        ...zeroStateView(sess, run),
+        type: 'zero_found',
+        id: sess.id, seed: sess.seed, countdown: 3,
+      });
+    }
+    // 入れなかった人には正直に伝える（黙って落とさない）
+    for (const ws of sess.overflow || []) {
+      send(ws, { type: 'error', error: 'アリーナが満席です。次の枠でお待ちしています' });
+    }
+    sess.tick = setInterval(() => {
+      const r = db.meta.adminEventRun;
+      if (!r || sess.ended) { clearInterval(sess.tick); zeroSessions.delete(sess.id); return; }
+      // 誰も見ていない部屋は畳む（住人だけの部屋を回し続けない）
+      const watching = sess.entrants.some(e => e.human && e.ws && e.ws.readyState === e.ws.OPEN);
+      if (!watching) { clearInterval(sess.tick); zeroSessions.delete(sess.id); return; }
+      try { tickZero(sess, r, zeroDeps(sess)); } catch (err) { console.error('[zero] tick:', err && err.message); }
+    }, ZERO_TICK);
+    return sess;
+  }
+
+  function zeroSessionOf(ws) {
+    return ws.zeroId ? zeroSessions.get(ws.zeroId) || null : null;
   }
 
   // ---- 👁️ 管理者ゼロ の声 ----
@@ -1116,7 +1212,7 @@ export function initBattle(server, deps) {
   }
 
   function joinQueue(ws, mode) {
-    if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId) return;
+    if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId || ws.zeroId) return;
     leaveQueues(ws);
     const wait = mode === 'duel' || mode === 'attack' ? duelBotWait() : mode === 'coop' ? coopBotWait() : teamBotWait();
     const entry = { ws, since: Date.now(), botAt: Date.now() + wait };
@@ -1996,7 +2092,15 @@ export function initBattle(server, deps) {
           // 正規のクライアントは 700〜900ms 間隔なので、余裕を持って毎秒4回。
           if (!sockRate(ws, 'stateTimes', 40, 10_000)) return;
           // Battle royale: no match object — just track the live score.
-          if (ws.royaleId) {
+          if (ws.zeroId) {
+        const sess = zeroSessions.get(ws.zeroId);
+        if (sess) {
+          const e = sess.entrants.find(x => x.ws === ws);
+          if (e) { e.alive = false; e.left = true; }
+        }
+        ws.zeroId = null;
+      }
+      if (ws.royaleId) {
             const r = royales.get(ws.royaleId);
             if (r && !r.ended) {
               const e = r.entrants.find(x => x.ws === ws);
@@ -2044,6 +2148,43 @@ export function initBattle(server, deps) {
         // what it costs — the same revive-then-eliminate rule the bots follow.
         // Without this humans were immortal while bots died, which made
         // burying someone pointless.
+        // 👁️ 断罪 — 参加
+        case 'zero_join': {
+          if (ws.zeroId || ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId || ws.zeroId) return;
+          const zu = zeroUserOf(ws);
+          if (!zu) { send(ws, { type: 'error', error: 'ログインが必要です' }); return; }
+          if (!zeroRun(zu)) { send(ws, { type: 'error', error: 'いまはあなたの枠の時間ではありません' }); return; }
+          if (!sockRate(ws, 'zeroJoinTimes', 5, 30_000)) return;
+          startZeroSession([ws], zeroRun(zu));
+          return;
+        }
+        // 断罪を斬った申告
+        case 'zero_cut': {
+          const sess = zeroSessionOf(ws);
+          const run = db.meta.adminEventRun;
+          if (!sess || !run) return;
+          if (!sockRate(ws, 'zeroCutTimes', 20, 10_000)) return;
+          const cells = Array.isArray(msg.cells) ? msg.cells.slice(0, 64).map(n => n | 0) : [];
+          zeroCut(sess, run, sockName(ws), String(msg.id || ''), cells, zeroDeps(sess));
+          saveDb();
+          return;
+        }
+        case 'zero_topout': {
+          const sess = zeroSessionOf(ws);
+          const run = db.meta.adminEventRun;
+          if (!sess || !run) return;
+          zeroTopOut(sess, run, sockName(ws), zeroDeps(sess));
+          return;
+        }
+        case 'zero_leave': {
+          const sess = zeroSessionOf(ws);
+          if (sess) {
+            const e = sess.entrants.find(x => x.ws === ws);
+            if (e) { e.alive = false; e.left = true; }
+          }
+          ws.zeroId = null;
+          return;
+        }
         case 'royale_topout': {
           if (!ws.royaleId) return;
           const r = royales.get(ws.royaleId);
@@ -2093,7 +2234,7 @@ export function initBattle(server, deps) {
           if (!offer || offer.until < Date.now()) { send(ws, { type: 'rematch_gone' }); return; }
           // joinQueue と同じガード — ルーム/トーナメント/ロイヤル在籍中の再戦受諾は
           // rooms Map にゴースト部屋を残す（createMatch が roomCode を黙って消すため）
-          if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId) return;
+          if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId || ws.zeroId) return;
           const mine = offer.sides.find(sd => sd.sock === ws);
           if (!mine) return;
           mine.ready = true;
