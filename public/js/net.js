@@ -70,7 +70,9 @@ export class BattleClient {
       const timeout = setTimeout(() => { try { ws.close(); } catch {} ; reject(new Error(trServer('接続タイムアウト'))); }, 8000);
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'hello', token: session.token, guestName }));
+        // 対戦用のこのソケットは、chat.js が常時つないでいるソケットと
+        // 同じ人の2本目。role を申告して人数に二重計上されないようにする。
+        ws.send(JSON.stringify({ type: 'hello', token: session.token, guestName, role: 'battle' }));
       };
       ws.onmessage = ev => {
         let msg;

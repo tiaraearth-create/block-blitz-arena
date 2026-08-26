@@ -73,7 +73,7 @@ export function createGuild(db, owner, input) {
 }
 
 export function findGuild(db, { id, code, name } = {}) {
-  if (id && db.guilds[id]) return db.guilds[id];
+  if (id && Object.prototype.hasOwnProperty.call(db.guilds, id)) return db.guilds[id];
   if (code) {
     const c = String(code).trim().toUpperCase();
     return Object.values(db.guilds).find(g => g.code === c) || null;

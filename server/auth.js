@@ -54,8 +54,15 @@ export function hashPassword(password, salt = crypto.randomBytes(16).toString('h
 }
 
 export function verifyPassword(password, salt, expectedHash) {
+  // アップロードされたバックアップやスキーマの古いレコードには、salt や
+  // passHash が壊れているものが混ざりうる。以前はそこで例外が飛び、
+  // 「パスワードが違う」ではなく 500 になっていた（pbkdf2Sync は salt が
+  // 文字列でないと落ち、timingSafeEqual は長さが違うと落ちる）。
+  if (typeof salt !== 'string' || typeof expectedHash !== 'string') return false;
+  const expected = Buffer.from(expectedHash, 'hex');
+  if (expected.length !== 32) return false;
   const { hash } = hashPassword(password, salt);
-  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(expectedHash, 'hex'));
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), expected);
 }
 
 function sign(payload) {

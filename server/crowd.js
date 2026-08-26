@@ -11,6 +11,7 @@
 
 import { residentStats, archetype, tierOf, jstHour, jstWeekday } from './residents.js';
 import { SHOP_ITEMS, BOSSES, TITLES } from './catalog.js';
+import { enName } from '../public/js/catalog-en.js';
 import { ACHIEVEMENTS } from './achievements.js';
 // チャット3.0 (v2.6): 再出防止メモリ + 話題スレッド + 生成合成エンジン
 import * as gen from './chatgen.js';
@@ -73,9 +74,11 @@ const rnd = () => Math.random();
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
-function cosmeticName() {
+// 名前ではなくカタログの項目そのものを返す。英語面の描画で id から英語名を
+// 引けるようにするため（以前は日本語名がそのまま英文に挿さっていた）。
+function cosmeticItem() {
   const pool = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && i.cat !== 'ult');
-  return pick(pool).name;
+  return pick(pool);
 }
 
 // Slots resolve to a language-neutral value first, then render per language.
@@ -109,9 +112,9 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'you': v = null; break;
     case 'opt': v = ctx.poll && ctx.poll.options && ctx.poll.options.length ? pick(ctx.poll.options) : ''; break;   // オブジェクトごと保持し言語別に描画
     case 'winner': v = ''; break;
-    case 'item': v = cosmeticName(); break;
-    case 'boss': v = pick(BOSSES).name; break;
-    case 'title': v = pick(TITLES).name; break;
+    case 'item': v = cosmeticItem(); break;      // オブジェクトごと保持し言語別に描画
+    case 'boss': v = pick(BOSSES); break;         // 同上
+    case 'title': v = pick(TITLES); break;        // 同上
     case 'ach': v = pick(ACHIEVEMENTS); break;
     case 'question': v = ctx.poll || ''; break;   // pollオブジェクトごと保持し言語別に描画
     // v2.6 新モードの進行度 — 塔の進みからそれっぽい数字を出す
@@ -140,6 +143,16 @@ function renderSlot(key, v, lang) {
     case 'question': return v && typeof v === 'object' ? String((L && v.questionEn) || v.question || '') : String(v == null ? '' : v);
     case 'you': return v === null ? (L ? 'you' : 'きみ') : String(v);
     case 'ach': return v && typeof v === 'object' ? (L ? v.nameEn : v.name) : String(v);
+    // 王座のボード名とバッジ名。ここを通していなかったので、英語のセリフに
+    // 日本語がそのまま挿さっていた（"gz on 鬼討伐バッジ, Bob!"）。
+    // 文字列で渡された場合は従来どおり — 呼び出し側の移行を壊さない。
+    // ショップ品・ボス・称号。BOSSES は nameEn を持ち、ショップ/称号は
+    // catalog-en.js が id で英語名を持つ。どちらも無ければ日本語のまま。
+    case 'item': case 'boss': case 'title':
+      if (!v || typeof v !== 'object') return String(v == null ? '' : v);
+      return L ? String(v.nameEn || enName(v)) : String(v.name || '');
+    case 'board': case 'badge':
+      return v && typeof v === 'object' ? String((L && v.nameEn) || v.name || '') : String(v == null ? '' : v);
     default: return v === null || v === undefined ? '' : String(v);
   }
 }

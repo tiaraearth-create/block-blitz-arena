@@ -31,7 +31,15 @@ async function start(secret) {
 async function stop() {
   if (!proc) return;
   const p = proc; proc = null;
-  await new Promise(res => { p.on('exit', res); p.kill(); });
+  // 既に落ちているプロセスは二度と 'exit' を出さない。素朴に待つと、
+  // 起動に失敗した時だけテストが永久に固まる（原因も分からない）。
+  if (p.exitCode !== null || p.signalCode !== null) { await sleep(300); return; }
+  await new Promise(res => {
+    const done = () => { clearTimeout(timer); res(); };
+    const timer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} done(); }, 5000);
+    p.once('exit', done);
+    p.kill();
+  });
   await sleep(300);
 }
 

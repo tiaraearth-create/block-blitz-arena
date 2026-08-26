@@ -30,6 +30,7 @@ import {
   boardResidents,
 } from './ambient.js';
 import { BADGE_NAMES } from './crowd.js';
+import { enName } from '../public/js/catalog-en.js';   // 実況フィードの英語名（クライアントと同じ表）
 import {
   GUILD_CREATE_COST, GUILD_ICONS, createGuild, findGuild, joinGuild, leaveGuild, kickMember,
   addGuildPoints, guildView, guildLevel, guildCoinBonus, ghostGuildViews, tagOfName, validateGuildInput,
@@ -44,7 +45,7 @@ import {
   createPoll, eventPollOptions, vote as castVote, pollView, tickPoll, winnerOf, isOpen as pollOpen,
 } from './polls.js';
 import {
-  AE_MODES, WEEKDAYS_JA as AE_WEEKDAYS_JA,
+  AE_MODES, WEEKDAYS_JA as AE_WEEKDAYS_JA, jstDayKey,
   aeMode as aeModeById, getSchedule as getAeSchedule, normalizeSchedule as aeNormalizeSchedule,
   currentOccurrence as aeCurrentOccurrence, upcomingOccurrences as aeUpcoming,
   reserve as aeReserve, cancelReservation as aeCancelReservation, liveSlotFor as aeLiveSlotFor,
@@ -158,7 +159,7 @@ function newUser(username, password, role = 'user') {
     badges: [],
     achievements: [],
     missions: null,   // generated on first access (syncMissions)
-    lastDaily: new Date().toISOString().slice(0, 10),
+    lastDaily: jstDayKey(),   // grantDaily と同じJST基準で揃える
   };
   db.users[id] = user;
   saveDb();
@@ -635,7 +636,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   if (badge && mode !== 'tournament' && mode !== 'royale') {
     const bn = BADGE_NAMES[badge] || badge;
     feedNotes.push({ icon: BADGE_ICONS[badge] || '🎖️', ja: `${nm} が「${bn}」を獲得！`, en: `${nm} earned "${BADGE_NAMES_EN[badge] || badge}"!`,
-      react: ['badge', { you: nm, badge: bn }] });
+      // 言語中立で渡す（renderSlot が英語面では nameEn を選ぶ）
+      react: ['badge', { you: nm, badge: { name: bn, nameEn: BADGE_NAMES_EN[badge] || badge } }] });
   }
   if (mode === 'boss' && won && gems > 0 && extraBossId) {
     const b = BOSSES.find(x => x.id === extraBossId);
@@ -743,10 +745,13 @@ const DAILY_GEMS = 5;
 // Daily login bonus. Consecutive days build a streak that scales the reward
 // (day 7 and beyond pay roughly triple day 1) — missing a day resets it.
 function grantDaily(user) {
-  const today = new Date().toISOString().slice(0, 10);
+  // UTC の日付で判定していたので、日本のプレイヤーにとっては「日付が変わる」
+  // のが朝9時だった（深夜にログインしても前日扱い、朝9時に急に切り替わる）。
+  // 保存形式は 'YYYY-MM-DD' のままなので、移行もデータ変更も要らない。
+  const today = jstDayKey();
   if (user.lastDaily === today) return null;
   migrateUser(user);
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const yesterday = jstDayKey(Date.now() - 86400000);
   const s = user.stats;
   s.loginStreak = user.lastDaily === yesterday ? (s.loginStreak || 0) + 1 : 1;
   if (s.loginStreak > (s.loginStreakBest || 0)) s.loginStreakBest = s.loginStreak;
@@ -1209,7 +1214,9 @@ app.get('/api/guilds', (req, res) => {
 });
 
 app.get('/api/guilds/:id', (req, res) => {
-  const g = db.guilds[req.params.id];
+  // `__proto__` や `constructor` を渡されると Object.prototype が返ってきて
+  // truthy 判定を通り、そのあと g.members で落ちて 500 になっていた。
+  const g = Object.prototype.hasOwnProperty.call(db.guilds, req.params.id) ? db.guilds[req.params.id] : null;
   if (g) return res.json({ guild: guildView(db, g, curWeek(), { detailed: true, viewerId: req.user && req.user.id, levelOf }) });
   const ghost = ghostGuildViews(curWeek()).find(x => x.id === req.params.id);
   if (ghost) return res.json({ guild: ghost });
@@ -1274,7 +1281,9 @@ app.post('/api/guild/settings', requireAuth, (req, res) => {
 });
 
 app.delete('/api/admin/guilds/:id', requireAuth, requireAdmin, (req, res) => {
-  const g = db.guilds[req.params.id];
+  // `__proto__` や `constructor` を渡されると Object.prototype が返ってきて
+  // truthy 判定を通り、そのあと g.members で落ちて 500 になっていた。
+  const g = Object.prototype.hasOwnProperty.call(db.guilds, req.params.id) ? db.guilds[req.params.id] : null;
   if (!g) return res.status(404).json({ error: 'ギルドが見つかりません' });
   for (const id of g.members) { const u = db.users[id]; if (u) u.guildId = null; }
   delete db.guilds[g.id];
@@ -1348,6 +1357,25 @@ const SEED_NEWS = [
       '[🐲 Raid / 2v2 screen] Three allies\' mini boards used to stack above your own and squeeze it flat. Allies are now a single compact row and the boss HP is a slim bar — on an iPhone SE-sized screen your board goes from 210px to 347px, the same size as in solo. The landscape bug that made the board vanish entirely is fixed. Tap ▾ to bring the ally boards back.\n' +
       '[🌐 Matchmaking] Players are now paired by rating (the search widens the longer you wait), the AI opponent\'s strength is chosen to match your rating instead of at random, two players who queue together for 2v2 always land on the same team, and the search screen honestly shows your elapsed time, how many real people are waiting in that mode, the rating range being searched, and exactly when an AI player will step in.\n' +
       '[🐛 Fixes] A socket error could take the whole server down; a dropped connection while waiting for results left an undismissable modal covering the app; pieces could still be placed after a run had ended; a hand change mid-drag placed a different piece than the one you were holding; deleting an account left a guild permanently stuck at "full"; co-op scores could be forged by a client; with 10 items the leftmost four sat off-screen and were unreachable; online modes recorded 0 pieces placed so those missions never advanced — and more.' },
+  { id: 'seed-v2111', pinned: true,
+    title: '🛡️ v2.11.1 遊んだまま更新できるように ＆ 大量のバグ修正',
+    titleEn: '🛡️ v2.11.1 — Updates Without Losing Your Run, and a Pile of Fixes',
+    body: '【🛡️ 遊んだまま更新できるようになりました】アップデートでサーバーを入れ替えるとき、これまでは遊んでいる最中の人が黙って切断されていました。これからは全員に予告が出て、進行中のものがきちんと終わります — オンライン対戦は引き分け（記録も報酬も残り、勝敗はどちらにもつきません）、バトルロイヤルはその時点の順位で確定、ソロやダンジョンは自動で保存して終了します。\n' +
+      '【🏰 AIのギルドが24個に】住人のギルドが8個から24個に増え、住人の数に応じて自然に増減するようになりました。これまでは600人いても8ギルド（160席）しか無く、大多数がどこにも所属できていませんでした。\n' +
+      '【🗳️ 住人も投票します】投票が始まると、住人たちが自分の性格に沿って票を入れるようになりました。管理者イベントの枠選びにも参加します。\n' +
+      '【📈 ランキングのAIを強化】住人の記録が「毎日ちょっとだけ動く数字」ではなく、本物の自己ベストのように伸びるようになりました — 伸び悩む時期があり、たまに一気に更新します。レートの上限も引き上げ（最高1900）、塔は95F止まり。100F制覇と時間の頂点は人間のものです。\n' +
+      '【👑 管理者アカウントの全解放】管理者は全モード・全ステージ・全アイテム・全称号・全実績を最初から解放済みになりました（表示だけでなく、実データとして解放されます）。\n' +
+      '【🎒 インベントリ】メニューに新しいインベントリ画面を追加。装備・アイテム・バッジ・王座を1か所で確認して、その場で着せ替えできます。\n' +
+      '【🔊 にぎわい調整】ロビーの住人は最大600人まで、チャットの速さも管理者設定から8倍まで上げられるようになりました。\n' +
+      '【🐛 バグ修正】スコアの詐称（プレイ時間を偽って報酬を水増しする手口）を塞ぎました／チャットの履歴が再起動で消えなくなりました／バックアップの復元に失敗したとき途中まで書き込まれたデータが残る不具合／日付の変わり目が日本時間からずれていた不具合（ログインボーナスと連続ログイン）／壊れたパスワード情報でログインすると500になる不具合／ギルドIDを細工するとサーバーが誤動作しうる不具合／英語表示に日本語のアイテム名・ボス名・称号・バッジ名がそのまま出ていた不具合／協力プレイで手札がズレると置けなくなる不具合／再戦のときに相手が別の部屋に入っていても引きずり出してしまう不具合／バトルロイヤルで回線が切れた人が生存者として順位に居座る不具合／オンライン人数が実際の約2倍に見えていた不具合 — ほか多数。',
+    bodyEn: '[🛡️ Updates without losing your run] Swapping the server for an update used to disconnect everyone mid-game without a word. Now everybody is warned and whatever is in progress is closed out properly: online matches end in a draw (the run and its rewards are kept, and nobody takes a loss), a battle royale locks in your placement at that moment, and solo or dungeon runs are saved and ended automatically.\n' +
+      '[🏰 24 AI guilds] Resident guilds grew from 8 to 24 and now scale with the resident population. With 600 residents there were only 8 guilds (160 seats), so most residents belonged nowhere.\n' +
+      '[🗳️ Residents vote] When a poll opens, residents now cast votes in line with their personalities — including on which admin-event slot to attend.\n' +
+      '[📈 Stronger ranking AI] Resident records now grow like real personal bests instead of drifting a little every day: they plateau, then break through. The rating ceiling was raised (1900 max) and the tower caps at floor 95 — clearing 100F and the time-attack summit stay human territory.\n' +
+      '[👑 Admin account fully unlocked] The admin account now starts with every mode, stage, item, title and achievement genuinely unlocked in the data, not just on screen.\n' +
+      '[🎒 Inventory] A new inventory screen in the menu: gear, items, badges and thrones in one place, with equipping right there.\n' +
+      '[🔊 Livelier lobby] Up to 600 residents in the lobby, and chat speed can be pushed to 8x from the admin settings.\n' +
+      '[🐛 Fixes] Closed a score-forgery hole (faking playtime to inflate rewards); chat history now survives a restart; a failed backup restore could leave half-written data behind; the day rollover was not using Japan time (login bonus and streaks); a corrupted password record returned a 500 instead of a login failure; a crafted guild ID could confuse the server; English text showed Japanese item, boss, title and badge names verbatim; a co-op hand desync made you unable to place anything; a rematch could drag an opponent out of another room; a player whose connection dropped stayed on the royale leaderboard as a survivor; the online player count read roughly double the real number — and more.' },
 ];
 
 function seedNews() {
@@ -1754,7 +1782,7 @@ function refreshThrones(force = false) {
       textEn: old ? `${t.username} seized the ${def.nameEn} throne from ${old.username}!!` : `${t.username} claimed the ${def.nameEn} throne!`,
     });
     // 新王者が住人でも、当の本人が自分を祝わないように除外する。
-    battle.crowd.react('throne', { you: t.username, board: def.name, notName: t.username });
+    battle.crowd.react('throne', { you: t.username, board: { name: def.name, nameEn: def.nameEn }, notName: t.username });
   }
   db.meta.thrones = next;
   // 多冠の節目（2/3/5/7冠）に達した実プレイヤーへ永久バッジ。冠を失っても
@@ -2410,7 +2438,8 @@ app.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
   const ur = results.find(r => r.rarity === 'UR');
   const ssr = results.find(r => r.rarity === 'SSR' && r.type === 'cosmetic');
   if (ur) postRealFeed(user, [{ icon: '🌟', ja: `${user.username} が UR を引き当てた！！`, en: `${user.username} hit the UR jackpot!!`, react: null }]);
-  else if (ssr) postRealFeed(user, [{ icon: '🎰', ja: `${user.username} がガチャで SSR「${ssr.name}」を引いた！`, en: `${user.username} pulled SSR "${ssr.name}"!` }]);
+  // 英語面に日本語のアイテム名が挿さっていた。カタログの英名を使う。
+  else if (ssr) postRealFeed(user, [{ icon: '🎰', ja: `${user.username} がガチャで SSR「${ssr.name}」を引いた！`, en: `${user.username} pulled SSR "${enName(ssr)}"!` }]);
   const collectibles = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly);
   res.json({
     results, user: publicUser(user), cost, lucky: !!bonus.gachaLuck,
@@ -3054,9 +3083,15 @@ app.post('/api/admin/restore', (req, res) => {
   adminLog(req, 'restore', actor.username, { mode, fromBackup: !!actor.fromBackup, users: check.stats.users });
   const snap = snapshot(db, 'pre-restore');
   let report;
+  // applyRestore は db をその場で書き換える。途中で落ちると「変更は保存されて
+  // いません」と返しながら、実際には半分マージされた db がメモリに残り、次の
+  // saveDb() でそれがディスクに焼かれてしまう。丸ごと退避してから実行する。
+  const rollback = structuredClone(db);
   try {
     report = applyRestore(db, data, mode);
   } catch (err) {
+    for (const k of Object.keys(db)) delete db[k];
+    Object.assign(db, rollback);          // db.js が同じ参照を握っているので in-place で戻す
     console.error('[restore] failed:', err);
     return res.status(500).json({ error: '復元中にエラーが発生しました。変更は保存されていません' });
   }
@@ -3401,13 +3436,17 @@ function pinAdminPassword() {
     if (pinned) console.warn('[admin] ADMIN_PASSWORD は8文字以上にしてください（無視されました）');
     return;
   }
-  const admin = Object.values(db.users).find(u => u.role === 'admin');
+  // 管理者が複数いると「db.users で最初に見つかった管理者」に当たってしまい、
+  // 起動のたびに対象が変わりうる（復元やマージで並び順は変わる）。
+  // ADMIN_PASSWORD が固定したいのは本来の運営アカウント一つだけ。
+  const admins = Object.values(db.users).filter(u => u.role === 'admin');
+  const admin = admins.find(u => u.username === ADMIN_NAME) || admins[0];
   if (!admin) return;
   const { salt, hash } = hashPassword(pinned);
   admin.salt = salt;
   admin.passHash = hash;
   saveDb();
-  console.log(`[admin] 管理者パスワードを環境変数 ADMIN_PASSWORD に固定しました`);
+  console.log(`[admin] 管理者パスワードを環境変数 ADMIN_PASSWORD に固定しました（対象: ${admin.username}）`);
 }
 
 // 管理者は「表示だけ全部持っている」状態だった: publicUser が owned を丸ごと

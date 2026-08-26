@@ -126,14 +126,25 @@ try {
   // 実時刻に依存するので、分の引き算ではなく「1分前」の実インスタントから
   // 組み立てる（`HH:(MM-1)` は MM=0 のとき HH:00 になり、30分枠だと実行時刻に
   // よっては既に終わっていた — 分によって落ちるテストになっていた）。
-  const DUR = 30;
   const oneMinAgo = new Date(Date.now() - 60000 + 9 * 3600000);
   const liveMin = oneMinAgo.getUTCHours() * 60 + oneMinAgo.getUTCMinutes();
   const hhmm = m => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+  // 枠は JST の同じ日に収まっていないとサーバーに弾かれる（予約日と
+  // 開催日がズレないための仕様）。23時台に流すと 30分枠が入らないので、
+  // 深夜は枠を短くする。ここを固定30分にしていたので、夜遅くに走らせた
+  // ときだけ全部落ちるテストになっていた。
+  const DUR = Math.min(30, 24 * 60 - liveMin);
   // 2枠目は DUR 以上あけ、かつ日をまたがないところに置く。
   let laterMin = liveMin + 120;
   if (laterMin + DUR > 24 * 60) laterMin = liveMin + DUR;
   const twoSlots = laterMin + DUR <= 24 * 60;   // 深夜すぎると2枠は作れない
+  if (DUR < 5) {
+    // 日付が変わる直前。ここだけは実時刻を動かさない限り再現できない。
+    console.log('  （JST 23:55以降のためスキップ。数分後に再実行してください）');
+    for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');
+    await stop();
+    process.exit(0);
+  }
   const liveAt = hhmm(liveMin);
   const later = hhmm(laterMin);
   const slots = twoSlots ? [liveAt, later] : [liveAt];

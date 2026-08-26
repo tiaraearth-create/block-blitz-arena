@@ -2,6 +2,8 @@
 // Usage: t('日本語テキスト', 'English text') — inline pairs, no key tables.
 // The language is stored in localStorage and auto-detected on first visit.
 
+import { CATALOG_EN } from './catalog-en.js';
+
 const KEY = 'bba_lang';
 
 export const LANG = (() => {
@@ -19,127 +21,9 @@ export function t(ja, en) {
 }
 
 // ---------------------------------------------------------------------------
-// Catalog translations: server data (shop/bosses/titles) ships Japanese
-// names — the client swaps them by id when playing in English.
+// Catalog translations: server data (shop/bosses/titles) ships Japanese names
+// — the client swaps them by id. 表そのものは catalog-en.js（サーバーと共用）。
 // ---------------------------------------------------------------------------
-
-const CATALOG_EN = {
-  // block skins
-  skin_default: { name: 'Classic', desc: 'The standard blocks' },
-  skin_neon: { name: 'Neon Glow', desc: 'Glowing neon blocks' },
-  skin_candy: { name: 'Candy', desc: 'Glossy candy look' },
-  skin_pixel: { name: 'Retro Pixel', desc: '8-bit retro style' },
-  skin_crystal: { name: 'Crystal', desc: 'Translucent gem blocks' },
-  skin_gold: { name: 'Gold', desc: 'Shining golden blocks' },
-  skin_shadow: { name: 'Shadow', desc: 'Outlines that glow in the dark' },
-  skin_pastel: { name: 'Pastel', desc: 'Soft flat design' },
-  skin_magma: { name: 'Magma', desc: 'Rock blocks with molten cracks' },
-  skin_dot: { name: 'Polka Dot', desc: 'Pop polka-dot blocks' },
-  skin_prism: { name: 'Prism [Gacha]', desc: 'Light-splitting crystal blocks — gacha exclusive' },
-  board_aurora: { name: 'Aurora [Gacha]', desc: 'Northern lights stage — gacha exclusive' },
-  fx_comet: { name: 'Comet [Gacha]', desc: 'Streaking comets — gacha exclusive' },
-  // boards
-  board_default: { name: 'Midnight', desc: 'The standard night-sky theme' },
-  board_ocean: { name: 'Deep Ocean', desc: 'Deep-sea gradient' },
-  board_sunset: { name: 'Sunset', desc: 'Warm sunset hues' },
-  board_forest: { name: 'Forest', desc: 'The calm of deep woods' },
-  board_galaxy: { name: 'Galaxy', desc: 'Nebulae and sparkling stars' },
-  board_sakura: { name: 'Sakura Room', desc: 'Cherry blossoms in full bloom' },
-  board_volcano: { name: 'Volcano', desc: 'A scorching stage of embers' },
-  board_snow: { name: 'Snowfield', desc: 'A silver world of falling snow' },
-  board_cyber: { name: 'Cyberspace', desc: 'A neon grid in the digital world' },
-  // clear effects
-  fx_default: { name: 'Spark', desc: 'The standard spark effect' },
-  fx_fireworks: { name: 'Fireworks', desc: 'Fireworks on line clears' },
-  fx_thunder: { name: 'Thunder', desc: 'Lightning strikes on clears' },
-  fx_sakura: { name: 'Sakura Storm', desc: 'Petals dance and scatter' },
-  fx_bubble: { name: 'Bubble', desc: 'Soap bubbles pop' },
-  fx_star: { name: 'Stardust', desc: 'Glittering stardust' },
-  fx_flame: { name: 'Flame', desc: 'Fire roars on every clear' },
-  // booster items
-  item_bomb: { name: 'Smart Bomb', desc: 'Blows up the densest 3×3' },
-  item_cleaner: { name: 'Cleaner', desc: 'Clears all garbage + the bottom row' },
-  item_fever: { name: 'Fever', desc: '2× score for 15 seconds' },
-  item_mini: { name: 'Mini Blocks', desc: 'Turns your hand into tiny pieces' },
-  // ultimate skills
-  ult_blast: { name: 'Destruction Shockwave', desc: 'Force-clears the two fullest rows and columns' },
-  ult_purify: { name: 'Purifying Wave', desc: 'Erases all garbage + the bottom two rows' },
-  ult_overdrive: { name: 'Overdrive', desc: 'Triple score for 15 seconds' },
-  ult_meteor: { name: 'Meteor Strike', desc: 'Obliterates 14 random cells' },
-  ult_rainbow: { name: 'Rainbow Hand', desc: 'Your hand becomes the best-fitting pieces' },
-  ult_fortress: { name: 'Impregnable Fortress', desc: '30s of combo shield and garbage immunity' },
-  ult_timestop: { name: 'Time Stop', desc: '+12s on the clock / freezes bosses for 20s' },
-  ult_judgement: { name: 'Divine Judgement', desc: 'Annihilates the board for a colossal score' },
-  ult_admin: { name: 'Omnipotence [Staff]', desc: 'Staff-only: board wipe + instant gauge refill' },
-  // admin-exclusive gear
-  skin_admin: { name: 'Rainbow [Staff]', desc: 'Staff-only blocks shimmering in rainbow' },
-  board_admin: { name: 'Throne Room [Staff]', desc: 'A staff-only stage of royal gold' },
-  fx_admin: { name: 'Rainbow Blessing [Staff]', desc: 'Staff-only rainbow particle burst' },
-  // bosses
-  slime: { name: 'Slime King' },
-  golem: { name: 'Iron Golem' },
-  dragon: { name: 'Dragon' },
-  maou: { name: 'Demon Lord' },
-  kraken: { name: 'Abyssal Kraken' },
-  tiamat: { name: 'Tiamat the Dread Dragon' },
-  hades: { name: 'Hades, Lord of the Dead' },
-  // titles
-  rookie: { name: 'Rookie Blocker', desc: 'Play 1 game' },
-  addict: { name: 'Block Addict', desc: 'Play 50 games' },
-  combo5: { name: 'Combo Prodigy', desc: 'Reach a 5 combo' },
-  combo10: { name: 'Combo Master', desc: 'Reach a 10 combo' },
-  score100k: { name: 'Beyond 100K', desc: 'Score 100,000' },
-  pvp10: { name: 'Undefeated General', desc: 'Win 10 online battles' },
-  rate1200: { name: 'Legend', desc: 'Reach 1200 rating' },
-  rich: { name: 'Tycoon', desc: 'Hold 10,000 coins' },
-  bosshunt: { name: 'Boss Hunter', desc: 'Defeat 2 bosses' },
-  maoslayer: { name: 'Demon Lord Slayer', desc: 'Defeat the Demon Lord' },
-  rushhero: { name: 'Rush Conqueror', desc: 'Clear Boss Rush' },
-  onislayer: { name: 'Oni Slayer', desc: 'Beat "Oni" difficulty' },
-  kamislayer: { name: 'God Slayer', desc: 'Beat "Kami" difficulty' },
-  souzouslayer: { name: 'Beyond Creation', desc: 'Beat "Creator God" difficulty' },
-  tourneyking: { name: 'Tournament King', desc: 'Win an online tournament' },
-  apex100: { name: 'Apex of 100', desc: 'Take #1 in Battle Royale' },
-  hunter: { name: 'The Hunter', desc: '25 lifetime knockouts in Battle Royale' },
-  guest: { name: 'Honoured Guest', desc: 'Take part in 10 Admin Event runs' },
-  streak5: { name: 'Streak Rider', desc: 'Win 5 ranked duels in a row' },
-  diamond: { name: 'Diamond Pride', desc: 'Reach 1500 rating' },
-  grandmaster: { name: 'Peak Master', desc: 'Reach 1700 rating' },
-  veteran: { name: 'Born Blocker', desc: 'Play 200 games' },
-  combo15: { name: 'Combo Divinity', desc: 'Reach a 15 combo' },
-  score300k: { name: 'Legend of 300K', desc: 'Score 300,000' },
-  liner: { name: 'Line Artisan', desc: 'Clear 5,000 total lines' },
-  pvp50: { name: 'Hundred Battles', desc: 'Win 50 online battles' },
-  explorer: { name: 'Tower Explorer', desc: 'Reach F50 in the Dungeon Tower' },
-  towerlord: { name: 'Lord of 100 Floors', desc: 'Conquer all 100 tower floors' },
-  ultimate: { name: 'Heir of Mastery', desc: 'Use 100 ultimate skills' },
-  ultgod: { name: 'Grand Master of Arts', desc: 'Use 500 ultimate skills' },
-  missionman: { name: 'Mission Runner', desc: 'Complete 50 missions' },
-  missiongod: { name: 'Mission Demon', desc: 'Complete 300 missions' },
-  achiever: { name: 'Trophy Hunter', desc: 'Unlock 20 achievements' },
-  completionist: { name: 'Completionist', desc: 'Unlock 40 achievements' },
-  loyal7: { name: 'Perfect Attendance', desc: 'Log in 7 days in a row' },
-  loyal30: { name: 'Immovable Regular', desc: 'Log in 30 days in a row' },
-  survivor: { name: 'Survival Instinct', desc: 'Reach wave 20 in Survival' },
-  millionaire: { name: 'Millionaire', desc: 'Reach 1,000,000 total score' },
-  sprinter: { name: 'Gale-Force Blocker', desc: 'Score 20,000 in a 60s Time Attack' },
-  buddy: { name: 'Great Duo', desc: 'Play 10 co-op runs' },
-  soulmate: { name: 'In Perfect Sync', desc: 'Reach 20,000 in co-op' },
-  abysswalker: { name: 'Abyss Gazer', desc: 'Reach A50 in the Abyss Dungeon' },
-  abysslord: { name: 'Lord of the Abyss', desc: 'Conquer A100 in the Abyss Dungeon' },
-  guildfounder: { name: 'Guild Founder', desc: 'Found a guild' },
-  guildace: { name: 'Guild Ace', desc: 'Contribute 2,000 guild points in a week' },
-  weeklyking: { name: 'Weekly Sovereign', desc: 'Finish #1 in the weekly challenge' },
-  bossmaster: { name: 'Perfect Slayer', desc: 'S-rank every boss' },
-  hellrunner: { name: 'Hell Runner', desc: 'Reach depth 12 in Infinite Hell Rush' },
-  ruinsage: { name: 'Ancient Sage', desc: 'Clear Puzzle Ruins stage 30' },
-  miner: { name: 'Master Miner', desc: 'Reach depth 50 in the Mines' },
-  gachaprince: { name: 'Gacha Prodigy', desc: 'Pull the gacha 100 times' },
-  lobbyface: { name: 'Lobby Regular', desc: 'Send 300 chat messages' },
-  ghostmaster: { name: 'Ghost Whisperer', desc: 'Score 15,000 in the Haunted House' },
-  mecha: { name: 'Deus Ex Machina', desc: '' },
-  frost: { name: 'Frost Queen Frione', desc: '' },
-};
 
 // Name/description for a catalog object ({id, name, desc}) in the UI language.
 export function catName(obj) {

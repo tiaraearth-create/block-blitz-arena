@@ -4324,6 +4324,7 @@ class OnlineMode extends VersusBase {
         console.warn('[coop] board resynced from server');
       }
     }
+    this.applyCoopHand(msg.hand);
     if (typeof msg.score === 'number') this.engine.score = msg.score;
     this.coopTurn = msg.turn;
     this.coopTurnRemain = msg.turnRemain || 0;
@@ -4334,11 +4335,27 @@ class OnlineMode extends VersusBase {
     this.updateCoopHud();
   }
 
+  // 手札もサーバーが持ち主。盤面と違って自前で描いているだけなので、
+  // ズレたまま置こうとすると永久に弾かれる。番号から作り直す。
+  applyCoopHand(hand) {
+    if (!Array.isArray(hand) || !this.engine) return;
+    for (let i = 0; i < 3; i++) {
+      const idx = hand[i];
+      const cur = this.engine.hand[i];
+      if (idx == null) { this.engine.hand[i] = null; continue; }
+      const def = SHAPES[idx];
+      if (!def) continue;
+      if (cur && cur.shape === idx) continue;
+      this.engine.hand[i] = { shape: idx, cells: def.cells, color: def.color };
+    }
+  }
+
   onCoopReject(msg) {
     if (!this.engine) return;
     if (Array.isArray(msg.grid)) {
       for (let i = 0; i < msg.grid.length; i++) this.engine.grid[i] = msg.grid[i];
     }
+    this.applyCoopHand(msg.hand);
     this.coopTurn = msg.turn;
     this.applyCoopTurn();
     audio.putback();
@@ -4764,6 +4781,11 @@ class OnlineMode extends VersusBase {
       this.destroy();
       toast(this.isCoop
         ? t('🤝 協力プレイから離脱しました（敗北にはなりません）', '🤝 You left the co-op run (no loss recorded)')
+        : this.isRoyale
+        // ロイヤルには「相手」がいないので、敗北でも不戦勝でもない。
+        // 実際の扱い（生存者の中で最下位）をそのまま伝える。
+        ? t('🏳️ バトルロイヤルから離脱しました（そのときの生存者の中で最下位扱い）',
+            '🏳️ You left the royale (recorded as last among the survivors at that moment)')
         : t('🏳️ 対戦から離脱しました（敗北扱い・相手の不戦勝）', '🏳️ You left the match (counts as a loss)'), 'err', 2600);
       endToMenu();
     } else {

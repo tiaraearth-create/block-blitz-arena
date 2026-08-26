@@ -57,7 +57,8 @@ export function initBattle(server, deps) {
   function broadcastAll(msg) { for (const ws of clients) send(ws, msg); }
 
   // Displayed population = real sockets + simulated ambient players.
-  const displayOnline = () => clients.size + ambientOnline();
+  const realClients = () => { let n = 0; for (const c of clients) if (!c.secondary) n++; return n; };
+  const displayOnline = () => realClients() + ambientOnline();
   const displayMatches = () => matches.size + ambientMatches();
 
   // ---- global chat (in-memory history) ----
@@ -91,7 +92,8 @@ export function initBattle(server, deps) {
   const crowdOn = (key) => effectiveScale() > 0 && clients.size > 0 && !isQuietNow() && (!key || toggles()[key]);
 
   // Names of real people online — residents may greet them.
-  const humanNames = () => [...clients].filter(c => !c.isBot).map(sockName).filter(Boolean);
+  // 同上。名前も重複すると住民が同じ人に二度あいさつする。
+  const humanNames = () => [...new Set([...clients].filter(c => !c.isBot).map(sockName).filter(Boolean))];
 
   // Guild tag shown next to a name in chat ([TAG]); residents carry their
   // ghost guild's tag so the crowd looks like it belongs to guilds too.
@@ -660,6 +662,10 @@ export function initBattle(server, deps) {
         moves: match.moves,
         over: e.over,
         grid: e.snapshot(),                    // resync safety net
+        // 盤面だけ直しても手札がズレたままだと、クライアントは持っていない
+        // ピースを置こうとし続けてサーバーに弾かれる（時間切れまで詰む）。
+        // 形の番号だけ送れば十分（cells/color は SHAPES から引ける）。
+        hand: e.hand.map(p => (p ? p.shape : null)),
       });
     }
   }
@@ -1629,6 +1635,21 @@ export function initBattle(server, deps) {
     const elapsed = (now - r.startedAt) / 1000 - COUNTDOWN;
     if (elapsed < 0) return;
 
+    // --- 落ちた人を席から外す ---
+    // 回線が切れても FIN が届かないことがあり（電波が切れた端末など）、
+    // readyState は最大30秒 OPEN のまま。その間その人は「生存者」として
+    // ランキングに居座り、カットの生き残り枠や優勝まで奪ってしまう。
+    // 更新が途切れた時点で、その時の順位で確定させる。
+    // （e.lastSeen は記録していたのに、これまで一度も読んでいなかった）
+    for (const e of r.entrants) {
+      if (!e.alive || !e.human) continue;
+      const gone = e.ws.readyState !== e.ws.OPEN || (now - (e.lastSeen || now)) > 20000;
+      if (!gone) continue;
+      const ranked = royaleRanked(r);
+      endRoyaleFor(e, r, royaleAlive(r).length, ranked);
+      royaleFeed(r, { kind: 'left', victim: e.name, alive: royaleAlive(r).length });
+    }
+
     // --- AI entrants actually play ---
     for (const e of r.entrants) {
       if (!e.alive || e.human || !e.engine) continue;
@@ -1822,6 +1843,9 @@ export function initBattle(server, deps) {
             ws.close();
             return;
           }
+          // 対戦画面に入った人は chat.js の常時接続と合わせて2本つないでいる。
+          // 2本目を数えると「オンライン○人」が実人数の倍近くまで膨らむ。
+          ws.secondary = msg.role === 'battle';
           ws.user = user ? { id: user.id, username: user.username } : null;
           ws.guestName = user ? null : (sanitizeName(msg.guestName) || `ゲスト${Math.floor(Math.random() * 9999)}`);
           send(ws, {
@@ -1833,8 +1857,9 @@ export function initBattle(server, deps) {
             chat: chatHistory.slice(-40),
             feed: feedHistory.slice(-20),
           });
-          // Only a fresh arrival gets greeted, not a reconnecting chat socket.
-          if (!ws.greeted) { ws.greeted = true; maybeGreet(ws); }
+          // Only a fresh arrival gets greeted, not a reconnecting chat socket
+          // — nor the 2本目 that opens when the same person enters online play.
+          if (!ws.greeted && !ws.secondary) { ws.greeted = true; maybeGreet(ws); }
           break;
         }
         case 'queue': {
@@ -1960,7 +1985,11 @@ export function initBattle(server, deps) {
             ] });
             return;
           }
-          if (!other.sock || other.sock.readyState !== other.sock.OPEN || other.sock.matchId) {
+          // matchId だけを見ていたので、相手が待っている間にルーム/大会/
+          // ロイヤルへ入っていると、そこから引きはがして再戦を始めてしまった。
+          // 参加を弾く条件（1949行目）と同じ「取り込み中」判定を使う。
+          const busy = other.sock && (other.sock.matchId || other.sock.roomCode || other.sock.tourneyId || other.sock.royaleId);
+          if (!other.sock || other.sock.readyState !== other.sock.OPEN || busy) {
             rematchOffers.delete(String(msg.rematchId));
             send(ws, { type: 'rematch_gone' });
             return;
@@ -1990,7 +2019,7 @@ export function initBattle(server, deps) {
           if (!sockRate(ws, '_coopRate', 40, 10000)) return;
           const ok = coopApply(match, me.slot, Number(msg.index), Number(msg.row), Number(msg.col));
           // Rejected (not your turn / stale board): resend authoritative state.
-          if (!ok) send(ws, { type: 'coop_reject', turn: match.turn, grid: match.engine.snapshot(), score: match.engine.score });
+          if (!ok) send(ws, { type: 'coop_reject', turn: match.turn, grid: match.engine.snapshot(), score: match.engine.score, hand: match.engine.hand.map(p => (p ? p.shape : null)) });
           break;
         }
         case 'create_room': {

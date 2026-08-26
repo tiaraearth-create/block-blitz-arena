@@ -3,7 +3,7 @@
 // reactions) across every archetype, period and world state — catches broken
 // slots, bad archetype filters and crashes from newly added content.
 import { buildRoster, ARCHETYPES } from '../server/residents.js';
-import { composeLine, composeDialogue, composeFeed, composeReaction, chooseReplies, buildCtx } from '../server/crowd.js';
+import { composeLine, composeDialogue, composeFeed, composeReaction, chooseReplies, buildCtx, fill } from '../server/crowd.js';
 import { _resetForTest } from '../server/chatgen.js';
 import { setWorldProvider, activeResidents, setCustom, chatPaceFactor, chatFloorMs } from '../server/ambient.js';
 
@@ -32,6 +32,10 @@ const scan = (s, src) => {
   if (typeof s !== 'string' || !s.length) bad.push(`${src}: empty`);
   else if (/\{\w+\}/.test(s)) bad.push(`${src}: unfilled slot in "${s}"`);
   else if (/undefined|NaN/.test(s)) bad.push(`${src}: leaked value in "${s}"`);
+  // スロットにオブジェクトを渡したのに renderSlot 側に対応する case が
+  // 無いと、文字列化されて "[object Object]" が本文に出る。以前はこれを
+  // 検出できず、英語のセリフが壊れたままテストが緑になっていた。
+  else if (s.includes('[object')) bad.push(`${src}: object leaked into "${s}"`);
 };
 
 // ---- composeLine: every archetype × every period × event/poll states ----
@@ -90,8 +94,14 @@ check(`composeFeed fuzz (${feedCount} items, ${feedIds.size} distinct kinds)`, b
 
 // ---- composeReaction: every kind ----
 bad.length = 0;
-const KINDS = ['greet_named', 'greet_plain', 'lost_to', 'beat', 'drew', 'coop_done', 'event_start', 'event_end', 'poll_open', 'poll_close', 'poll_voted', 'poll_swing', 'poll_lastcall', 'champion', 'royale_win', 'record', 'badge'];
-const extra = { you: 'テスト太郎', opt: 'ガチャ祭', winner: 'ガチャ祭', score: '12,000', badge: '鬼討伐バッジ' };
+// 'throne' はスロット {board} を持つのに、これまで一度も走っていなかった。
+const KINDS = ['greet_named', 'greet_plain', 'lost_to', 'beat', 'drew', 'coop_done', 'event_start', 'event_end', 'poll_open', 'poll_close', 'poll_voted', 'poll_swing', 'poll_lastcall', 'champion', 'royale_win', 'record', 'badge', 'throne'];
+// badge / board は言語中立なオブジェクトで渡す（実際の呼び出し側と同じ形）。
+const extra = {
+  you: 'テスト太郎', opt: 'ガチャ祭', winner: 'ガチャ祭', score: '12,000',
+  badge: { name: '鬼討伐バッジ', nameEn: 'Oni Slayer badge' },
+  board: { name: 'スコア', nameEn: 'Score' },
+};
 let reactN = 0, reactTr = 0;
 for (const kind of KINDS) {
   for (let i = 0; i < 25; i++) {
@@ -264,6 +274,27 @@ _resetForTest();
   setCustom({ chatPace: 0 });
   check('チャット頻度は下限0.25でクランプされる', chatPaceFactor() === 0.25, `pace=${chatPaceFactor()}`);
   setCustom({ chatPace: 1 });
+}
+
+// ---- カタログ名は英語面で英語になるか ----
+// {item}/{boss}/{title} は長いあいだ日本語名をそのまま英文に挿していた。
+// スロットが言語中立なオブジェクトを保持するようになったので、英語の
+// セリフに日本語が残らないことを直接確かめる。
+{
+  const en = { ...roster[0], lang: 'en' };
+  const ja = { ...roster[0], lang: 'ja' };
+  const CJK = /[぀-ヿ一-鿿]/;
+  const enOut = new Set(), jaOut = new Set();
+  for (let i = 0; i < 400; i++) {
+    enOut.add(fill('{item}|{boss}|{title}', en, buildCtx(atHour(14))));
+    jaOut.add(fill('{item}|{boss}|{title}', ja, buildCtx(atHour(14))));
+  }
+  const leaked = [...enOut].filter(x => CJK.test(x));
+  check('{item}/{boss}/{title} は英語面に日本語を残さない', leaked.length === 0,
+    leaked.length ? leaked[0] : `${enOut.size}通り すべて英語`);
+  check('日本語面はこれまで通り日本語のまま', [...jaOut].every(x => CJK.test(x)), `${jaOut.size}通り`);
+  check('どちらの言語でも [object Object] が出ない',
+    ![...enOut, ...jaOut].some(x => x.includes('[object')));
 }
 
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');
