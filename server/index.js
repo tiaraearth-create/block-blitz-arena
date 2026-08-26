@@ -49,7 +49,7 @@ import {
   aeMode as aeModeById, getSchedule as getAeSchedule, normalizeSchedule as aeNormalizeSchedule,
   currentOccurrence as aeCurrentOccurrence, upcomingOccurrences as aeUpcoming,
   reserve as aeReserve, cancelReservation as aeCancelReservation, liveSlotFor as aeLiveSlotFor,
-  ensureRun as aeEnsureRun, contribute as aeContribute,
+  ensureRun as aeEnsureRun, contribute as aeContribute, isStaff as aeIsStaff,
   playerView as aePlayerView, slotCounts as aeSlotCounts, entrantCount as aeEntrantCount,
 } from './adminevent.js';
 
@@ -2024,6 +2024,11 @@ app.get('/api/adminevent', (req, res) => {
 app.post('/api/adminevent/reserve', requireAuth, maintenanceGuard, (req, res) => {
   const schedule = getAeSchedule(db);
   if (!schedule.enabled) return res.status(409).json({ error: 'いま開催予定の管理者イベントはありません' });
+  // 試運転中は運営以外、そもそも存在しないのと同じ扱いにする
+  // （見えないのに予約だけ通る、という中途半端な状態を作らない）。
+  if (schedule.staffOnly && !aeIsStaff(req.user)) {
+    return res.status(409).json({ error: 'いま開催予定の管理者イベントはありません' });
+  }
   const occ = aeCurrentOccurrence(schedule);
   if (!occ) return res.status(409).json({ error: 'いま開催予定の管理者イベントはありません' });
   const slotId = Math.floor(Number(req.body && req.body.slotId));

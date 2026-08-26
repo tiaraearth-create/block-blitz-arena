@@ -117,6 +117,9 @@ export const AE_MAX_DURATION = 180;
 export function defaultSchedule() {
   return {
     enabled: false,
+    // 🔒 試運転。true の間は運営（admin/mod）にしか見えず、参加もできない。
+    // 新しいモードを本番で自分だけ確かめるための軸。
+    staffOnly: false,
     weekday: 6,                              // Saturday (JST)
     slots: ['18:00', '19:00', '21:00'],      // JST wall clock
     durationMin: 30,
@@ -179,6 +182,7 @@ export function normalizeSchedule(input = {}, prev = null) {
     out.rewardMult = Math.round(r * 10) / 10;
   }
 
+  if (input.staffOnly !== undefined) out.staffOnly = !!input.staffOnly;
   if (input.note !== undefined) out.note = String(input.note || '').slice(0, 140);
 
   // Slots must not overlap each other, or a player could sit in two at once
@@ -329,6 +333,8 @@ export function cancelReservation(user, dayKey) {
 // The slot a user may PLAY in right now, or null. Admins are always let in —
 // they have to be able to test the thing they are hosting.
 export function liveSlotFor(schedule, user, now = Date.now()) {
+  // 試運転中は運営以外、枠が来ていても「あなたの時間ではない」と同じ扱い。
+  if (schedule && schedule.staffOnly && !isStaff(user)) return null;
   const occ = currentOccurrence(schedule, now);
   if (!occ) return null;
   const isAdmin = !!user && user.role === 'admin';
@@ -490,7 +496,17 @@ function slotView(slot, now, taken) {
 
 // What every client needs to render the banner, the reservation sheet and the
 // live session. `user` may be null (guests see the schedule but cannot book).
+// 試運転中は運営だけ。ここ1か所で止めれば、バナーも予約も参加も結果送信も
+// まとめて閉じる（playerView が null なら画面に何も出ず、liveSlotFor も
+// 別途 staffOnly を見るので API 側も通らない）。
+function schedule0(db) { return getSchedule(db); }
+
+export function isStaff(user) {
+  return !!(user && (user.role === 'admin' || user.role === 'mod'));
+}
+
 export function playerView(db, user, now = Date.now(), counts = null) {
+  if (schedule0(db).staffOnly && !isStaff(user)) return null;
   const schedule = getSchedule(db);
   if (!schedule.enabled) return null;
   const occ = currentOccurrence(schedule, now);

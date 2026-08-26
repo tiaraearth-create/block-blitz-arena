@@ -149,7 +149,7 @@ try {
   if (DUR < 5) {
     // 日付が変わる直前。ここだけは実時刻を動かさない限り再現できない。
     console.log('  （JST 23:55以降のためスキップ。数分後に再実行してください）');
-    for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');
+for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');
     await stop();
     process.exit(0);
   }
@@ -251,11 +251,53 @@ try {
   check('専用モードがすべて日英そろっている',
     AE_MODES.length >= 3 && AE_MODES.every(m => m.id && m.icon && m.name && m.nameEn && m.desc && m.descEn && m.tagline && m.taglineEn),
     AE_MODES.map(m => m.id).join(','));
+    // ---- 🔒 試運転（運営だけに見せる）----------------------------------------
+// 新しいモードを本番でいきなり全員に出さないための軸。
+// 「見えないのに予約だけ通る」のような中途半端な状態を作らないこと ——
+// 実際に一度、予約だけ塞ぎ忘れていた。
+{
+  const jstNow = new Date(Date.now() - 60000 + 9 * 3600000);
+  const hh = `${pad(jstNow.getUTCHours())}:${pad(jstNow.getUTCMinutes())}`;
+  const dur = Math.min(25, 24 * 60 - (jstNow.getUTCHours() * 60 + jstNow.getUTCMinutes()));
+  if (dur >= 5) {
+    let r = await api('/api/admin/adminevent', {
+      method: 'POST', token: atk,
+      body: { enabled: true, staffOnly: true, weekday: jstNow.getUTCDay(), slots: [hh], durationMin: dur, rotation: 'zero' },
+    });
+    check('試運転ONで設定できる', r.status === 200, r.d.error || '');
+
+    const asAdmin = await api('/api/status', { token: atk });
+    check('試運転中でも運営には見える', !!asAdmin.d.adminEvent, '');
+    const asPlayer = await api('/api/status', { token: t1 });
+    check('試運転中は一般プレイヤーに見えない', !asPlayer.d.adminEvent, JSON.stringify(asPlayer.d.adminEvent));
+    const anon = await api('/api/status');
+    check('試運転中は未ログインにも見えない', !anon.d.adminEvent, '');
+
+    r = await api('/api/adminevent/reserve', { method: 'POST', token: t1, body: { slotId: 0 } });
+    check('試運転中は一般が予約できない', r.status !== 200, `HTTP ${r.status}`);
+    r = await api('/api/adminevent/result', { method: 'POST', token: t1, body: { score: 9000, duration: 120 } });
+    check('試運転中は一般が結果を送れない', r.status !== 200, `HTTP ${r.status}`);
+    r = await api('/api/adminevent/reserve', { method: 'POST', token: atk, body: { slotId: 0 } });
+    check('試運転中も運営は予約できる', r.status === 200, r.d.error || '');
+
+    // 開放
+    r = await api('/api/admin/adminevent', { method: 'POST', token: atk, body: { staffOnly: false } });
+    check('試運転をOFFにできる', r.status === 200, '');
+    const opened = await api('/api/status', { token: t1 });
+    check('OFFにすると一般にも見える', !!opened.d.adminEvent, '');
+    r = await api('/api/adminevent/reserve', { method: 'POST', token: t1, body: { slotId: 0 } });
+    check('OFFにすると一般も予約できる', r.status === 200, r.d.error || '');
+  } else {
+    console.log('  （JSTが深夜のため試運転のテストはスキップ）');
+  }
+}
+
 } catch (err) {
   check('test harness', false, err.stack || String(err));
 } finally {
   await stop();
   fs.rmSync(DIR, { recursive: true, force: true });
 }
+
 
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

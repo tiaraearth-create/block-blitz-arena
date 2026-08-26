@@ -2638,6 +2638,18 @@ async function showAdminEventModal() {
     </div>
 
     <div class="settings-row">
+      <label>試運転<br><span class="muted" style="font-size:10px">運営だけに見せる</span></label>
+      <div class="seg" id="aeStaff">
+        <button data-v="1" class="${s.staffOnly ? 'active' : ''}">ON</button>
+        <button data-v="0" class="${s.staffOnly ? '' : 'active'}">OFF</button>
+      </div>
+    </div>
+    <p class="muted" style="font-size:11px;margin:-4px 0 10px">
+      試運転ONの間は、一般プレイヤーにはバナーも出ず、予約も参加もできません。
+      新しいモードを自分で一度確かめてからOFFにしてください。
+    </p>
+
+    <div class="settings-row">
       <label>曜日</label>
       <select id="aeWeekday" style="font-family:inherit;padding:6px 10px;border-radius:8px">
         ${AE_WEEKDAY_LABELS.map((w, i) => `<option value="${i}" ${i === s.weekday ? 'selected' : ''}>${w}曜日</option>`).join('')}
@@ -2720,6 +2732,14 @@ async function showAdminEventModal() {
   seg('aeMult', v => { rewardMult = Number(v); });
 
   m.querySelector('#aeCancelBtn').onclick = closeModal;
+  let staffOnly = !!s.staffOnly;
+  m.querySelectorAll('#aeStaff button').forEach(btn => {
+    btn.onclick = () => {
+      staffOnly = btn.dataset.v === '1';
+      m.querySelectorAll('#aeStaff button').forEach(x => x.classList.toggle('active', x === btn));
+    };
+  });
+
   m.querySelector('#aeSave').onclick = async () => {
     const slots = m.querySelector('#aeSlots').value.split(/[,、\s]+/).filter(Boolean);
     try {
@@ -2727,6 +2747,7 @@ async function showAdminEventModal() {
         method: 'POST',
         body: {
           enabled,
+          staffOnly,
           weekday: Number(m.querySelector('#aeWeekday').value),
           slots,
           durationMin,
@@ -2735,7 +2756,9 @@ async function showAdminEventModal() {
           note: m.querySelector('#aeNote').value,
         },
       });
-      toast(enabled ? '👑 管理者イベントを設定しました（全員にアナウンス済み）' : '👑 管理者イベントをOFFにしました', 'ok', 4000);
+      toast(!enabled ? '👑 管理者イベントをOFFにしました'
+        : staffOnly ? '🔒 試運転で設定しました（いま見えるのは運営だけです）'
+        : '👑 管理者イベントを設定しました（全員にアナウンス済み）', 'ok', 4000);
       closeModal();
       showAdminEventModal();
     } catch (err) {
