@@ -9,3 +9,5 @@ block-blitz-backup-*.json
 _repro_tmp.mjs
 *_repro*.mjs
 .claude/
+test/_probe/
+test/_scratch/
