@@ -87,10 +87,19 @@ const api = async (p, o = {}) => {
 
   // モードを足しても壊れないよう、数は決め打ちしない。
   // 「全種類を1周してから最初に戻る」ことだけを見る。
-  const N = AE_MODES.length;
+  // 試験中(trial)のモードは自動ローテーションに入らない。
+  // これが効いていないと、確かめていないモードがいきなり全員に出る。
+  const live = AE_MODES.filter(m => !m.trial);
+  const N = live.length;
   const modes = Array.from({ length: N + 1 }, (_, w) => weekModeId({ rotation: 'auto' }, occ.opensAt + w * 7 * 86400000));
   check(`モードは週替わりで${N}種を巡回する`,
     new Set(modes.slice(0, N)).size === N && modes[0] === modes[N], modes.join('→'));
+  const trials = AE_MODES.filter(m => m.trial).map(m => m.id);
+  check('試験中のモードは自動ローテーションに入らない',
+    !modes.some(id => trials.includes(id)), trials.length ? `試験中: ${trials.join(',')}` : '試験中なし');
+  for (const id of trials) {
+    check(`${id} は明示すれば動く`, weekModeId({ rotation: id }, occ.opensAt) === id, '');
+  }
 
   // Reserving, and who may actually play.
   const user = { id: 'u1', username: 'A', role: 'user' };

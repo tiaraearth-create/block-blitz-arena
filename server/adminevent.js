@@ -94,6 +94,10 @@ export const AE_MODES = [
   },
   {
     id: 'zero', icon: '👁️',
+    // 🧪 試験中。自動ローテーションには入らない（rotation:'zero' と
+    // 明示したときだけ動く）。実際に自分で一度回して、数字と手触りを
+    // 確かめてからこの行を消す。消し忘れても全員に出てしまうことはない。
+    trial: true,
     name: '断罪', nameEn: 'Condemned',
     tagline: '人間しか封印を割れない',
     taglineEn: 'Only humans can break the seal',
@@ -278,8 +282,13 @@ export function weekModeId(schedule, dayStart) {
   if (schedule.rotation && schedule.rotation !== 'auto' && aeMode(schedule.rotation)) {
     return schedule.rotation;
   }
+  // 試験中(trial)のモードは自動ローテーションに入れない。
+  // 入れてしまうと、まだ確かめていないモードがその週いきなり全員に出る。
+  // 出したいときは rotation にそのIDを明示する。
+  const pool = AE_MODES.filter(m => !m.trial);
+  const list = pool.length ? pool : AE_MODES;
   const weeks = Math.floor(dayStart / (7 * DAY_MS));
-  return AE_MODES[((weeks % AE_MODES.length) + AE_MODES.length) % AE_MODES.length].id;
+  return list[((weeks % list.length) + list.length) % list.length].id;
 }
 
 // ---------------------------------------------------------------------------
