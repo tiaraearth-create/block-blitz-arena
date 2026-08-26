@@ -212,10 +212,12 @@ function resolveExpiredVerdicts(s, run, danIndex, deps) {
     v.resolved = true;
     const e = s.entrants.find(x => x.name === v.target);
     if (e) e.missed = (e.missed || 0) + 1;
+    if (deps.onStat) deps.onStat(v.target, 'zeroMissed');
     // 落とすと段が少し回復し、住人が1人処刑される。
     const dan = danAt(danIndex);
     run.dealt = Math.max(0, (run.dealt || 0) - missHealFor(danIndex, s.humans, run));
     const victim = executeResident(s, run, deps, random);
+    chronicle(run, 'missed', { by: v.target, victim: victim ? victim.name : null });
     if (say) say('missed', danIndex, { you: v.target, name: victim ? victim.name : undefined, seed: v.at });
     if (emit) {
       for (const x of s.entrants) if (x.human) {
@@ -253,6 +255,7 @@ function fireVerdicts(s, run, danIndex, deps) {
     };
     s.verdicts.push(v);
     if (emit) emit(e, { type: 'zero_verdict', id: v.id, cells, keystone, warnMs });
+    if (deps.onStat) deps.onStat(e.name, 'zeroNamed');
     if (say && i === 0) say('verdict', danIndex, { you: e.name, seed: t });
   }
 }
@@ -290,10 +293,12 @@ export function submitCut(s, run, name, verdictId, clearedCells, deps) {
 
   const e = s.entrants.find(x => x.name === name);
   if (e) e.cuts = (e.cuts || 0) + 1;
+  if (deps.onStat) deps.onStat(name, 'zeroCuts');
   const danIndex = run.dan | 0;
   const dmg = cutDamageFor(danIndex, s.humans, { keystone: r.keystone, run });
   run.sealDealt = (run.sealDealt || 0) + dmg;
   run.cuts = (run.cuts || 0) + 1;
+  chronicle(run, 'cut', { by: name, keystone: !!r.keystone, dan: danIndex + 1 });
   if (say) say('cut', danIndex, { you: name, seed: t });
   if (emit) {
     for (const x of s.entrants) if (x.human) {
@@ -347,6 +352,7 @@ function breakDan(s, run, danIndex, deps) {
   const top = aliveHumans(s).sort((a, b) => (b.cuts || 0) - (a.cuts || 0))[0];
   const rec = { dan: danIndex + 1, at: now(), by: top ? top.name : null };
   run.broken.push(rec);
+  chronicle(run, 'dan', { dan: danIndex + 1, by: rec.by });
   s.stakes.push(rec);
   if (say) say('danBroken', danIndex, { dan: danIndex + 1, seed: rec.at });
   if (emit) {
@@ -354,7 +360,50 @@ function breakDan(s, run, danIndex, deps) {
       emit(x, { type: 'zero_dan', dan: danIndex + 1, by: rec.by, next: run.dan < DAN.length ? run.dan + 1 : null });
     }
   }
+  // 段が割れた瞬間そこに居た人だけにバッジ。あとから点を足しても手に入らない。
+  if (deps.onDanBadge) deps.onDanBadge(s.entrants.filter(x => x.human).map(x => x.name));
   if (onDanBroken) onDanBroken(rec, s);
+}
+
+// ---------------------------------------------------------------------------
+// 📜 断罪録
+// ---------------------------------------------------------------------------
+//
+// その日の出来事を、実名つきで時系列に残す。実装は配列に足すだけだが、
+// 「あいつがあの時ああした」が保存される場所はここしかない。
+// 次の枠の人はこれを読んでから入る。
+
+export const CHRONICLE_MAX = 400;
+
+export function chronicle(run, kind, data) {
+  run.log = run.log || [];
+  run.log.push({ at: Date.now(), kind, ...data });
+  // 1日ぶんなので上限は緩くてよいが、無制限にすると db.json が太る。
+  if (run.log.length > CHRONICLE_MAX) run.log.splice(0, run.log.length - CHRONICLE_MAX);
+}
+
+// 📝 伝言 ── 段にとどめを刺した人が、次の枠へ1行残せる。
+// 40字。次の枠の開幕でゼロが読み上げて茶々を入れる。
+export const WILL_MAX = 40;
+
+export function submitWill(run, name, text) {
+  run.wills = run.wills || [];
+  // とどめを刺した人だけが書ける（書ける権利は1段につき1回）
+  const rec = (run.broken || []).slice().reverse().find(b => b.by === name && !b.will);
+  if (!rec) return { ok: false, why: 'not-earned' };
+  const clean = String(text || '').replace(/\s+/g, ' ').trim().slice(0, WILL_MAX);
+  if (!clean) return { ok: false, why: 'empty' };
+  rec.will = clean;
+  run.wills.push({ by: name, text: clean, dan: rec.dan, at: Date.now() });
+  if (run.wills.length > 30) run.wills.splice(0, run.wills.length - 30);
+  chronicle(run, 'will', { by: name, text: clean, dan: rec.dan });
+  return { ok: true };
+}
+
+// 次の枠の開幕で読み上げる、直近の伝言
+export function latestWill(run) {
+  const w = run.wills || [];
+  return w.length ? w[w.length - 1] : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +458,7 @@ function runDeal(s, run, danIndex, deps, elapsed, t) {
     if (emit) for (const x of s.entrants) if (x.human) {
       emit(x, { type: 'zero_deal_done', win, tally: dealTally(run.deal) });
     }
+    chronicle(run, 'deal', { win, tally: dealTally(run.deal), q: run.deal.q });
     if (say) say(win === 'yes' ? 'dealYes' : 'dealNo', danIndex, { seed: t });
   }
 }
@@ -457,6 +507,9 @@ export function stateView(s, run) {
     fallen: (run.fallen || []).map(f => f.name),
     deal: run.deal && !run.deal.settled ? dealView(run.deal) : null,
     stakes: { have: s.stakes2 || 0, need: run.dealStakeCost || 3 },
+    will: latestWill(run),
+    // とどめを刺してまだ伝言を残していない段があれば、書く権利がある
+    canWill: null,
     zeroGrid: s.zero.engine ? s.zero.engine.snapshot() : null,
     seats: s.entrants.map(e => ({
       name: e.name, human: !!e.human, score: Math.floor(e.score || 0),

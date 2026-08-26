@@ -14,6 +14,7 @@ import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
 import { zeroSay, moodFor } from './zero.js';
 import { createSession as createZeroSession, tick as tickZero, submitCut as zeroCut,
   submitStake as zeroStake, submitDealVote as zeroDealVote,
+  submitWill as zeroWill, latestWill as zeroLatestWill,
   topOut as zeroTopOut, stateView as zeroStateView, ZERO_TICK } from './zero-session.js';
 import { danAt, DAN as ZERO_DAN } from './zero.js';
 import { getSchedule as getAeSchedule, liveSlotFor as aeLiveSlotFor,
@@ -170,6 +171,24 @@ export function initBattle(server, deps) {
       uuid: () => crypto.randomUUID(),
       emit: (e, msg) => { if (e.human && e.ws && e.ws.readyState === e.ws.OPEN) send(e.ws, msg); },
       say: (kind, danIndex, ctx) => zeroSpeak(kind, danIndex, ctx),
+      // 出来事をプレイヤーの記録に残す。これが無いと称号もバッジも解除されない。
+      onStat: (name, key, n = 1) => {
+        const sock = [...clients].find(c => !c.isBot && c.user && sockName(c) === name);
+        const u = sock && sock.user ? db.users[sock.user.id] : null;
+        if (!u || !u.stats) return;
+        u.stats[key] = (u.stats[key] || 0) + n;
+        saveDb();
+      },
+      // 段を割った回に居合わせた人全員にバッジ
+      onDanBadge: (names) => {
+        for (const nm of names) {
+          const sock = [...clients].find(c => !c.isBot && c.user && sockName(c) === nm);
+          const u = sock && sock.user ? db.users[sock.user.id] : null;
+          if (!u) continue;
+          if (!u.badges.includes('zero')) u.badges.push('zero');
+        }
+        saveDb();
+      },
       // ゼロが2列以上消したら、席にいる人間の盤面にゴミが降る。
       // 既存の対戦の攻撃経路をそのまま使う。
       attack: (sx, lines, combo) => {
@@ -207,6 +226,14 @@ export function initBattle(server, deps) {
       e.ws.zeroId = sess.id;
       // 状態を展開すると type:'zero_state' が入っているので、
       // 後に置かないと zero_found が上書きされて消える（実際に消えた）。
+      // 前の枠の誰かが残した伝言があれば、ゼロが読み上げて茶々を入れる。
+      // 会ったことのない18時の人からの言伝が、21時の人に届く。
+      const will = zeroLatestWill(run);
+      if (will && !sess.willRead) {
+        sess.willRead = true;
+        zeroChat(`……前の方が言伝を残しています。「${will.text}」 ── ${will.by} より`,
+          `…The last one left you a message. "${will.text}" — from ${will.by}`);
+      }
       send(e.ws, {
         ...zeroStateView(sess, run),
         type: 'zero_found',
@@ -2200,6 +2227,28 @@ export function initBattle(server, deps) {
             }
           } else {
             send(ws, { type: 'error', error: r.why === 'already' ? 'もう投票しました' : '投票を受け付けられません' });
+          }
+          return;
+        }
+        // 📝 伝言 ── 段にとどめを刺した人だけが、次の枠へ40字残せる
+        case 'zero_will': {
+          const run = db.meta.adminEventRun;
+          if (!run || !zeroSessionOf(ws)) return;
+          if (!sockRate(ws, 'zeroWillTimes', 3, 60_000)) return;
+          const r = zeroWill(run, sockName(ws), String(msg.text || ''));
+          if (r.ok) {
+            saveDb();
+            send(ws, { type: 'zero_will_ok' });
+            // 伝言はその場の全員にも見せる（次の枠の人は開幕で読む）
+            broadcastAll({
+              type: 'announce',
+              message: `📝 ${sockName(ws)} が次の枠へ伝言を残した`,
+              messageEn: `📝 ${sockName(ws)} left a message for the next slot`,
+              from: '管理者ゼロ',
+            });
+          } else {
+            send(ws, { type: 'error', error: r.why === 'not-earned'
+              ? '伝言は、段にとどめを刺した人だけが残せます' : '伝言を入力してください' });
           }
           return;
         }

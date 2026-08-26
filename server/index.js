@@ -720,8 +720,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
 
 // Real players' notable moments go on the live feed (starred), and the crowd
 // may react. Capped per user so a hot streak doesn't flood the ticker.
-const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', abyss: '🌑', tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
-const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', under: 'Depths Conqueror', heaven: 'Ascent Conqueror', abyss: 'Abyss Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', adminevent: 'Admin Event', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination', ghost: 'Haunted House' };
+const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', abyss: '🌑', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
+const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', under: 'Depths Conqueror', heaven: 'Ascent Conqueror', abyss: 'Abyss Conqueror', zero: 'Condemned', tourney: 'Tournament Champion', royale: 'Royale #1', adminevent: 'Admin Event', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination', ghost: 'Haunted House' };
 const feedAt = new Map();   // userId -> last feed timestamp
 function postRealFeed(user, notes) {
   if (!notes.length) return;
@@ -2820,7 +2820,7 @@ const EDITABLE_STATS = [
   { key: 'royaleKills', label: 'ロイヤル通算KO', max: 1_000_000 },
 ];
 
-const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
+const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
 
 app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   const target = userById(req.params.id);
@@ -3534,6 +3534,27 @@ app.post('/api/admin/chat/say', requireAuth, requireAdmin, (req, res) => {
   const text = String(req.body.text || '').trim().slice(0, 200);
   const entry = battle.chatOps.say(text || undefined);
   res.json({ ok: true, from: entry.from, text: entry.text });
+});
+
+// 📜 断罪録 ── メニューからいつでも読める公開アーカイブ。
+//
+// その日ゼロが何を誰に向けて言ったかが、実名つきで時系列に残る。
+// 次の枠の人はこれを読んでから戦場に入る。ログインは要らない ——
+// 「自分の名前が世界の歴史に載る」ので、誰でも読めることに意味がある。
+app.get('/api/zero/chronicle', (_req, res) => {
+  const run = db.meta.adminEventRun;
+  if (!run || run.modeId !== 'zero') return res.json({ run: null });
+  res.json({
+    run: {
+      dayKey: run.dayKey,
+      dan: (run.dan | 0) + 1,
+      broken: run.broken || [],
+      // 慰霊碑: その日消えた住人と、誰の取りこぼしで消えたか
+      fallen: (run.fallen || []).map(x => ({ name: x.name, at: x.at })),
+      wills: run.wills || [],
+      log: (run.log || []).slice(-200),
+    },
+  });
 });
 
 // 👁️ 憑依 ── 管理者ゼロの口から、るみまきさんが打った言葉をそのまま出す。

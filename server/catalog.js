@@ -106,6 +106,11 @@ export const RAID_BOSSES = [
 
 // ---- Titles (称号) — earned from stats, one equippable ----
 export const TITLES = [
+  // 👁️ 断罪。負け側の勲章（名指しの常連）もあえて置いてある ——
+  // 落とした回数しか誇れない日もあるので。
+  { id: 'zerocut',   name: '断罪を斬りし者', color: '#e03546', desc: '封印を破るとどめを入れる' },
+  { id: 'zeronamed', name: '名指しの常連',   color: '#8b6cff', desc: '通算50回 名指しされる' },
+  { id: 'zeroseven', name: '七冠奪還',       color: '#f0b429', desc: '七段すべてが割れた日に参加している' },
   { id: 'rookie',   name: 'かけだしブロッカー', color: '#9aa3c7', desc: '1回プレイする' },
   { id: 'addict',   name: 'ブロック中毒',       color: '#43d9e8', desc: '50回プレイする' },
   { id: 'combo5',   name: 'コンボの申し子',     color: '#5ee86e', desc: '5コンボを達成' },
@@ -182,6 +187,10 @@ export function earnedTitles(user) {
   if (has('tourney')) out.push('tourneyking');
   if (has('royale')) out.push('apex100');
   if ((s.royaleKills || 0) >= 25) out.push('hunter');
+  // 👁️ 断罪
+  if ((s.zeroCuts || 0) >= 1) out.push('zerocut');      // 封印を破るとどめ
+  if ((s.zeroNamed || 0) >= 50) out.push('zeronamed');  // 名指しされた回数（負け側の勲章）
+  if (has('zero')) out.push('zeroseven');
   if ((s.aePlays || 0) >= 10) out.push('guest');
   if ((s.winStreak || 0) >= 5) out.push('streak5');
   if (s.rating >= 1500) out.push('diamond');

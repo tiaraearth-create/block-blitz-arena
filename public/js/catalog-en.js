@@ -84,6 +84,10 @@ export const CATALOG_EN = {
   tourneyking: { name: 'Tournament King', desc: 'Win an online tournament' },
   apex100: { name: 'Apex of 100', desc: 'Take #1 in Battle Royale' },
   hunter: { name: 'The Hunter', desc: '25 lifetime knockouts in Battle Royale' },
+  // 👁️ 断罪
+  zerocut: { name: 'Sealbreaker', desc: 'Land the blow that breaks a seal' },
+  zeronamed: { name: 'Marked', desc: 'Be condemned 50 times' },
+  zeroseven: { name: 'Seven Reclaimed', desc: 'Be there when all seven stages fall' },
   guest: { name: 'Honoured Guest', desc: 'Take part in 10 Admin Event runs' },
   streak5: { name: 'Streak Rider', desc: 'Win 5 ranked duels in a row' },
   diamond: { name: 'Diamond Pride', desc: 'Reach 1500 rating' },
