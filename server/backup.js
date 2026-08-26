@@ -12,6 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import { DATA_DIR } from './db.js';
+import { GUILD_ICONS } from './guilds.js';
 
 const SNAP_DIR = path.join(DATA_DIR, 'snapshots');
 const KEEP_SNAPSHOTS = 12;
@@ -21,6 +22,9 @@ export const BACKUP_VERSION = 2;
 // --- validation -----------------------------------------------------------
 
 // Returns { ok: true, stats } or { ok: false, error }.
+// 復元で受け付けるユーザー数の上限。
+export const MAX_RESTORE_USERS = 20_000;
+
 export function validateBackup(data) {
   if (!data || typeof data !== 'object') return { ok: false, error: 'バックアップの形式が不正です' };
   if (!data.users || typeof data.users !== 'object' || Array.isArray(data.users)) {
@@ -28,6 +32,13 @@ export function validateBackup(data) {
   }
   const users = Object.values(data.users);
   if (users.length === 0) return { ok: false, error: 'ユーザーが0件です。安全のため復元を中止しました' };
+  // 件数の上限。復元の後段にはユーザー1人あたり pbkdf2 を回す処理があり
+  // （1回13ms前後）、Node は1本の処理列で動くので、その間サーバー全体が
+  // 何も応答できなくなる。5万件詰めたファイルを1回投げるだけで10分以上
+  // 止められた。実在しうる規模から充分に離れた位置で頭を打たせる。
+  if (users.length > MAX_RESTORE_USERS) {
+    return { ok: false, error: `ユーザー数が多すぎます（${users.length}件 / 上限${MAX_RESTORE_USERS}件）` };
+  }
   for (const u of users) {
     if (!u || typeof u !== 'object' || !u.id || !u.username || !u.passHash || !u.salt) {
       return { ok: false, error: 'ユーザーレコードが壊れています（id/username/パスワードハッシュが必要）' };
@@ -43,6 +54,21 @@ export function validateBackup(data) {
       savedAt: data.meta && data.meta.backupAt ? data.meta.backupAt : null,
     },
   };
+}
+
+// 復元で入ってくるギルドは、これまで一切検証されていなかった。
+// 名前・タグ・説明はクライアント側でエスケープされているのに、アイコンだけが
+// 素通しで innerHTML に入るため、細工したアイコンを仕込んだデータを流し込むと、
+// ギルドランキング（ログイン不要で誰でも開ける）を見た全員に影響しえた。
+// 表示側も直したが、そもそも入れさせない。
+function sanitizeGuilds(guilds) {
+  const out = {};
+  for (const [id, g] of Object.entries(guilds)) {
+    if (!g || typeof g !== 'object') continue;
+    if (!Object.prototype.hasOwnProperty.call(guilds, id)) continue;
+    out[id] = { ...g, icon: GUILD_ICONS.includes(g.icon) ? g.icon : GUILD_ICONS[0] };
+  }
+  return out;
 }
 
 // How "far along" a user record is — used to pick a winner on username clashes.
@@ -154,7 +180,7 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     db.tokens = data.tokens && typeof data.tokens === 'object' ? data.tokens : {};
     if (data.season) db.season = data.season;
     if (Array.isArray(data.transactions)) db.transactions = data.transactions;
-    if (data.guilds && typeof data.guilds === 'object') db.guilds = data.guilds;
+    if (data.guilds && typeof data.guilds === 'object') db.guilds = sanitizeGuilds(data.guilds);
     if (Array.isArray(data.news)) db.news = data.news;
     if (Array.isArray(data.bugreports)) db.bugreports = data.bugreports;
     if (data.revoked && typeof data.revoked === 'object') db.revoked = data.revoked;
@@ -248,7 +274,8 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
   // clash); news is unioned by id.
   for (const key of ['revoked', 'deleted', 'guilds']) {
     if (data[key] && typeof data[key] === 'object' && !Array.isArray(data[key])) {
-      db[key] = { ...(data[key]), ...(db[key] || {}) };
+      const incoming = key === 'guilds' ? sanitizeGuilds(data[key]) : data[key];
+      db[key] = { ...incoming, ...(db[key] || {}) };
     }
   }
   if (Array.isArray(data.news)) {

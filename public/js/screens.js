@@ -3328,7 +3328,7 @@ function guildCard(g, { rank = null, clickable = true } = {}) {
   return `
     <div class="guild-card ${g.ghost ? '' : 'real'}" ${clickable ? `data-guild="${escapeHtml(g.id)}"` : ''}>
       ${rank ? `<div class="guild-rank">${rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : rank}</div>` : ''}
-      <div class="guild-icon">${g.icon}</div>
+      <div class="guild-icon">${escapeHtml(g.icon)}</div>
       <div class="guild-info">
         <div class="guild-name"><span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)} <small class="muted">Lv.${g.level}</small></div>
         <div class="guild-meta">${escapeHtml(g.desc || '')}</div>
@@ -3365,7 +3365,7 @@ function renderMyGuild() {
   const isOwner = g.ownerId === me;
   body.innerHTML = `
     <div class="guild-hero">
-      <div class="guild-hero-icon">${g.icon}</div>
+      <div class="guild-hero-icon">${escapeHtml(g.icon)}</div>
       <div>
         <div class="guild-hero-name"><span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)}</div>
         <div class="muted" style="font-size:12px">${escapeHtml(g.desc || tr('（説明なし）', '(no description)'))}</div>
@@ -3436,7 +3436,7 @@ async function showGuildModal(id) {
   try { g = (await api(`/api/guilds/${encodeURIComponent(id)}`)).guild; } catch (err) { toast(err.message, 'err'); return; }
   const canJoin = session.user && !(guildData && guildData.mine) && !g.ghost && g.open && g.memberCount < g.maxMembers;
   const m = showModal(`
-    <h2>${g.icon} <span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)}</h2>
+    <h2>${escapeHtml(g.icon)} <span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)}</h2>
     <p class="muted center" style="margin-bottom:8px">${escapeHtml(g.desc || '')}</p>
     <div class="guild-hero-stats" style="justify-content:center;margin-bottom:10px"><span>Lv.<b>${g.level}</b></span><span>${tr('週間', 'Weekly')} <b>${fmt(g.weeklyPoints)}</b>pt</span><span>👥 <b>${g.memberCount}</b>/${g.maxMembers}</span><span>🪙<b>+${g.bonusPct}%</b></span></div>
     <div class="ms-list" style="max-height:40vh;overflow-y:auto">

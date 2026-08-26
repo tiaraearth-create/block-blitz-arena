@@ -44,6 +44,16 @@ export function initBattle(server, deps) {
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 256 * 1024 });
   wss.on('error', err => console.error('[wss]', err && err.message));
   const clients = new Set();
+  // 接続の上限。以前は認証も上限も無く、無言のソケットを何本でも張れた
+  // （実測で200本つないでオンライン人数を 0→200 に水増しできた）。
+  // これが土台になって、リアクションの増幅・チャット制限のすり抜け・
+  // 対戦報酬の並列採掘が成立していた。
+  const MAX_SOCKETS = 400;              // 全体
+  const MAX_SOCKETS_PER_IP = 12;        // 同一IPあたり（家族や学校の共有を考慮して緩め）
+  const MAX_SOCKETS_PER_USER = 6;       // 同一アカウントあたり（PC＋スマホ＋予備）
+  const HELLO_GRACE_MS = 20_000;        // 名乗らない接続を切るまで
+  const ipCounts = new Map();
+  const sockIp = ws => (ws && ws._ip) || '?';
   const matches = new Map();               // matchId -> match
   const rooms = new Map();                 // code -> room
   const tourneys = new Map();              // id -> tournament
@@ -136,6 +146,18 @@ export function initBattle(server, deps) {
     persistChat();
   }
 
+  // 盤面は長さ64だけを見て中身は素通しだった。巨大な文字列を64個詰めれば
+  // 1回約250KB を他人へ中継させられる。数値以外は落とす。
+  function sanitizeGrid(g) {
+    if (!Array.isArray(g)) return null;
+    const out = new Array(64);
+    for (let i = 0; i < 64; i++) {
+      const v = Math.floor(Number(g[i]));
+      out[i] = Number.isFinite(v) && v >= 0 && v <= 8 ? v : 0;
+    }
+    return out;
+  }
+
   function reactOwnerKey(ws) {
     if (ws.user) return `u:${ws.user.id}`;
     if (!ws.reactId) ws.reactId = crypto.randomUUID();
@@ -145,6 +167,10 @@ export function initBattle(server, deps) {
   function applyReaction(entry, ownerKey, name, emoji) {
     let owners = reactOwners.get(entry.id);
     if (!owners) { owners = new Map(); reactOwners.set(entry.id, owners); }
+    // 参加者数に上限。以前は無制限で、1リアクションごとに全所有者名の配列を
+    // 全クライアントへ再送していたため、接続を増やすだけで送信量を膨らませられた
+    // （500接続で1人あたり約1MB）。
+    if (owners.size >= 200 && !owners.has(ownerKey)) return;
     const prev = owners.get(ownerKey);
     if (prev && prev.emoji === emoji) owners.delete(ownerKey);
     else owners.set(ownerKey, { emoji, name });
@@ -937,6 +963,7 @@ export function initBattle(server, deps) {
         }
         if (!p.forfeited) {
           rewards = applyGameResult(me, {
+            trusted: true,   // サーバーが勝敗を決めている
             mode: match.tourney ? 'tournament'
               : match.mode === 'team' ? 'team' : match.mode === 'raid' ? 'raid'
               : match.mode === 'coop' ? 'coop' : 'pvp',
@@ -1599,6 +1626,7 @@ export function initBattle(server, deps) {
     const payout = royalePayout(placement);
     if (me && e.ws.readyState === e.ws.OPEN) {
       rewards = applyGameResult(me, {
+        trusted: true,   // サーバーが順位を決めている（クライアント申告ではない）
         mode: 'royale', score: e.score, lines: e.lines, maxCombo: e.combo,
         pieces: e.pieces || 0,
         duration: Math.max(1, (Date.now() - r.startedAt) / 1000), won: placement === 1,
@@ -1818,7 +1846,31 @@ export function initBattle(server, deps) {
   // Socket lifecycle
   // -------------------------------------------------------------------------
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    const ip = String((req && req.socket && req.socket.remoteAddress) || '?');
+    ws._ip = ip;
+    if (clients.size >= MAX_SOCKETS) {
+      try { send(ws, { type: 'error', error: '接続数が上限に達しています。しばらくしてからお試しください' }); ws.close(); } catch { /* ignore */ }
+      return;
+    }
+    const n = (ipCounts.get(ip) || 0) + 1;
+    if (n > MAX_SOCKETS_PER_IP) {
+      try { send(ws, { type: 'error', error: '同時接続が多すぎます' }); ws.close(); } catch { /* ignore */ }
+      return;
+    }
+    ipCounts.set(ip, n);
+    ws.on('close', () => {
+      const c = (ipCounts.get(ip) || 1) - 1;
+      if (c > 0) ipCounts.set(ip, c); else ipCounts.delete(ip);
+    });
+    // 名乗らないまま居座る接続を切る。gateSocket は message 受信時にしか
+    // 走らないので、無言のソケットは ban もメンテナンスもすり抜けていた。
+    ws._helloTimer = setTimeout(() => {
+      if (!ws.greeted && !ws.user && !ws.guestName) {
+        try { ws.close(); } catch { /* ignore */ }
+      }
+    }, HELLO_GRACE_MS);
+    ws.on('close', () => clearTimeout(ws._helloTimer));
     clients.add(ws);
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
@@ -1865,9 +1917,31 @@ export function initBattle(server, deps) {
           }
           // 対戦画面に入った人は chat.js の常時接続と合わせて2本つないでいる。
           // 2本目を数えると「オンライン○人」が実人数の倍近くまで膨らむ。
+          // 同じアカウントで何十本も繋いで対戦を並列に回されると、
+          // REST 側の回数制限を迂回してコインを稼げてしまう（実測で8試合同時）。
+          if (user) {
+            let mine = 0;
+            for (const c of clients) if (c !== ws && c.user && c.user.id === user.id) mine++;
+            if (mine >= MAX_SOCKETS_PER_USER) {
+              send(ws, { type: 'error', error: '同じアカウントの接続が多すぎます' });
+              ws.close();
+              return;
+            }
+          }
           ws.secondary = msg.role === 'battle';
           ws.user = user ? { id: user.id, username: user.username } : null;
-          ws.guestName = user ? null : (sanitizeName(msg.guestName) || `ゲスト${Math.floor(Math.random() * 9999)}`);
+          // 登録済みの名前をゲストが名乗れてしまうと、チャットで管理者や
+          // 他人になりすませる（🛡️ の表示は role で出るので付かないが、
+          // 名前だけ見ている相手には区別がつかない）。使われている名前は避ける。
+          if (!user) {
+            const want = sanitizeName(msg.guestName) || '';
+            const taken = want && Object.values(db.users)
+              .some(u => u.username.toLowerCase() === want.toLowerCase());
+            ws.guestName = (want && !taken) ? want : `ゲスト${Math.floor(Math.random() * 9999)}`;
+            if (want && taken) send(ws, { type: 'error', error: 'その名前は使われています。別の名前になりました' });
+          } else {
+            ws.guestName = null;
+          }
           send(ws, {
             type: 'hello_ok',
             name: user ? user.username : ws.guestName,
@@ -1893,6 +1967,9 @@ export function initBattle(server, deps) {
           break;
         }
         case 'state': {
+          // 唯一レート制限が付いていなかった高頻度メッセージ。
+          // 正規のクライアントは 700〜900ms 間隔なので、余裕を持って毎秒4回。
+          if (!sockRate(ws, 'stateTimes', 40, 10_000)) return;
           // Battle royale: no match object — just track the live score.
           if (ws.royaleId) {
             const r = royales.get(ws.royaleId);
@@ -1909,7 +1986,7 @@ export function initBattle(server, deps) {
                 e.lines = Math.max(e.lines, Math.floor(Number(msg.lines) || 0));
                 e.combo = Math.max(e.combo, Math.floor(Number(msg.combo) || 0));
                 e.pieces = Math.max(e.pieces || 0, Math.min(20000, Math.floor(Number(msg.pieces) || 0)));
-                if (Array.isArray(msg.grid)) e.grid = msg.grid.slice(0, 64);
+                if (Array.isArray(msg.grid)) e.grid = sanitizeGrid(msg.grid);
                 e.lastSeen = Date.now();
               }
             }
@@ -1934,7 +2011,7 @@ export function initBattle(server, deps) {
             score: me.score,
             combo: Math.floor(Number(msg.combo) || 0),
             lines: me.lines,
-            grid: Array.isArray(msg.grid) ? msg.grid.slice(0, 64) : null,
+            grid: sanitizeGrid(msg.grid),
           });
           break;
         }

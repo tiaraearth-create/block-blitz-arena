@@ -101,7 +101,12 @@ const jsonParser = express.json({
   // Keep the raw body for Stripe webhook signature verification.
   verify: (req, _res, buf) => { req.rawBody = buf; },
 });
-const restoreParser = express.json({ limit: '64mb' });
+// 復元だけは本文が大きくなりうるので別枠。ただし 64MB は過大だった。
+// この読み込みは認証より前に走るうえ、gzip の自動展開が効いていたので、
+// 61KB のファイルが約63MB に膨らみ、20並列でメモリが 2.6GB まで伸びた
+// （Render starter は 512MB）。実在しうる規模から充分離れた位置に下げ、
+// 圧縮の自動展開も止める（正規の復元は素の JSON を送っている）。
+const restoreParser = express.json({ limit: '12mb', inflate: false });
 app.use((req, res, next) => {
   if (req.path === '/api/admin/restore') return restoreParser(req, res, next);
   return jsonParser(req, res, next);
@@ -109,14 +114,33 @@ app.use((req, res, next) => {
 // Body-parser failures must still answer JSON — the client shows `error`.
 app.use((err, _req, res, next) => {
   if (!err) return next();
-  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'ファイルが大きすぎます（最大64MB）' });
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'ファイルが大きすぎます（最大12MB）' });
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'JSONとして読み取れませんでした' });
   return next(err);
 });
 app.use(authMiddleware);
-app.use((_req, res, next) => {
+app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // このゲームは外部のスクリプトも外部への通信も使っていない（フォントも
+  // 画像も自前）。だから許可先を自分自身だけに絞れる。万一どこかに文字列を
+  // 差し込まれても、外へ持ち出す先が無くなる。
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",   // インラインstyle属性を多用しているため
+    "img-src 'self' data: blob:",
+    "media-src 'self' data: blob:",
+    "connect-src 'self' ws: wss:",
+    "frame-ancestors 'self'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; '));
+  // HTTPS でしか繋がないよう憶えさせる（本番のみ。ローカルのhttpを壊さない）。
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
   next();
 });
 app.use(express.static(path.join(__dirname, '..', 'public'), {
@@ -314,9 +338,22 @@ function publicUser(user) {
 }
 
 // Sanity-check and apply a finished game's rewards. Returns the reward summary.
-function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage }) {
+// サーバーが自分で勝敗を決めているモード。これらの結果は対戦の実処理
+// （server/battle.js）からしか受け付けない。クライアントが /api/game/result に
+// 「royale で勝った」と書いて送るだけで、その判定を丸ごと飛び越えられていた
+// （実測: 新規アカウントが239msで4,875ジェム＋バッジ11種を取得）。
+// スコアがクライアント申告なのは構造上そうだが、これは設計上の割り切りでは
+// なく単なる抜け穴だった。
+const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']);
+
+function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, trusted }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   mode = String(mode || 'solo');
+  // 対戦の実処理を経ていない申告は、ソロ扱いに落として報酬を出さない。
+  if (!trusted && SERVER_JUDGED_MODES.has(mode)) {
+    console.warn(`[cheat] ${user.username}: サーバー判定モード '${mode}' を直接申告（拒否）`);
+    return { rejected: true, reason: 'mode', coins: 0, gems: 0, xp: 0, badge: null, missions: [], levelUp: null };
+  }
   migrateUser(user);
   // Pay out last week's ranking BEFORE this game can overwrite a stale
   // stats.weekly record with the new week.
@@ -346,7 +383,12 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     const last = user.stats.lastResultAt || 0;
     // +90s of slack: a run can start before the previous one is submitted
     // (menus, result screens), and clocks drift.
-    const elapsed = last ? (now - last) / 1000 + 90 : 3600;
+    // 初回だけ 3600秒 の猶予を与えていたので、3600×500=180万点 が上限を
+    // 上回り、スコアの絶対上限100万点に対して**一度も発動しない**状態だった。
+    // しかもこの「初回」はセッション初回ではなくアカウント生涯の初回。
+    // 実測で、新規アカウントが1リクエストで王座を6つ独占できた。
+    // 通常の1プレイに必要なぶんだけ与える。
+    const elapsed = last ? (now - last) / 1000 + 90 : 300;
     if (duration > elapsed) duration = Math.max(1, Math.floor(elapsed));
     user.stats.lastResultAt = now;
   }
@@ -1301,6 +1343,12 @@ app.delete('/api/admin/guilds/:id', requireAuth, requireAdmin, (req, res) => {
 // instead of multiplying the launch announcements on every restore. Every seed
 // post is fully bilingual; boot also BACKFILLS titleEn/bodyEn onto copies that
 // were stored before the fields existed (so production news heals itself).
+// ⚠ ニュースはプレイヤーが読む場所。次のものは書かないこと:
+//   * 管理者だけが使う機能の話（管理画面・権限・運営の設定）
+//   * セキュリティ修正の中身。どこをどう塞いだかを公開すると、
+//     次に狙う場所を教えることになる。直したこと自体を書く必要も無い
+//   * 内部の実装用語。プレイヤーから見て何が変わるかだけを書く
+// 文面を直したいときは NEWS_BODY_REV を1つ増やす（公開済みも差し替わる）。
 const SEED_NEWS = [
   { id: 'seed-1', pinned: true,
     title: '🎉 v2.0 超進化アップデート！', titleEn: '🎉 The v2.0 Mega Evolution Update!',
@@ -1363,32 +1411,63 @@ const SEED_NEWS = [
     title: '🛡️ v2.11.1 遊んだまま更新できるように ＆ 大量のバグ修正',
     titleEn: '🛡️ v2.11.1 — Updates Without Losing Your Run, and a Pile of Fixes',
     body: '【🛡️ 遊んだまま更新できるようになりました】アップデートでサーバーを入れ替えるとき、これまでは遊んでいる最中の人が黙って切断されていました。これからは全員に予告が出て、進行中のものがきちんと終わります — オンライン対戦は引き分け（記録も報酬も残り、勝敗はどちらにもつきません）、バトルロイヤルはその時点の順位で確定、ソロやダンジョンは自動で保存して終了します。\n' +
-      '【🏰 AIのギルドが24個に】住人のギルドが8個から24個に増え、住人の数に応じて自然に増減するようになりました。これまでは600人いても8ギルド（160席）しか無く、大多数がどこにも所属できていませんでした。\n' +
-      '【🗳️ 住人も投票します】投票が始まると、住人たちが自分の性格に沿って票を入れるようになりました。管理者イベントの枠選びにも参加します。\n' +
-      '【📈 ランキングのAIを強化】住人の記録が「毎日ちょっとだけ動く数字」ではなく、本物の自己ベストのように伸びるようになりました — 伸び悩む時期があり、たまに一気に更新します。レートの上限も引き上げ（最高1900）、塔は95F止まり。100F制覇と時間の頂点は人間のものです。\n' +
-      '【👑 管理者アカウントの全解放】管理者は全モード・全ステージ・全アイテム・全称号・全実績を最初から解放済みになりました（表示だけでなく、実データとして解放されます）。\n' +
+      '【🏰 ダンジョン全4世界に報酬がつきました】🕳️地下と☁️天国は、これまで100階まで登ってもジェムが1個も出ず、到達階すら記録に残っていませんでした。地下は「上級者向け」と書いてあるのに塔より損をする状態だったので、難しさに見合う報酬に直しました。10階ごとにジェム、100階制覇で新バッジ「地底踏破」「天界踏破」が手に入ります。（塔700💎／地下1,050💎／天国700💎／深淵1,400💎）\n' +
+      '【🎁 共同作業の報酬を受け取れるようになりました】管理者イベント「🏛️共同作業」で、ゲージの段階目標を越えても報酬を受け取る場所がどこにも無く、実際には1枚も配られていませんでした。受け取りボタンを追加しました。\n' +
+      '【🏵️ 達成できない実績を直しました】「伝説の収集家」はアイテム45種が目標でしたが、そもそもゲームに37種しかありませんでした。永久に埋まらない実績だったので、正しく「全37種そろえる」に直しました。\n' +
+      '【🏰 住人のギルドが24個に】住人のギルドが8個から24個に増え、住人の数に応じて自然に増減するようになりました。これまでは600人いても8ギルド（160席）しか無く、大多数がどこにも所属できていませんでした。\n' +
+      '【🗳️ 住人も投票します】投票が始まると、住人たちが自分の性格に沿って票を入れるようになりました。イベントの枠選びにも参加します。\n' +
+      '【📈 ランキングの住人が強くなりました】住人の記録が「毎日ちょっとだけ動く数字」ではなく、本物の自己ベストのように伸びるようになりました — 伸び悩む時期があり、たまに一気に更新します。レートの上限も引き上げ（最高1900）、塔は95F止まり。100F制覇と時間の頂点は人間のものです。\n' +
       '【🎒 インベントリ】メニューに新しいインベントリ画面を追加。装備・アイテム・バッジ・王座を1か所で確認して、その場で着せ替えできます。\n' +
-      '【🔊 にぎわい調整】ロビーの住人は最大600人まで、チャットの速さも管理者設定から8倍まで上げられるようになりました。\n' +
-      '【🐛 バグ修正】スコアの詐称（プレイ時間を偽って報酬を水増しする手口）を塞ぎました／チャットの履歴が再起動で消えなくなりました／バックアップの復元に失敗したとき途中まで書き込まれたデータが残る不具合／日付の変わり目が日本時間からずれていた不具合（ログインボーナスと連続ログイン）／壊れたパスワード情報でログインすると500になる不具合／ギルドIDを細工するとサーバーが誤動作しうる不具合／英語表示に日本語のアイテム名・ボス名・称号・バッジ名がそのまま出ていた不具合／協力プレイで手札がズレると置けなくなる不具合／再戦のときに相手が別の部屋に入っていても引きずり出してしまう不具合／バトルロイヤルで回線が切れた人が生存者として順位に居座る不具合／オンライン人数が実際の約2倍に見えていた不具合 — ほか多数。',
+      '【🔊 ロビーがにぎやかに】ロビーの住人が最大600人までいるようになりました。\n' +
+      '【🐛 バグ修正】バトルロイヤルで、スマホのアプリを切り替えただけで失格になっていた不具合（回線が切れていないのに20秒よそ見すると脱落していました）／同時に脱落したとき、スコアの低い人が良い順位を取ることがあった不具合／協力プレイで手札がズレると置けなくなる不具合／再戦のときに相手が別の部屋に入っていても引きずり出してしまう不具合／オンライン人数が実際の約2倍に見えていた不具合／チャットの履歴が再起動で消えていた不具合／英語表示に日本語のアイテム名・ボス名・称号・バッジ名がそのまま出ていた不具合／日付の変わり目が日本時間からずれていた不具合（ログインボーナスと連続ログイン）／深淵ダンジョンを制覇しても専用のお祝いが出なかった不具合 — ほか多数。',
     bodyEn: '[🛡️ Updates without losing your run] Swapping the server for an update used to disconnect everyone mid-game without a word. Now everybody is warned and whatever is in progress is closed out properly: online matches end in a draw (the run and its rewards are kept, and nobody takes a loss), a battle royale locks in your placement at that moment, and solo or dungeon runs are saved and ended automatically.\n' +
-      '[🏰 24 AI guilds] Resident guilds grew from 8 to 24 and now scale with the resident population. With 600 residents there were only 8 guilds (160 seats), so most residents belonged nowhere.\n' +
-      '[🗳️ Residents vote] When a poll opens, residents now cast votes in line with their personalities — including on which admin-event slot to attend.\n' +
-      '[📈 Stronger ranking AI] Resident records now grow like real personal bests instead of drifting a little every day: they plateau, then break through. The rating ceiling was raised (1900 max) and the tower caps at floor 95 — clearing 100F and the time-attack summit stay human territory.\n' +
-      '[👑 Admin account fully unlocked] The admin account now starts with every mode, stage, item, title and achievement genuinely unlocked in the data, not just on screen.\n' +
+      '[🏰 All four dungeon realms now pay out] 🕳️ The Depths and ☁️ The Ascent gave no gems at all — not even a record of the floor you reached — no matter how far you climbed. The Depths is billed as the harder realm, yet clearing it paid strictly worse than the Tower. Rewards now match the difficulty: gems every 10 floors, plus the new badges Depths Conqueror and Ascent Conqueror for reaching floor 100. (Tower 700💎 / Depths 1,050💎 / Ascent 700💎 / Abyss 1,400💎)\n' +
+      '[🎁 The Great Work rewards can finally be collected] Clearing a gauge tier in 🏛️ The Great Work had nowhere to actually claim the reward, so not a single coin was ever handed out. There is now a collect button.\n' +
+      '[🏵️ An impossible achievement, fixed] Legendary Collector asked for 45 items when the game only has 37. It could never be completed, so it now correctly asks for all 37.\n' +
+      '[🏰 24 resident guilds] Resident guilds grew from 8 to 24 and now scale with the population. With 600 residents there were only 8 guilds (160 seats), so most residents belonged nowhere.\n' +
+      '[🗳️ Residents vote] When a poll opens, residents now cast votes in line with their personalities — including on which event slot to attend.\n' +
+      '[📈 Stronger residents on the leaderboards] Resident records now grow like real personal bests instead of drifting a little every day: they plateau, then break through. The rating ceiling was raised (1900 max) and the tower caps at floor 95 — clearing 100F and the time-attack summit stay human territory.\n' +
       '[🎒 Inventory] A new inventory screen in the menu: gear, items, badges and thrones in one place, with equipping right there.\n' +
-      '[🔊 Livelier lobby] Up to 600 residents in the lobby, and chat speed can be pushed to 8x from the admin settings.\n' +
-      '[🐛 Fixes] Closed a score-forgery hole (faking playtime to inflate rewards); chat history now survives a restart; a failed backup restore could leave half-written data behind; the day rollover was not using Japan time (login bonus and streaks); a corrupted password record returned a 500 instead of a login failure; a crafted guild ID could confuse the server; English text showed Japanese item, boss, title and badge names verbatim; a co-op hand desync made you unable to place anything; a rematch could drag an opponent out of another room; a player whose connection dropped stayed on the royale leaderboard as a survivor; the online player count read roughly double the real number — and more.' },
+      '[🔊 A livelier lobby] Up to 600 residents now fill the lobby.\n' +
+      '[🐛 Fixes] In Battle Royale, switching apps on a phone got you eliminated — your connection was fine, but looking away for 20 seconds knocked you out; when several players dropped at once the lower scorer could take the better placement; a co-op hand desync made you unable to place anything; a rematch could drag an opponent out of another room; the online player count read roughly double the real number; chat history vanished on restart; English text showed Japanese item, boss, title and badge names verbatim; the day rollover was not using Japan time (login bonus and streaks); conquering the Abyss gave no special celebration — and more.' },
 ];
 
+// ニュース本文の改訂番号。SEED_NEWS の文面を書き直したら1つ増やすと、
+// すでに公開済みの投稿も次の起動で1度だけ差し替わる。
+//
+// これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
+// 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
+// v2.11.1 の本文を差し替えるのに必要になった。
+const NEWS_BODY_REV = 2;
+
+// id で引いたユーザー。`__proto__` や `constructor` を渡されると
+// Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
+// （実測で、モデレーターが1回の操作で管理者を含む全員をミュートできた）。
+// 自前のキーであることを確かめてから返す。
+function userById(id) {
+  const key = String(id == null ? '' : id);
+  return Object.prototype.hasOwnProperty.call(db.users, key) ? db.users[key] : undefined;
+}
 function seedNews() {
   // ループ内で push すると2件目以降の判定が狂うので「元から空だったか」を先に確定
   const hadNews = db.news.length > 0;
+  const refresh = (db.meta.newsBodyRev || 0) < NEWS_BODY_REV;
+  let refreshed = 0;
   for (const p of SEED_NEWS) {
     const existing = db.news.find(n => n && (n.id === p.id || n.title === p.title));
     if (existing) {
       // 既存の日本語のみの投稿に英語を後から補完（本番が自己修復する）
       if (!existing.titleEn) existing.titleEn = p.titleEn;
       if (!existing.bodyEn) existing.bodyEn = p.bodyEn;
+      // 文面の改訂。投稿日時（at）は変えない — 「新着」に戻して
+      // 全員に赤い印を出し直すのは、直しただけなのに騒がしい。
+      if (refresh && (existing.body !== p.body || existing.title !== p.title)) {
+        existing.title = p.title;
+        existing.titleEn = p.titleEn;
+        existing.body = p.body;
+        existing.bodyEn = p.bodyEn;
+        refreshed++;
+      }
       continue;
     }
     // seed-1..4 は初期ロビー用 — ニュースが既に流れているサーバーには足さない
@@ -1397,6 +1476,10 @@ function seedNews() {
       id: p.id, title: p.title, titleEn: p.titleEn, body: p.body, bodyEn: p.bodyEn,
       pinned: !!p.pinned, by: 'るみまき', at: Date.now(),
     });
+  }
+  if (refresh) {
+    db.meta.newsBodyRev = NEWS_BODY_REV;
+    if (refreshed) console.log(`[news] お知らせ ${refreshed}件の本文を最新版に差し替えました`);
   }
   unpinOldReleaseNotes();
 }
@@ -1934,6 +2017,12 @@ app.post('/api/adminevent/cancel', requireAuth, (req, res) => {
 // world state (one boss / one gauge / one board per event day), so the 18:00
 // crowd and the 21:00 crowd are demonstrably working on the same thing.
 app.post('/api/adminevent/result', requireAuth, maintenanceGuard, (req, res) => {
+  // /api/game/result と同じ回数制限。ここだけ無かったので、枠の30分間
+  // ジェムを1回40個ずつ何度でも取れた（枠は誰でも自分で予約できる）。
+  if (!rateLimit(`aeresult:${req.user.id}`, 30, 60 * 1000)
+      || !rateLimit(`aeresulth:${req.user.id}`, 250, 60 * 60 * 1000)) {
+    return res.status(429).json({ error: '送信が多すぎます。しばらく待ってください' });
+  }
   const schedule = getAeSchedule(db);
   const live = schedule.enabled ? aeLiveSlotFor(schedule, req.user) : null;
   if (!live) return res.status(403).json({ error: 'いまはあなたの枠の時間ではありません' });
@@ -1945,7 +2034,17 @@ app.post('/api/adminevent/result', requireAuth, maintenanceGuard, (req, res) => 
   // Same anti-cheat ceiling the normal result path uses, then the event's own
   // reward multiplier on top (🎁 お宝ラッシュ).
   const body = req.body || {};
-  const duration = Math.max(1, Math.min(3600, Number(body.duration) || 1));
+  let duration = Math.max(1, Math.min(3600, Number(body.duration) || 1));
+  // duration はクライアント申告なので、/api/game/result と同じく
+  // 「前回の提出からの実経過時間」で頭を押さえる。ここが無かったので
+  // duration:3600 を書くだけで毎回 score=1,000,000 を通せた。
+  {
+    const now = Date.now();
+    const last = req.user.stats.lastResultAt || 0;
+    const elapsed = last ? (now - last) / 1000 + 90 : 300;
+    if (duration > elapsed) duration = Math.max(1, Math.floor(elapsed));
+    req.user.stats.lastResultAt = now;
+  }
   let score = Math.max(0, Math.min(1_000_000, Math.floor(Number(body.score) || 0)));
   if (score > duration * 500) score = Math.floor(duration * 500);
 
@@ -2668,7 +2767,7 @@ function adminUserView(u) {
 }
 
 app.get('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
-  const u = db.users[req.params.id];
+  const u = userById(req.params.id);
   if (!u) return res.status(404).json({ error: 'ユーザーが見つかりません' });
   migrateUser(u);
   res.json({
@@ -2715,7 +2814,7 @@ const EDITABLE_STATS = [
 const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
 
 app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
-  const target = db.users[req.params.id];
+  const target = userById(req.params.id);
   if (!target) return res.status(404).json({ error: 'ユーザーが見つかりません' });
   // Repair FIRST, not last: the branches below assume a complete record, and a
   // legacy or restored one could make them throw a 500 or write NaN before the
@@ -2954,13 +3053,13 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
 
 
 app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
-  const target = db.users[req.params.id];
+  const target = userById(req.params.id);
   if (!target) return res.status(404).json({ error: 'ユーザーが見つかりません' });
   if (target.role === 'admin') return res.status(400).json({ error: '管理者は削除できません' });
   revokeAllTokens(req.params.id);
   adminLog(req, 'user_delete', target.username, { id: req.params.id });
   leaveGuild(db, target);   // same reason as DELETE /api/me — before the record goes
-  delete db.users[req.params.id];
+  if (Object.prototype.hasOwnProperty.call(db.users, String(req.params.id))) delete db.users[String(req.params.id)];
   db.deleted[req.params.id] = Date.now();
   saveDb();
   res.json({ ok: true });
@@ -3072,7 +3171,7 @@ app.post('/api/admin/restore', (req, res) => {
     const pw = String(body.password || '');
     if (!pw) return res.status(401).json({ error: '管理者パスワードを入力してください' });
 
-    const liveAdmins = Object.values(db.users).filter(u => u.role === 'admin');
+    const liveAdmins = Object.values(db.users).filter(u => u.role === 'admin').slice(0, 8);
     const liveMatch = liveAdmins.find(u => verifyPassword(pw, u.salt, u.passHash));
     if (liveMatch) {
       actor = { username: liveMatch.username };
@@ -3096,7 +3195,11 @@ app.post('/api/admin/restore', (req, res) => {
         });
       }
 
-      const fileAdmins = Object.values(data.users).filter(u => u.role === 'admin');
+      // 照合1回につき pbkdf2 が約13ms かかり、その間サーバーは他の処理を
+      // 一切できない（Node は1本の処理列で動く）。管理者を大量に詰めた
+      // ファイルを1回投げるだけで数分〜十数分の完全停止を作れた。
+      // 正規のバックアップに管理者が何十人も入ることはないので、頭を打たせる。
+      const fileAdmins = Object.values(data.users).filter(u => u.role === 'admin').slice(0, 8);
       const fileMatch = fileAdmins.find(u => verifyPassword(pw, u.salt, u.passHash));
       // `replace` destroys whatever is live. Doing that needs the CURRENT
       // password, not one supplied inside the file being uploaded.
@@ -3130,7 +3233,13 @@ app.post('/api/admin/restore', (req, res) => {
   }
 
   // Dry run: let the admin see what would happen before committing.
-  if (body.dryRun) return res.json({ preview: check.stats, mode, actor: actor.username });
+  // 下見。以前は管理者名（誰のパスワードが当たったか）まで返していたので、
+  // 未ログインからパスワードの当たり判定と管理者名の両方を引き出せた。
+  // 名前は返さず、記録も残す。
+  if (body.dryRun) {
+    adminLog(req, 'restore-dryrun', actor.username, { mode, fromBackup: !!actor.fromBackup, users: check.stats.users });
+    return res.json({ preview: check.stats, mode });
+  }
 
   adminLog(req, 'restore', actor.username, { mode, fromBackup: !!actor.fromBackup, users: check.stats.users });
   const snap = snapshot(db, 'pre-restore');
@@ -3267,7 +3376,7 @@ app.get('/api/mod/users', requireAuth, requireMod, (_req, res) => {
 });
 
 app.post('/api/mod/mute', requireAuth, requireMod, (req, res) => {
-  const target = db.users[String(req.body.id || '')];
+  const target = userById(req.body.id);
   if (!target) return res.status(404).json({ error: 'ユーザーが見つかりません' });
   if (target.role === 'admin' || target.role === 'mod') {
     return res.status(400).json({ error: '運営メンバーはミュートできません' });

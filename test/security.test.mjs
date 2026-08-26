@@ -191,6 +191,78 @@ try {
       `bestScore=${after.stats.bestScore}（7200秒を申告しても1,000,000は通らない）`);
     check('稼げるコインも有限にとどまる', after.coins < 5000, `${after.coins}🪙`);
   }
+
+  // ---------------------------------------------------------------------
+  // サーバーが勝敗を決めるモードは、直接申告できない
+  // ---------------------------------------------------------------------
+  // 監査で、新規アカウントが239msで4,875ジェム＋バッジ11種を取得できた。
+  // /api/game/result に mode:'royale', won:true と書いて送るだけで、
+  // server/battle.js が持っているサーバー側の勝敗判定を丸ごと飛び越えられた。
+  {
+    const g = await j('/api/register', { method: 'POST', body: { username: '直接申告太郎', password: 'pass1234' } });
+    const gt = g.token;
+    const before = (await j('/api/me', {}, gt)).user;
+    for (const mode of ['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']) {
+      await j('/api/game/result', { method: 'POST', body: { mode, won: true, score: 900000, lines: 400, maxCombo: 30, duration: 600 } }, gt);
+    }
+    const after = (await j('/api/me', {}, gt)).user;
+    check('サーバー判定モードを直接申告してもジェムが増えない',
+      after.gems === before.gems, `${before.gems}→${after.gems}💎`);
+    check('バッジも付かない', (after.badges || []).length === (before.badges || []).length,
+      `${(before.badges || []).length}→${(after.badges || []).length}種`);
+    check('勝ち星も増えない', (after.stats.pvpWins || 0) === 0, `pvpWins=${after.stats.pvpWins}`);
+  }
+
+  // ---------------------------------------------------------------------
+  // アカウント生涯の初回でも、スコアの上限は効く
+  // ---------------------------------------------------------------------
+  // 初回だけ猶予3600秒を与えていたため、3600×500=180万点 が絶対上限の
+  // 100万点を上回り、上限チェックが一度も発動しなかった。
+  // 実測で、新規アカウントが1リクエストで王座を6つ独占できた。
+  {
+    const v = await j('/api/register', { method: 'POST', body: { username: '初回一撃太郎', password: 'pass1234' } });
+    await j('/api/game/result', { method: 'POST', body: { mode: 'solo', score: 1000000, lines: 900, maxCombo: 99, duration: 7200 } }, v.token);
+    const me = (await j('/api/me', {}, v.token)).user;
+    check('初回でも100万点は通らない', me.stats.bestScore < 1000000, `bestScore=${me.stats.bestScore}`);
+    check('初回の上限が妥当な範囲', me.stats.bestScore <= 300 * 500, `bestScore=${me.stats.bestScore} (上限 ${300 * 500})`);
+  }
+
+  // ---------------------------------------------------------------------
+  // __proto__ を id に渡しても、全ユーザーに波及しない
+  // ---------------------------------------------------------------------
+  // db.users['__proto__'] は Object.prototype を返す。そこに muted:true を
+  // 書けたので、モデレーターが1回の操作で管理者を含む全員をミュートできた。
+  {
+    const r = await j('/api/mod/mute', { method: 'POST', body: { id: '__proto__', muted: true } }, adminTok);
+    check('__proto__ を渡しても成功しない', r.status !== 200, `HTTP ${r.status}`);
+    const someone = await j('/api/register', { method: 'POST', body: { username: '巻き添え太郎', password: 'pass1234' } });
+    const me = (await j('/api/me', {}, someone.token)).user;
+    check('無関係なユーザーがミュートされていない', !me.muted, `muted=${me.muted}`);
+  }
+
+  // ---------------------------------------------------------------------
+  // 復元で受け付けるユーザー数に上限がある（1回で数分止められた）
+  // ---------------------------------------------------------------------
+  {
+    const many = { users: {} };
+    for (let i = 0; i < 25000; i++) {
+      many.users['u' + i] = { id: 'u' + i, username: 'u' + i, passHash: 'x'.repeat(64), salt: 'y', role: 'admin' };
+    }
+    const r = await j('/api/admin/restore', { method: 'POST', body: { data: many, mode: 'merge', password: 'nope' } }, adminTok);
+    check('巨大すぎるバックアップは弾かれる', r.status === 400, `HTTP ${r.status} ${r.error || ''}`);
+  }
+
+  // ---------------------------------------------------------------------
+  // セキュリティヘッダ
+  // ---------------------------------------------------------------------
+  {
+    const res = await fetch(BASE + '/');
+    const csp = res.headers.get('content-security-policy') || '';
+    check('CSP が付いている', csp.includes("default-src 'self'"), csp.slice(0, 50));
+    check('外部スクリプトを許可していない', csp.includes("script-src 'self'") && !csp.includes('unsafe-eval'), '');
+    check('Referrer-Policy が付いている', !!res.headers.get('referrer-policy'), '');
+    check('X-Content-Type-Options が付いている', res.headers.get('x-content-type-options') === 'nosniff', '');
+  }
 } catch (err) {
   check('test harness', false, err.stack || String(err));
 } finally {
