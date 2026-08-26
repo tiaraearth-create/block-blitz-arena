@@ -123,13 +123,26 @@ try {
   // Schedule TODAY, with a slot that opened a minute ago → live right now.
   const pad = n => String(n).padStart(2, '0');
   const nowJst = new Date(Date.now() + 9 * 3600 * 1000);
-  const liveAt = `${pad(nowJst.getUTCHours())}:${pad(Math.max(0, nowJst.getUTCMinutes() - 1))}`;
-  const later = `${pad((nowJst.getUTCHours() + 3) % 24)}:00`;
+  // 実時刻に依存するので、分の引き算ではなく「1分前」の実インスタントから
+  // 組み立てる（`HH:(MM-1)` は MM=0 のとき HH:00 になり、30分枠だと実行時刻に
+  // よっては既に終わっていた — 分によって落ちるテストになっていた）。
+  const DUR = 30;
+  const oneMinAgo = new Date(Date.now() - 60000 + 9 * 3600000);
+  const liveMin = oneMinAgo.getUTCHours() * 60 + oneMinAgo.getUTCMinutes();
+  const hhmm = m => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+  // 2枠目は DUR 以上あけ、かつ日をまたがないところに置く。
+  let laterMin = liveMin + 120;
+  if (laterMin + DUR > 24 * 60) laterMin = liveMin + DUR;
+  const twoSlots = laterMin + DUR <= 24 * 60;   // 深夜すぎると2枠は作れない
+  const liveAt = hhmm(liveMin);
+  const later = hhmm(laterMin);
+  const slots = twoSlots ? [liveAt, later] : [liveAt];
+  if (!twoSlots) console.log('  （JSTが深夜のため2枠目のテストはスキップ）');
   let r = await api('/api/admin/adminevent', {
     method: 'POST', token: atk,
-    body: { enabled: true, weekday: nowJst.getUTCDay(), slots: [liveAt, later], durationMin: 30, rotation: 'invasion', rewardMult: 2 },
+    body: { enabled: true, weekday: oneMinAgo.getUTCDay(), slots, durationMin: DUR, rotation: 'invasion', rewardMult: 2 },
   });
-  check('スケジュールを保存できる', r.status === 200, r.d.error || '');
+  check('スケジュールを保存できる', r.status === 200, r.d.error || `slots=${slots.join(',')}`);
 
   r = await api('/api/adminevent');
   check('未ログインでも予定は見える', r.status === 200 && !!r.d.event, r.d.event ? r.d.event.dayKey : 'null');
@@ -146,11 +159,12 @@ try {
   // 早番さん takes the live slot; 遅番さん takes the later one.
   r = await api('/api/adminevent/reserve', { method: 'POST', token: t1, body: { slotId: 0 } });
   check('早番さんが開催中の枠を予約', r.status === 200 && r.d.event.mine.slotId === 0, r.d.error || '');
-  r = await api('/api/adminevent/reserve', { method: 'POST', token: t2, body: { slotId: 1 } });
-  check('遅番さんが後の枠を予約', r.status === 200 && r.d.event.mine.slotId === 1, r.d.error || '');
-
-  r = await api('/api/adminevent/result', { method: 'POST', token: t2, body: { score: 5000, duration: 120 } });
-  check('自分の枠が来る前は遊べない(403)', r.status === 403, r.d.error || '');
+  if (twoSlots) {
+    r = await api('/api/adminevent/reserve', { method: 'POST', token: t2, body: { slotId: 1 } });
+    check('遅番さんが後の枠を予約', r.status === 200 && r.d.event.mine.slotId === 1, r.d.error || '');
+    r = await api('/api/adminevent/result', { method: 'POST', token: t2, body: { score: 5000, duration: 120 } });
+    check('自分の枠が来る前は遊べない(403)', r.status === 403, r.d.error || '');
+  }
 
   const before = (await api('/api/me', { token: t1 })).d.user.coins;
   r = await api('/api/adminevent/result', { method: 'POST', token: t1, body: { score: 9000, lines: 30, maxCombo: 5, duration: 120, pieces: 60 } });
@@ -167,8 +181,10 @@ try {
   // /api/status carries the personalised block (this is what the banner reads).
   r = await api('/api/status', { token: t1 });
   check('/api/status に自分の枠が載る', !!(r.d.adminEvent && r.d.adminEvent.live && r.d.adminEvent.mine), JSON.stringify(r.d.adminEvent && r.d.adminEvent.mine));
-  r = await api('/api/status', { token: t2 });
-  check('枠が来ていない人には live が出ない', !!(r.d.adminEvent && !r.d.adminEvent.live && r.d.adminEvent.mine), '');
+  if (twoSlots) {
+    r = await api('/api/status', { token: t2 });
+    check('枠が来ていない人には live が出ない', !!(r.d.adminEvent && !r.d.adminEvent.live && r.d.adminEvent.mine), '');
+  }
 
   // Switching the mode mid-day must not keep grinding the old mode's state.
   r = await api('/api/admin/adminevent', { method: 'POST', token: atk, body: { rotation: 'communal' } });

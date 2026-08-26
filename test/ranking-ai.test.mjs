@@ -108,12 +108,20 @@ const snap = t => roster.map(r => JSON.stringify(residentStats(r, t, 'W100')));
 }
 
 // ---- 人間が勝てる余地があること --------------------------------------------
+//
+// 住人は日が経つほど強くなる設計なので、上限を明示していないと半年後には
+// 人間が到達しうる値を追い越してしまう。「いま」だけでなく1000日後も
+// 頭打ちになっていることを確かめる。
 {
-  const st = registered.map(r => residentStats(r, NOON_JST, 'W100'));
-  const top = k => Math.max(...st.map(s => s[k]));
-  check('ハイスコアの頂点は人間の射程内', top('bestScore') < 160000, `最高 ${top('bestScore')}`);
-  check('レートの頂点は人間の射程内', top('rating') < 1900, `最高 ${top('rating')}`);
-  check('ダンジョン100Fは住人には踏破できない（人間だけの称号）', top('dungeonMax') < 100, `最高 ${top('dungeonMax')}F`);
+  for (const days of [0, 90, 365, 1000]) {
+    const at = NOON_JST + days * DAY;
+    const st = registered.map(r => residentStats(r, at, 'W100'));
+    const top = k => Math.max(...st.map(s => s[k]));
+    check(`+${days}日: ハイスコアが上限内`, top('bestScore') <= 160000, `最高 ${top('bestScore')}`);
+    check(`+${days}日: レートが上限1900以内`, top('rating') <= 1900, `最高 ${top('rating')}`);
+    check(`+${days}日: 塔100Fは人間だけ（住人は95F止まり）`, top('dungeonMax') <= 95, `最高 ${top('dungeonMax')}F`);
+    check(`+${days}日: タイムアタックは人間の射程内`, top('sprintBest') < 60000, `最高 ${top('sprintBest')}`);
+  }
 }
 
 // ---- 速度: ランキングは頻繁に叩かれる ---------------------------------------

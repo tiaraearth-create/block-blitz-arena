@@ -236,10 +236,10 @@ function aptitude(r, mode) {
 // age に対して単調（更新しかしない）で、同じ日なら何度呼んでも同じ。
 const MAX_STEPS = 60;
 function personalBest(r, age, key, base, span, apt) {
-  const cadence = 2 + Math.floor(unit(r.id, `${key}c`) * 5);          // 2〜6日おきに挑戦
+  const cadence = 2 + Math.floor(unit(r.id, `${key}c`) * 4);          // 2〜5日おきに挑戦
   const offset = Math.floor(unit(r.id, `${key}o`) * cadence);          // 全員が同じ日に伸びない
   const steps = Math.min(MAX_STEPS, Math.max(0, Math.floor((age + offset) / cadence)));
-  const patience = 14 + (1 - r.skill) * 45;                            // 上手いほど早く頭打ち
+  const patience = 9 + (1 - r.skill) * 30;                             // 上手いほど早く頭打ち
   let best = base;
   for (let i = 0; i <= steps; i++) {
     const ceil = base + span * apt * (1 - Math.exp(-i / patience));
@@ -268,13 +268,16 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   // レートは実力に長期の伸びを足し、そこに調子が乗る形。
   const climb = 1 - Math.exp(-age / (30 + (1 - s) * 60));
   const aptPvp = aptitude(r, 'pvp');
-  const rating = Math.round(850 + Math.pow(s, 1.3) * 950 * aptPvp * (0.72 + 0.28 * climb) + mood * 70);
+  // 上限は明示する。伸び続ける設計なので、放っておくと半年後には理論値2140に
+  // 達して人間が到達しうるレートを追い越してしまう。1900 = マスター帯の上。
+  const rating = Math.min(1900, Math.round(850 + Math.pow(s, 1.3) * 1080 * aptPvp * (0.72 + 0.28 * climb) + mood * 70));
   const level = Math.max(1, Math.min(60, 1 + Math.floor(age * (0.08 + s * 0.25))));
   // ここから下は全部「自己ベスト」— 練習日に更新され、下がらず、住人ごとに
   // 更新日がずれる。得意ボードほど天井が高い。
-  const scoreSpan = 4000 + Math.pow(s, 2) * 150000;
+  const scoreSpan = 5000 + Math.pow(s, 2) * 230000;
   const bestScore = Math.min(160000, personalBest(r, age, 'sc', 2500, scoreSpan, aptitude(r, 'solo')));
-  const dungeonMax = Math.min(100, 1 + personalBest(r, age, 'dg', 0, Math.pow(s, 1.4) * 105, aptitude(r, 'dungeon')));
+  // 95止まり: 塔100F制覇（🏰バッジ）は人間だけのものにしておく。
+  const dungeonMax = Math.min(95, 1 + personalBest(r, age, 'dg', 0, Math.pow(s, 1.3) * 125, aptitude(r, 'dungeon')));
   const wk = unit(r.id, weekId);
   const weeklyMix = s * 0.6 + wk * 0.4;
   const badges = [];
@@ -309,9 +312,9 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
     // 「その週の調子」で決まる（本物のウィークリーと同じ性質）。
     weeklyBest: Math.floor(Math.pow(weeklyMix, 2) * 30000 * aptitude(r, 'weekly') * (0.8 + 0.4 * ((mood + 1) / 2)) + 800),
     // かつては住人ごとの定数で、何日経っても1ミリも動かなかった箇所。
-    sprintBest: personalBest(r, age, 'sp', 600, Math.pow(s, 2) * 20000, aptSprint),
-    sprint180: personalBest(r, age, 's3', 2000, Math.pow(s, 2) * 62000, aptSprint),
-    survivalWave: Math.max(1, Math.min(99, personalBest(r, age, 'sv', 3, s * 30, aptitude(r, 'survival')))),
+    sprintBest: personalBest(r, age, 'sp', 600, Math.pow(s, 2) * 30000, aptSprint),
+    sprint180: personalBest(r, age, 's3', 2000, Math.pow(s, 2) * 92000, aptSprint),
+    survivalWave: Math.max(1, Math.min(99, personalBest(r, age, 'sv', 3, s * 42, aptitude(r, 'survival')))),
     badges, title,
   };
 }

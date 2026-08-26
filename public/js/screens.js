@@ -1,6 +1,6 @@
 // Sub-screens: auth modal, leaderboard, shop, battle pass, admin panel.
 import { session, api, setToken, refreshMe } from './net.js';
-import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar, confettiBurst, rankOf, staffUiOn, setStaffUi } from './dom.js';
+import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar, confettiBurst, rankOf, staffUiOn, setStaffUi, staffExtras } from './dom.js';
 import { getSkin, BOARDS } from './themes.js';
 import { audio, TRACK_INFO } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
@@ -283,8 +283,8 @@ function showCreditsModal() {
     <h2>BLOCK BLITZ ARENA</h2>
     <div class="result-stats" style="margin-top:10px">
       <div class="rs-row"><span>${tr('企画・運営', 'Produced by')}</span><b>るみまき</b></div>
-      <div class="rs-row"><span>${tr('開発・プログラム', 'Development')}</span><b>Claude (Anthropic) × るみまき</b></div>
-      <div class="rs-row"><span>${tr('ゲームデザイン', 'Game design')}</span><b>るみまき & Claude</b></div>
+      <div class="rs-row"><span>${tr('開発・プログラム', 'Development')}</span><b>るみまき</b></div>
+      <div class="rs-row"><span>${tr('ゲームデザイン', 'Game design')}</span><b>るみまき</b></div>
       <div class="rs-row"><span>${tr('音楽・効果音', 'Music & SFX')}</span><b>${tr('オリジナル（WebAudioシンセ）', 'Original (WebAudio synth)')}</b></div>
       <div class="rs-row"><span>${tr('グラフィック', 'Graphics')}</span><b>${tr('Canvas 手描きレンダリング', 'Hand-drawn Canvas rendering')}</b></div>
       <div class="rs-row"><span>Special Thanks</span><b>${tr('遊んでくれるキミ！', 'YOU, for playing!')}</b></div>

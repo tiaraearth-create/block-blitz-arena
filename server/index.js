@@ -3340,6 +3340,60 @@ function pinAdminPassword() {
   console.log(`[admin] 管理者パスワードを環境変数 ADMIN_PASSWORD に固定しました`);
 }
 
+// 管理者は「表示だけ全部持っている」状態だった: publicUser が owned を丸ごと
+// 差し替え、バトルパスをプレミアム扱いで返すだけで、レコードの中身は空。
+// そのためインベントリのように user.owned / badges / achievements を素直に
+// 読む画面では何も出ない（見えているものが実在しない）。
+// ここで実データとして全部持たせる。ランキングは元から管理者を除外している
+// ので、統計を最大にしても順位表は汚れない。
+function unlockEverythingForStaff() {
+  const admins = Object.values(db.users).filter(u => u.role === 'admin');
+  for (const u of admins) {
+    migrateUser(u);
+    const before = (u.owned || []).length + (u.badges || []).length;
+    // ショップ・ガチャ限定・管理者専用まで全部
+    u.owned = [...new Set([...(u.owned || []), ...SHOP_ITEMS.map(i => i.id)])];
+    u.badges = [...new Set([...(u.badges || []), ...ADMIN_KNOWN_BADGES])];
+    // 全実績を解除済みに（受け取り済みリストなので、進捗は統計側で満たす）
+    u.achievements = [...new Set([...(u.achievements || []), ...ACHIEVEMENTS.map(a => a.id)])];
+    // ブースターは無限のかわりに大量に持たせる（0だと使えない画面がある）
+    u.items = u.items || {};
+    for (const it of BOOST_ITEMS) u.items[it.id] = Math.max(u.items[it.id] || 0, 999);
+    // 称号・実績・モード解放はすべて統計から導出されるので、そこを満たす。
+    const s = u.stats;
+    const atLeast = (k, v) => { if ((s[k] || 0) < v) s[k] = v; };
+    atLeast('gamesPlayed', 500); atLeast('bestScore', 300000); atLeast('totalScore', 5000000);
+    atLeast('totalLines', 20000); atLeast('maxCombo', 20); atLeast('rating', 1700);
+    atLeast('pvpWins', 100); atLeast('winStreakBest', 10);
+    atLeast('bossMax', BOSSES.length); atLeast('dungeonMax', 100); atLeast('abyssMax', 100);
+    atLeast('survivalWave', 30); atLeast('puzzleStage', 60); atLeast('digDepth', 60);
+    atLeast('loginStreakBest', 30); atLeast('sprintPlays', 50); atLeast('coopPlays', 20);
+    atLeast('ultsUsed', 600); atLeast('itemsUsed', 600); atLeast('piecesPlaced', 30000);
+    atLeast('gachaPulls', 100); atLeast('gachaSSR', 20); atLeast('ghostBest', 20000);
+    atLeast('royalePlays', 50); atLeast('royaleTop10', 10); atLeast('royaleKills', 50);
+    atLeast('royaleBestKills', 5); atLeast('aePlays', 20);
+    // 残り9称号ぶんの条件（連勝・奥義500・ミッション300・協力2万点・
+    // ギルド週2000pt・全ボスSランク・無限地獄深度12・チャット300回）
+    atLeast('winStreak', 10); atLeast('missionsDone', 300); atLeast('coopBest', 30000);
+    atLeast('guildBestWeek', 3000); atLeast('rushDepth', 20); atLeast('chatMessages', 300);
+    if (!s.royaleBest || s.royaleBest > 1) s.royaleBest = 1;
+    s.bossRanks = s.bossRanks || {};
+    for (const b of BOSSES) s.bossRanks[b.id] = 'S';
+    s.sprint = s.sprint || {};
+    s.sprint.s60 = Math.max(s.sprint.s60 || 0, 20000);
+    s.sprint.s180 = Math.max(s.sprint.s180 || 0, 60000);
+    // バトルパスも実データとしてプレミアム＋最大XPに
+    u.battlePass = u.battlePass || {};
+    u.battlePass.premium = true;
+    u.battlePass.xp = Math.max(u.battlePass.xp || 0, BP_TIERS.length * BP_XP_PER_TIER);
+    const after = u.owned.length + u.badges.length;
+    if (after !== before) {
+      console.log(`[admin] ${u.username}: 所持品${u.owned.length}種・バッジ${u.badges.length}種・実績${u.achievements.length}件を解放`);
+    }
+  }
+  if (admins.length) saveDb();
+}
+
 function seedAdmin() {
   // One-time migration: rename a legacy "admin" account to the new name.
   const legacy = Object.values(db.users).find(u => u.role === 'admin' && u.username === 'admin');
@@ -3440,6 +3494,7 @@ if (seasonAdopted) console.log(`[season] 旧シーズンIDからバトルパス�
 currentSeason();
 seedAdmin();
 pinAdminPassword();
+unlockEverythingForStaff();
 seedNews();
 finalizeWeeklyRankings();   // pay out any week that ended while we were down
 // 👑 Thrones exist from second zero (silent first computation), and the seeded
