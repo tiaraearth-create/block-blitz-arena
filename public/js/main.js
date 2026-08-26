@@ -4,7 +4,7 @@ import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, sta
 import { audio } from './audio.js';
 import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
-import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
+import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openInventory, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
@@ -223,6 +223,7 @@ $('#btnCancelQueue').onclick = () => { audio.click(); cancelMatchmaking(); };
 
 $('#btnMissions').onclick = () => { audio.click(); openMissions(); };
 $('#btnLeaderboard').onclick = () => { audio.click(); openLeaderboard(); };
+$('#btnInventory').onclick = () => { audio.click(); openInventory(); };
 $('#btnShop').onclick = () => { audio.click(); openShop(); };
 $('#btnGemShop').onclick = () => { audio.click(); showGemShop(); };
 $('#btnBattlePass').onclick = () => { audio.click(); openBattlePass(); };
@@ -234,6 +235,7 @@ document.querySelector('.gem-chip').onclick = () => { audio.click(); showGemShop
 // tabs
 $$('[data-lb]').forEach(t => { t.onclick = () => openLeaderboard(t.dataset.lb); });
 $$('[data-shop]').forEach(t => { t.onclick = () => openShop(t.dataset.shop); });
+$$('[data-inv]').forEach(t => { t.onclick = () => { audio.click(); openInventory(t.dataset.inv); }; });
 $$('[data-ms]').forEach(t => { t.onclick = () => { audio.click(); openMissions(t.dataset.ms); }; });
 
 // back buttons

@@ -75,6 +75,7 @@
           <button class="nav-btn" id="btnGuild"><span>🏰</span>ギルド</button>
           <button class="nav-btn" id="btnNews"><span>📰</span>ニュース<i id="newsDot" class="nav-dot hidden"></i></button>
           <button class="nav-btn" id="btnLeaderboard"><span>🏆</span>ランキング</button>
+          <button class="nav-btn" id="btnInventory"><span>🎒</span>インベントリ</button>
           <button class="nav-btn" id="btnShop"><span>🛍️</span>ショップ</button>
           <button class="nav-btn" id="btnGacha"><span>🎰</span>ガチャ</button>
           <button class="nav-btn" id="btnGemShop"><span>💎</span>課金</button>
@@ -190,6 +191,21 @@
     </section>
 
     <!-- ===================== Shop ===================== -->
+    <section id="screen-inventory" class="screen sub-screen hidden">
+      <div class="sub-header">
+        <button class="chip icon-btn back-btn" data-back>←</button>
+        <h2>🎒 インベントリ</h2>
+      </div>
+      <div id="invSummary" class="inv-summary"></div>
+      <div class="tabs">
+        <button class="tab active" data-inv="gear">装備</button>
+        <button class="tab" data-inv="item">アイテム</button>
+        <button class="tab" data-inv="title">称号</button>
+        <button class="tab" data-inv="badge">バッジ</button>
+      </div>
+      <div id="invBody" class="inv-body"></div>
+    </section>
+
     <section id="screen-shop" class="screen sub-screen hidden">
       <div class="sub-header">
         <button class="chip icon-btn back-btn" data-back>←</button>

@@ -818,6 +818,267 @@ function renderShop() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// 🎒 インベントリ（プレイヤー向け）
+//
+// 「自分が何を持っているか」は今まで4か所に散らばっていた: コスメはショップの
+// 購入グリッドの中、アイテム個数はショップのタブとゲーム中のHUDだけ、称号は
+// プロフィール→👑と3クリック先、バッジに至っては名前も解除条件もプレイヤー
+// 側のどこにも存在しなかった。ここに集約する。
+//
+// 価格・購入・ガチャはここに複製しない（第二のショップになってしまう）。
+// 足りないものは openShop(cat) / openGacha() へのリンクで渡す。
+// ---------------------------------------------------------------------------
+
+// バッジの名前と解除条件。プレイヤー向けには今まで一切表示されていなかった。
+// 条件は server/index.js の付与箇所（applyGameResult ほか）と対応している。
+const BADGE_INFO = {
+  oni:        { icon: '👹', ja: '鬼討伐',        en: 'Oni Slayer',      cja: 'AI対戦の難易度「鬼」に勝利',        cen: 'Beat the Oni AI' },
+  kami:       { icon: '🔱', ja: '神殺し',        en: 'God Slayer',      cja: '隠し難易度「神」に勝利',            cen: 'Beat the hidden Kami AI' },
+  souzou:     { icon: '🌌', ja: '創造神討伐',    en: 'Creator Slayer',  cja: '真の隠し難易度「創造神」に勝利',    cen: 'Beat the true hidden AI' },
+  maou:       { icon: '😈', ja: '魔王討伐',      en: 'Demon Lord',      cja: 'ボス「まおう」を討伐',              cen: 'Defeat the Demon Lord boss' },
+  rush:       { icon: '⚔️', ja: 'ボスラッシュ制覇', en: 'Rush Conqueror', cja: 'ボスラッシュをクリア',            cen: 'Clear Boss Rush' },
+  dungeon:    { icon: '🏰', ja: '百塔踏破',      en: 'Tower Conqueror', cja: 'ダンジョンの塔100Fを制覇',          cen: 'Conquer floor 100 of the Tower' },
+  abyss:      { icon: '🌑', ja: '深淵踏破',      en: 'Abyss Conqueror', cja: '深淵ダンジョンA100を制覇',          cen: 'Conquer floor A100 of the Abyss' },
+  tourney:    { icon: '🏆', ja: '大会優勝',      en: 'Tournament Champ', cja: 'オンライントーナメントで優勝',     cen: 'Win an online tournament' },
+  royale:     { icon: '💯', ja: '百人の頂点',    en: 'Apex of 100',     cja: 'バトルロイヤルで1位',               cen: 'Take #1 in Battle Royale' },
+  adminevent: { icon: '👑', ja: '管理者イベント制覇', en: 'Admin Event', cja: '管理者イベントの目標を達成',        cen: 'Complete an Admin Event objective' },
+  weekly1:    { icon: '🏅', ja: '週間チャンピオン', en: 'Weekly Champion', cja: 'ウィークリーランキングで1位',     cen: 'Finish #1 on the weekly board' },
+  puzzle:     { icon: '🧩', ja: '遺跡マスター',  en: 'Ruins Master',    cja: 'パズル遺跡のステージ50に到達',      cen: 'Reach Puzzle Ruins stage 50' },
+  dig:        { icon: '⛏️', ja: 'マスター採掘士', en: 'Master Miner',   cja: '採掘場で深度50に到達',              cen: 'Reach depth 50 in the Mines' },
+  ghost:      { icon: '👻', ja: '幽霊屋敷の生還者', en: 'Haunted House', cja: '幽霊屋敷で15,000点',               cen: 'Score 15,000 in the Haunted House' },
+  bronze:     { icon: '🥉', ja: 'ブロンズ',      en: 'Bronze',          cja: 'バトルパスのティア10到達',          cen: 'Reach battle pass tier 10' },
+  silver:     { icon: '🥈', ja: 'シルバー',      en: 'Silver',          cja: 'バトルパスのティア20到達',          cen: 'Reach battle pass tier 20' },
+  gold:       { icon: '🥇', ja: 'ゴールド',      en: 'Gold',            cja: 'バトルパスのティア30到達',          cen: 'Reach battle pass tier 30' },
+  crown2:     { icon: '👑', ja: '二冠',          en: 'Dual Crown',      cja: '王座を同時に2つ保持',               cen: 'Hold 2 thrones at once' },
+  crown3:     { icon: '👑', ja: '三冠',          en: 'Triple Crown',    cja: '王座を同時に3つ保持',               cen: 'Hold 3 thrones at once' },
+  crown5:     { icon: '👑', ja: '五冠',          en: 'Five Crowns',     cja: '王座を同時に5つ保持',               cen: 'Hold 5 thrones at once' },
+  crown7:     { icon: '🌈', ja: '全冠制覇',      en: 'Total Domination', cja: '7つの王座をすべて同時に保持',       cen: 'Hold all 7 thrones at once' },
+};
+const BADGE_ORDER = ['oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'abyss', 'tourney', 'royale', 'adminevent', 'weekly1', 'puzzle', 'dig', 'ghost', 'bronze', 'silver', 'gold', 'crown2', 'crown3', 'crown5', 'crown7'];
+const THRONE_LABEL = {
+  score: '🏆 ハイスコア', rating: '📈 レート', dungeon: '🏰 ダンジョン', weekly: '🎯 ウィークリー',
+  sprint: '⏱️ タイムアタック', puzzle: '🧩 パズル遺跡', dig: '⛏️ 採掘場',
+};
+
+let invTab = 'gear';
+
+export async function openInventory(tab = invTab) {
+  showScreen('inventory');
+  invTab = tab;
+  $$('[data-inv]').forEach(t => t.classList.toggle('active', t.dataset.inv === tab));
+  const body = $('#invBody');
+  body.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
+  try {
+    if (!shopItems) {
+      const data = await api('/api/shop');
+      shopItems = data.items;
+      shopBoosters = data.boosters || [];
+      shopRole = session.user ? session.user.role : 'guest';
+    }
+  } catch (err) {
+    body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  renderInvSummary();
+  if (tab === 'gear') renderInvGear();
+  else if (tab === 'item') renderInvItems();
+  else if (tab === 'title') await renderInvTitles();
+  else renderInvBadges();
+}
+
+// 管理者は「全ショップ所持・通貨無限」という表示上の嘘を持つので、
+// 完成度を数字で出すと必ず嘘になる。そこだけ別扱いにする。
+const invIsStaff = () => !!session.user && session.user.role === 'admin';
+
+function invCollectibles() {
+  return shopItems.filter(i => !i.adminOnly && !i.default);
+}
+
+function renderInvSummary() {
+  const el = $('#invSummary');
+  const u = session.user;
+  if (!u) {
+    el.innerHTML = `<span class="muted">${tr('ゲストとしてプレイ中 — 登録すると持ち物が保存されます', 'Playing as a guest — register to keep your collection')}</span>`;
+    return;
+  }
+  if (invIsStaff()) {
+    el.innerHTML = `<span>👑 ${tr('運営アカウント', 'Staff account')}</span><span class="muted">${tr('すべて解放されています', 'Everything is unlocked')}</span>`;
+    return;
+  }
+  const all = invCollectibles();
+  const have = all.filter(i => (u.owned || []).includes(i.id)).length;
+  const pct = Math.round((have / Math.max(1, all.length)) * 100);
+  el.innerHTML = `
+    <span>📚 ${tr('コレクション', 'Collection')} <b>${have} / ${all.length}</b></span>
+    <span class="inv-bar"><span style="width:${pct}%"></span></span>
+    <span class="muted">${pct}%</span>`;
+}
+
+const CAT_TITLE = {
+  skin: { ja: '🧱 ブロックスキン', en: '🧱 Block skins' },
+  board: { ja: '🎨 ボードテーマ', en: '🎨 Board themes' },
+  fx: { ja: '✨ 消去エフェクト', en: '✨ Clear effects' },
+  ult: { ja: '⚡ アルティメット', en: '⚡ Ultimates' },
+};
+
+function renderInvGear() {
+  const body = $('#invBody');
+  const u = session.user;
+  body.innerHTML = '';
+  for (const cat of ['skin', 'board', 'fx', 'ult']) {
+    const all = shopItems.filter(i => i.cat === cat && (!i.adminOnly || staffExtras()));
+    const owned = all.filter(i => i.adminOnly ? invIsStaff()
+      : u ? (u.owned || []).includes(i.id) : !!i.default);
+    const total = all.filter(i => !i.adminOnly).length;
+    const equippedId = cat === 'ult' ? equippedUlt()
+      : u ? (u.equipped || {})[cat] : `${cat}_default`;
+    const missing = total - owned.filter(i => !i.adminOnly).length;
+
+    const sec = document.createElement('div');
+    sec.className = 'inv-sec';
+    sec.innerHTML = `
+      <div class="inv-sec-head">
+        <span>${tr(CAT_TITLE[cat].ja, CAT_TITLE[cat].en)}</span>
+        <span class="muted">${invIsStaff() ? '∞' : `${owned.filter(i => !i.adminOnly).length} / ${total}`}</span>
+      </div>
+      <div class="inv-grid"></div>
+      ${missing > 0 && !invIsStaff()
+        ? `<button class="btn btn-sm btn-ghost inv-more" data-shop-cat="${cat}">🛍️ ${tr(`ショップで見る（あと${missing}種）`, `See ${missing} more in the shop`)}</button>`
+        : ''}`;
+    const grid = sec.querySelector('.inv-grid');
+    for (const item of owned) {
+      const isEq = item.id === equippedId;
+      const card = document.createElement('button');
+      card.className = `inv-card ${isEq ? 'equipped' : ''}`;
+      card.innerHTML = `<div class="inv-pv" data-pv="${item.id}"></div>
+        <div class="inv-name">${item.adminOnly ? '👑 ' : ''}${catName(item)}</div>
+        ${isEq ? `<div class="inv-eq">${tr('装備中', 'Equipped')}</div>` : ''}`;
+      renderPreview(card.querySelector('.inv-pv'), item);
+      card.onclick = () => { if (!isEq) equipItem(item); };
+      grid.appendChild(card);
+    }
+    body.appendChild(sec);
+  }
+  body.querySelectorAll('[data-shop-cat]').forEach(b => {
+    b.onclick = () => { audio.click(); openShop(b.dataset.shopCat); };
+  });
+}
+
+function renderInvItems() {
+  const body = $('#invBody');
+  const u = session.user;
+  const counts = u ? (u.items || {}) : guestItemCounts();
+  const rows = shopBoosters.filter(i => !i.adminOnly || staffExtras());
+  body.innerHTML = `
+    <p class="muted center inv-note">${tr(
+      'ゲーム中のHUDから使えます。<br><small>ソロ・ボス・ダンジョン・サバイバル・カオスで使用可（AI戦／オンライン／ウィークリーは公平のため対象外）</small>',
+      'Use them from the in-game HUD.<br><small>Available in Solo, Boss, Dungeon, Survival and Chaos (disabled in AI / Online / Weekly for fairness)</small>')}</p>
+    <div class="inv-items">
+      ${rows.map(i => {
+        const n = invIsStaff() ? '∞' : (counts[i.id] || 0);
+        const zero = !invIsStaff() && !counts[i.id];
+        return `<div class="inv-item ${zero ? 'off' : ''}">
+          <span class="inv-item-icon">${i.icon}</span>
+          <span class="inv-item-body">
+            <b>${i.adminOnly ? '👑 ' : ''}${catName(i)}</b>
+            <small>${catDesc(i)}</small>
+          </span>
+          <span class="inv-item-n">×${n}</span>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="inv-links">
+      <button class="btn btn-sm btn-ghost" id="invToShop">🛍️ ${tr('ショップで補充', 'Restock in the shop')}</button>
+      <button class="btn btn-sm btn-ghost" id="invToGacha">🎰 ${tr('ガチャを引く', 'Pull the gacha')}</button>
+    </div>`;
+  $('#invToShop').onclick = () => { audio.click(); openShop('item'); };
+  $('#invToGacha').onclick = () => { audio.click(); openGacha(); };
+}
+
+// ゲストのブースターは localStorage にある（modes.js が初回に1個ずつ配る）。
+function guestItemCounts() {
+  try { return JSON.parse(localStorage.getItem('bba_items') || '{}'); } catch { return {}; }
+}
+
+let invTitleFilter = 'all';
+async function renderInvTitles() {
+  const body = $('#invBody');
+  if (!session.user) {
+    body.innerHTML = `<p class="muted center">${tr('称号はアカウント登録すると集められます', 'Register an account to start collecting titles')}</p>`;
+    return;
+  }
+  let data;
+  try { data = await api('/api/titles'); } catch (err) { body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`; return; }
+  const earned = new Set(data.earned || []);
+  const list = data.titles.slice().sort((a, b) => (earned.has(b.id) ? 1 : 0) - (earned.has(a.id) ? 1 : 0));
+  const shown = invTitleFilter === 'earned' ? list.filter(t => earned.has(t.id)) : list;
+  body.innerHTML = `
+    <div class="inv-sec-head">
+      <span>👑 ${tr('称号', 'Titles')}</span>
+      <span class="muted">${earned.size} / ${data.titles.length}</span>
+    </div>
+    <div class="seg" id="invTitleSeg" style="justify-content:center;margin-bottom:8px">
+      <button data-v="all" class="${invTitleFilter === 'all' ? 'active' : ''}">${tr('すべて', 'All')}</button>
+      <button data-v="earned" class="${invTitleFilter === 'earned' ? 'active' : ''}">${tr('獲得済みのみ', 'Earned only')}</button>
+    </div>
+    <div class="inv-titles">
+      ${shown.map(t2 => {
+        const has = earned.has(t2.id);
+        const eq = data.equipped === t2.id;
+        return `<button class="inv-title ${has ? '' : 'locked'} ${eq ? 'equipped' : ''}" data-title="${t2.id}" ${has ? '' : 'disabled'}>
+          <span class="inv-title-name" style="color:${has ? escapeHtml(t2.color) : 'var(--dim)'}">《${escapeHtml(catName(t2))}》</span>
+          <span class="inv-title-desc">${has ? (eq ? tr('装備中', 'Equipped') : tr('タップで装備', 'Tap to equip')) : `🔒 ${escapeHtml(catDesc(t2))}`}</span>
+        </button>`;
+      }).join('')}
+    </div>`;
+  body.querySelectorAll('#invTitleSeg button').forEach(b => {
+    b.onclick = () => { invTitleFilter = b.dataset.v; renderInvTitles(); };
+  });
+  body.querySelectorAll('[data-title]').forEach(b => {
+    b.onclick = async () => {
+      audio.click();
+      try {
+        await api('/api/titles/equip', { method: 'POST', body: { titleId: b.dataset.title } });
+        updateTopbar();
+        toast(tr('👑 称号を変更しました', '👑 Title equipped'), 'ok');
+        renderInvTitles();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  });
+}
+
+function renderInvBadges() {
+  const body = $('#invBody');
+  const u = session.user;
+  const have = new Set(u ? (u.badges || []) : []);
+  const thrones = (u && u.thrones) || [];
+  body.innerHTML = `
+    ${thrones.length ? `
+      <div class="inv-thrones">
+        <div class="inv-sec-head"><span>👑 ${tr('保持中の王座', 'Thrones you hold')}</span><span class="muted">${thrones.length} / 7</span></div>
+        <div class="inv-throne-row">${thrones.map(b => `<span class="inv-throne">${tr(THRONE_LABEL[b] || b, THRONE_LABEL[b] || b)}</span>`).join('')}</div>
+      </div>` : ''}
+    <div class="inv-sec-head">
+      <span>🎖️ ${tr('バッジ', 'Badges')}</span>
+      <span class="muted">${invIsStaff() ? '👑' : `${[...have].filter(b => BADGE_INFO[b]).length} / ${BADGE_ORDER.length}`}</span>
+    </div>
+    <p class="muted center inv-note">${tr('解除条件つき。灰色はまだ持っていないバッジです', 'With unlock conditions — greyed badges are still locked')}</p>
+    <div class="inv-badges">
+      ${BADGE_ORDER.map(id => {
+        const b = BADGE_INFO[id];
+        const has = have.has(id);
+        return `<div class="inv-badge ${has ? '' : 'locked'}">
+          <span class="inv-badge-icon">${b.icon}</span>
+          <span class="inv-badge-body">
+            <b>${tr(b.ja, b.en)}</b>
+            <small>${has ? `✅ ${tr('獲得済み', 'Earned')}` : tr(b.cja, b.cen)}</small>
+          </span>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
 function renderPreview(el, item) {
   if (item.cat === 'skin') {
     const canvas = document.createElement('canvas');
@@ -979,6 +1240,15 @@ export function openGacha() {
 
 function confetti() { confettiBurst(50); }
 
+// Equipping is reachable from BOTH the shop and the inventory, so redraw
+// whichever screen the player is actually looking at — repainting the shop
+// grid while the inventory is open left the old loadout on screen and made
+// the tap look like it did nothing.
+function afterEquip() {
+  if (document.body.dataset.screen === 'inventory') openInventory();
+  else renderShop();
+}
+
 async function equipItem(item) {
   // Guests can still pick an ultimate — the choice lives in localStorage.
   if (!session.user) {
@@ -986,14 +1256,14 @@ async function equipItem(item) {
     setGuestUlt(item.id);
     audio.click();
     toast(tr(`${catName(item)} を装備しました`, `Equipped ${catName(item)}`), 'ok');
-    renderShop();
+    afterEquip();
     return;
   }
   try {
     await api('/api/equip', { method: 'POST', body: { slot: item.cat, itemId: item.id } });
     audio.click();
-    toast(tr(`${item.name} を装備しました`, `Equipped ${catName(item)}`), 'ok');
-    renderShop();
+    toast(tr(`${catName(item)} を装備しました`, `Equipped ${catName(item)}`), 'ok');
+    afterEquip();
   } catch (err) {
     toast(err.message, 'err');
   }
