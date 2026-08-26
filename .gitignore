@@ -5,3 +5,6 @@ server/data/*.txt
 *.log
 server/data/snapshots/
 block-blitz-backup-*.json
+# 監査/検証で作った使い捨てスクリプト
+_repro_tmp.mjs
+*_repro*.mjs
