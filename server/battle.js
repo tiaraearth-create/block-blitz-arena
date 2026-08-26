@@ -1637,17 +1637,37 @@ export function initBattle(server, deps) {
 
     // --- 落ちた人を席から外す ---
     // 回線が切れても FIN が届かないことがあり（電波が切れた端末など）、
-    // readyState は最大30秒 OPEN のまま。その間その人は「生存者」として
+    // readyState はしばらく OPEN のまま。その間その人は「生存者」として
     // ランキングに居座り、カットの生き残り枠や優勝まで奪ってしまう。
-    // 更新が途切れた時点で、その時の順位で確定させる。
-    // （e.lastSeen は記録していたのに、これまで一度も読んでいなかった）
+    // 本命の判定は readyState。死んだソケットは 30秒ごとの ping/pong で
+    // terminate されるので、そこで OPEN でなくなる。
+    //
+    // 無音時間はあくまで保険で、しきい値は長くとる。lastSeen を更新するのは
+    // クライアントの state 送信（700ms ごとの setInterval）だけで、スマホで
+    // アプリを切り替えたり画面をロックすると、その setInterval はブラウザに
+    // 止められる。回線は生きているのにタイマーだけ凍る状態で、ここを短く
+    // すると「席を外しただけで失格」になってしまう。ping への応答は
+    // ブラウザ本体が返すので readyState 側は正しく生きたままになる。
+    const gone = [];
     for (const e of r.entrants) {
       if (!e.alive || !e.human) continue;
-      const gone = e.ws.readyState !== e.ws.OPEN || (now - (e.lastSeen || now)) > 20000;
-      if (!gone) continue;
+      const dead = e.ws.readyState !== e.ws.OPEN;
+      const silent = now - (e.lastSeen || now) > 90000;
+      if (!dead && !silent) continue;
+      gone.push(e);
+    }
+    if (gone.length) {
+      // まとめて外れるときは、スコアの低い人から先に確定させる。
+      // 以前は r.entrants の並び順で決めていたので、スコアの低いほうが
+      // 良い順位を取ることがあった。順位は報酬と戦績（royaleBest /
+      // royaleWins / royaleTop10）に残るので、実害のあるズレだった。
+      // 足切り（下の royale_cut）と同じ「下位から先に」に揃える。
       const ranked = royaleRanked(r);
-      endRoyaleFor(e, r, royaleAlive(r).length, ranked);
-      royaleFeed(r, { kind: 'left', victim: e.name, alive: royaleAlive(r).length });
+      gone.sort((a, b) => a.score - b.score);
+      for (const e of gone) {
+        endRoyaleFor(e, r, royaleAlive(r).length, ranked);
+        royaleFeed(r, { kind: 'left', victim: e.name, alive: royaleAlive(r).length });
+      }
     }
 
     // --- AI entrants actually play ---
