@@ -3433,7 +3433,17 @@ const ADMIN_NAME = 'るみまき';
 function pinAdminPassword() {
   const pinned = process.env.ADMIN_PASSWORD;
   if (!pinned || pinned.length < 8) {
-    if (pinned) console.warn('[admin] ADMIN_PASSWORD は8文字以上にしてください（無視されました）');
+    // 短いと黙って無視していたので、「変えたのにログインできない」の原因が
+    // ログを読まない限り分からなかった。何文字だったかまで出す（値は出さない）。
+    if (pinned) {
+      console.warn('┌──────────────────────────────────────────────────────────────');
+      console.warn(`│ [admin] ADMIN_PASSWORD が短すぎます（${pinned.length}文字／8文字以上が必要）`);
+      console.warn('│ 無視したので、管理者パスワードは 変わっていません。');
+      console.warn('│ 8文字以上にして再デプロイしてください。');
+      console.warn('└──────────────────────────────────────────────────────────────');
+    } else {
+      console.warn('[admin] ADMIN_PASSWORD 未設定 — 管理者パスワードは固定されません');
+    }
     return;
   }
   // 管理者が複数いると「db.users で最初に見つかった管理者」に当たってしまい、
