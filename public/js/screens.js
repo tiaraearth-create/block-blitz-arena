@@ -1517,6 +1517,7 @@ function renderAdminUsers(users) {
       <span class="au-name">${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '👤'} ${escapeHtml(u.username)}${u.role === 'mod' ? ' <small style="color:var(--cyan)">MOD</small>' : ''}</span>
       <span class="au-meta">Lv.${u.level} ・ 🪙${fmt(u.coins)} ・ 💎${fmt(u.gems)} ・ 🏆${fmt(u.stats.bestScore)} ・ R${u.stats.rating}${u.banned ? ' ・ ⛔凍結中' : ''}${u.muted ? ' ・ 🔇ミュート中' : ''}</span>
       <span class="au-actions">
+        <button class="btn btn-sm btn-ghost" data-a="edit" title="インベントリを編集（通貨・アイテム・所持品・バッジ・記録）">🎒編集</button>
         <button class="btn btn-sm btn-ghost" data-a="coins">+🪙</button>
         <button class="btn btn-sm btn-ghost" data-a="gems">+💎</button>
         <button class="btn btn-sm btn-ghost" data-a="rating" title="レートを設定">R</button>
@@ -1538,6 +1539,10 @@ function renderAdminUsers(users) {
       btn.onclick = async () => {
         try {
           const act = btn.dataset.a;
+          if (act === 'edit') {
+            showUserEditor(uid);
+            return;   // 編集画面が自分で保存・再描画する
+          }
           if (act === 'coins' || act === 'gems') {
             const amount = promptAmount(act === 'coins' ? 'コイン付与額' : 'ジェム付与額');
             if (amount === null) return;
@@ -1589,6 +1594,213 @@ function renderAdminUsers(users) {
       };
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// 🎒 インベントリ編集（管理者）
+//
+// 個別ボタン＋prompt() では「消えたアカウントを元に戻す」ような作業に耐えない
+// ので、1画面で所持品ぜんぶを見て直接書き換えられるようにする。保存は1回の
+// POST にまとめる（途中で失敗して中途半端な状態になるのを避けるため）。
+// ---------------------------------------------------------------------------
+
+const CAT_LABEL = { skin: '🧱 ブロックスキン', board: '🎨 ボードテーマ', fx: '✨ 消去エフェクト', ult: '⚡ アルティメット' };
+const BADGE_LABEL = {
+  bronze: '🥉ブロンズ', silver: '🥈シルバー', gold: '🥇ゴールド', oni: '👹鬼', kami: '🔱神',
+  souzou: '🌌創造神', maou: '😈魔王', rush: '⚔️ラッシュ', dungeon: '🏰百塔', tourney: '🏆大会',
+  royale: '💯ロイヤル', adminevent: '👑管理者イベント', abyss: '🌑深淵', weekly1: '🏅週間',
+  puzzle: '🧩遺跡', dig: '⛏️採掘', crown2: '👑二冠', crown3: '👑三冠', crown5: '👑五冠',
+  crown7: '🌈全冠', ghost: '👻幽霊屋敷',
+};
+
+export async function showUserEditor(uid) {
+  let data;
+  try {
+    data = await api(`/api/admin/users/${uid}`);
+  } catch (err) { toast(err.message, 'err'); return; }
+  const u = data.user;
+  const c = data.catalog;
+  const owned = new Set(u.owned);
+
+  const num = (id, label, value, hint = '') => `
+    <div class="settings-row">
+      <label>${escapeHtml(label)}${hint ? `<br><span class="muted" style="font-size:10px">${escapeHtml(hint)}</span>` : ''}</label>
+      <input id="${id}" type="number" value="${value}" style="width:120px;text-align:right">
+    </div>`;
+
+  const byCat = cat => c.shop.filter(i => i.cat === cat);
+
+  const m = showModal(`
+    <h2>🎒 ${escapeHtml(u.username)}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">
+      ${u.role === 'admin' ? '🛡️管理者' : u.role === 'mod' ? '🔧モデレーター' : '👤一般'}
+      ・ 登録 ${new Date(u.createdAt).toLocaleDateString('ja-JP')}
+      ${u.guildName ? ` ・ 🏰${escapeHtml(u.guildName)}` : ''}
+      ${u.banned ? ' ・ ⛔凍結中' : ''}${u.muted ? ' ・ 🔇ミュート中' : ''}
+    </p>
+    ${u.role === 'admin' ? '<p class="ae-note">🛡️ 管理者は所持品も通貨も無制限として扱われるため、ここでの編集は表示上ほとんど意味がありません。</p>' : ''}
+
+    <div class="ue-body">
+      <h3 class="ue-h">💰 通貨・レベル</h3>
+      ${num('ueCoins', '🪙 コイン', u.coins)}
+      ${num('ueGems', '💎 ジェム', u.gems)}
+      ${num('ueXp', '⭐ XP', u.xp, `いまは Lv.${u.level}（1000ごとに1レベル）`)}
+      ${num('ueRating', '📈 レート', u.stats.rating || 1000)}
+
+      <h3 class="ue-h">🎫 バトルパス</h3>
+      ${num('uePassXp', 'パスXP', (u.battlePass && u.battlePass.xp) || 0)}
+      <div class="settings-row">
+        <label>プレミアム<br><span class="muted" style="font-size:10px">ジェムで購入した権利の復元用</span></label>
+        <div class="seg" id="uePrem">
+          <button type="button" data-v="1" class="${u.battlePass && u.battlePass.premium ? 'active' : ''}">ON</button>
+          <button type="button" data-v="0" class="${u.battlePass && u.battlePass.premium ? '' : 'active'}">OFF</button>
+        </div>
+      </div>
+
+      <h3 class="ue-h">🧪 アイテム（ブースター）</h3>
+      <div class="ue-grid">
+        ${c.boosters.filter(i => !i.adminOnly).map(i => `
+          <label class="ue-item">
+            <span>${i.icon} ${escapeHtml(i.name)}</span>
+            <input type="number" data-item="${i.id}" value="${(u.items && u.items[i.id]) || 0}" min="0" max="999">
+          </label>`).join('')}
+      </div>
+
+      <h3 class="ue-h">🎨 所持品</h3>
+      ${c.slots.map(cat => `
+        <div class="ue-cat">
+          <div class="ue-cat-head">
+            <span>${CAT_LABEL[cat] || cat}</span>
+            <span>
+              <button type="button" class="btn btn-sm btn-ghost" data-all="${cat}">全部</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-none="${cat}">なし</button>
+            </span>
+          </div>
+          <div class="ue-grid">
+            ${byCat(cat).map(i => `
+              <label class="ue-own${i.adminOnly ? ' staff' : ''}">
+                <input type="checkbox" data-own="${i.id}" data-cat="${cat}" ${owned.has(i.id) ? 'checked' : ''}>
+                <span>${i.icon ? i.icon + ' ' : ''}${escapeHtml(i.name)}</span>
+              </label>`).join('')}
+          </div>
+          <div class="settings-row">
+            <label>装備中</label>
+            <select data-eq="${cat}" style="font-family:inherit;padding:5px 8px;border-radius:8px;max-width:180px">
+              ${byCat(cat).map(i => `<option value="${i.id}" ${u.equipped[cat] === i.id ? 'selected' : ''}>${escapeHtml(i.name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>`).join('')}
+
+      <h3 class="ue-h">👑 称号</h3>
+      <div class="settings-row">
+        <label>装備中の称号</label>
+        <select id="ueTitle" style="font-family:inherit;padding:5px 8px;border-radius:8px;max-width:200px">
+          <option value="">（なし）</option>
+          ${c.titles.map(t2 => `<option value="${t2.id}" ${u.equippedTitle === t2.id ? 'selected' : ''}>${escapeHtml(t2.name)}</option>`).join('')}
+        </select>
+      </div>
+
+      <h3 class="ue-h">🎖️ バッジ</h3>
+      <div class="ue-grid">
+        ${c.badges.map(id => `
+          <label class="ue-own">
+            <input type="checkbox" data-badge="${id}" ${u.badges.includes(id) ? 'checked' : ''}>
+            <span>${escapeHtml(BADGE_LABEL[id] || id)}</span>
+          </label>`).join('')}
+      </div>
+
+      <h3 class="ue-h">📊 記録</h3>
+      ${c.stats.map(s => num(`ueSt_${s.key}`, s.label, (u.stats && u.stats[s.key]) || 0)).join('')}
+    </div>
+
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="ueCancel">とじる</button>
+      <button class="btn btn-gold" id="ueSave">保存する</button>
+    </div>`);
+
+  // 「全部 / なし」— 復旧作業のときに一番よく使う操作。
+  m.querySelectorAll('[data-all]').forEach(btn => {
+    btn.onclick = () => m.querySelectorAll(`[data-cat="${btn.dataset.all}"]`).forEach(cb => { cb.checked = true; });
+  });
+  m.querySelectorAll('[data-none]').forEach(btn => {
+    btn.onclick = () => m.querySelectorAll(`[data-cat="${btn.dataset.none}"]`).forEach(cb => { cb.checked = false; });
+  });
+
+  // プレミアムのトグル
+  let premium = !!(u.battlePass && u.battlePass.premium);
+  m.querySelectorAll('#uePrem button').forEach(btn => {
+    btn.onclick = () => {
+      m.querySelectorAll('#uePrem button').forEach(x => x.classList.remove('active'));
+      btn.classList.add('active');
+      premium = btn.dataset.v === '1';
+      markDirty('pass');
+    };
+  });
+
+  // 触った項目だけ送る。全項目を毎回送ると、入力を空にしただけの欄が 0 として
+  // 保存され、本人の記録を消してしまう（setOwned/setBadges は「全置換」なので
+  // なおさら危ない）。
+  const dirty = new Set();
+  const markDirty = key => dirty.add(key);
+  m.querySelectorAll('#ueCoins, #ueGems, #ueXp').forEach(el => { el.oninput = () => markDirty(el.id); });
+  m.querySelector('#uePassXp').oninput = () => markDirty('pass');
+  m.querySelector('#ueRating').oninput = () => markDirty('stats');
+  m.querySelectorAll('[data-item]').forEach(el => { el.oninput = () => markDirty('items'); });
+  m.querySelectorAll('[data-own]').forEach(el => { el.onchange = () => markDirty('owned'); });
+  m.querySelectorAll('[data-badge]').forEach(el => { el.onchange = () => markDirty('badges'); });
+  m.querySelectorAll('[data-eq]').forEach(el => { el.onchange = () => markDirty('equipped'); });
+  m.querySelector('#ueTitle').onchange = () => markDirty('title');
+  c.stats.forEach(s => {
+    const el = m.querySelector(`#ueSt_${s.key}`);
+    if (el) el.oninput = () => markDirty('stats');
+  });
+  // 「全部 / なし」も変更として扱う
+  m.querySelectorAll('[data-all], [data-none]').forEach(btn => {
+    btn.addEventListener('click', () => markDirty('owned'));
+  });
+
+  m.querySelector('#ueCancel').onclick = closeModal;
+  m.querySelector('#ueSave').onclick = async () => {
+    if (!dirty.size) { toast('変更がありません', '', 1800); return; }
+    const int = id => Math.floor(Number(m.querySelector(`#${id}`).value) || 0);
+    const body = {};
+    if (dirty.has('ueCoins')) body.setCoins = int('ueCoins');
+    if (dirty.has('ueGems')) body.setGems = int('ueGems');
+    if (dirty.has('ueXp')) body.setXp = int('ueXp');
+    if (dirty.has('pass')) body.setPass = { xp: int('uePassXp'), premium };
+    if (dirty.has('title')) body.setTitle = m.querySelector('#ueTitle').value || null;
+    if (dirty.has('items')) {
+      body.setItems = {};
+      m.querySelectorAll('[data-item]').forEach(el => { body.setItems[el.dataset.item] = Math.floor(Number(el.value) || 0); });
+    }
+    if (dirty.has('badges')) {
+      body.setBadges = [...m.querySelectorAll('[data-badge]')].filter(el => el.checked).map(el => el.dataset.badge);
+    }
+    if (dirty.has('owned') || dirty.has('equipped')) {
+      const owned = [...m.querySelectorAll('[data-own]')].filter(el => el.checked).map(el => el.dataset.own);
+      const equipped = {};
+      m.querySelectorAll('[data-eq]').forEach(el => { equipped[el.dataset.eq] = el.value; });
+      // 装備は所持していないと弾かれるので、選んだ装備は自動で所持に含める。
+      for (const id of Object.values(equipped)) if (!owned.includes(id)) owned.push(id);
+      body.setOwned = owned;
+      body.setEquipped = equipped;
+    }
+    if (dirty.has('stats')) {
+      body.setStats = { rating: int('ueRating') };
+      for (const s of c.stats) {
+        if (s.key === 'rating') continue;
+        body.setStats[s.key] = Math.floor(Number(m.querySelector(`#ueSt_${s.key}`).value) || 0);
+      }
+    }
+    try {
+      await api(`/api/admin/users/${uid}`, { method: 'POST', body });
+      toast(`🎒 ${u.username} を保存しました`, 'ok', 3000);
+      closeModal();
+      openAdmin();
+    } catch (err) {
+      toast(err.message, 'err', 4500);
+    }
+  };
 }
 
 function promptAmount(label) {

@@ -2536,17 +2536,106 @@ app.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   res.json({ users });
 });
 
+// 🎒 インベントリ編集 — one screen with everything an admin can put back.
+//
+// The list endpoint above deliberately stays light (it renders every account),
+// so the editor asks for one player in full, plus the catalogue it needs to
+// draw checkboxes for. Without this the client would have to guess what exists.
+// The RAW record as the editor needs to see it. Deliberately not publicUser():
+// that one hands admins the entire shop and infinite currency as a display
+// fiction, which the editor must never read back as fact.
+function adminUserView(u) {
+  return {
+    id: u.id, username: u.username, role: u.role,
+    banned: !!u.banned, muted: !!u.muted,
+    coins: u.coins, gems: u.gems, xp: u.xp, level: levelOf(u.xp),
+    items: u.items || {}, owned: u.owned || [], equipped: u.equipped || {},
+    equippedTitle: u.equippedTitle || null,
+    badges: u.badges || [], achievements: u.achievements || [],
+    battlePass: u.battlePass || null,
+    createdAt: u.createdAt,
+    guildId: u.guildId || null,
+    guildName: u.guildId && db.guilds[u.guildId] ? db.guilds[u.guildId].name : null,
+    stats: u.stats,
+  };
+}
+
+app.get('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
+  const u = db.users[req.params.id];
+  if (!u) return res.status(404).json({ error: 'ユーザーが見つかりません' });
+  migrateUser(u);
+  res.json({
+    user: adminUserView(u),
+    catalog: {
+      shop: SHOP_ITEMS.map(i => ({ id: i.id, cat: i.cat, name: i.name, icon: i.icon || null, adminOnly: !!i.adminOnly, gachaOnly: !!i.gachaOnly })),
+      boosters: BOOST_ITEMS.map(i => ({ id: i.id, name: i.name, icon: i.icon, adminOnly: !!i.adminOnly })),
+      slots: EQUIP_SLOTS,
+      titles: TITLES.map(t => ({ id: t.id, name: t.name, color: t.color })),
+      badges: ADMIN_KNOWN_BADGES,
+      // Only these stats are hand-editable. Everything else is a running total
+      // the game maintains, and editing it just makes the numbers lie.
+      stats: EDITABLE_STATS,
+    },
+  });
+});
+
+// The stats an admin can sensibly restore. Anything derived (level from xp,
+// titles from stats, achievement progress) is deliberately absent — those
+// recompute themselves from what is set here.
+const EDITABLE_STATS = [
+  { key: 'bestScore', label: 'ハイスコア', max: 100_000_000 },
+  { key: 'rating', label: 'レート', max: 5000 },
+  { key: 'gamesPlayed', label: 'プレイ回数', max: 1_000_000 },
+  { key: 'totalScore', label: '累計スコア', max: 1_000_000_000 },
+  { key: 'totalLines', label: '累計ライン', max: 10_000_000 },
+  { key: 'maxCombo', label: '最大コンボ', max: 999 },
+  { key: 'pvpWins', label: 'PvP勝利', max: 1_000_000 },
+  { key: 'pvpLosses', label: 'PvP敗北', max: 1_000_000 },
+  { key: 'dungeonMax', label: 'ダンジョン最高階', max: 100 },
+  { key: 'abyssMax', label: '深淵最高階', max: 100 },
+  { key: 'bossMax', label: 'ボス討伐数', max: 6 },
+  { key: 'puzzleStage', label: 'パズル遺跡ステージ', max: 9999 },
+  { key: 'digDepth', label: '採掘深度', max: 9999 },
+  { key: 'survivalWave', label: 'サバイバルWAVE', max: 999 },
+  { key: 'loginStreakBest', label: '最長連続ログイン', max: 3650 },
+  // 順位なので 1 が最高。0 は「記録なし」を意味するので下限は 0 のまま。
+  { key: 'royaleBest', label: 'ロイヤル最高順位（0=記録なし）', max: 100 },
+  { key: 'royaleKills', label: 'ロイヤル通算KO', max: 1_000_000 },
+];
+
+const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
+
 app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   const target = db.users[req.params.id];
   if (!target) return res.status(404).json({ error: 'ユーザーが見つかりません' });
+  // Repair FIRST, not last: the branches below assume a complete record, and a
+  // legacy or restored one could make them throw a 500 or write NaN before the
+  // repair at the end of the handler ever ran.
+  migrateUser(target);
   const b = req.body || {};
-  if (typeof b.grantCoins === 'number') target.coins = Math.max(0, target.coins + Math.floor(b.grantCoins));
-  if (typeof b.grantGems === 'number') target.gems = Math.max(0, target.gems + Math.floor(b.grantGems));
-  if (typeof b.grantItems === 'number') {
+  // `typeof v === 'number'` lets Infinity through — JSON.parse('1e400') is
+  // Infinity, and `coins + Infinity` serialises to null, which permanently
+  // corrupts that account.
+  const delta = (v, max) => {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+    return Math.max(-max, Math.min(max, Math.trunc(v)));
+  };
+  if (b.grantCoins !== undefined) {
+    const n = delta(b.grantCoins, 1_000_000_000);
+    if (n === null) return res.status(400).json({ error: 'コイン付与額が不正です' });
+    target.coins = Math.max(0, Math.min(1_000_000_000, target.coins + n));
+  }
+  if (b.grantGems !== undefined) {
+    const n = delta(b.grantGems, 100_000_000);
+    if (n === null) return res.status(400).json({ error: 'ジェム付与額が不正です' });
+    target.gems = Math.max(0, Math.min(100_000_000, target.gems + n));
+  }
+  if (b.grantItems !== undefined) {
     // grant N of every booster (negative to confiscate)
-    const n = Math.floor(b.grantItems);
+    const n = delta(b.grantItems, 999);
+    if (n === null) return res.status(400).json({ error: 'アイテム付与数が不正です' });
     target.items = target.items || {};
-    for (const it of BOOST_ITEMS) target.items[it.id] = Math.max(0, (target.items[it.id] || 0) + n);
+    for (const it of BOOST_ITEMS) target.items[it.id] = Math.max(0, Math.min(999, (target.items[it.id] || 0) + n));
   }
   if (typeof b.banned === 'boolean') {
     if (target.role === 'admin' && b.banned) return res.status(400).json({ error: '管理者は凍結できません' });
@@ -2566,7 +2655,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     // force re-login everywhere with the new password
     revokeAllTokens(target.id);
   }
-  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
+  const KNOWN_BADGES = ADMIN_KNOWN_BADGES;   // 一箇所で管理（編集画面と同じ一覧）
   if (typeof b.grantBadge === 'string') {
     if (!KNOWN_BADGES.includes(b.grantBadge)) return res.status(400).json({ error: `バッジIDが不正です（${KNOWN_BADGES.join(' / ')}）` });
     if (!target.badges.includes(b.grantBadge)) target.badges.push(b.grantBadge);
@@ -2589,9 +2678,170 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   if (b.resetStats === true) {
     target.stats = { gamesPlayed: 0, bestScore: 0, totalScore: 0, totalLines: 0, maxCombo: 0, aiWins: 0, pvpWins: 0, pvpLosses: 0, rating: 1000 };
   }
+
+  // ---- 🎒 インベントリ編集（絶対値で設定する系） ----
+  //
+  // The grant* fields above ADD; these SET. Two rules make this safe enough to
+  // expose in a browser:
+  //
+  //  1. VALIDATE EVERYTHING FIRST, then apply. Writing as we validated meant a
+  //     later field's 400 left the earlier fields already written to the live
+  //     record, and the next saveDb() persisted that half-applied edit while
+  //     the admin saw an error and assumed nothing happened.
+  //  2. Reject rather than coerce. `Number(null)` is 0, so a stray null in the
+  //     JSON used to silently wipe a player's currency and answer ok:true.
+  const patch = {};
+  const intIn = (v, max, min = 0) => {
+    if (typeof v === 'string' ? v.trim() === '' : typeof v !== 'number') return null;
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : null;
+  };
+  const bad = msg => { throw Object.assign(new Error(msg), { userError: true }); };
+
+  try {
+    if (b.setCoins !== undefined) {
+      const n = intIn(b.setCoins, 1_000_000_000);
+      if (n === null) bad('コインの値が不正です');
+      patch.coins = n;
+    }
+    if (b.setGems !== undefined) {
+      const n = intIn(b.setGems, 100_000_000);
+      if (n === null) bad('ジェムの値が不正です');
+      patch.gems = n;
+    }
+    // setLevel rounds XP down to the floor of that level, which throws away
+    // partial progress — setXp restores the exact value.
+    if (b.setXp !== undefined) {
+      const n = intIn(b.setXp, 998_000);
+      if (n === null) bad('XPの値が不正です');
+      patch.xp = n;
+    }
+
+    if (b.setItems !== undefined) {
+      if (!b.setItems || typeof b.setItems !== 'object' || Array.isArray(b.setItems)) bad('アイテムの指定が不正です');
+      const known = new Map(BOOST_ITEMS.map(i => [i.id, i]));
+      const next = {};
+      for (const [id, v] of Object.entries(b.setItems)) {
+        const def = known.get(id);
+        if (!def) bad(`不明なアイテムです: ${String(id).slice(0, 32)}`);
+        if (def.adminOnly && target.role !== 'admin') bad('管理者専用アイテムは付与できません');
+        const n = intIn(v, 999);
+        if (n === null) bad(`アイテム個数が不正です: ${id}`);
+        if (n > 0) next[id] = n;
+      }
+      patch.items = next;
+    }
+
+    // Owned cosmetics. The defaults are always re-added so a player can never
+    // be left with nothing equippable.
+    if (b.setOwned !== undefined) {
+      if (!Array.isArray(b.setOwned)) bad('所持品の指定が不正です');
+      const known = new Map(SHOP_ITEMS.map(i => [i.id, i]));
+      for (const id of b.setOwned) {
+        const it = known.get(id);
+        if (!it) bad(`不明なアイテムです: ${String(id).slice(0, 32)}`);
+        if (it.adminOnly && target.role !== 'admin') bad('管理者専用の装備は付与できません');
+      }
+      patch.owned = [...new Set([...DEFAULT_OWNED, ...b.setOwned])];
+    }
+
+    // Equipping something the player does not own renders as a blank board, so
+    // this is checked against the owned list AFTER any change in this same
+    // request — not the stale one.
+    if (b.setEquipped !== undefined) {
+      if (!b.setEquipped || typeof b.setEquipped !== 'object' || Array.isArray(b.setEquipped)) bad('装備の指定が不正です');
+      const owned = new Set(patch.owned || target.owned || []);
+      const next = { ...(target.equipped || {}) };
+      for (const [slot, id] of Object.entries(b.setEquipped)) {
+        if (!EQUIP_SLOTS.includes(slot)) bad(`不明な装備スロットです: ${String(slot).slice(0, 16)}`);
+        const item = SHOP_ITEMS.find(i => i.id === id);
+        if (!item || item.cat !== slot) bad(`${slot} に装備できないアイテムです`);
+        if (!owned.has(id)) bad('所持していないアイテムは装備できません（先に所持品に追加してください）');
+        next[slot] = id;
+      }
+      patch.equipped = next;
+    }
+
+    if (b.setTitle !== undefined) {
+      if (b.setTitle === null || b.setTitle === '') patch.equippedTitle = null;
+      else if (!TITLES.some(t => t.id === b.setTitle)) bad('不明な称号です');
+      else patch.equippedTitle = b.setTitle;
+    }
+
+    if (b.setBadges !== undefined) {
+      if (!Array.isArray(b.setBadges)) bad('バッジの指定が不正です');
+      for (const id of b.setBadges) {
+        if (!ADMIN_KNOWN_BADGES.includes(id)) bad(`不明なバッジです: ${String(id).slice(0, 32)}`);
+      }
+      patch.badges = [...new Set(b.setBadges)];
+    }
+
+    // A premium battle pass was PAID for with gems, so restoring an account
+    // has to be able to give it back. The season is not editable: it must stay
+    // whatever currentSeason() says, or syncBattlePass wipes the record.
+    if (b.setPass !== undefined) {
+      if (!b.setPass || typeof b.setPass !== 'object' || Array.isArray(b.setPass)) bad('バトルパスの指定が不正です');
+      const bp = { ...(target.battlePass || {}) };
+      if (b.setPass.xp !== undefined) {
+        const n = intIn(b.setPass.xp, BP_TIERS.length * BP_XP_PER_TIER);
+        if (n === null) bad('バトルパスXPの値が不正です');
+        bp.xp = n;
+      }
+      if (b.setPass.premium !== undefined) {
+        if (typeof b.setPass.premium !== 'boolean') bad('プレミアムの指定が不正です');
+        bp.premium = b.setPass.premium;
+      }
+      patch.battlePass = bp;
+    }
+
+    if (b.setStats !== undefined) {
+      if (!b.setStats || typeof b.setStats !== 'object' || Array.isArray(b.setStats)) bad('統計の指定が不正です');
+      const next = {};
+      for (const [key, v] of Object.entries(b.setStats)) {
+        const def = EDITABLE_STATS.find(s => s.key === key);
+        if (!def) bad(`編集できない項目です: ${String(key).slice(0, 32)}`);
+        const n = intIn(v, def.max, def.min || 0);
+        if (n === null) bad(`${def.label} の値が不正です`);
+        next[key] = n;
+      }
+      patch.stats = next;
+    }
+  } catch (err) {
+    if (err && err.userError) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+
+  // ---- everything validated: apply ----
+  for (const k of ['coins', 'gems', 'xp', 'items', 'owned', 'equippedTitle', 'badges', 'battlePass']) {
+    if (patch[k] !== undefined) target[k] = patch[k];
+  }
+  if (patch.equipped) target.equipped = patch.equipped;
+  if (patch.stats) {
+    target.stats = target.stats || {};
+    Object.assign(target.stats, patch.stats);
+  }
+
+  // Reconcile the equipped-must-be-owned invariant no matter WHICH field moved:
+  // dropping an item from the owned list while it was equipped used to leave
+  // the player staring at a board that renders nothing.
+  target.owned = target.owned || [];
+  for (const slot of EQUIP_SLOTS) {
+    const cur = target.equipped && target.equipped[slot];
+    const item = SHOP_ITEMS.find(i => i.id === cur);
+    if (!item || item.cat !== slot || !target.owned.includes(cur)) {
+      target.equipped = target.equipped || {};
+      target.equipped[slot] = DEFAULT_EQUIPPED[slot];
+    }
+  }
+
+  // Leave the record in a shape the rest of the server can read.
+  migrateUser(target);
   saveDb();
-  res.json({ ok: true });
+  // NOT publicUser(): for an admin target that view fakes the entire shop as
+  // owned, and echoing it back would let the editor write that fiction in.
+  res.json({ ok: true, user: adminUserView(target) });
 });
+
 
 app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   const target = db.users[req.params.id];

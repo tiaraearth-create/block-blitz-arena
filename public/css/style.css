@@ -1722,3 +1722,43 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
   .rl-fin-card canvas { width: 44px; height: 44px; }
   .ae-slot-time { font-size: 16px; min-width: 54px; }
 }
+
+/* ---------------------------------------------------------------------------
+   🎒 インベントリ編集（管理者）
+   1画面に全部載るぶん縦に長いので、モーダル内でスクロールさせる。
+   --------------------------------------------------------------------------- */
+.ue-body {
+  max-height: min(58vh, 520px);
+  overflow-y: auto;
+  padding-right: 6px;
+  margin: 4px 0 12px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.ue-h {
+  font-size: 13px; font-weight: 800; color: var(--cyan);
+  margin: 14px 0 6px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; background: var(--bg1); z-index: 1;
+}
+.ue-h:first-child { margin-top: 0; }
+.ue-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 4px; margin-bottom: 6px;
+}
+.ue-item, .ue-own {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 5px 8px; font-size: 12px; cursor: pointer;
+}
+.ue-item { justify-content: space-between; cursor: default; }
+.ue-item span, .ue-own span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ue-item input { width: 56px; text-align: right; }
+.ue-own input { flex: 0 0 auto; }
+.ue-own:has(input:checked) { border-color: var(--green); background: rgba(94,232,110,0.12); }
+.ue-own.staff { border-style: dashed; }
+.ue-own.staff span { color: var(--gold); }
+.ue-cat { margin-bottom: 10px; }
+.ue-cat-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; font-weight: 800; color: var(--muted); margin-bottom: 4px;
+}
