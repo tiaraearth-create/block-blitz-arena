@@ -154,8 +154,12 @@ export function initBattle(server, deps) {
     const schedule = getAeSchedule(db);
     if (!schedule.enabled) return null;
     const live = user ? aeLiveSlotFor(schedule, user) : null;
-    if (!live) return db.meta.adminEventRun || null;
+    // 枠を取れていない人には null を返す。以前はここで共有runをそのまま
+    // 返していたので、予約なしでも枠の時間外でも参加できてしまった。
+    if (!live) return null;
     const counts = aeSlotCounts(db, live.occ);
+    // 断罪の回でなければ、この導線は使えない（他の3モードは別経路）
+    if (live.occ.modeId !== 'zero') return null;
     return aeEnsureRun(db, live.occ, Math.max(1, aeEntrantCount(counts)));
   }
 
@@ -246,13 +250,39 @@ export function initBattle(server, deps) {
     }
     sess.tick = setInterval(() => {
       const r = db.meta.adminEventRun;
-      if (!r || sess.ended) { clearInterval(sess.tick); zeroSessions.delete(sess.id); return; }
+      if (!r || sess.ended) { endZeroSession(sess); return; }
       // 誰も見ていない部屋は畳む（住人だけの部屋を回し続けない）
-      const watching = sess.entrants.some(e => e.human && e.ws && e.ws.readyState === e.ws.OPEN);
-      if (!watching) { clearInterval(sess.tick); zeroSessions.delete(sess.id); return; }
+      // 抜けた人(e.left)は「見ている」に数えない。数えていたので、
+      // 席に印が付いただけの部屋が永久に回り続けていた。
+      const watching = sess.entrants.some(e => e.human && !e.left && e.ws && e.ws.readyState === e.ws.OPEN);
+      if (!watching) { endZeroSession(sess); return; }
       try { tickZero(sess, r, zeroDeps(sess)); } catch (err) { console.error('[zero] tick:', err && err.message); }
     }, ZERO_TICK);
     return sess;
+  }
+
+  // 席を外れる／部屋を畳む。以前は zero_leave も切断も「席に印を付ける」
+  // だけで、tick を止めておらず zeroSessions からも消していなかった。
+  // 畳む判定も e.left を見ていなかったので、1本のソケットから5部屋が
+  // 同時に生き続けることを実測で確認している。
+  function zeroSeatOut(ws) {
+    const sess = ws.zeroId ? zeroSessions.get(ws.zeroId) : null;
+    ws.zeroId = null;
+    if (!sess) return;
+    const e = sess.entrants.find(x => x.ws === ws);
+    if (e) { e.alive = false; e.left = true; }
+    // 生身が誰も居なくなったら、その場で畳む（次の tick を待たない）
+    if (!sess.entrants.some(x => x.human && !x.left && x.ws && x.ws.readyState === x.ws.OPEN)) {
+      endZeroSession(sess);
+    }
+  }
+
+  function endZeroSession(sess) {
+    if (!sess || sess.ended) return;
+    sess.ended = true;
+    if (sess.tick) clearInterval(sess.tick);
+    sess.tick = null;
+    zeroSessions.delete(sess.id);
   }
 
   function zeroSessionOf(ws) {
@@ -269,11 +299,13 @@ export function initBattle(server, deps) {
   // 自動台詞より先にこれを作るのが正しい順序 —— 実装はほぼ無いのに、
   // 「今日のゼロ、なんか喋りが違う」が起きるのはこちらだけ。
   const ZERO_NAME = '管理者ゼロ';
-  function zeroChat(text, tr) {
+  function zeroChat(text, en) {
     if (!text) return null;
+    // tr は { lang, text, engine } の形。素の文字列を渡していたので、
+    // 英語面でゼロの発言だけ翻訳が出ていなかった。
     return postChat(ZERO_NAME, String(text).slice(0, 300), {
       role: 'zero',
-      ...(tr ? { tr } : {}),
+      ...(en ? { tr: { lang: 'en', text: String(en).slice(0, 300), engine: 'native' } } : {}),
     });
   }
   // 台詞テーブルから1行選んで喋る（日英そろって出る）
@@ -2126,15 +2158,7 @@ export function initBattle(server, deps) {
           // 正規のクライアントは 700〜900ms 間隔なので、余裕を持って毎秒4回。
           if (!sockRate(ws, 'stateTimes', 40, 10_000)) return;
           // Battle royale: no match object — just track the live score.
-          if (ws.zeroId) {
-        const sess = zeroSessions.get(ws.zeroId);
-        if (sess) {
-          const e = sess.entrants.find(x => x.ws === ws);
-          if (e) { e.alive = false; e.left = true; }
-        }
-        ws.zeroId = null;
-      }
-      if (ws.royaleId) {
+          if (ws.royaleId) {
             const r = royales.get(ws.royaleId);
             if (r && !r.ended) {
               const e = r.entrants.find(x => x.ws === ws);
@@ -2189,6 +2213,7 @@ export function initBattle(server, deps) {
           if (!zu) { send(ws, { type: 'error', error: 'ログインが必要です' }); return; }
           if (!zeroRun(zu)) { send(ws, { type: 'error', error: 'いまはあなたの枠の時間ではありません' }); return; }
           if (!sockRate(ws, 'zeroJoinTimes', 5, 30_000)) return;
+          zeroSeatOut(ws);                 // 念のため。前の部屋を残さない
           startZeroSession([ws], zeroRun(zu));
           return;
         }
@@ -2253,6 +2278,8 @@ export function initBattle(server, deps) {
           return;
         }
         case 'zero_topout': {
+          // ここだけレート制限が無く、連打でゼロを回復させ放題だった。
+          if (!sockRate(ws, 'zeroTopTimes', 6, 60_000)) return;
           const sess = zeroSessionOf(ws);
           const run = db.meta.adminEventRun;
           if (!sess || !run) return;
@@ -2260,12 +2287,7 @@ export function initBattle(server, deps) {
           return;
         }
         case 'zero_leave': {
-          const sess = zeroSessionOf(ws);
-          if (sess) {
-            const e = sess.entrants.find(x => x.ws === ws);
-            if (e) { e.alive = false; e.left = true; }
-          }
-          ws.zeroId = null;
+          zeroSeatOut(ws);
           return;
         }
         case 'royale_topout': {
@@ -2489,6 +2511,7 @@ export function initBattle(server, deps) {
       leaveQueues(ws);
       leaveRoom(ws);
       dropRematchesFor(ws);   // 🔁 相手が消えたら再戦オファーも消える
+      if (ws.zeroId) zeroSeatOut(ws);   // 👁️断罪の席から外し、無人なら部屋を畳む
       // Battle royale: leaving eliminates you where you actually stood — LAST
       // among the current survivors. Awarding rank-among-survivors made
       // quitting while ahead score better than playing the round out.

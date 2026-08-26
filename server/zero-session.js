@@ -126,7 +126,18 @@ export function tick(s, run, deps) {
   if (s.ended || elapsed < 0) return;
 
   const danIndex = run.dan | 0;
-  if (danIndex >= DAN.length) return;          // 7段すべて割れている
+  // 七段すべて割れた。以降は静かに終わる（tick は何もしない）が、
+  // 完全勝利を一度だけ知らせる ── 気づかれないまま終わるのが一番もったいない。
+  if (danIndex >= DAN.length) {
+    if (!run.allBroken) {
+      run.allBroken = Date.now();
+      if (deps.say) deps.say('wrap', DAN.length - 1, { n: DAN.length });
+      if (deps.emit) for (const x of s.entrants) if (x.human) {
+        deps.emit(x, { type: 'zero_complete', dan: DAN.length });
+      }
+    }
+    return;
+  }
   const dan = danAt(danIndex);
   const softCap = softCapFor(danIndex, s.humans, run);
 

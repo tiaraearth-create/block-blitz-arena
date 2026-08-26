@@ -1949,11 +1949,14 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
 /* 🤝 取引 ── 60秒の生投票。票が割れていく様子そのものが見世物なので、
    盤面の上に大きく重ねて、途中経過が常に見えるようにする。 */
 .zero-deal {
-  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+  /* 画面下に固定すると、375x812 では手札と盤面の下端に重なって
+     置けなくなる（実測で確認）。上から降ろす。 */
+  position: fixed; left: 50%; top: 12px; transform: translateX(-50%);
   width: min(460px, calc(100vw - 24px)); z-index: 60;
   background: linear-gradient(180deg, #2a1116, #14161f);
   border: 1px solid #6d1a22; border-radius: 12px; padding: 14px 16px;
   box-shadow: 0 12px 40px rgba(0,0,0,.6);
+  max-height: 46vh; overflow-y: auto;
 }
 .zd-q { font-size: 13px; font-weight: 700; line-height: 1.7; color: #f2d4d7; margin-bottom: 10px; }
 .zd-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: rgba(0,0,0,.4); }
@@ -1965,3 +1968,7 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
 .zd-btn.picked { border-color: #e03546; color: #ffd7db; }
 .zd-btn:disabled { opacity: .5; }
 .zd-left { text-align: center; font-size: 11px; font-weight: 700; color: #e03546; margin-top: 7px; font-variant-numeric: tabular-nums; }
+
+/* 👁️ 断罪の入れ物。#bossPanel の中身は消さずに隠すので、専用の箱を足す。 */
+#zeroArena { width: 100%; }
+.boss-panel.zero-panel { display: block; }

@@ -5616,9 +5616,18 @@ class ZeroMode extends VersusBase {
   // ---- アリーナ（席・ゼロの盤面・段のバー）----
 
   buildArena() {
+    // #bossPanel の中身を innerHTML で置き換えると、index.html に書いてある
+    // ボス戦用の要素(#bossEmoji / #bossName / #bossHp …)が永久に消え、
+    // 同じタブでボス戦を始めたときに落ちる。専用の箱を足して、
+    // 元の中身は隠すだけにする。
     const panel = $('#bossPanel');
     panel.classList.remove('hidden');
-    panel.innerHTML = [
+    panel.classList.add('zero-panel');
+    for (const el of [...panel.children]) el.classList.add('hidden');
+    let box = $('#zeroArena');
+    if (!box) { box = document.createElement('div'); box.id = 'zeroArena'; panel.appendChild(box); }
+    box.classList.remove('hidden');
+    box.innerHTML = [
       '<div class="zero-top">',
       '  <canvas id="zeroBoard" class="zero-board" width="120" height="120"></canvas>',
       '  <div class="zero-bars">',
@@ -5916,12 +5925,25 @@ class ZeroMode extends VersusBase {
         ? `<p class="zero-fallen">${t('今日、消えた住人', 'Lost today')}: ${st.fallen.map(escapeHtml).join('、')}</p>` : '',
       `<button class="btn btn-primary" id="zeroClose">${t('とじる', 'Close')}</button>`,
     ].join(''));
+    // ここでも元に戻す。destroy() は次のモードを始めるまで呼ばれないので、
+    // 結果画面からメニューに戻った直後にボス戦を始めると壊れたままになる。
+    this.restoreBossPanel();
     const btn = $('#zeroClose');
     if (btn) btn.onclick = () => { closeModal(); showScreen('menu'); };
   }
 
   quit() { this.finish(); }
 
+  // #bossPanel を、隠しただけの元の中身に戻す。
+  restoreBossPanel() {
+    const zp = $('#bossPanel');
+    if (!zp) return;
+    const za = $('#zeroArena');
+    if (za) za.remove();
+    zp.classList.remove('zero-panel');
+    for (const el of [...zp.children]) el.classList.remove('hidden');
+    zp.classList.add('hidden');
+  }
   destroy() {
     this.ended = true;
     this.stopTimer();
@@ -5930,7 +5952,8 @@ class ZeroMode extends VersusBase {
     const v = getView();
     if (v) { v.dangerCells = null; v.keystoneCell = -1; }
     const dl = $('#zeroDeal'); if (dl) dl.remove();
-    $('#bossPanel').classList.add('hidden');
+    // ボス戦がまた使えるよう、隠しただけの元の中身を戻す
+    this.restoreBossPanel();
   }
 }
 

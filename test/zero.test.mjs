@@ -9,6 +9,7 @@
 //   * 人が増えても段の到達が逆転しない
 //   * 台詞が必ず日英そろっている（片方だけだと英語面がまた壊れる）
 //   * 断罪の判定が、予告時間を過ぎた申告を受け付けない
+import fs from 'fs';
 import {
   DAN, ZERO_BOARDS, SEAL_RATIO, SEATS_MIN, SEATS_MAX, MIN_BOT_SEATS,
   danAt, danHpFor, sealHpFor, softCapFor, cutDamageFor, cutsNeededFor,
@@ -141,4 +142,66 @@ check('すべての段で態度が決まる', DAN.every((_, i) => MOODS.includes
   check('配列でない申告は通らない', !verdictAccepts(verdict, 2000, 'ぜんぶ').ok, '');
 }
 
+// ---- 画面の作りが壊れないこと（レビューで見つかった重大な2件）------------
+//
+// ① ZeroMode が #bossPanel の中身を innerHTML で置き換えていたので、
+//    断罪を1回遊ぶと、同じタブでボス戦・ダンジョン・レイド・他の管理者イベントが
+//    起動時に落ちるようになっていた（index.html にしかない要素が消えるため）。
+//    専用の箱(#zeroArena)を足して、元の中身は隠すだけにした。
+// ② セッションの後始末が無く、1本のソケットから部屋が並走し続けた。
+//
+// どちらもコードの形でしか固定できないので、ソースを読んで確かめる。
+{
+  const modes = fs.readFileSync(new URL('../public/js/modes.js', import.meta.url), 'utf8');
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const battle = fs.readFileSync(new URL('../server/battle.js', import.meta.url), 'utf8');
+
+  const zi = modes.indexOf('class ZeroMode');
+  const zEnd = modes.indexOf('export function startAdminEventMode', zi);
+  const zero = modes.slice(zi, zEnd > 0 ? zEnd : undefined);
+  check('ZeroMode がある', zi > 0, '');
+  check('#bossPanel の中身を innerHTML で潰していない',
+    !/panel.innerHTMLs*=/.test(zero), '');
+  check('専用の箱に描いている', zero.includes('#zeroArena'), '');
+  // 素直に数える（正規表現のエスケープは経路で欠けやすい）
+  const restores = zero.split('restoreBossPanel()').length - 1;
+  check('抜けるときに元の中身を戻す', restores >= 3, `${restores}箇所（定義1＋呼び出し2）`);
+
+  // index.html 側の要素が、いまも1か所にしか無いことを確かめる
+  for (const id of ['bossEmoji', 'bossName', 'bossHp', 'bossHpText', 'bossAtkBar']) {
+    if ((html.match(new RegExp('id="' + id + '"', 'g')) || []).length !== 1) {
+      check(`#${id} が index.html に1つある`, false, '数が違う');
+    }
+  }
+  check('ボス戦の要素は index.html にしか無い（消すと復元できない）', true, '');
+
+  // セッションの後始末
+  check('部屋を畳む関数がある', battle.includes('function endZeroSession'), '');
+  check('席を外す関数がある', battle.includes('function zeroSeatOut'), '');
+  check('抜けた人は「見ている」に数えない', battle.includes('e.human && !e.left'), '');
+  // 正規表現ではなく素直な文字列で見る（バックスラッシュは経路で欠けやすい）
+  {
+    const di = battle.indexOf('dropRematchesFor(ws);   //');
+    check('切断時に席から外す', di > 0 && battle.slice(di, di + 160).includes('zeroSeatOut(ws)'), '');
+    const ji = battle.indexOf('zeroSeatOut(ws);                 //');
+    check('参加時に前の部屋を残さない', ji > 0 && battle.slice(ji, ji + 120).includes('startZeroSession'), '');
+  }
+
+  // 参加条件（予約・枠・モード）
+  check('枠を取れていない人には run を返さない', battle.includes('if (!live) return null;'), '');
+  check('断罪の回でなければ参加させない', battle.includes("live.occ.modeId !== 'zero'"), '');
+
+  // レート制限が全メッセージに付いていること
+  for (const m of ['zero_join', 'zero_cut', 'zero_stake', 'zero_vote', 'zero_will', 'zero_topout']) {
+    const i = battle.indexOf(`case '${m}':`);
+    const seg = i > 0 ? battle.slice(i, i + 420) : '';
+    if (i > 0 && !seg.includes('sockRate')) { check(`${m} にレート制限がある`, false, '無い'); }
+  }
+  check('断罪の全メッセージにレート制限がある', true, '');
+
+  // 離脱処理が case 'state' に紛れ込んでいないこと（実際に一度そうなった）
+  const si = battle.indexOf("case 'state': {");
+  const seg = si > 0 ? battle.slice(si, si + 500) : '';
+  check('離脱処理が state の中に紛れ込んでいない', !seg.includes('zeroSeatOut') && !seg.includes('e.left = true'), '');
+}
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');
