@@ -1,23 +1,28 @@
 # Render Blueprint — deploy with "New +" → "Blueprint" on render.com
 #
-# ⚠️ DATA PERSISTENCE ⚠️
-# The FREE plan has NO persistent disk: server/data (accounts, scores, gems)
-# is wiped on every deploy AND whenever the instance restarts.
+# ✅ DATA PERSISTENCE — 永続ディスク構成（starter プラン）
+# server/data（アカウント・スコア・ジェム・ギルド・イベント）は下の disk に
+# 保存されるので、デプロイでも再起動でも消えません。
 #
-#   Free plan  → before each deploy: 管理者パネル → 💾 バックアップDL
-#                after the deploy:   https://<your-url>/?restore=1 → file +
-#                the admin password from the backup → ♻️ 復元（マージ）
-#   Paid disk  → switch `plan` to `starter` and uncomment the disk block below.
-#                Data then survives deploys with nothing to do by hand.
+# ⚠️ 無料プランに戻す場合の注意（plan: free / disk をコメントアウト）
+#   free には永続ディスクがありません。デプロイ時だけでなく、15分アイドルで
+#   スピンダウンして再起動するたびに server/data が消えます。その構成では
+#   push の前に必ず `npm run backup:pull` を実行し、生成された
+#   server/seed-backup.json をコミットしてください（起動時に自動復元されます）。
 #
-# SESSIONS: with SESSION_SECRET set, logins survive deploys/restarts — players
-# stay signed in through the wipe and re-attach automatically once the data is
-# restored. (Without it, every redeploy logs everyone out.)
+# SEED: server/seed-backup.json は起動時に一度だけマージ復元されます
+# （db.meta.seedHash で「同じseedは二度適用しない」制御）。ディスクを付けた
+# 直後の初回起動でも空のディスクに1回だけ適用されるため、ディスク移行の前に
+# seed を最新化しておくと、そのまま正しい状態で立ち上がります。
+# ディスク運用が安定したあと自動復元を止めたいときは SEED_RESTORE=0。
+#
+# SESSIONS: SESSION_SECRET を設定しておくと、再デプロイでもプレイヤーは
+# ログアウトされません（未設定だと毎回全員ログアウト）。
 services:
   - type: web
     name: block-blitz-arena
     runtime: node
-    plan: free
+    plan: starter
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /api/status
@@ -26,9 +31,10 @@ services:
         generateValue: true        # long random string; keeps logins across deploys
       - key: ADMIN_PASSWORD
         sync: false                # prompted on first deploy; pins the admin password
-    # --- permanent data (requires the paid "starter" plan) ---
-    # plan: starter
-    # disk:
-    #   name: game-data
-    #   mountPath: /opt/render/project/src/server/data
-    #   sizeGB: 1
+    # --- permanent data ---
+    # mountPath must match DATA_DIR (defaults to <repo>/server/data, and Render
+    # checks the repo out at /opt/render/project/src).
+    disk:
+      name: game-data
+      mountPath: /opt/render/project/src/server/data
+      sizeGB: 1

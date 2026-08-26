@@ -158,11 +158,12 @@ git remote add origin https://github.com/<あなたのユーザー名>/block-bli
 git push -u origin master
 ```
 
-### 2. ホスティング（無料枠で可）
+### 2. ホスティング
 **Render** (おすすめ・簡単):
 1. [render.com](https://render.com) で「New → Web Service」→ GitHubリポジトリを接続
 2. Build Command: `npm install` / Start Command: `npm start`
-3. 「Disks」で永続ディスクを追加し、Mount Path を `/opt/render/project/src/server/data` に（セーブデータ保持のため）
+3. **「Disks」で永続ディスクを追加**し、Mount Path を `/opt/render/project/src/server/data` に
+   （無料プランでは選べません。これが無いと再起動のたびにセーブデータが消えます）
 
 **Railway / Fly.io** も同様（`PORT` は自動注入、対応済み）。**Docker** も可:
 ```bash
@@ -172,9 +173,24 @@ docker run -p 3000:3000 -v blockblitz-data:/app/server/data block-blitz
 
 ### 3. 公開後の注意（⚠️まず読んでください）
 
-#### ✅ v2.6の更新手順（推奨・自動復元）
-アップデートを push する**前に**、リポジトリのフォルダで1コマンド実行するだけ：
+#### ✅ 永続ディスクがある場合（Starterプラン・推奨）
+`render.yaml` が `plan: starter` ＋ `disk` になっていれば、`server/data` は
+ディスクに保存されるので**デプロイでも再起動でもデータは消えません**。
+push するだけで更新が完了します。事前の `npm run backup:pull` は不要です。
 
+> **ディスクを後から付けるときは順番に注意。** 新しいディスクは空の状態で
+> 作られるため、その初回起動で `server/seed-backup.json` が1回だけ適用され、
+> それがディスクの初期状態になります。移行の直前に `npm run backup:pull` を
+> 実行して seed を最新化してから push してください。
+> （`db.meta.seedHash` により、同じ seed が二度適用されることはありません）
+
+ディスク運用が安定したら、環境変数 `SEED_RESTORE=0` で自動復元を止めても
+かまいません（`seed-backup.json` は最後の保険として残しておけます）。
+
+#### ⚠️ 無料プランの場合の更新手順（自動復元）
+無料プランには永続ディスクがありません。**デプロイ時だけでなく、15分アイドルで
+スピンダウンして再起動するたびに `server/data` が消えます。** そのため
+アップデートを push する**前に**、毎回このコマンドが必要です：
 ```bash
 npm run backup:pull
 ```
