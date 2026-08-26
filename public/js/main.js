@@ -9,6 +9,7 @@ import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
 import { applySettings } from './settings.js';
 import { initChat, reconnectChat, showFeedModal, setMood, updateNewsDot } from './chat.js';
+import { setAdminEvent } from './adminevent.js';
 import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
 
 applyStaticI18n();
@@ -400,8 +401,9 @@ function updateEventBanner() {
 
 async function pollStatus() {
   try {
-    const res = await fetch('/api/status');
-    const data = await res.json();
+    // api() attaches the bearer token, which is what lets /api/status return
+    // YOUR admin-event slot and countdown instead of a generic schedule.
+    const data = await api('/api/status');
     // Keep every counter (menu badge + chat drawer) on the same number.
     $('#onlineCount').textContent = data.online;
     $('#chatOnline').textContent = t(`🟢 ${data.online}人`, `🟢 ${data.online} online`);
@@ -409,6 +411,7 @@ async function pollStatus() {
     setMood(data.mood);
     window.__bbaEvent = data.event || null;
     updateEventBanner();
+    setAdminEvent(data.adminEvent || null);
     const prevPoll = window.__bbaPoll && window.__bbaPoll.id;
     window.__bbaPoll = data.poll || null;
     if (!data.poll || prevPoll !== data.poll.id) refreshPollBanner();

@@ -207,9 +207,17 @@ const EFFECTS = {
     view.screenFlash = 0.45;
     audio.combo(8);
     document.querySelector('#hudScore').classList.add('fever');
+    // Fires 15s later, by which time the run may be over and a NEW run (with a
+    // new engine) may be on screen — leaving the old score glowing gold and
+    // resetting a multiplier that belongs to nobody. Both effects expire on
+    // their own via feverUntil, so the timeout only has to tidy up, and only
+    // if it is still the same run.
     setTimeout(() => {
-      document.querySelector('#hudScore').classList.remove('fever');
-      engine.feverMult = 2;
+      if (engine.feverUntil <= Date.now()) {
+        engine.feverMult = 2;
+        const el = document.querySelector('#hudScore');
+        if (el && (!window.__bbaMode || window.__bbaMode.engine === engine)) el.classList.remove('fever');
+      }
     }, 15000);
     const [cx, cy] = boardCenter(view);
     view.addFloatText(cx, cy, 'OVERDRIVE!', '#ff5d5d', 2);

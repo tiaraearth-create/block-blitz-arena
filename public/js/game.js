@@ -151,14 +151,29 @@ export class GameView {
       if (!this.drag) return;
       const { x, y } = pos(e);
       const anchor = this.dragAnchor();
-      const { index } = this.drag;
+      const { index, piece } = this.drag;
       this.drag = null;
+      // pointerdown checks inputLocked, but the lock can land DURING a drag —
+      // the timer expiring, the run ending, the result already submitted. A
+      // release after that used to still place the piece and move the score.
+      if (this.inputLocked || !this.running || !this.engine || this.engine.over) {
+        audio.putback();
+        return;
+      }
       // Chimera welding: the drag preview (drawDrag) uses the same predicate,
       // so whenever the weld highlight is showing, releasing welds — and
       // whenever a board ghost is showing, releasing places. Never both.
       const wslot = this.weldTargetAt(x, y, index);
       if (wslot !== -1 && this.onTrayDrop(index, wslot)) return;
-      if (anchor && this.engine.canPlace(this.engine.hand[index], anchor.r, anchor.c)) {
+      // The hand can be rewritten mid-drag (a boss move, a co-op broadcast,
+      // the admin's 🎴 hand shuffle). dragAnchor() ghosts the piece you picked
+      // UP, so placing hand[index] blind would drop a different shape than the
+      // one under your finger.
+      if (this.engine.hand[index] !== piece) {
+        audio.putback();
+        return;
+      }
+      if (anchor && this.engine.canPlace(piece, anchor.r, anchor.c)) {
         // Co-op runs on a server-authoritative board: the hook forwards the
         // move and returns true, and the real placement arrives as a broadcast.
         if (this.onIntentPlace && this.onIntentPlace(index, anchor.r, anchor.c)) return;

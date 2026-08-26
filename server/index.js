@@ -43,6 +43,14 @@ import { EVENT_TYPES, makeEvent, eventBonus } from './events.js';
 import {
   createPoll, eventPollOptions, vote as castVote, pollView, tickPoll, winnerOf, isOpen as pollOpen,
 } from './polls.js';
+import {
+  AE_MODES, WEEKDAYS_JA as AE_WEEKDAYS_JA,
+  aeMode as aeModeById, getSchedule as getAeSchedule, normalizeSchedule as aeNormalizeSchedule,
+  currentOccurrence as aeCurrentOccurrence, upcomingOccurrences as aeUpcoming,
+  reserve as aeReserve, cancelReservation as aeCancelReservation, liveSlotFor as aeLiveSlotFor,
+  ensureRun as aeEnsureRun, contribute as aeContribute,
+  playerView as aePlayerView, slotCounts as aeSlotCounts, entrantCount as aeEntrantCount,
+} from './adminevent.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -50,6 +58,38 @@ const PORT = process.env.PORT || 3000;
 const db = loadDb();
 setLiveScale(db.meta.popScale === undefined ? 1 : db.meta.popScale);
 if (db.meta.ambient) setCustom(db.meta.ambient);
+
+// Heal guilds that account deletions already jammed. Until v2.11 a deleted
+// account left its id in guild.members (counter stuck at 20/20, "ギルドは満員
+// です" for every applicant) and, if it was the owner, in guild.ownerId — after
+// which nothing could rename, re-open or kick. New deletions call leaveGuild;
+// this repairs the damage that is sitting in the live db.json right now.
+{
+  let fixed = 0, disbanded = 0;
+  for (const g of Object.values(db.guilds || {})) {
+    const live = (g.members || []).filter(id => db.users[id]);
+    if (live.length === (g.members || []).length) continue;
+    g.members = live;
+    fixed++;
+    if (!live.length) { delete db.guilds[g.id]; disbanded++; continue; }
+    if (!db.users[g.ownerId]) {
+      g.ownerId = live.map(id => db.users[id])
+        .sort((a, b) => (a.guildJoinedAt || 0) - (b.guildJoinedAt || 0))[0].id;
+    }
+  }
+  if (fixed) console.log(`[guilds] 幽霊メンバーを掃除: ${fixed}件（解散 ${disbanded}件）`);
+}
+
+// A throw that escapes an async boundary used to take the process down AND
+// discard everything the debounced writer had not flushed yet.
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException:', err);
+  try { flushDb(); } catch { /* nothing left to try */ }
+  process.exit(1);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err && err.message ? err.message : err);
+});
 const app = express();
 app.set('trust proxy', 1);
 app.use(compression());   // gzip — big win for overseas players on slow links
@@ -339,7 +379,9 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // Meltdown's critical-heat multiplier (×15+) makes its totals incomparable
   // to a plain game — it stays off the global score board (own best stat).
   // Chimera caps around ×3, same ballpark as chaos, so it counts.
-  const scoreboardEligible = mode !== 'meltdown';
+  // 管理者イベントも同じ理由で除外: ルーレットは×5、襲来は妨害まみれで、
+  // 「誰でも挑めるモードのハイスコア」と並べても意味がない。
+  const scoreboardEligible = mode !== 'meltdown' && !mode.startsWith('ae_');
   if (scoreboardEligible && score > s.bestScore) s.bestScore = score;
   if (maxCombo > s.maxCombo) s.maxCombo = maxCombo;
   s.ultsUsed = (s.ultsUsed || 0) + ults;
@@ -567,7 +609,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   }
   if (mode === 'boss' && won && gems > 0 && extraBossId) {
     const b = BOSSES.find(x => x.id === extraBossId);
-    if (b) feedNotes.push({ icon: '🐲', ja: `${nm} が ${b.name} を初討伐！`, en: `${nm} defeated ${b.name} for the first time!` });
+    if (b) feedNotes.push({ icon: '🐲', ja: `${nm} が ${b.name} を初討伐！`, en: `${nm} defeated ${b.nameEn || b.name} for the first time!` });
   }
   if (mode.startsWith('dungeon') && floor >= 10 && Math.floor(floor / 10) > Math.floor((s.dungeonPrev || 0) / 10)) {
     feedNotes.push({ icon: '🏰', ja: `${nm} がダンジョン F${Math.floor(Number(floor) || 0)} に到達`, en: `${nm} reached dungeon F${Math.floor(Number(floor) || 0)}` });
@@ -602,8 +644,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
 
 // Real players' notable moments go on the live feed (starred), and the crowd
 // may react. Capped per user so a hot streak doesn't flood the ticker.
-const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
-const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination', ghost: 'Haunted House' };
+const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
+const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', adminevent: 'Admin Event', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination', ghost: 'Haunted House' };
 const feedAt = new Map();   // userId -> last feed timestamp
 function postRealFeed(user, notes) {
   if (!notes.length) return;
@@ -622,6 +664,9 @@ function postRealFeed(user, notes) {
 }
 
 // Simple in-memory rate limiter (per key, sliding window).
+// Keyed by IP (and by user for some routes), so on a long-lived instance this
+// grew for every address that ever touched the server and never shrank. Both
+// this and feedAt are swept on a slow timer.
 const rateMap = new Map();
 function rateLimit(key, limit, windowMs) {
   const now = Date.now();
@@ -631,6 +676,17 @@ function rateLimit(key, limit, windowMs) {
   rateMap.set(key, arr);
   return true;
 }
+
+setInterval(() => {
+  const now = Date.now();
+  // Nothing here has a window longer than an hour.
+  for (const [k, arr] of rateMap) {
+    if (!arr.length || now - arr[arr.length - 1] > 3600_000) rateMap.delete(k);
+  }
+  for (const [k, at] of feedAt) {
+    if (now - at > 3600_000) feedAt.delete(k);
+  }
+}, 600_000).unref?.();
 
 function inMaintenance() { return !!db.meta.maintenance; }
 
@@ -811,6 +867,11 @@ app.delete('/api/me', requireAuth, (req, res) => {
     return res.status(400).json({ error: '管理者アカウントは削除できません（先に権限を外してください）' });
   }
   revokeAllTokens(user.id);
+  // Must run BEFORE the record disappears: leaveGuild resolves the remaining
+  // members to hand ownership over. Skipping it left a ghost id in
+  // guild.members forever — the roster counter said 20/20 and nobody could
+  // ever join again, and if the ghost was the owner the guild froze solid.
+  leaveGuild(db, user);
   delete db.users[user.id];
   db.deleted[user.id] = Date.now();
   saveDb();
@@ -818,16 +879,43 @@ app.delete('/api/me', requireAuth, (req, res) => {
 });
 
 // Limited-time event (admin-controlled), e.g. chaos mode.
+//
+// An event that runs out of time used to just stop being returned — no
+// announcement, and the record sat in db.meta.event forever so every backup
+// carried a stale one. Expiry is now noticed on the first read after the fact
+// (there is no timer to lose across a restart).
+let battleReady = false;
+
 function currentEvent() {
   const e = db.meta.event;
-  if (e && e.endsAt > Date.now()) return e;
+  if (!e) return null;
+  if (e.endsAt > Date.now()) return e;
+  if (!e.expiredHandled) {
+    e.expiredHandled = true;
+    db.meta.event = null;
+    saveDb();
+    // `battle` is a const initialised near the bottom of this file, so it is in
+    // the temporal dead zone during boot — the flag keeps that reference safe.
+    if (battleReady) {
+      battle.broadcastAll({
+        type: 'announce',
+        message: `${e.icon || '🌪️'} 期間限定イベント「${e.name}」は終了しました。おつかれさま！`,
+        messageEn: `${e.icon || '🌪️'} The limited-time event "${e.nameEn || e.name}" has ended — thanks for playing!`,
+        from: '運営',
+      });
+      battle.crowd.react('event_end');
+    }
+  }
   return null;
 }
 
 // Public lightweight status (menu online counter + event).
-app.get('/api/status', (_req, res) => {
+// The client sends its bearer token, so the admin-event block below can be
+// personalised (your slot, your countdown) without a second round trip.
+app.get('/api/status', (req, res) => {
   refreshThrones();   // polled every ~25s by clients — keeps 👑 takeovers timely
   res.json({
+    adminEvent: adminEventView(req.user),
     online: battle.displayOnline(),
     activeMatches: battle.displayMatches(),
     queueing: ambientQueue() + battle.queueSize(),
@@ -981,7 +1069,7 @@ app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
       messageEn: `🗳️→${ev.icon} The vote has spoken — "${ev.nameEn || ev.name}" is now live! ${ev.descEn || ''}`,
       from: req.user.username,
     });
-    battle.crowd.feed({ icon: ev.icon, real: true, who: '運営', text: `投票で選ばれたイベント「${ev.name}」が開幕！`, textEn: `The voted event "${ev.name}" has begun!` });
+    battle.crowd.feed({ icon: ev.icon, real: true, who: '運営', text: `投票で選ばれたイベント「${ev.name}」が開幕！`, textEn: `The voted event "${ev.nameEn || ev.name}" has begun!` });
     battle.crowd.react('poll_close', { winner: w });   // renderSlot が言語別に text/textEn を選ぶ
     setTimeout(() => battle.crowd.react('event_start'), 25000);
     saveDb();
@@ -1178,6 +1266,23 @@ const SEED_NEWS = [
     title: '💥 オンライン対戦 超絶大型アップデート ＆ 🌐完全翻訳！', titleEn: '💥 Online Battle MEGA Update & 🌐 Full Translation!',
     body: '【💥アタック戦】新モード登場！2ライン以上を同時消しすると相手の盤面にお邪魔ブロックを送り込めます（3ライン=4個、4ライン+コンボで最大9個）。攻撃も防御も自分の腕次第 — オンラインメニューの「💥アタック戦」から！【🔁再戦】デュエル/アタック戦の結果画面に再戦ボタンが付きました。30秒以内なら同じ相手にリベンジできます。【📈昇格演出】レートが新しい帯（🥈シルバー〜👑グランドマスター）に到達すると紙吹雪でお祝い＋ゴールド以上は全体アナウンス！【🌐翻訳大型アップデート】ニュース・投票・イベント・チャットの住人の会話まで、英語表示が全面ネイティブ品質になりました。',
     bodyEn: '[💥 Attack Duel] New mode! Clear 2+ lines at once to send garbage blocks onto your opponent\'s board (3 lines = 4 cells, up to 9 with combos). Attack and defend with pure skill — find it under "💥 Attack Duel" in the online menu! [🔁 Rematch] Duel and Attack results now have a rematch button — get your revenge against the same opponent within 30 seconds. [📈 Promotions] Reaching a new rank tier (🥈 Silver through 👑 Grandmaster) triggers a confetti celebration, and Gold+ promotions are announced to everyone! [🌐 Translation Overhaul] News, polls, events and even the residents\' chat are now native-quality in English.' },
+  { id: 'seed-v211', pinned: true,
+    title: '👑 v2.11 管理者イベント開幕 ＆ 💯バトルロイヤル大改造！',
+    titleEn: '👑 v2.11 — Admin Events & the Battle Royale Overhaul!',
+    body: '【👑 管理者イベント（週1・予約制）】運営が主催する特別イベントがはじまります。ポイントは「開催時間を “あなたが” 選べる」こと — 18:00 / 19:00 / 21:00 のように複数の枠が用意され、メニューのバナーから好きな枠を予約すると、その時間にあなた専用の回が開幕します。予約が違ってもボスHP・共同ゲージ・ランキングは全員で共有。18時に遊んだ人と21時に遊んだ人が、同じ1体のボスを一緒に削ります。10分前と1分前にお知らせが出るので、うっかり寝過ごしても大丈夫。\n' +
+      '【🎮 この枠でしか遊べない専用モード3種（週替わり）】👑管理者襲来＝管理者の分身が「お邪魔の雨」「盤面回転」「手札シャッフル」「目隠し」などをリアルタイムで撃ち込んでくる総力戦。全員の合計ダメージで巨大HPを削り切れ！／🎰運営ルーレット＝30秒ごとにルーレットが回り、スコア5倍・極小ブロックのみ・盤面回転・せり上がり・ラッキーセブンなど9種のルールに書き換わるカオス番組。／🏛️共同作業＝参加者全員のスコアが1本のゲージに合流し、段階目標を越えるたび全員に報酬。盤面に湧く🧱建材を回収すると大きく加速します。\n' +
+      '【🎁 お宝ラッシュ】自分の枠の中は報酬が最大3倍。討伐に成功すると参加者全員に👑バッジ。\n' +
+      '【💯 バトルロイヤル 大改造】99人のAIが「スコアが自動で増えるだけの数字」から、本当に盤面を持って打つプレイヤーになりました。弱いAIは実際に詰んで脱落します。さらに ①2ライン以上消すと生存者の誰かにお邪魔を送り込む殴り合い ②時間経過で全員に降りそそぐ🌩️ストーム ③「あと◯点で生き残れる」を数字で出す危険メーター ④脱落しても終わりじゃない観戦モード ⑤残り3人の盤面が並ぶファイナル ⑥順位別の報酬ラダー（1位🪙1,200💎40 〜 参加賞まで）⑦KO数・最高順位の記録と新実績7種・新称号2種。1回のトップアウトは「復活」、2回目で脱落です。\n' +
+      '【🐲 レイド/2v2 の画面改善】仲間3人ぶんのミニ盤面が縦に積み上がって自分の盤面を圧迫していた問題を解消。仲間は1行のコンパクト表示になり、ボスHPも細いバーになりました。iPhone SE クラスの画面では自分の盤面が 210px → 347px（ソロと同じ大きさ）に。横画面では盤面が消えてしまう不具合も修正。仲間の盤面を見たい人は ▾ ボタンで元に戻せます。\n' +
+      '【🌐 マッチング見直し】①レートの近い人から優先してマッチ（待つほど条件がゆるくなります）②AI相手の強さがあなたのレートに合わせて選ばれるように（今までは完全ランダムでした）③2v2で2人一緒に来たら必ず同じチーム ④待機画面に「経過時間・同じモードで待っている実人数・レート検索範囲・AIが参戦するまでの秒数」を正直に表示。\n' +
+      '【🐛 バグ修正】通信エラーでサーバー全体が落ちうる不具合／対戦の結果待ち中に接続が切れると画面が固まって操作不能になる不具合／ゲーム終了後もピースを置けてしまう不具合／ドラッグ中に手札が変わると別のピースが置かれる不具合／アカウント削除でギルドが満員のまま壊れる不具合／協力プレイのスコアを改ざんできる不具合／アイテムが10個あると左端の4個が画面外で押せない不具合／オンライン対戦でピース数が記録されずミッションが進まない不具合 — ほか多数。',
+    bodyEn: '[👑 Admin Events — weekly, and YOU pick the time] A special event hosted by the staff. The point of it is that you choose when to attend: several slots are offered (say 18:00 / 19:00 / 21:00 JST) and you reserve the one that suits you from the menu banner — your own session opens at that time. Different slots, one shared world: the boss HP, the community gauge and the leaderboard are common to everybody, so the 18:00 crowd and the 21:00 crowd chip away at the same boss together. You get a reminder 10 minutes and 1 minute before your slot.\n' +
+      '[🎮 Three exclusive modes, rotating weekly] 👑 Admin Invasion — the admin\'s avatar meddles with your board in real time (garbage rain, board spin, hand shuffle, blindfold) while everyone\'s damage goes onto one enormous HP bar. 🎰 Operator Roulette — every 30 seconds the wheel is spun and the rules are rewritten: 5× score, tiny blocks only, a spinning board, a rising floor, Lucky 7 and more. 🏛️ The Great Work — every participant\'s score flows into a single gauge, and each tier cleared pays out to everyone; collect the 🧱 materials that appear on your board to speed it up.\n' +
+      '[🎁 Treasure Rush] Rewards are multiplied (up to 3×) inside your slot, and defeating the objective earns a 👑 badge for everyone who took part.\n' +
+      '[💯 Battle Royale rebuilt] The 99 AI entrants were score curves that could not be beaten fairly; they now run real boards with the real AI, and weak ones genuinely top out and die. Added: garbage warfare (clear 2+ lines to bury a survivor), a 🌩️ storm that rains garbage on everyone as the clock runs down, a danger meter that tells you exactly how many points you are from safety, spectating after you are knocked out, a finale showing the last three boards, a placement reward ladder (🪙1,200 💎40 for #1 down to a consolation prize), plus knockout/best-placement stats, 7 new achievements and 2 new titles. Your first top-out revives you; the second eliminates you.\n' +
+      '[🐲 Raid / 2v2 screen] Three allies\' mini boards used to stack above your own and squeeze it flat. Allies are now a single compact row and the boss HP is a slim bar — on an iPhone SE-sized screen your board goes from 210px to 347px, the same size as in solo. The landscape bug that made the board vanish entirely is fixed. Tap ▾ to bring the ally boards back.\n' +
+      '[🌐 Matchmaking] Players are now paired by rating (the search widens the longer you wait), the AI opponent\'s strength is chosen to match your rating instead of at random, two players who queue together for 2v2 always land on the same team, and the search screen honestly shows your elapsed time, how many real people are waiting in that mode, the rating range being searched, and exactly when an AI player will step in.\n' +
+      '[🐛 Fixes] A socket error could take the whole server down; a dropped connection while waiting for results left an undismissable modal covering the app; pieces could still be placed after a run had ended; a hand change mid-drag placed a different piece than the one you were holding; deleting an account left a guild permanently stuck at "full"; co-op scores could be forged by a client; with 10 items the leftmost four sat off-screen and were unreachable; online modes recorded 0 pieces placed so those missions never advanced — and more.' },
 ];
 
 function seedNews() {
@@ -1349,7 +1454,7 @@ app.post('/api/admin/event', requireAuth, requireAdmin, (req, res) => {
       messageEn: `${ev.icon} Limited-time event "${ev.nameEn || ev.name}" is live! ${ev.descEn || ''}`,
       from: req.user.username,
     });
-    battle.crowd.feed({ icon: ev.icon, real: true, who: '運営', text: `イベント「${ev.name}」が始まった！ ${ev.desc}`, textEn: `Event "${ev.name}" is live! ${ev.descEn}` });
+    battle.crowd.feed({ icon: ev.icon, real: true, who: '運営', text: `イベント「${ev.name}」が始まった！ ${ev.desc}`, textEn: `Event "${ev.nameEn || ev.name}" is live! ${ev.descEn || ev.desc}` });
     battle.crowd.react('event_start');
   } else {
     const was = db.meta.event;
@@ -1652,6 +1757,244 @@ app.post('/api/rank/claim', requireAuth, maintenanceGuard, (req, res) => {
 app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
   const rewards = applyGameResult(req.user, req.body || {});
   res.json({ rewards, user: publicUser(req.user) });
+});
+
+// ---------------------------------------------------------------------------
+// 👑 管理者イベント — weekly, with per-player time slots
+// ---------------------------------------------------------------------------
+
+// Reservation counts + the shared world state, recomputed per request. There
+// are no timers: everything derives from wall-clock time, so a redeploy in the
+// middle of an event changes nothing.
+function adminEventView(user) {
+  const schedule = getAeSchedule(db);
+  if (!schedule.enabled) return null;
+  const occ = aeCurrentOccurrence(schedule);
+  if (!occ) return null;
+  return aePlayerView(db, user, Date.now(), aeSlotCounts(db, occ));
+}
+
+app.get('/api/adminevent', (req, res) => {
+  res.json({ event: adminEventView(req.user) });
+});
+
+app.post('/api/adminevent/reserve', requireAuth, maintenanceGuard, (req, res) => {
+  const schedule = getAeSchedule(db);
+  if (!schedule.enabled) return res.status(409).json({ error: 'いま開催予定の管理者イベントはありません' });
+  const occ = aeCurrentOccurrence(schedule);
+  if (!occ) return res.status(409).json({ error: 'いま開催予定の管理者イベントはありません' });
+  const slotId = Math.floor(Number(req.body && req.body.slotId));
+  const r = aeReserve(req.user, occ, slotId);
+  if (r.error) return res.status(400).json({ error: r.error });
+  saveDb();
+  res.json({ event: adminEventView(req.user), user: publicUser(req.user) });
+});
+
+app.post('/api/adminevent/cancel', requireAuth, (req, res) => {
+  const schedule = getAeSchedule(db);
+  const occ = schedule.enabled ? aeCurrentOccurrence(schedule) : null;
+  if (occ) aeCancelReservation(req.user, occ.dayKey);
+  else req.user.adminEvent = null;
+  saveDb();
+  res.json({ event: adminEventView(req.user) });
+});
+
+// Finish one run of the exclusive mode. The score is folded into the SHARED
+// world state (one boss / one gauge / one board per event day), so the 18:00
+// crowd and the 21:00 crowd are demonstrably working on the same thing.
+app.post('/api/adminevent/result', requireAuth, maintenanceGuard, (req, res) => {
+  const schedule = getAeSchedule(db);
+  const live = schedule.enabled ? aeLiveSlotFor(schedule, req.user) : null;
+  if (!live) return res.status(403).json({ error: 'いまはあなたの枠の時間ではありません' });
+
+  const { occ } = live;
+  const counts = aeSlotCounts(db, occ);
+  const run = aeEnsureRun(db, occ, Math.max(1, aeEntrantCount(counts)));
+
+  // Same anti-cheat ceiling the normal result path uses, then the event's own
+  // reward multiplier on top (🎁 お宝ラッシュ).
+  const body = req.body || {};
+  const duration = Math.max(1, Math.min(3600, Number(body.duration) || 1));
+  let score = Math.max(0, Math.min(1_000_000, Math.floor(Number(body.score) || 0)));
+  if (score > duration * 500) score = Math.floor(duration * 500);
+
+  const before = { hp: run.hp, tiersReached: run.tiersReached };
+  const delta = aeContribute(run, req.user, score);
+
+  const rewards = applyGameResult(req.user, {
+    ...body,
+    mode: `ae_${run.modeId}`,
+    score,
+    duration,
+    won: !!delta.killed,
+  });
+
+  // 🎁 お宝ラッシュ — the slot's own multiplier, paid on top of whatever the
+  // normal pipeline granted, and reported separately so the result screen can
+  // show where it came from.
+  const mult = Math.max(1, schedule.rewardMult || 1);
+  let chestCoins = 0, chestGems = 0;
+  if (mult > 1 && rewards) {
+    chestCoins = Math.round(rewards.coins * (mult - 1));
+    chestGems = Math.floor(score / 25_000) + (delta.killed ? 25 : 0);
+    req.user.coins += chestCoins;
+    req.user.gems += chestGems;
+  }
+
+  const r = req.user.adminEvent;
+  if (r && r.dayKey === occ.dayKey) {
+    r.playedAt = Date.now();
+    r.runs = (r.runs || 0) + 1;
+    r.best = Math.max(r.best || 0, score);
+    r.contributed = (r.contributed || 0) + score;
+    r.chests = (r.chests || 0) + 1;
+  }
+  req.user.stats.aePlays = (req.user.stats.aePlays || 0) + 1;
+  req.user.stats.aeBest = Math.max(req.user.stats.aeBest || 0, score);
+
+  // 👑 Everyone who took part in the day the Admin fell keeps the badge — the
+  // final blow is luck, the 120,000 HP was the group's work.
+  let aeBadge = null;
+  if (run.modeId === 'invasion' && run.killedAt) {
+    for (const u of Object.values(db.users)) {
+      const ur = u && u.adminEvent;
+      if (!ur || ur.dayKey !== occ.dayKey || !ur.runs) continue;
+      if (!u.badges.includes('adminevent')) {
+        u.badges.push('adminevent');
+        if (u.id === req.user.id) aeBadge = 'adminevent';
+      }
+    }
+  }
+
+  // World-scale moments go to everyone, not just the people currently in a slot.
+  if (delta.killed) {
+    const mode = aeModeById(run.modeId);
+    battle.broadcastAll({
+      type: 'announce',
+      message: `👑 「${req.user.username}」のとどめ！ ${mode ? mode.name : '管理者'}を全員で討ち取りました！`,
+      messageEn: `👑 "${req.user.username}" lands the final blow — everyone brought the Admin down together!`,
+      from: '運営',
+    });
+    battle.crowd.feed({ icon: '👑', real: true, who: '運営',
+      text: `管理者イベントのボスが討伐されました（とどめ: ${req.user.username}）`,
+      textEn: `The Admin Event boss has been defeated (final blow: ${req.user.username})` });
+  }
+  for (const idx of delta.tiersReached) {
+    const tier = run.tiers[idx];
+    battle.broadcastAll({
+      type: 'announce',
+      message: `🏛️ 共同作業 目標${idx + 1}達成！ 参加者全員に 🪙${tier.coins} 💎${tier.gems}`,
+      messageEn: `🏛️ The Great Work cleared tier ${idx + 1}! Everyone who took part gets 🪙${tier.coins} 💎${tier.gems}`,
+      from: '運営',
+    });
+  }
+
+  saveDb();
+  res.json({
+    rewards, user: publicUser(req.user),
+    chest: { coins: chestCoins, gems: chestGems, mult },
+    delta: { gained: delta.gained, damage: delta.damage, killed: delta.killed, tiersReached: delta.tiersReached },
+    aeBadge,
+    before,
+    event: adminEventView(req.user),
+  });
+});
+
+// Community-goal payouts are claimed, not pushed — a player who was in the
+// 18:00 slot can collect a tier the 21:00 crowd unlocked later.
+app.post('/api/adminevent/claim', requireAuth, (req, res) => {
+  const schedule = getAeSchedule(db);
+  const occ = schedule.enabled ? aeCurrentOccurrence(schedule) : null;
+  const run = db.meta.adminEventRun;
+  if (!run || run.modeId !== 'communal') return res.status(409).json({ error: '受け取れる報酬がありません' });
+  const r = req.user.adminEvent;
+  if (!r || r.dayKey !== run.dayKey || !r.runs) {
+    return res.status(403).json({ error: 'この回に参加していません' });
+  }
+  const claimed = r.claimedTiers || (r.claimedTiers = []);
+  // Nothing reached yet is NOT the same as already collected — saying
+  // "受け取り済みです" to someone whose gauge simply has not filled is a lie.
+  if (!run.tiersReached) {
+    return res.status(409).json({ error: 'まだ目標に届いていません（ゲージを進めよう）' });
+  }
+  let coins = 0, gems = 0, badge = null;
+  for (let i = 0; i < run.tiersReached; i++) {
+    if (claimed.includes(i)) continue;
+    claimed.push(i);
+    coins += run.tiers[i].coins;
+    gems += run.tiers[i].gems;
+    if (run.tiers[i].badge && !req.user.badges.includes(run.tiers[i].badge)) {
+      req.user.badges.push(run.tiers[i].badge);
+      badge = run.tiers[i].badge;
+    }
+  }
+  if (!coins && !gems && !badge) return res.status(409).json({ error: '受け取り済みです' });
+  req.user.coins += coins;
+  req.user.gems += gems;
+  saveDb();
+  res.json({ reward: { coins, gems, badge }, user: publicUser(req.user), event: adminEventView(req.user) });
+});
+
+// ---- admin side ----
+
+app.get('/api/admin/adminevent', requireAuth, requireAdmin, (_req, res) => {
+  const schedule = getAeSchedule(db);
+  const occ = schedule.enabled ? aeCurrentOccurrence(schedule) : null;
+  const counts = occ ? aeSlotCounts(db, occ) : {};
+  const roster = [];
+  if (occ) {
+    for (const u of Object.values(db.users)) {
+      const r = u && u.adminEvent;
+      if (r && r.dayKey === occ.dayKey) {
+        roster.push({ username: u.username, slotId: r.slotId, runs: r.runs || 0, best: r.best || 0 });
+      }
+    }
+    roster.sort((a, b) => a.slotId - b.slotId || b.best - a.best);
+  }
+  res.json({
+    schedule,
+    modes: AE_MODES,
+    weekdays: AE_WEEKDAYS_JA,
+    occurrences: aeUpcoming(schedule, Date.now(), 2).map(o => ({
+      dayKey: o.dayKey, modeId: o.modeId, opensAt: o.opensAt, closesAt: o.closesAt,
+      slots: o.slots.map(s => ({ id: s.id, time: s.time, startsAt: s.startsAt, endsAt: s.endsAt, taken: counts[s.id] || 0 })),
+    })),
+    roster,
+    run: db.meta.adminEventRun || null,
+  });
+});
+
+app.post('/api/admin/adminevent', requireAuth, requireAdmin, (req, res) => {
+  const prev = db.meta.adminEvent || null;
+  const r = aeNormalizeSchedule(req.body || {}, prev);
+  if (r.error) return res.status(400).json({ error: r.error });
+  const wasEnabled = prev && prev.enabled;
+  r.schedule.updatedAt = Date.now();
+  r.schedule.updatedBy = req.user.username;
+  db.meta.adminEvent = r.schedule;
+  // Re-scheduling to a different day — or switching the mode — abandons the
+  // old shared state; it belongs to the day+mode pair it was created for.
+  const occ = r.schedule.enabled ? aeCurrentOccurrence(r.schedule) : null;
+  const run = db.meta.adminEventRun;
+  if (run && (!occ || run.dayKey !== occ.dayKey || run.modeId !== occ.modeId)) {
+    db.meta.adminEventRun = null;
+  }
+  saveDb();
+
+  if (r.schedule.enabled && !wasEnabled && occ) {
+    const mode = aeModeById(occ.modeId);
+    const times = r.schedule.slots.join(' / ');
+    battle.broadcastAll({
+      type: 'announce',
+      message: `👑 管理者イベント「${mode.name}」開催決定！ ${occ.dayKey} の ${times}（JST）— メニューから好きな時間帯を予約してね`,
+      messageEn: `👑 Admin Event "${mode.nameEn}" is scheduled for ${occ.dayKey} at ${times} JST — reserve the slot that suits you from the menu`,
+      from: '運営',
+    });
+    battle.crowd.feed({ icon: '👑', real: true, who: '運営',
+      text: `管理者イベント「${mode.name}」の予約受付がはじまりました`,
+      textEn: `Reservations are open for the Admin Event "${mode.nameEn}"` });
+  }
+  res.json({ schedule: r.schedule });
 });
 
 app.get('/api/leaderboard', (req, res) => {
@@ -2198,7 +2541,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     // force re-login everywhere with the new password
     revokeAllTokens(target.id);
   }
-  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'abyss', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
+  const KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
   if (typeof b.grantBadge === 'string') {
     if (!KNOWN_BADGES.includes(b.grantBadge)) return res.status(400).json({ error: `バッジIDが不正です（${KNOWN_BADGES.join(' / ')}）` });
     if (!target.badges.includes(b.grantBadge)) target.badges.push(b.grantBadge);
@@ -2230,6 +2573,7 @@ app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   if (!target) return res.status(404).json({ error: 'ユーザーが見つかりません' });
   if (target.role === 'admin') return res.status(400).json({ error: '管理者は削除できません' });
   revokeAllTokens(req.params.id);
+  leaveGuild(db, target);   // same reason as DELETE /api/me — before the record goes
   delete db.users[req.params.id];
   db.deleted[req.params.id] = Date.now();
   saveDb();
@@ -2408,10 +2752,19 @@ app.post('/api/admin/maintenance', requireAuth, requireAdmin, (req, res) => {
   res.json({ maintenance: db.meta.maintenance });
 });
 
-app.post('/api/admin/broadcast', requireAuth, requireAdmin, (req, res) => {
+app.post('/api/admin/broadcast', requireAuth, requireAdmin, async (req, res) => {
   const message = String(req.body.message || '').slice(0, 200);
   if (!message) return res.status(400).json({ error: 'メッセージが空です' });
-  battle.broadcastAll({ type: 'announce', message, from: req.user.username });
+  // /api/admin/news already auto-translates; a broadcast did not, so English
+  // players got a raw Japanese banner. An explicit messageEn always wins.
+  let messageEn = String(req.body.messageEn || '').slice(0, 200) || null;
+  if (!messageEn) {
+    try {
+      const tr = await translateChat(message);
+      if (tr && tr.lang === 'en' && tr.text) messageEn = tr.text;
+    } catch { /* dictionary fallback failed — ship the original */ }
+  }
+  battle.broadcastAll({ type: 'announce', message, messageEn, from: req.user.username });
   res.json({ ok: true, delivered: battle.clients.size });
 });
 
@@ -2632,6 +2985,8 @@ const battle = initBattle(server, {
   // AI-vote guild solidarity: ghost-guild tag only (never scans db.users).
   residentGuildTag: (name) => { const g = ghostGuildOfResident(name); return g ? g.tag : null; },
 });
+
+battleReady = true;
 
 // The crowd reads the live event / open poll through this (no import cycle).
 setWorldProvider(() => ({

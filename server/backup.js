@@ -74,6 +74,11 @@ function mergeEarned(winner, loser) {
       winner.items[id] = Math.max(winner.items[id] || 0, Number(n) || 0);
     }
   }
+  // 👑 管理者イベントの予約は「進行度」に出ないので、進行度で負けたコピーが
+  // 持っていると消えてしまう。新しいほうの予約を残す。
+  const wr = winner.adminEvent, lr = loser.adminEvent;
+  if (lr && (!wr || (lr.reservedAt || 0) > (wr.reservedAt || 0))) winner.adminEvent = lr;
+
   const wb = winner.battlePass, lb = loser.battlePass;
   if (wb && lb && wb.season === lb.season) {
     wb.xp = Math.max(wb.xp || 0, lb.xp || 0);
@@ -247,7 +252,11 @@ export function applyRestore(db, data, mode = 'merge') {
   // season override) for every key the live side hasn't set since boot.
   if (data.meta && typeof data.meta === 'object') {
     db.meta = db.meta || {};
-    for (const k of ['event', 'poll', 'popScale', 'ambient', 'maintenance', 'seasonOverride', 'createdAt']) {
+    // NOTE: every new db.meta key MUST be listed here or a restore silently
+    // drops it — that is how the admin-event schedule would vanish on the
+    // first redeploy after it was set.
+    for (const k of ['event', 'poll', 'popScale', 'ambient', 'maintenance', 'seasonOverride', 'createdAt',
+      'adminEvent', 'adminEventRun', 'thrones']) {
       if (db.meta[k] == null && data.meta[k] != null) db.meta[k] = data.meta[k];
     }
     // Weekly payouts: an empty post-deploy boot may have stamped the current

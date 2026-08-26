@@ -208,7 +208,7 @@ body {
   flex-shrink: 0;
 }
 #oppCards { display: flex; flex-direction: row; justify-content: center; gap: 14px; width: 100%; }
-.opp-card { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.opp-card { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
 .opp-card canvas { width: 74px; height: 74px; border-radius: 8px; }
 #oppCards.compact .opp-card canvas { width: 58px; height: 58px; }
 .opp-card.ally { background: rgba(94,232,110,0.08); border: 1px solid rgba(94,232,110,0.35); border-radius: 10px; padding: 4px 2px; }
@@ -216,6 +216,39 @@ body {
 .opp-score { font-size: 17px; font-weight: 900; color: var(--red); }
 .opp-card.ally .opp-score { color: var(--green); }
 .opp-combo { font-size: 10px; color: var(--yellow); font-weight: 800; min-height: 12px; }
+
+/* ---------------------------------------------------------------------------
+   Ally strip (raid / 2v2)
+   The card layout costs ~116px of height per player for a 6px-per-cell mini
+   board nobody can read — and with three of them the player's own board fell
+   to 210px on a 375x667 phone (a 40% smaller board than solo). The strip says
+   the same thing in one 30px row, and ⤢ brings the boards back for anyone who
+   actually wants them.
+   --------------------------------------------------------------------------- */
+#oppCards.strip {
+  flex-wrap: wrap; gap: 6px; justify-content: center;
+}
+#oppCards.strip .opp-card {
+  flex-direction: row; align-items: center; gap: 5px;
+  background: rgba(255,255,255,0.05); border: 1px solid var(--line);
+  border-radius: 999px; padding: 2px 8px;
+  min-width: 0; flex: 0 1 auto;
+}
+#oppCards.strip .opp-card.ally { background: rgba(94,232,110,0.1); border-color: rgba(94,232,110,0.35); }
+#oppCards.strip .opp-card canvas { display: none; }
+/* Three chips have to share ~337px, so the name yields before the score does. */
+#oppCards.strip .opp-name { font-size: 10.5px; max-width: 56px; flex: 0 1 auto; }
+#oppCards.strip .opp-score { font-size: 13px; flex: 0 0 auto; }
+#oppCards.strip .opp-combo { font-size: 10px; min-height: 0; }
+#oppCards.strip .opp-card.topped { opacity: 0.45; }
+
+.opp-density {
+  position: absolute; top: 2px; right: 6px;
+  background: none; border: none; color: var(--muted);
+  font-size: 13px; line-height: 1; padding: 4px 6px; cursor: pointer;
+  font-family: inherit;
+}
+.opp-density:hover { color: var(--text); }
 .team-totals { font-size: 13px; font-weight: 800; }
 .team-totals .tt-a { color: var(--blue); }
 .team-totals .tt-b { color: var(--red); }
@@ -595,6 +628,17 @@ body {
   width: 100%; max-width: 430px; margin: 0 auto 6px;
   flex-shrink: 0; overflow: hidden;
 }
+
+/* Slim variant — used in raid, where the ally strip is already above it and
+   every pixel of height comes straight out of the player's own board. Same
+   information, one line: 🐲 name ▓▓▓▓░░ 12,340/35,000 */
+.boss-panel.slim { padding: 4px 10px; gap: 8px; border-radius: 11px; }
+.boss-panel.slim .boss-emoji { font-size: 24px; }
+.boss-panel.slim .boss-info { display: flex; align-items: center; gap: 8px; }
+.boss-panel.slim .boss-name { font-size: 12px; margin: 0; white-space: nowrap; max-width: 88px; overflow: hidden; text-overflow: ellipsis; }
+.boss-panel.slim .boss-hpbar { flex: 1; height: 9px; }
+.boss-panel.slim .boss-hptext { margin: 0; font-size: 10px; white-space: nowrap; }
+.boss-panel.slim .boss-atkbar { position: absolute; left: 0; right: 0; bottom: 0; margin: 0; height: 3px; border-radius: 0; }
 .boss-emoji { font-size: 44px; line-height: 1; transition: transform .15s; }
 .boss-emoji.boss-hit { animation: bossHit .35s ease; }
 @keyframes bossHit { 30% { transform: translateX(-6px) rotate(-8deg); filter: brightness(2); } 60% { transform: translateX(5px); } }
@@ -805,10 +849,20 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
 }
 
 /* In-game booster item bar */
+/* Ten chips (6 staff items + 4 boosters) are wider than a phone. `justify-
+   content: flex-end` pushes the overflow off the START edge, where no browser
+   lets you scroll to it — the leftmost four sat at a negative x and were
+   simply unreachable. An auto margin on the first chip right-aligns exactly
+   the same way while keeping the overflow scrollable. */
 .item-bar {
-  display: flex; gap: 8px; justify-content: flex-end;
+  display: flex; gap: 8px; justify-content: flex-start;
   padding: 0 10px 6px;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
 }
+.item-bar::-webkit-scrollbar { display: none; }
+.item-bar .chip { flex: 0 0 auto; }
+.item-bar .chip:first-child { margin-inline-start: auto; }
 .item-bar .chip.off { opacity: 0.4; }
 .item-bar .chip b { margin-left: 3px; font-size: 11px; }
 
@@ -1122,6 +1176,42 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
   .modal-buttons { flex-wrap: wrap; }
   .perk-icon { font-size: 22px; }
   .boss-panel { max-width: 96vw; }
+}
+
+/* ---------------------------------------------------------------------------
+   Height is the scarce axis, not width
+   Every media query above keys on width, so a short phone (375x667) got the
+   full-height chrome and a 210px board. These two rules key on the axis that
+   actually ran out.
+   --------------------------------------------------------------------------- */
+@media (max-height: 720px) {
+  #topbar { min-height: 0; }
+  body[data-screen="game"] #topbar { display: none; }   /* static coin counts, mid-match */
+  .game-hud { min-height: 44px; padding: 2px 4px 4px; }
+  .hud-score { font-size: 26px; }
+  .opp-panel { padding: 4px 8px; gap: 3px; margin-bottom: 4px; }
+  .boss-panel { padding: 5px 10px; margin-bottom: 4px; }
+  #oppCards.strip .opp-card { padding: 2px 8px; }
+}
+
+/* Landscape: the board is a centered square, so the side margins are dead
+   space — that is where the panels belong. In normal flow they ate the entire
+   column and `.game-canvas-wrap` collapsed to 0px: the board vanished. */
+@media (orientation: landscape) and (max-height: 540px) {
+  body[data-screen="game"] #topbar { display: none; }
+  #screen-game { padding: 0 4px 4px; }
+  .game-hud { min-height: 40px; padding: 2px 4px; }
+  .opp-panel, .boss-panel {
+    position: absolute; z-index: 6;
+    width: min(30vw, 240px); max-width: none; margin: 0;
+    background: rgba(10,13,30,0.9);
+  }
+  .opp-panel { left: 6px; top: 46px; }
+  .boss-panel { right: 6px; top: 46px; }
+  #oppCards.strip { flex-direction: column; align-items: stretch; }
+  #oppCards.strip .opp-card { justify-content: space-between; }
+  .opp-card canvas, #oppCards.compact .opp-card canvas { width: 44px; height: 44px; }
+  .game-canvas-wrap { min-height: 180px; }
 }
 
 /* ============ v2.0: ultimate skill HUD ============ */
@@ -1509,3 +1599,126 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
 .admin-cmd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
 .admin-cmd-grid .btn { white-space: normal; }
 .item-bar .chip.admin-item { border-color: var(--gold); box-shadow: 0 0 10px -2px var(--gold); }
+
+/* ===========================================================================
+   v2.11 — 💯 Battle Royale HUD, 👑 Admin Event
+   =========================================================================== */
+
+/* ---- royale: one slim strip instead of an ally panel ---- */
+.opp-panel.royale-panel { padding: 5px 8px; gap: 3px; }
+.rl-bar { width: 100%; display: flex; flex-direction: column; gap: 3px; }
+.rl-row { display: flex; align-items: center; justify-content: center; gap: 14px; font-size: 12px; font-weight: 800; }
+.rl-row b { font-size: 15px; }
+.rl-alive { color: var(--cyan); }
+.rl-rank { color: var(--yellow); }
+.rl-kills { color: var(--red); }
+.rl-storm { animation: pulse .8s ease infinite; }
+.rl-danger {
+  font-size: 11px; font-weight: 800; text-align: center; min-height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.rl-danger.safe { color: var(--green); }
+.rl-danger.risk { color: var(--red); animation: pulse .7s ease infinite; }
+.rl-feed { display: flex; flex-direction: column; gap: 1px; align-items: center; min-height: 0; }
+.rl-feed-line {
+  font-size: 10.5px; font-weight: 700; color: var(--muted);
+  background: rgba(0,0,0,0.35); border-radius: 999px; padding: 1px 8px;
+  animation: rowIn .2s ease; transition: opacity .5s;
+}
+.rl-feed-line b { color: var(--red); }
+.rl-feed-line.out { opacity: 0; }
+
+/* Spectating: a corner window onto the leader's board. Sits over the dead
+   space beside the (square) board, so it never covers a cell. */
+.rl-spectate {
+  position: absolute; top: 6px; right: 6px; z-index: 5;
+  background: rgba(10,13,30,0.9); border: 1px solid var(--line);
+  border-radius: 12px; padding: 6px 8px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  animation: rowIn .3s ease;
+}
+.rl-spectate canvas { width: 84px; height: 84px; border-radius: 8px; }
+.rl-spec-head { font-size: 11px; font-weight: 800; color: var(--cyan); max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-spec-sub { font-size: 10px; color: var(--muted); font-weight: 700; }
+
+/* Finale: the last three boards, side by side. */
+.rl-finale {
+  position: absolute; left: 0; right: 0; bottom: 4px; z-index: 5;
+  display: flex; justify-content: center; gap: 8px; pointer-events: none;
+}
+.rl-fin-card {
+  background: rgba(10,13,30,0.9); border: 1px solid var(--gold);
+  border-radius: 10px; padding: 4px 6px; text-align: center;
+}
+.rl-fin-card canvas { width: 54px; height: 54px; border-radius: 6px; display: block; }
+.rl-fin-name { font-size: 9.5px; font-weight: 800; color: var(--muted); max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-fin-score { font-size: 11px; font-weight: 900; color: var(--gold); }
+
+/* ---- 👑 admin event ---- */
+.ae-banner {
+  background: linear-gradient(90deg, rgba(255,215,94,0.22), rgba(176,107,255,0.22));
+  border: 1px solid rgba(255,215,94,0.45); border-radius: 12px;
+  padding: 8px 18px; font-size: 13px; font-weight: 800; color: var(--text);
+  font-family: inherit; cursor: pointer; text-align: center;
+  transition: transform .12s, box-shadow .2s;
+}
+.ae-banner:hover { transform: translateY(-1px); }
+.ae-banner.booked { border-color: rgba(94,232,110,0.5); background: linear-gradient(90deg, rgba(94,232,110,0.18), rgba(67,217,232,0.18)); }
+.ae-banner.live {
+  border-color: var(--red);
+  background: linear-gradient(90deg, rgba(255,93,93,0.3), rgba(255,169,61,0.3));
+  animation: aeLive 1.3s ease-in-out infinite;
+}
+@keyframes aeLive {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,93,93,0.55); }
+  50% { box-shadow: 0 0 18px 3px rgba(255,93,93,0.55); }
+}
+
+.ae-head { text-align: center; margin-bottom: 10px; }
+.ae-mode-name { font-size: 20px; font-weight: 900; }
+.ae-mode-tag { font-size: 12px; font-weight: 800; color: var(--gold); margin-bottom: 6px; }
+.ae-mode-desc { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.ae-note {
+  font-size: 12px; font-weight: 700; color: var(--cyan);
+  background: rgba(67,217,232,0.1); border-radius: 8px; padding: 6px 10px; margin-top: 8px;
+}
+
+.ae-world {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 8px 12px; margin-bottom: 10px; text-align: center;
+}
+.ae-world-label { font-size: 11px; font-weight: 800; color: var(--muted); margin-bottom: 4px; }
+.ae-world-sub { font-size: 11.5px; font-weight: 700; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.ae-hpbar, .ae-gauge { height: 12px; background: rgba(0,0,0,0.4); border-radius: 6px; overflow: hidden; }
+.ae-hpbar > div { height: 100%; background: linear-gradient(90deg, #ff5d5d, #ffa93d); transition: width .4s; }
+.ae-gauge > div { height: 100%; background: linear-gradient(90deg, #43d9e8, #5ee86e); transition: width .4s; }
+
+.ae-slot-label { font-size: 12px; font-weight: 800; color: var(--muted); text-align: center; margin: 10px 0 6px; }
+.ae-slots { display: flex; flex-direction: column; gap: 6px; }
+.ae-slot {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 12px; padding: 8px 12px; cursor: pointer;
+  font-family: inherit; text-align: left; transition: all .15s;
+}
+.ae-slot:hover:not(:disabled) { border-color: var(--blue); transform: translateY(-1px); }
+.ae-slot:disabled { opacity: 0.4; cursor: default; }
+.ae-slot.mine { border-color: var(--green); background: rgba(94,232,110,0.12); }
+.ae-slot.live { border-color: var(--red); }
+.ae-slot-time { font-size: 18px; font-weight: 900; font-variant-numeric: tabular-nums; min-width: 62px; }
+.ae-slot-meta { flex: 1; display: flex; flex-direction: column; font-size: 11px; font-weight: 700; }
+.ae-slot-meta b { font-size: 12px; }
+.ae-slot-pick { font-size: 12px; font-weight: 800; color: var(--blue); }
+
+/* 👁️ the admin's blindfold / the roulette's dark spin */
+.game-canvas-wrap.ae-blind::after {
+  content: ''; position: absolute; inset: 0; z-index: 3;
+  background: rgba(2,3,10,0.82); border-radius: 12px;
+  pointer-events: none; animation: fadeIn .25s ease;
+}
+
+@media (max-width: 520px) {
+  .rl-spectate canvas { width: 64px; height: 64px; }
+  .rl-fin-card canvas { width: 44px; height: 44px; }
+  .ae-slot-time { font-size: 16px; min-width: 54px; }
+}

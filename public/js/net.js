@@ -102,7 +102,7 @@ export class BattleClient {
 
   queue(mode = 'duel') { this.send({ type: 'queue', mode }); }
   cancelQueue() { this.send({ type: 'cancel_queue' }); }
-  sendState(score, combo, lines, grid) { this.send({ type: 'state', score, combo, lines, grid }); }
+  sendState(score, combo, lines, grid, pieces) { this.send({ type: 'state', score, combo, lines, grid, pieces }); }
   finish(score, lines, combo) { this.send({ type: 'finish', score, lines, combo }); }
   createRoom(settings) { this.send({ type: 'create_room', settings }); }
   joinRoom(code) { this.send({ type: 'join_room', code }); }

@@ -52,6 +52,16 @@ export const ACHIEVEMENTS = [
   a('ach_rate1700', '👑', 'battle', 1700, 6000, 50, '頂のマスター', 'Peak Master',      'レート1700到達',      'Reach 1700 rating',       u => S(u).rating || 0),
   a('ach_tourney',  '🏆', 'battle', 1,    3000, 25, '大会王者',     'Tournament King',  'トーナメント優勝',     'Win a tournament',        u => has(u, 'tourney') ? 1 : 0),
   a('ach_royale',   '💯', 'battle', 1,    3000, 25, '百人の頂点',   'Apex of 100',      'バトルロイヤル1位',    'Take #1 in Battle Royale', u => has(u, 'royale') ? 1 : 0),
+  // v2.11 — battle royale grew a whole progression, so it gets goals that are
+  // reachable without winning outright.
+  a('ach_rl_top10', '🎖️', 'battle', 5,    1200, 9,  'ロワの常連',   'Royale Regular',   'バトルロイヤルでTOP10入り5回', 'Finish top 10 in Battle Royale 5 times', u => S(u).royaleTop10 || 0),
+  a('ach_rl_ko10',  '💀', 'battle', 10,   1500, 12, '狩る者',       'The Hunter',       'バトルロイヤルで通算10KO', 'Knock out 10 rivals in Battle Royale', u => S(u).royaleKills || 0),
+  a('ach_rl_ko3',   '🔪', 'battle', 3,    2000, 16, '一狩り三殺',   'Triple Threat',    '1試合で3KO', 'Knock out 3 rivals in a single Battle Royale', u => S(u).royaleBestKills || 0),
+  a('ach_rl_50',    '💯', 'battle', 50,   3000, 24, '百戦のロワイヤル', 'Royale Veteran', 'バトルロイヤルに50回参加', 'Enter Battle Royale 50 times', u => S(u).royalePlays || 0),
+  // v2.11 — 👑 管理者イベント
+  a('ach_ae_join',  '👑', 'battle', 1,    800,  6,  '招かれし者',   'Invited',          '管理者イベントに参加', 'Take part in an Admin Event', u => S(u).aePlays || 0),
+  a('ach_ae_10',    '👑', 'battle', 10,   2500, 20, '常連の来賓',   'Honoured Guest',   '管理者イベントで10回プレイ', 'Play 10 Admin Event runs', u => S(u).aePlays || 0),
+  a('ach_ae_clear', '🏛️', 'battle', 1,    4000, 32, '管理者イベント制覇', 'Event Conqueror', '管理者イベントの目標を達成', 'Complete an Admin Event objective', u => has(u, 'adminevent') ? 1 : 0),
 
   // ---- 探索 ----
   a('ach_boss1',    '🐲', 'explore', 1,   400,  3,  'ボス初討伐',   'First Kill',       'ボスを1体討伐',       'Defeat 1 boss',           u => S(u).bossMax || 0),

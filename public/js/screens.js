@@ -75,7 +75,7 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
@@ -720,7 +720,7 @@ export async function openLeaderboard(board = 'score') {
       }).join('');
       rewardHead = `<div class="lb-rewards">🎁 <b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
     }
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
     list.innerHTML = rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
@@ -1963,6 +1963,7 @@ export function bindAdminActions() {
   };
 
   $('#btnEvent').onclick = () => showEventModal();
+  $('#btnAdminEvent').onclick = () => showAdminEventModal();
 
   // ---- user search filter ----
   $('#adminUserSearch').oninput = () => {
@@ -2048,6 +2049,156 @@ function evRemainText(ms) {
   if (s >= 3600) return `${Math.floor(s / 3600)}時間${Math.floor((s % 3600) / 60)}分`;
   if (s >= 60) return `${Math.floor(s / 60)}分`;
   return `${s}秒`;
+}
+
+// ---------------------------------------------------------------------------
+// 👑 管理者イベント (weekly, per-player time slots)
+//
+// The admin picks ONE day of the week and several start times; every player
+// books whichever time suits them. All of the day's slots feed the same shared
+// boss / gauge / board, so a 18:00 player and a 21:00 player are demonstrably
+// in the same event.
+// ---------------------------------------------------------------------------
+
+const AE_WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
+
+function aeFmtDate(ts) {
+  // The schedule is authored in JST; show it in JST regardless of the device.
+  const d = new Date(ts + 9 * 3600 * 1000);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${AE_WEEKDAY_LABELS[d.getUTCDay()]}) ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+async function showAdminEventModal() {
+  let data;
+  try {
+    data = await api('/api/admin/adminevent');
+  } catch (err) { toast(err.message, 'err'); return; }
+
+  const s = data.schedule;
+  const occ = data.occurrences && data.occurrences[0];
+  const modeOpts = [{ id: 'auto', icon: '🔄', name: '週替わりローテ（おまかせ）' }]
+    .concat(data.modes.map(m => ({ id: m.id, icon: m.icon, name: m.name })));
+
+  const m = showModal(`
+    <h2>👑 管理者イベント</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">
+      週1回・プレイヤーが自分の時間帯を予約する形式です。<br>
+      どの枠を選んでも <b>進捗（ボスHP・ゲージ・ランキング）は全員で共有</b> されます。
+    </p>
+
+    <div class="settings-row">
+      <label>開催する</label>
+      <div class="seg" id="aeOn">
+        <button data-v="1" class="${s.enabled ? 'active' : ''}">ON</button>
+        <button data-v="0" class="${s.enabled ? '' : 'active'}">OFF</button>
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <label>曜日</label>
+      <select id="aeWeekday" style="font-family:inherit;padding:6px 10px;border-radius:8px">
+        ${AE_WEEKDAY_LABELS.map((w, i) => `<option value="${i}" ${i === s.weekday ? 'selected' : ''}>${w}曜日</option>`).join('')}
+      </select>
+    </div>
+
+    <div class="settings-row" style="align-items:flex-start">
+      <label>時間枠<br><span class="muted" style="font-size:10px">JST・最大6個</span></label>
+      <input id="aeSlots" type="text" value="${escapeHtml(s.slots.join(', '))}"
+        placeholder="18:00, 19:00, 21:00" style="flex:1;min-width:150px">
+    </div>
+
+    <div class="settings-row">
+      <label>1枠の長さ</label>
+      <div class="seg" id="aeDur">
+        ${[15, 30, 60].map(v => `<button data-v="${v}" class="${s.durationMin === v ? 'active' : ''}">${v}分</button>`).join('')}
+      </div>
+    </div>
+
+    <div class="settings-row">
+      <label>モード</label>
+      <select id="aeMode" style="font-family:inherit;padding:6px 10px;border-radius:8px">
+        ${modeOpts.map(o => `<option value="${o.id}" ${o.id === s.rotation ? 'selected' : ''}>${o.icon} ${o.name}</option>`).join('')}
+      </select>
+    </div>
+
+    <div class="settings-row">
+      <label>🎁 お宝ラッシュ</label>
+      <div class="seg" id="aeMult">
+        ${[1, 1.5, 2, 3].map(v => `<button data-v="${v}" class="${s.rewardMult === v ? 'active' : ''}">${v}倍</button>`).join('')}
+      </div>
+    </div>
+
+    <div class="settings-row" style="align-items:flex-start">
+      <label>ひとこと<br><span class="muted" style="font-size:10px">予約画面に出ます</span></label>
+      <input id="aeNote" type="text" maxlength="140" value="${escapeHtml(s.note || '')}"
+        placeholder="今週は初心者歓迎！" style="flex:1;min-width:150px">
+    </div>
+
+    ${occ ? `
+      <div class="result-stats" style="margin-top:12px">
+        <div class="rs-row"><span>次回</span><b>${escapeHtml(occ.dayKey)}</b></div>
+        <div class="rs-row"><span>モード</span><b>${escapeHtml((data.modes.find(x => x.id === occ.modeId) || {}).name || occ.modeId)}</b></div>
+        ${occ.slots.map(sl => `<div class="rs-row"><span>${sl.time}</span><b>${aeFmtDate(sl.startsAt)} 〜 ・ 予約${sl.taken}人</b></div>`).join('')}
+      </div>` : '<p class="muted center" style="margin-top:12px;font-size:12px">OFFのため予定はありません</p>'}
+
+    ${data.roster && data.roster.length ? `
+      <div class="result-stats" style="margin-top:10px">
+        <div class="rs-row"><span style="font-weight:800">予約者 ${data.roster.length}人</span><b></b></div>
+        ${data.roster.slice(0, 12).map(r => `<div class="rs-row"><span>${escapeHtml(r.username)}</span><b>${(s.slots[r.slotId] || '?')}${r.runs ? ` ・ ${r.runs}回プレイ` : ''}</b></div>`).join('')}
+      </div>` : ''}
+
+    ${data.run ? `
+      <div class="result-stats" style="margin-top:10px">
+        <div class="rs-row"><span style="font-weight:800">共有の進捗（${escapeHtml(data.run.dayKey)}）</span><b></b></div>
+        ${data.run.modeId === 'invasion' ? `<div class="rs-row"><span>管理者HP</span><b>${fmt(Math.max(0, data.run.hp))} / ${fmt(data.run.maxHp)}</b></div>` : ''}
+        <div class="rs-row"><span>合計スコア</span><b>${fmt(data.run.total)}</b></div>
+        <div class="rs-row"><span>参加人数</span><b>${Object.keys(data.run.byUser || {}).length}人</b></div>
+      </div>` : ''}
+
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="aeCancelBtn">とじる</button>
+      <button class="btn btn-gold" id="aeSave">保存する</button>
+    </div>`);
+
+  let enabled = s.enabled;
+  let durationMin = s.durationMin;
+  let rewardMult = s.rewardMult;
+  const seg = (id, set) => {
+    m.querySelectorAll(`#${id} button`).forEach(b => {
+      b.onclick = () => {
+        m.querySelectorAll(`#${id} button`).forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        set(b.dataset.v);
+      };
+    });
+  };
+  seg('aeOn', v => { enabled = v === '1'; });
+  seg('aeDur', v => { durationMin = Number(v); });
+  seg('aeMult', v => { rewardMult = Number(v); });
+
+  m.querySelector('#aeCancelBtn').onclick = closeModal;
+  m.querySelector('#aeSave').onclick = async () => {
+    const slots = m.querySelector('#aeSlots').value.split(/[,、\s]+/).filter(Boolean);
+    try {
+      await api('/api/admin/adminevent', {
+        method: 'POST',
+        body: {
+          enabled,
+          weekday: Number(m.querySelector('#aeWeekday').value),
+          slots,
+          durationMin,
+          rotation: m.querySelector('#aeMode').value,
+          rewardMult,
+          note: m.querySelector('#aeNote').value,
+        },
+      });
+      toast(enabled ? '👑 管理者イベントを設定しました（全員にアナウンス済み）' : '👑 管理者イベントをOFFにしました', 'ok', 4000);
+      closeModal();
+      showAdminEventModal();
+    } catch (err) {
+      toast(err.message, 'err', 4000);
+    }
+  };
 }
 
 async function showEventModal() {

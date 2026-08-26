@@ -14,15 +14,30 @@ const MATCH_SECONDS = 120;
 let view = null;
 let currentMode = null;
 
+// NOTE: this is a mutating accessor — every call re-applies a theme and
+// re-measures the canvas. That is deliberate (it keeps the board in sync with
+// a shop purchase or a rotation), but it used to slam the player's OWN theme
+// back over a stage a mode had chosen: firing an ultimate during Chaos, or
+// calling getView() anywhere in a boss/admin-event run, reverted the board to
+// the equipped skin. Modes that pick a stage set `setModeTheme` and it wins
+// until the mode ends.
 function getView() {
   if (!view) {
     view = new GameView($('#gameCanvas'), { interactive: true });
     view.onRescue = () => autoRescue();   // autopilot 5.0 guard (checks its own eligibility)
     window.__bbaView = view;   // debug/testing hook
   }
-  view.setTheme(equippedTheme());
+  view.setTheme(view.modeTheme || equippedTheme());
   view.resize();
   return view;
+}
+
+// A mode claiming the stage. Cleared by endToMenu().
+function setModeTheme(theme) {
+  const v = getView();
+  v.modeTheme = theme;
+  v.setTheme(theme);
+  return v;
 }
 
 function equippedTheme() {
@@ -34,8 +49,22 @@ function equippedTheme() {
   };
 }
 
+// A quit during the 3-2-1 runs destroy() BEFORE the countdown's callback
+// fires. Without this guard the callback then re-armed timers and view hooks
+// that nothing would ever clear again.
+function afterCountdown(mode, fn) {
+  return () => { if (mode.ended || currentMode !== mode) return; fn(); };
+}
+
 function guestBest() { return Number(localStorage.getItem('bba_best') || 0); }
 function setGuestBest(v) { localStorage.setItem('bba_best', String(v)); }
+
+// How much room the OTHER players get in raid / 2v2. 'strip' is the default
+// for crowds because their mini boards were costing the player's own board
+// more height than the boards were worth.
+const OPP_DENSITY_KEY = 'bba_opp_density';
+function oppDensity() { return localStorage.getItem(OPP_DENSITY_KEY) === 'cards' ? 'cards' : 'strip'; }
+function setOppDensity(v) { localStorage.setItem(OPP_DENSITY_KEY, v); }
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -1675,22 +1704,65 @@ class VersusBase {
   }
 
   // others: [{ slot, name, isAlly }]
+  //
+  // With 2+ other players (raid, 2v2) the mini-board cards cost ~116px of
+  // height each and squeezed the player's OWN board down to 210px on a
+  // 375x667 phone. Those crowds default to the one-row strip; the ⤢ button
+  // brings the boards back and the choice is remembered.
   buildPanels(others) {
     const cards = $('#oppCards');
     cards.innerHTML = '';
-    cards.classList.toggle('compact', others.length > 1);
-    for (const o of others) {
+    this.oppList = others.slice();
+    // Your own side first: in 2v2 the partner used to render between the two
+    // opponents, which reads as "the middle one is an enemy".
+    this.oppList.sort((a, b) => (b.isAlly ? 1 : 0) - (a.isAlly ? 1 : 0));
+    cards.classList.toggle('compact', this.oppList.length > 1);
+    for (const o of this.oppList) {
       const card = document.createElement('div');
       card.className = `opp-card ${o.isAlly ? 'ally' : ''}`;
+      card.dataset.slot = o.slot;
       card.innerHTML = `
         <canvas></canvas>
         <div class="opp-name">${o.isAlly ? '🤝 ' : ''}${escapeHtml(o.name)}</div>
         <div class="opp-score" data-slot-score="${o.slot}">0</div>
         <div class="opp-combo" data-slot-combo="${o.slot}"></div>`;
       cards.appendChild(card);
-      this.miniBoards[o.slot] = new MiniBoard(card.querySelector('canvas'));
-      this.miniBoards[o.slot].setGrid(new Array(64).fill(0));
       this.scores[o.slot] = 0;
+    }
+    this.applyOppDensity(this.oppList.length > 1 ? oppDensity() : 'cards');
+    const btn = $('#btnOppDensity');
+    btn.classList.toggle('hidden', this.oppList.length < 2);
+    btn.onclick = () => {
+      audio.click();
+      const next = this.density === 'strip' ? 'cards' : 'strip';
+      setOppDensity(next);
+      this.applyOppDensity(next);
+      getView().resize();
+    };
+  }
+
+  // Mini boards only exist in card mode — in strip mode they are neither
+  // rendered nor allocated, so the ~1/s relay redraw disappears too.
+  applyOppDensity(density) {
+    this.density = density;
+    const cards = $('#oppCards');
+    cards.classList.toggle('strip', density === 'strip');
+    const btn = $('#btnOppDensity');
+    if (btn) {
+      btn.textContent = density === 'strip' ? '⤢' : '▾';
+      btn.title = density === 'strip'
+        ? t('仲間の盤面を表示', 'Show ally boards')
+        : t('コンパクト表示にする', 'Switch to compact');
+    }
+    for (const o of (this.oppList || [])) {
+      const canvas = cards.querySelector(`.opp-card[data-slot="${o.slot}"] canvas`);
+      if (!canvas) continue;
+      if (density === 'strip') {
+        delete this.miniBoards[o.slot];
+      } else if (!this.miniBoards[o.slot]) {
+        this.miniBoards[o.slot] = new MiniBoard(canvas);
+        this.miniBoards[o.slot].setGrid(this.lastGrids && this.lastGrids[o.slot] ? this.lastGrids[o.slot] : new Array(64).fill(0));
+      }
     }
   }
 
@@ -1705,7 +1777,13 @@ class VersusBase {
         setTimeout(() => { cb.textContent = ''; }, 1200);
       }
     }
-    if (state.grid && this.miniBoards[slot]) this.miniBoards[slot].setGrid(state.grid);
+    // Kept even while the strip hides the boards, so ⤢ can show the CURRENT
+    // board instead of an empty grid that fills in a second later.
+    if (state.grid) {
+      this.lastGrids = this.lastGrids || {};
+      this.lastGrids[slot] = state.grid;
+      if (this.miniBoards[slot]) this.miniBoards[slot].setGrid(state.grid);
+    }
   }
 
   updateTimerHud() {
@@ -1779,7 +1857,7 @@ class AiMode extends VersusBase {
     this.startedAt = Date.now();
     const v = getView();
     const stage = DIFF_THEME[this.level] || DIFF_THEME.normal;
-    v.setTheme({ ...equippedTheme(), boardId: stage.board });
+    setModeTheme({ ...equippedTheme(), boardId: stage.board });
     this.engine = new Engine(seed);
     this.aiEngine = new Engine(seed);
     v.setEngine(this.engine);
@@ -1792,11 +1870,11 @@ class AiMode extends VersusBase {
     v.start();
     audio.playTrack(stage.track);
 
-    const begin = () => countdownOverlay(3, () => {
+    const begin = () => countdownOverlay(3, afterCountdown(this, () => {
       v.inputLocked = false;
       this.startTimer(() => this.finish());
       this.aiLoop();
-    }, audio);
+    }), audio);
 
     if (this.level === 'oni') this.oniIntro(begin);
     else if (this.level === 'kami') this.kamiIntro(begin);
@@ -2154,7 +2232,7 @@ class BossMode {
     $('#oppPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
-    $('#bossPanel').classList.remove('hidden');
+    $('#bossPanel').classList.remove('hidden', 'slim');
     document.querySelector('.boss-atkbar').classList.remove('hidden');
     $('#bossEmoji').textContent = this.boss.emoji;
     $('#bossEmoji').className = 'boss-emoji';
@@ -2171,7 +2249,7 @@ class BossMode {
 
     const v = getView();
     const stage = BOSS_STAGE[this.boss.id] || {};
-    v.setTheme({ ...equippedTheme(), boardId: stage.board || 'board_default' });
+    setModeTheme({ ...equippedTheme(), boardId: stage.board || 'board_default' });
     this.engine = new Engine();
     v.setEngine(this.engine);
     v.inputLocked = true;
@@ -2183,11 +2261,11 @@ class BossMode {
     v.start();
     audio.playTrack(stage.track || 'boss');
 
-    countdownOverlay(3, () => {
+    countdownOverlay(3, afterCountdown(this, () => {
       v.inputLocked = false;
       this.nextAtk = Date.now() + bossAtkMs(this);
       this.atkInt = setInterval(() => this.tickAttack(), 100);
-    }, audio);
+    }), audio);
   }
 
   afterAttack() {
@@ -2367,7 +2445,7 @@ class BossRushMode {
     $('#oppPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
-    $('#bossPanel').classList.remove('hidden');
+    $('#bossPanel').classList.remove('hidden', 'slim');
     document.querySelector('.boss-atkbar').classList.remove('hidden');
     showItemBar(true);
     this.kills = 0;
@@ -2384,7 +2462,7 @@ class BossRushMode {
     this.startedAt = Date.now();
 
     const v = getView();
-    v.setTheme({ ...equippedTheme(), boardId: 'board_oni' });
+    setModeTheme({ ...equippedTheme(), boardId: 'board_oni' });
     this.engine = new Engine();
     v.setEngine(this.engine);
     v.inputLocked = true;
@@ -2397,11 +2475,11 @@ class BossRushMode {
     audio.playTrack('boss');
     toast(t('⚔️ 無限地獄ラッシュ！倒すほど深く、敵は強く。遺物でビルドを組め！', '⚔️ Infinite Hell Rush! The deeper you go, the stronger they get. Build with relics!'), 'announce', 3200);
 
-    countdownOverlay(3, () => {
+    countdownOverlay(3, afterCountdown(this, () => {
       v.inputLocked = false;
       this.nextAtk = Date.now() + bossAtkMs(this);
       this.atkInt = setInterval(() => this.tickAttack(), 100);
-    }, audio);
+    }), audio);
   }
 
   afterAttack() {
@@ -2652,7 +2730,7 @@ class WeeklyMode {
     showItemBar(false);   // fair play: no boosters
     this.startedAt = Date.now();
     const v = getView();
-    v.setTheme({ ...equippedTheme(), boardId: 'board_galaxy' });
+    setModeTheme({ ...equippedTheme(), boardId: 'board_galaxy' });
     this.engine = new Engine(this.info.seed);
     v.setEngine(this.engine);
     v.inputLocked = false;
@@ -2929,7 +3007,7 @@ class DungeonMode {
     $('#oppPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
-    $('#bossPanel').classList.remove('hidden');
+    $('#bossPanel').classList.remove('hidden', 'slim');
     document.querySelector('.boss-atkbar').classList.remove('hidden');
     showItemBar(true);
     this.startedAt = Date.now();
@@ -2956,17 +3034,17 @@ class DungeonMode {
     toast(k > 0
       ? t(`${R.icon} ${R.prefix}${this.startFloor} から再開！（強化ボーナス付き）`, `${R.icon} Resuming from ${R.prefix}${this.startFloor}! (bonus perks included)`)
       : t(`${R.icon} ${R.name}に挑戦開始！${R.prefix}${R.floors}を目指せ！`, `${R.icon} ${R.nameEn} begins! Reach ${R.prefix}${R.floors}!`), 'announce', 2600);
-    countdownOverlay(3, () => {
+    countdownOverlay(3, afterCountdown(this, () => {
       v.inputLocked = false;
       this.armAttack();
-    }, audio);
+    }), audio);
   }
 
   loadFloor(f, silent) {
     this.info = dungeonFloor(f, this.realm);
     this.hp = this.info.hp;
     const v = getView();
-    v.setTheme({ ...equippedTheme(), boardId: this.info.band.board });
+    setModeTheme({ ...equippedTheme(), boardId: this.info.band.board });
     audio.playTrack(this.info.band.track);
     $('#bossEmoji').textContent = this.info.emoji;
     $('#bossEmoji').className = 'boss-emoji';
@@ -3330,7 +3408,7 @@ class ChaosMode extends VersusBase {
     this.startedAt = Date.now();
     this.modCount = 0;
     const v = getView();
-    v.setTheme({ ...equippedTheme(), boardId: 'board_galaxy' });
+    setModeTheme({ ...equippedTheme(), boardId: 'board_galaxy' });
     this.engine = new Engine();
     v.setEngine(this.engine);
     v.inputLocked = true;
@@ -3343,18 +3421,19 @@ class ChaosMode extends VersusBase {
     audio.playTrack('boss');
     toast(t(`🌪️ カオスモード！${this.interval}秒ごとにルールが変わるぞ！`, `🌪️ Chaos Mode! The rules change every ${this.interval} seconds!`), 'announce', 3000);
 
-    countdownOverlay(3, () => {
+    countdownOverlay(3, afterCountdown(this, () => {
       v.inputLocked = false;
       this.startTimer(() => this.finish());
       this.nextModifier();
       this.modInt = setInterval(() => this.nextModifier(), this.interval * 1000);
       // slim progress bar counting down to the next rule mutation
       $('#chaosBar').classList.remove('hidden');
+      getView().resize();   // the bar just took height off the canvas box
       this.barInt = setInterval(() => {
         const remain = Math.max(0, (this.nextModAt || 0) - Date.now());
         $('#chaosBarFill').style.width = `${(remain / (this.interval * 1000)) * 100}%`;
       }, 100);
-    }, audio);
+    }), audio);
   }
 
   nextModifier() {
@@ -3380,7 +3459,7 @@ class ChaosMode extends VersusBase {
     this.modName = CHAOS_MODS[id];
 
     // visual chaos: new random stage + flash + shake
-    view.setTheme({ ...equippedTheme(), boardId: CHAOS_BOARDS[(Math.random() * CHAOS_BOARDS.length) | 0] });
+    setModeTheme({ ...equippedTheme(), boardId: CHAOS_BOARDS[(Math.random() * CHAOS_BOARDS.length) | 0] });
     view.screenFlash = 0.3;
     view.shake = 10;
     audio.combo(8);
@@ -3618,7 +3697,9 @@ class OnlineMode extends VersusBase {
       .on('match_found', msg => this.onMatchFound(msg))
       .on('opp_state', msg => this.onOppState(msg))
       .on('result', msg => this.onResult(msg))
-      .on('announce', msg => toast(`📢 ${msg.message}`, 'announce', 5000))
+      // The chat drawer already picks messageEn; the in-match toast did not,
+      // so English players got Japanese announcements mid-game.
+      .on('announce', msg => toast(`📢 ${t(msg.message, msg.messageEn || msg.message)}`, 'announce', 5000))
       .on('room_update', msg => this.onRoomUpdate(msg))
       .on('room_error', msg => { audio.error(); toast(trServer(msg.error), 'err'); })
       .on('raid_state', msg => this.onRaidState(msg))
@@ -3642,6 +3723,15 @@ class OnlineMode extends VersusBase {
       .on('royale_state', msg => this.onRoyaleState(msg))
       .on('royale_cut', msg => this.onRoyaleCut(msg))
       .on('royale_result', msg => this.onRoyaleResult(msg))
+      .on('royale_garbage', msg => this.onRoyaleGarbage(msg))
+      .on('royale_kill', msg => this.onRoyaleKill(msg))
+      .on('royale_revive', msg => this.onRoyaleRevive(msg))
+      .on('royale_feed', msg => this.onRoyaleFeed(msg))
+      .on('royale_finale', msg => this.onRoyaleFinaleStart(msg))
+      .on('royale_over', msg => this.onRoyaleOver(msg))
+      // The server has always sent these; nothing on the client listened.
+      .on('queued', msg => this.onQueued(msg))
+      .on('queue_cancelled', () => { this.queueInfo = null; })
       .on('online', msg => {
         this.onlineCount = msg.online;
         const el = $('#mmOnline');
@@ -3650,7 +3740,13 @@ class OnlineMode extends VersusBase {
       })
       .on('close', () => {
         if (this.ended) return;
+        // A drop during the "⌛ 集計中…" wait used to leave that modal — which
+        // is deliberately non-dismissable — sitting over the menu forever,
+        // with the 20s fallback already disarmed by this.ended. The app was
+        // unusable until a reload.
+        if (this.leftOnPurpose) { closeModal(); return; }
         if (this.inMatch || this.kind === 'custom' || this.kind === 'tourney') {
+          closeModal();
           toast(t('サーバーとの接続が切れました', 'Lost connection to the server'), 'err');
           this.ended = true;
           this.destroy();
@@ -3685,6 +3781,33 @@ class OnlineMode extends VersusBase {
     if (!el) return;
     if (typeof n !== 'number') { el.textContent = ''; return; }
     el.textContent = t(`🧑‍🤝‍🧑 いま ${n} 人がマッチング待ち`, `🧑‍🤝‍🧑 ${n} players queueing right now`);
+  }
+
+  // The search screen used to say one frozen sentence and then drop you into a
+  // bot match with no explanation. This is the truth, once a second: how long
+  // you have waited, how wide the rating search has opened, how many real
+  // people are in this queue, and exactly when an AI player will step in.
+  onQueued(msg) {
+    const st = $('#mmStatus');
+    const sub = $('#mmSub');
+    if (!st || !sub) return;
+    this.queueInfo = msg;
+    const mins = Math.floor((msg.waited || 0) / 60);
+    const secs = (msg.waited || 0) % 60;
+    const clock = mins ? `${mins}:${String(secs).padStart(2, '0')}` : `${secs}${t('秒', 's')}`;
+    const others = Math.max(0, (msg.humans || 1) - 1);
+    sub.innerHTML = t(
+      `⏱️ ${clock} 経過 ・ このモードで待っている人: <b>${others}</b>人`,
+      `⏱️ ${clock} elapsed ・ others waiting in this mode: <b>${others}</b>`);
+    const q = $('#mmQueue');
+    if (!q) return;
+    if (msg.botInSec > 0) {
+      q.innerHTML = t(
+        `🎯 レート ${msg.rating} ±${msg.band} で検索中<br>あと <b>${msg.botInSec}</b> 秒で AIプレイヤーが参戦します`,
+        `🎯 Searching rating ${msg.rating} ±${msg.band}<br>an AI player joins in <b>${msg.botInSec}</b>s`);
+    } else {
+      q.textContent = t('🤖 AIプレイヤーを準備しています…', '🤖 Bringing in an AI player…');
+    }
   }
 
   // ---- custom room lobby ----
@@ -3757,13 +3880,20 @@ class OnlineMode extends VersusBase {
     }
   }
 
-  // ---- battle royale (100 players, score race with cuts) ----
+  // ---- 💯 battle royale (v2.11) ----
+  //
+  // 100 entrants who actually play, garbage flying between survivors, a rising
+  // storm, a live KO feed, a danger meter that says how far you are from the
+  // cut, spectating after you die, and a three-way finale.
 
   onRoyaleFound(msg) {
     if (this.inMatch || this.ended) return;
     closeModal();
     this.inMatch = true;
     this.isRoyale = true;
+    this.royaleKills = 0;
+    this.royaleDead = false;
+    this.sawRoyaleResult = false;
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
     $('#bossPanel').classList.add('hidden');
@@ -3776,19 +3906,47 @@ class OnlineMode extends VersusBase {
     this.engine = new Engine(msg.seed);
     v.setEngine(this.engine);
     v.inputLocked = true;
-    v.onPlace = () => this.updateRoyaleHud();
-    v.onGameOver = () => this.onTopOut();
+    v.onPlace = r => this.onRoyalePlace(r);
+    v.onGameOver = () => this.onRoyaleTopOut();
     this.updateRoyaleHud();
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
     audio.playTrack('pixel');
-    toast(t('💯 バトルロイヤル開始！100人の頂点を目指せ！', '💯 Battle Royale! Outscore 99 rivals!'), 'announce', 2600);
-    countdownOverlay(msg.countdown || 3, () => {
+    this.showRoyaleBar();
+    toast(t('💯 バトルロイヤル開始！2ライン以上消して相手を潰せ！', '💯 Battle Royale! Clear 2+ lines to bury your rivals!'), 'announce', 3000);
+    countdownOverlay(msg.countdown || 3, afterCountdown(this, () => {
+      // The mode may have been quit during the 3-2-1 — re-arming timers here
+      // would leak them past destroy().
+      if (this.ended || currentMode !== this) return;
       v.inputLocked = false;
       this.startTimer(() => { getView().inputLocked = true; });   // the server calls the finish
-      this.stateInt = setInterval(() => this.pushState(), 900);
-    }, audio);
+      this.stateInt = setInterval(() => this.pushState(), 700);
+    }), audio);
+  }
+
+  // A slim strip above the board: rank, survivors, KOs, storm, and the danger
+  // meter. Built once, updated from royale_state.
+  showRoyaleBar() {
+    const panel = $('#oppPanel');
+    panel.classList.remove('hidden');
+    panel.classList.add('royale-panel');
+    $('#teamTotals').classList.add('hidden');
+    $('#btnOppDensity').classList.add('hidden');
+    document.querySelector('.vs-bar').classList.add('hidden');
+    $('#oppCards').className = '';
+    $('#oppCards').innerHTML = `
+      <div class="rl-bar">
+        <div class="rl-row">
+          <span class="rl-alive">💯 <b id="rlAlive">100</b></span>
+          <span class="rl-rank">#<b id="rlRank">-</b></span>
+          <span class="rl-kills">💀 <b id="rlKills">0</b></span>
+          <span class="rl-storm hidden" id="rlStorm">🌩️</span>
+        </div>
+        <div class="rl-danger" id="rlDanger"></div>
+        <div class="rl-feed" id="rlFeed"></div>
+      </div>`;
+    getView().resize();   // the strip just took height off the canvas box
   }
 
   updateRoyaleHud() {
@@ -3799,14 +3957,161 @@ class OnlineMode extends VersusBase {
       ? `RANK ${this.royaleRank}/${this.royaleAlive}` : 'SCORE';
   }
 
+  onRoyalePlace(r) {
+    this.updateRoyaleHud();
+    this.pushState();
+    // 2+ lines buries somebody. The server picks the target (often the leader).
+    if (r && r.lineCount >= 2 && this.inMatch && !this.ended && !this.royaleDead) {
+      this.client.send({ type: 'royale_attack', lines: r.lineCount, combo: r.streak });
+      toast(t(`⚔️ ${r.lineCount}ライン攻撃！`, `⚔️ ${r.lineCount}-line strike!`), 'ok', 900);
+    }
+  }
+
+  // The server owns the consequence — first top-out revives, the second is
+  // elimination — so it is told, not asked.
+  onRoyaleTopOut() {
+    if (this.ended || this.royaleDead) return;
+    this.client.send({ type: 'royale_topout' });
+    getView().inputLocked = true;   // unlocked again by royale_revive
+  }
+
+  onRoyaleRevive(msg) {
+    if (this.ended) return;
+    this.engine.reviveBoard();
+    this.engine.score = msg.score;
+    getView().reviveFlash();
+    getView().inputLocked = false;
+    audio.levelUp();
+    this.updateRoyaleHud();
+    updateRerollHud(this.engine);
+    toast(t('🔥 復活！ただし次に潰れたら脱落です（スコア-10%）',
+      '🔥 Revived! Next top-out eliminates you (−10% score)'), 'announce', 3200);
+  }
+
+  onRoyaleGarbage(msg) {
+    if (this.ended || !this.engine) return;
+    const cells = this.engine.addGarbage(Math.max(0, Math.min(12, msg.cells || 0)));
+    const v = getView();
+    for (const [r, c] of cells) {
+      v.spawnAnim.set(r * 8 + c, v.time);
+      v.particles.burstCell(v.boardX + (c + 0.5) * v.cell, v.boardY + (r + 0.5) * v.cell, v.cell, 9, 'fx_default');
+    }
+    v.shake = 9;
+    audio.bossAttack();
+    if (msg.from) toast(t(`💥 ${msg.from} の攻撃！ お邪魔${cells.length}個`, `💥 Hit by ${msg.from}! ${cells.length} garbage`), 'err', 1500);
+    if (this.engine.over) this.onRoyaleTopOut();
+  }
+
+  onRoyaleKill(msg) {
+    this.royaleKills = msg.kills;
+    const k = $('#rlKills');
+    if (k) k.textContent = msg.kills;
+    audio.victory();
+    toast(t(`💀 ${msg.victim} を脱落させた！（${msg.kills}KO）`, `💀 You knocked out ${msg.victim}! (${msg.kills} KOs)`), 'announce', 2200);
+  }
+
+  royaleFeedLine(html) {
+    const feed = $('#rlFeed');
+    if (!feed) return;
+    const el = document.createElement('div');
+    el.className = 'rl-feed-line';
+    el.innerHTML = html;
+    feed.prepend(el);
+    while (feed.children.length > 3) feed.lastChild.remove();
+    setTimeout(() => el.classList.add('out'), 3200);
+    setTimeout(() => el.remove(), 3800);
+  }
+
+  onRoyaleFeed(msg) {
+    if (msg.kind === 'ko') {
+      this.royaleFeedLine(msg.by
+        ? t(`💀 <b>${escapeHtml(msg.by)}</b> → ${escapeHtml(msg.victim)}`, `💀 <b>${escapeHtml(msg.by)}</b> → ${escapeHtml(msg.victim)}`)
+        : t(`💀 ${escapeHtml(msg.victim)} 脱落`, `💀 ${escapeHtml(msg.victim)} is out`));
+    } else if (msg.kind === 'left') {
+      this.royaleFeedLine(t(`🚪 ${escapeHtml(msg.victim)} が離脱`, `🚪 ${escapeHtml(msg.victim)} left`));
+    } else if (msg.kind === 'storm') {
+      audio.bossAttack();
+      if (view) view.screenFlash = 0.35;
+      toast(t(`🌩️ ストームが来る！ 全員にお邪魔${msg.cells}個が定期的に降ります`,
+        `🌩️ The storm closes in — ${msg.cells} garbage on everyone, on a timer`), 'err', 3200);
+    } else if (msg.kind === 'cut') {
+      this.royaleFeedLine(t(`⚔️ 足切り ${msg.eliminated}人 — 残り${msg.alive}`, `⚔️ Cut: ${msg.eliminated} out — ${msg.alive} left`));
+    } else if (msg.kind === 'finale') {
+      audio.victory();
+      toast(t('🔥 ファイナル！ 残り3人の盤面が見えます', '🔥 FINALE! You can see the last three boards'), 'announce', 3000);
+    }
+  }
+
   onRoyaleState(msg) {
     this.royaleRank = msg.rank;
     this.royaleAlive = msg.alive;
-    this.updateRoyaleHud();
-    if (msg.nextCutIn != null && msg.nextCutIn <= 5 && msg.alive > msg.nextKeep
-      && (!this.cutWarnedAt || Date.now() - this.cutWarnedAt > 8000)) {
-      this.cutWarnedAt = Date.now();
-      toast(t(`⚠️ まもなく足切り！上位${msg.nextKeep}人だけ生き残れる`, `⚠️ Cut incoming! Only the top ${msg.nextKeep} survive`), 'err', 2000);
+    if (!msg.spectating) this.updateRoyaleHud();
+    const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+    set('#rlAlive', msg.alive);
+    set('#rlRank', msg.rank || '-');
+    set('#rlKills', msg.kills || 0);
+    const storm = $('#rlStorm');
+    if (storm) storm.classList.toggle('hidden', !msg.storm);
+
+    // Danger meter: a number you can act on, not a vague warning.
+    const d = $('#rlDanger');
+    if (d && !msg.spectating) {
+      if (msg.safeBy == null || msg.nextKeep == null) {
+        d.className = 'rl-danger';
+        d.textContent = '';
+      } else if (msg.safeBy >= 0) {
+        d.className = 'rl-danger safe';
+        d.textContent = t(`✅ 安全圏まで +${fmt(msg.safeBy)} の余裕（上位${msg.nextKeep}人が残る・あと${msg.nextCutIn}秒）`,
+          `✅ ${fmt(msg.safeBy)} clear of the cut (top ${msg.nextKeep} survive, ${msg.nextCutIn}s)`);
+      } else {
+        d.className = 'rl-danger risk';
+        d.textContent = t(`⚠️ 脱落圏！ あと ${fmt(-msg.safeBy)} 点で生き残れる（あと${msg.nextCutIn}秒）`,
+          `⚠️ IN THE CUT! ${fmt(-msg.safeBy)} points from safety (${msg.nextCutIn}s)`);
+      }
+    }
+
+    if (msg.spectating && msg.watch) this.renderRoyaleSpectate(msg);
+    if (msg.finale && msg.finale.length) this.renderRoyaleFinale(msg.finale);
+  }
+
+  // Dying at 30 seconds into a 3-minute mode used to eject you to a modal with
+  // nothing to do. Now you watch the leader play it out.
+  renderRoyaleSpectate(msg) {
+    let box = document.querySelector('.rl-spectate');
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'rl-spectate';
+      box.innerHTML = `<div class="rl-spec-head"></div><canvas class="rl-spec-canvas"></canvas><div class="rl-spec-sub"></div>`;
+      document.querySelector('.game-canvas-wrap').appendChild(box);
+      this.specBoard = new MiniBoard(box.querySelector('canvas'));
+    }
+    box.querySelector('.rl-spec-head').textContent =
+      t(`👀 観戦中: ${msg.watch.name}`, `👀 Spectating ${msg.watch.name}`);
+    box.querySelector('.rl-spec-sub').textContent =
+      `${fmt(msg.watch.score)} ・ ${t(`残り${msg.alive}人`, `${msg.alive} alive`)} ・ ${msg.remain}s`;
+    if (msg.watch.grid && this.specBoard) this.specBoard.setGrid(msg.watch.grid);
+  }
+
+  renderRoyaleFinale(players) {
+    let box = document.querySelector('.rl-finale');
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'rl-finale';
+      document.querySelector('.game-canvas-wrap').appendChild(box);
+      this.finaleBoards = {};
+    }
+    for (const p of players) {
+      let cell = box.querySelector(`[data-fin="${CSS.escape(p.name)}"]`);
+      if (!cell) {
+        cell = document.createElement('div');
+        cell.className = 'rl-fin-card';
+        cell.dataset.fin = p.name;
+        cell.innerHTML = `<canvas></canvas><div class="rl-fin-name">${escapeHtml(p.name)}</div><div class="rl-fin-score">0</div>`;
+        box.appendChild(cell);
+        this.finaleBoards[p.name] = new MiniBoard(cell.querySelector('canvas'));
+      }
+      cell.querySelector('.rl-fin-score').textContent = fmt(p.score);
+      if (p.grid && this.finaleBoards[p.name]) this.finaleBoards[p.name].setGrid(p.grid);
     }
   }
 
@@ -3816,9 +4121,61 @@ class OnlineMode extends VersusBase {
     toast(t(`⚔️ 足切り！${msg.eliminated}人脱落 — 残り${msg.alive}人`, `⚔️ The cut! ${msg.eliminated} eliminated — ${msg.alive} remain`), 'announce', 2400);
   }
 
+  onRoyaleFinaleStart(msg) {
+    toast(t(`🔥 ファイナル！ 残り${msg.players.length}人`, `🔥 FINALE — ${msg.players.length} left`), 'announce', 3000);
+  }
+
+  // Everyone learns who actually won — including the people cut at 30 seconds.
+  onRoyaleOver(msg) {
+    this.clearRoyaleOverlays();
+    if (!msg.winner) return;
+    // royale_result lands microseconds before this. Opening a second modal
+    // here wiped the player's OWN placement, KOs and payout off the screen
+    // before they could read it — fold the champion into that card instead.
+    // (The result card deliberately does NOT show a "🥇 leader" row of its own:
+    // that was a snapshot of the standings at the moment you were knocked out,
+    // so an early leader who got buried saw "🥇 you" above "#70 / 100". The
+    // champion row appended here is the real answer.)
+    const open = document.querySelector('.modal .result-stats');
+    if (open && this.sawRoyaleResult) {
+      const row = document.createElement('div');
+      row.className = 'rs-row';
+      row.innerHTML = `<span>🏆 ${t('優勝', 'Champion')}</span><b>${escapeHtml(msg.winner.name)} — ${fmt(msg.winner.score)}${msg.winner.kills ? ` ・ 💀${msg.winner.kills}` : ''}</b>`;
+      open.appendChild(row);
+      return;
+    }
+    const rows = (msg.top || []).map((x, i) => `
+      <div class="rs-row"><span>${['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i] || ''} ${escapeHtml(x.name)}</span><b>${fmt(x.score)}${x.kills ? ` ・ 💀${x.kills}` : ''}</b></div>`).join('');
+    const m = showModal(`
+      <div class="result-banner win">👑 ${escapeHtml(msg.winner.name)}</div>
+      <p class="muted center">${t('100人の頂点', 'Last one standing of 100')}</p>
+      <div class="result-stats">${rows}</div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-oni" id="rAgain">${t('もう一度参戦', 'Drop in again')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline('royale'); };
+  }
+
+  clearRoyaleOverlays() {
+    for (const sel of ['.rl-spectate', '.rl-finale']) {
+      const el = document.querySelector(sel);
+      if (el) el.remove();
+    }
+    this.specBoard = null;
+    this.finaleBoards = null;
+    $('#oppPanel').classList.remove('royale-panel');
+    document.querySelector('.vs-bar').classList.remove('hidden');
+  }
+
   onRoyaleResult(msg) {
-    if (this.ended) return;
-    this.ended = true;
+    // Being eliminated is not the end of the session any more: unless this was
+    // the final standing, the socket stays open so you can watch the finish.
+    const spectate = !!msg.spectate;
+    this.royaleDead = true;
+    this.sawRoyaleResult = true;   // royale_over folds into this card, not over it
+    if (!spectate) this.ended = true;
     clearInterval(this.stateInt);
     this.stopTimer();
     getView().inputLocked = true;
@@ -3831,22 +4188,35 @@ class OnlineMode extends VersusBase {
       setTimeout(() => toast(t('💯 バッジ「百人の頂点」を獲得！+150💎', '💯 Badge earned: Apex of 100! +150💎'), 'announce', 5000), 1200);
     }
     const banner = win ? t('👑 1位！VICTORY!', '👑 #1 VICTORY!') : `#${msg.placement} / ${msg.players}`;
+    const tierName = {
+      champion: t('優勝', 'Champion'), podium: t('表彰台', 'Podium'),
+      top10: t('TOP10', 'Top 10'), top25: t('TOP25', 'Top 25'),
+      top50: t('TOP50', 'Top 50'), entrant: t('参加', 'Entrant'),
+    }[msg.payout ? msg.payout.tier : 'entrant'];
     const m = showModal(`
       <div class="result-banner ${win ? 'win' : msg.placement <= 10 ? 'draw' : 'lose'}">${banner}</div>
       ${msg.placement <= 10 && !win ? `<p class="muted center">${t('TOP10入り！すごい！', 'Top 10 finish — amazing!')}</p>` : ''}
       <div class="result-stats">
         <div class="rs-row"><span>${t('最終順位', 'Final placement')}</span><b>#${msg.placement} / ${msg.players}</b></div>
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(msg.score)}</b></div>
-        ${msg.top && msg.top[0] ? `<div class="rs-row"><span>🥇 ${escapeHtml(msg.top[0].name)}</span><b>${fmt(msg.top[0].score)}</b></div>` : ''}
+        <div class="rs-row"><span>${t('KO数', 'Knockouts')}</span><b>💀 ${msg.kills || 0}</b></div>
+        ${msg.payout ? `<div class="rs-row"><span>🏅 ${t('順位報酬', 'Placement reward')}（${tierName}）</span><b>+${fmt(msg.payout.coins)}🪙${msg.payout.gems ? ` +${fmt(msg.payout.gems)}💎` : ''}</b></div>` : ''}
         ${rewardsRows(msg.rewards)}
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        ${spectate ? `<button class="btn btn-online" id="rWatch">${t('👀 決着を見届ける', '👀 Watch the finish')}</button>` : ''}
         <button class="btn btn-oni" id="rAgain">${t('もう一度参戦', 'Drop in again')}</button>
       </div>`, { dismissable: false });
-    m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
-    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline('royale'); };
+    m.querySelector('#rMenu').onclick = () => { closeModal(); this.ended = true; this.destroy(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = true; this.destroy(); startOnline('royale'); };
+    const w = m.querySelector('#rWatch');
+    if (w) w.onclick = () => {
+      closeModal();
+      toast(t('👀 観戦モード — 決着がついたら結果が出ます', '👀 Spectating — the result appears when it is over'), 'announce', 3000);
+    };
   }
+
 
   // ---- tournament bracket (between rounds) ----
 
@@ -3925,12 +4295,12 @@ class OnlineMode extends VersusBase {
     toast(t(`🤝 ${this.partnerName}さんと協力プレイ！交互にピースを置いて高得点を狙おう`,
       `🤝 Co-op with ${this.partnerName}! Take turns placing pieces for a shared high score`), 'announce', 4000);
 
-    countdownOverlay(msg.countdown || 3, () => {
+    countdownOverlay(msg.countdown || 3, afterCountdown(this, () => {
       if (this.ended) return;
       this.coopStarted = true;
       this.applyCoopTurn();
       this.coopInt = setInterval(() => this.tickCoopBar(), 120);
-    }, audio);
+    }), audio);
   }
 
   onCoopState(msg) {
@@ -4031,10 +4401,13 @@ class OnlineMode extends VersusBase {
     if (this.isRaid && msg.boss) {
       this.raidBoss = msg.boss;
       this.raidHp = msg.boss.hp;
+      // Raid already spends height on the ally strip — the boss gets the
+      // one-line bar rather than the 72px block solo boss fights use.
       $('#bossPanel').classList.remove('hidden');
+      $('#bossPanel').classList.add('slim');
       $('#bossEmoji').textContent = msg.boss.emoji;
       $('#bossEmoji').className = 'boss-emoji';
-      $('#bossName').textContent = t(`${msg.boss.name}（レイド）`, `${catName(msg.boss)} (Raid)`);
+      $('#bossName').textContent = t(msg.boss.name, catName(msg.boss));
       document.querySelector('.boss-atkbar').classList.add('hidden');
       this.updateRaidHp();
     }
@@ -4058,14 +4431,14 @@ class OnlineMode extends VersusBase {
     emoteBtn.classList.remove('hidden');
     emoteBtn.onclick = () => this.toggleEmotePicker();
 
-    countdownOverlay(msg.countdown || 3, () => {
+    countdownOverlay(msg.countdown || 3, afterCountdown(this, () => {
       // カウントダウン中に不戦勝などで終わった試合を蘇らせない（タイマー/interval漏れ防止）
       if (this.ended || !this.inMatch) return;
       clearInterval(this.stateInt);
       v.inputLocked = false;
       this.startTimer(() => this.timeUp());
       this.stateInt = setInterval(() => this.pushState(), 900);
-    }, audio);
+    }), audio);
   }
 
   toggleEmotePicker() {
@@ -4139,7 +4512,8 @@ class OnlineMode extends VersusBase {
 
   pushState() {
     if (!this.engine || this.ended) return;
-    this.client.sendState(this.engine.score, this.engine.streak, this.engine.linesCleared, this.engine.snapshot());
+    this.client.sendState(this.engine.score, this.engine.streak, this.engine.linesCleared,
+      this.engine.snapshot(), this.engine.piecesPlaced);
   }
 
   onPlace(result) {
@@ -4401,12 +4775,19 @@ class OnlineMode extends VersusBase {
   }
 
   destroy() {
+    // destroy() closes the socket on purpose, and the resulting 'close' must
+    // not be reported to the player as "サーバーとの接続が切れました" — that is
+    // what cancelling a tournament queue or backing out of a room used to do.
+    this.leftOnPurpose = true;
     this.stopTimer();
     clearInterval(this.stateInt);
     clearInterval(this.coopInt);
     clearTimeout(this.resultTimeout);
     $('#bossPanel').classList.add('hidden');
+    $('#bossPanel').classList.remove('slim');
     $('#coopBar').classList.add('hidden');
+    $('#btnOppDensity').classList.add('hidden');
+    if (this.isRoyale) this.clearRoyaleOverlays();
     if (view) view.onIntentPlace = null;
     this.client.close();
   }
@@ -4568,13 +4949,13 @@ class SprintMode {
     v.start();
     audio.playTrack('hard');
 
-    countdownOverlay(3, () => {
+    countdownOverlay(3, afterCountdown(this, () => {
       if (this.ended) return;
       v.inputLocked = false;
       this.endAt = Date.now() + this.duration * 1000;
       this.tickInt = setInterval(() => this.tick(), 200);
       this.tick();
-    }, audio);
+    }), audio);
   }
 
   tick() {
@@ -4653,6 +5034,458 @@ export function startSprint(duration = 60) {
   currentMode.start();
 }
 
+// ---------------------------------------------------------------------------
+// 👑 管理者イベント専用モード（3種・週替わり）
+//
+// These exist ONLY inside a reserved admin-event slot — that is the whole point
+// of booking one. All three share the same shell (a 2-minute run on your own
+// board, folded into the day's SHARED world state on the server) and differ in
+// what happens to you while you play.
+// ---------------------------------------------------------------------------
+
+const AE_RUN_SECONDS = 120;
+
+// ---- board surgery used by 管理者襲来 / 運営ルーレット ----
+
+function aeRotateGrid(engine) {
+  const g = engine.grid, n = 8, out = new Array(64).fill(0);
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) out[c * n + (n - 1 - r)] = g[r * n + c];
+  for (let i = 0; i < 64; i++) g[i] = out[i];
+  if (!engine.hasAnyMove()) engine.over = true;
+}
+
+function aeGravity(engine) {
+  const g = engine.grid, n = 8;
+  for (let c = 0; c < n; c++) {
+    const col = [];
+    for (let r = 0; r < n; r++) if (g[r * n + c]) col.push(g[r * n + c]);
+    for (let r = n - 1, i = col.length - 1; r >= 0; r--, i--) g[r * n + c] = i >= 0 ? col[i] : 0;
+  }
+  if (!engine.hasAnyMove()) engine.over = true;
+}
+
+// A garbage row shoved in from the bottom, pushing everything up.
+function aeRiseRow(engine, holes = 2) {
+  const g = engine.grid, n = 8;
+  for (let r = 0; r < n - 1; r++) for (let c = 0; c < n; c++) g[r * n + c] = g[(r + 1) * n + c];
+  const gap = new Set();
+  while (gap.size < holes) gap.add(Math.floor(engine.rng.next() * n));
+  for (let c = 0; c < n; c++) g[(n - 1) * n + c] = gap.has(c) ? 0 : 9;
+  if (!engine.hasAnyMove()) engine.over = true;
+}
+
+function aeShuffleHand(engine) {
+  for (let i = 0; i < 3; i++) engine.hand[i] = engine.drawPiece();
+  if (!engine.hasAnyMove()) engine.over = true;
+}
+
+// ---- the interference the admin (or their avatar) throws at you ----
+
+const AE_STRIKES = [
+  { id: 'rain',    icon: '💥', ja: 'お邪魔の雨', en: 'Garbage rain',      run: m => m.engine.addGarbage(4) },
+  { id: 'seal',    icon: '🔒', ja: '封印',       en: 'Seal',              run: m => m.engine.addGarbage(3) },
+  { id: 'shuffle', icon: '🎴', ja: '手札シャッフル', en: 'Hand shuffle',  run: m => aeShuffleHand(m.engine) },
+  { id: 'spin',    icon: '🌀', ja: '盤面回転',   en: 'Board spin',        run: m => aeRotateGrid(m.engine) },
+  { id: 'gravity', icon: '🧲', ja: '重力',       en: 'Gravity',           run: m => aeGravity(m.engine) },
+  { id: 'rise',    icon: '⏫', ja: 'せり上がり', en: 'Rising floor',      run: m => aeRiseRow(m.engine) },
+  { id: 'blind',   icon: '👁️', ja: '目隠し',     en: 'Blindfold',         run: m => m.blindFor(3200) },
+  // 管理者は気まぐれ — たまに褒美をくれる。
+  { id: 'gift',    icon: '🎁', ja: '気まぐれの褒美', en: 'A fickle gift',  run: m => { m.engine.grid.fill(0); m.engine.score += 500; }, good: true },
+];
+
+// ---- 運営ルーレット: the wheel ----
+
+const AE_WHEEL = [
+  { id: 'jackpot', icon: '💰', ja: '一攫千金（スコア5倍・お邪魔つき）', en: 'Jackpot (5× score, with garbage)' },
+  { id: 'mini',    icon: '🐜', ja: '極小ブロックのみ',                 en: 'Tiny blocks only' },
+  { id: 'giant',   icon: '🗿', ja: '極大ブロックのみ',                 en: 'Giant blocks only' },
+  { id: 'spin',    icon: '🌀', ja: '回転盤（10秒ごとに回る）',         en: 'Spin cycle (rotates every 10s)' },
+  { id: 'treasure',icon: '🎁', ja: '大盤振る舞い（消すたびボーナス）', en: 'Treasure run (bonus on every clear)' },
+  { id: 'blind',   icon: '🕶️', ja: '目隠し（ゴースト消灯）',           en: 'Blindfold (no ghost preview)' },
+  { id: 'rise',    icon: '⏫', ja: 'せり上がり（8秒ごと）',            en: 'Rising floor (every 8s)' },
+  { id: 'lucky7',  icon: '🍀', ja: 'ラッキーセブン（7手ごとに大当たり）', en: 'Lucky 7 (jackpot every 7th piece)' },
+  { id: 'blessing',icon: '✨', ja: '天の恵み（全消し＋フィーバー）',    en: 'Blessing (clear board + fever)' },
+];
+
+class AdminEventMode extends VersusBase {
+  constructor(ae) {
+    super();
+    this.mode = 'ae';
+    this.ae = ae;
+    this.modeId = (ae && ae.mode && ae.mode.id) || 'invasion';
+    this.timers = [];
+  }
+
+  // Every timer this mode starts goes through here, so destroy() can be sure.
+  every(ms, fn) { const id = setInterval(fn, ms); this.timers.push(id); return id; }
+  after(ms, fn) { const id = setTimeout(fn, ms); this.timers.push(id); return id; }
+
+  start() {
+    this.setupHud(AE_RUN_SECONDS);
+    $('#oppPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    showItemBar(false);            // 公平のため: この枠ではアイテムは使えない
+    showUltBar(false);
+    this.startedAt = Date.now();
+    this.contribution = 0;
+    this.strikes = 0;
+
+    const v = getView();
+    setModeTheme({ ...equippedTheme(), boardId: this.modeId === 'invasion' ? 'board_oni' : this.modeId === 'roulette' ? 'board_galaxy' : 'board_sakura' });
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = r => this.onPlace(r);
+    v.onGameOver = () => this.finish();
+    this.updateMyHud(this.engine);
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack(this.modeId === 'invasion' ? 'oni' : this.modeId === 'roulette' ? 'boss' : 'solo');
+
+    this.setupWorldPanel();
+    toast(`${this.ae.mode.icon} ${t(this.ae.mode.name, this.ae.mode.nameEn)} — ${t(this.ae.mode.tagline, this.ae.mode.taglineEn)}`, 'announce', 3200);
+
+    countdownOverlay(3, afterCountdown(this, () => {
+      if (this.ended || currentMode !== this) return;   // 開始前に抜けた
+      v.inputLocked = false;
+      this.startTimer(() => this.finish());
+      if (this.modeId === 'invasion') this.scheduleStrike();
+      if (this.modeId === 'roulette') this.startWheel();
+      if (this.modeId === 'communal') this.startMaterials();
+    }), audio);
+  }
+
+  // The shared world state gets the slim boss bar: one HP/gauge line that the
+  // whole day is pushing on together.
+  setupWorldPanel() {
+    const w = this.ae.world;
+    const panel = $('#bossPanel');
+    if (this.modeId === 'roulette' || !w) { panel.classList.add('hidden'); return; }
+    panel.classList.remove('hidden');
+    panel.classList.add('slim');
+    document.querySelector('.boss-atkbar').classList.add('hidden');
+    $('#bossEmoji').textContent = this.modeId === 'invasion' ? '👑' : '🏛️';
+    $('#bossEmoji').className = 'boss-emoji';
+    $('#bossName').textContent = this.modeId === 'invasion'
+      ? t('管理者', 'The Admin') : t('共同作業', 'Great Work');
+    this.updateWorldPanel();
+  }
+
+  updateWorldPanel() {
+    const w = this.ae.world;
+    if (!w || this.modeId === 'roulette') return;
+    if (this.modeId === 'invasion') {
+      // Projected locally: your damage lands on the shared bar the instant you
+      // score it, and the server confirms the real number when the run ends.
+      const hp = Math.max(0, (w.hp || 0) - this.engine.score);
+      const pct = w.maxHp ? Math.max(0, (hp / w.maxHp) * 100) : 0;
+      $('#bossHp').style.width = `${pct}%`;
+      $('#bossHpText').textContent = `${fmt(hp)} / ${fmt(w.maxHp || 0)}`;
+    } else {
+      const goal = w.tiers && w.tiers.length ? w.tiers[w.tiers.length - 1].at : 1;
+      const total = (w.total || 0) + this.engine.score;
+      $('#bossHp').style.width = `${Math.min(100, (total / goal) * 100)}%`;
+      $('#bossHpText').textContent = `${fmt(total)} / ${fmt(goal)}`;
+    }
+  }
+
+  // VersusBase writes 'SCORE' into #hudSub on every placement, which wiped the
+  // roulette's current-rule label a moment after each spin. Combos still win
+  // the slot (they are the more urgent thing to know), the rule comes back.
+  updateMyHud(engine) {
+    const el = $('#hudScore');
+    el.textContent = fmt(engine.score);
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = engine.streak >= 2 ? `${engine.streak} COMBO`
+      : (this.modeId === 'roulette' && this.spinLabel) ? this.spinLabel
+      : 'SCORE';
+  }
+
+  onPlace(r) {
+    this.updateMyHud(this.engine);
+    this.updateWorldPanel();
+    if (this.modeId === 'roulette') this.rouletteOnPlace(r);
+    if (this.modeId === 'communal') this.communalOnPlace(r);
+  }
+
+  blindFor(ms) {
+    const wrap = document.querySelector('.game-canvas-wrap');
+    if (!wrap) return;
+    wrap.classList.add('ae-blind');
+    this.after(ms, () => wrap.classList.remove('ae-blind'));
+  }
+
+  // ---- 👑 管理者襲来 ----
+
+  scheduleStrike() {
+    const delay = 6500 + Math.random() * 5500;
+    this.after(delay, () => {
+      if (this.ended) return;
+      this.fireStrike();
+      this.scheduleStrike();
+    });
+  }
+
+  fireStrike() {
+    if (this.ended || !this.engine || this.engine.over) return;
+    // 気まぐれの褒美は控えめに。
+    const pool = AE_STRIKES.filter(s => !s.good || Math.random() < 0.18);
+    const s = pool[(Math.random() * pool.length) | 0] || AE_STRIKES[0];
+    this.strikes++;
+    s.run(this);
+    if (view) { view.shake = s.good ? 4 : 11; view.screenFlash = s.good ? 0.2 : 0.35; }
+    if (s.good) audio.coin(); else audio.bossAttack();
+    toast(`${s.icon} ${t(`管理者の${s.ja}！`, `The Admin: ${s.en}!`)}`, s.good ? 'ok' : 'err', 1800);
+    if (this.engine.over) this.finish();
+  }
+
+  // ---- 🎰 運営ルーレット ----
+
+  startWheel() {
+    $('#chaosBar').classList.remove('hidden');
+    getView().resize();   // same reason as Chaos: measure AFTER the reveal
+    this.spin();
+    this.every(30000, () => this.spin());
+    this.every(100, () => {
+      const remain = Math.max(0, (this.nextSpinAt || 0) - Date.now());
+      $('#chaosBarFill').style.width = `${(remain / 30000) * 100}%`;
+    });
+  }
+
+  clearWheelEffects() {
+    const e = this.engine;
+    e.scoreMult = 1;
+    e.chaosBig = false;
+    e.chaosMini = false;
+    if (this.spinInt) { clearInterval(this.spinInt); this.spinInt = null; }
+    if (this.riseInt) { clearInterval(this.riseInt); this.riseInt = null; }
+    if (this.rainInt) { clearInterval(this.rainInt); this.rainInt = null; }
+    this.treasure = false;
+    this.lucky7 = false;
+    if (view) view.ghostFx = null;
+    const wrap = document.querySelector('.game-canvas-wrap');
+    if (wrap) wrap.classList.remove('ae-blind');
+  }
+
+  spin() {
+    if (this.ended) return;
+    this.clearWheelEffects();
+    this.nextSpinAt = Date.now() + 30000;
+    let pick = AE_WHEEL[(Math.random() * AE_WHEEL.length) | 0];
+    if (pick.id === this.lastSpin) pick = AE_WHEEL[(AE_WHEEL.indexOf(pick) + 1) % AE_WHEEL.length];
+    this.lastSpin = pick.id;
+    const e = this.engine;
+
+    switch (pick.id) {
+      case 'jackpot':
+        e.scoreMult = 5;
+        this.rainInt = setInterval(() => { if (!this.ended && !e.over) e.addGarbage(2); }, 4000);
+        this.timers.push(this.rainInt);
+        break;
+      case 'mini': e.chaosMini = true; break;
+      case 'giant': e.chaosBig = true; break;
+      case 'spin':
+        this.spinInt = setInterval(() => {
+          if (this.ended || e.over || (view && (view.inputLocked || view.drag))) return;
+          aeRotateGrid(e);
+          if (view) view.shake = 8;
+        }, 10000);
+        this.timers.push(this.spinInt);
+        break;
+      case 'treasure': this.treasure = true; break;
+      case 'blind': this.blindFor(30000); break;
+      case 'rise':
+        this.riseInt = setInterval(() => {
+          if (this.ended || e.over || (view && (view.inputLocked || view.drag))) return;
+          aeRiseRow(e);
+          if (view) view.shake = 6;
+          if (e.over) this.finish();
+        }, 8000);
+        this.timers.push(this.riseInt);
+        break;
+      case 'lucky7': this.lucky7 = true; this.luckyCount = 0; break;
+      case 'blessing':
+        e.grid.fill(0);
+        e.feverUntil = Date.now() + 12000;
+        e.feverMult = 3;
+        break;
+    }
+
+    if (view) { view.screenFlash = 0.45; view.shake = 12; }
+    audio.combo(8);
+    toast(`${pick.icon} ${t(pick.ja, pick.en)}`, 'announce', 2600);
+    this.spinLabel = `${pick.icon} ${t(pick.ja, pick.en).split('（')[0].split(' (')[0]}`;
+    $('#hudSub').textContent = this.spinLabel;
+  }
+
+  rouletteOnPlace(r) {
+    const e = this.engine;
+    if (this.treasure && r && r.lineCount > 0) {
+      e.score += 300 * r.lineCount;
+      toast(t(`🎁 +${300 * r.lineCount}`, `🎁 +${300 * r.lineCount}`), 'ok', 900);
+    }
+    if (this.lucky7) {
+      this.luckyCount = (this.luckyCount || 0) + 1;
+      if (this.luckyCount % 7 === 0) {
+        e.score += 3000;
+        if (view) view.screenFlash = 0.5;
+        audio.victory();
+        toast(t('🍀 ラッキーセブン！ +3,000', '🍀 Lucky 7! +3,000'), 'announce', 1800);
+      }
+    }
+  }
+
+  // ---- 🏛️ 共同作業 ----
+
+  startMaterials() {
+    this.materials = new Set();
+    this.dropMaterial();
+    this.every(9000, () => this.dropMaterial());
+  }
+
+  // 建材 (golden cells): clearing a line that contains one is worth extra to
+  // the community gauge. They mark EMPTY cells, so they never block a move.
+  dropMaterial() {
+    if (this.ended || !this.engine) return;
+    const empties = [];
+    for (let i = 0; i < 64; i++) if (!this.engine.grid[i] && !this.materials.has(i)) empties.push(i);
+    if (!empties.length) return;
+    const k = empties[(Math.random() * empties.length) | 0];
+    this.materials.add(k);
+    if (view) {
+      view.glowCells = [...this.materials];
+      view.screenFlash = 0.12;
+    }
+  }
+
+  communalOnPlace(r) {
+    if (!r || !this.materials) return;
+    let hit = 0;
+    for (const [row, col] of (r.clearedCells || [])) {
+      const k = row * 8 + col;
+      if (this.materials.has(k)) { this.materials.delete(k); hit++; }
+    }
+    // 置いたマスが建材の上でも回収できる（塞いで損、をなくす）。
+    for (const [row, col] of (r.placedCells || [])) {
+      const k = row * 8 + col;
+      if (this.materials.has(k)) { this.materials.delete(k); hit++; }
+    }
+    if (hit) {
+      this.engine.score += 400 * hit;
+      audio.coin();
+      toast(t(`🧱 建材 ×${hit} 回収！ +${fmt(400 * hit)}`, `🧱 ${hit} material(s)! +${fmt(400 * hit)}`), 'ok', 1200);
+      this.updateMyHud(this.engine);
+      this.updateWorldPanel();
+    }
+    if (view) view.glowCells = [...this.materials];
+  }
+
+  // ---- finish ----
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    this.stopTimer();
+    this.clearTimers();
+    getView().inputLocked = true;
+    const e = this.engine;
+
+    let res = null;
+    try {
+      res = await api('/api/adminevent/result', {
+        method: 'POST',
+        body: {
+          score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
+          duration: (Date.now() - this.startedAt) / 1000,
+          ults: e.ultUses || 0, items: 0, pieces: e.piecesPlaced || 0,
+        },
+      });
+      updateTopbar();
+    } catch (err) {
+      toast(err.message, 'err', 4000);
+    }
+
+    if (res && res.event && window.__bbaAeRefresh) {
+      // Everyone's shared bar moved — re-read it rather than trusting the
+      // projection this run was drawing.
+      this.ae = res.event;
+    }
+
+    const d = res ? res.delta : null;
+    const chest = res ? res.chest : null;
+    const w = res && res.event ? res.event.world : null;
+    const killed = d && d.killed;
+    if (killed) { audio.victory(); confettiBurst(90); }
+
+    const worldRow = this.modeId === 'invasion' && w
+      ? `<div class="rs-row"><span>${t('管理者の残りHP', 'Admin HP left')}</span><b>${fmt(Math.max(0, w.hp))} / ${fmt(w.maxHp)}</b></div>`
+      : this.modeId === 'communal' && w
+        ? `<div class="rs-row"><span>${t('みんなの合計', 'Community total')}</span><b>${fmt(w.total)}</b></div>`
+        : '';
+
+    const m = showModal(`
+      <div class="result-banner ${killed ? 'win' : 'draw'}">${killed ? t('👑 討伐！', '👑 DEFEATED!') : `${this.ae.mode.icon} ${t('おつかれさま', 'Nice run')}`}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        ${this.modeId === 'invasion' ? `<div class="rs-row"><span>${t('与ダメージ', 'Damage dealt')}</span><b>${fmt(d ? d.damage : 0)}</b></div>` : ''}
+        ${this.modeId === 'invasion' ? `<div class="rs-row"><span>${t('妨害を受けた回数', 'Times meddled with')}</span><b>${this.strikes}</b></div>` : ''}
+        ${this.modeId === 'communal' ? `<div class="rs-row"><span>${t('ゲージへの貢献', 'Added to the gauge')}</span><b>${fmt(d ? d.gained : 0)}</b></div>` : ''}
+        ${worldRow}
+        ${rewardsRows(res ? res.rewards : null)}
+        ${chest && (chest.coins || chest.gems) ? `<div class="rs-row"><span>🎁 ${t(`お宝ラッシュ（${chest.mult}倍）`, `Treasure Rush (${chest.mult}×)`)}</span><b>+${fmt(chest.coins)}🪙 +${fmt(chest.gems)}💎</b></div>` : ''}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-gold" id="rAgain">${t('もう一度挑む', 'Run it again')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => {
+      closeModal();
+      const ae = this.ae;
+      this.destroy();
+      // 枠が終わっていたら、無言で締め出さずに理由を出す。
+      if (!ae || !ae.live || ae.live.endsAt <= Date.now()) {
+        toast(t('あなたの枠は終了しました。またの参加をお待ちしています！', 'Your slot has ended — see you next time!'), 'announce', 4000);
+        endToMenu();
+        return;
+      }
+      startAdminEventMode(ae);
+    };
+  }
+
+  clearTimers() {
+    for (const id of this.timers) { clearInterval(id); clearTimeout(id); }
+    this.timers = [];
+    this.spinInt = this.riseInt = this.rainInt = null;
+  }
+
+  quit() { this.finish(); }
+
+  destroy() {
+    this.ended = true;
+    this.stopTimer();
+    this.clearTimers();
+    $('#chaosBar').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#bossPanel').classList.remove('slim');
+    const wrap = document.querySelector('.game-canvas-wrap');
+    if (wrap) wrap.classList.remove('ae-blind');
+    if (view) view.glowCells = null;
+  }
+}
+
+export function startAdminEventMode(ae) {
+  if (!ae || !ae.live) {
+    toast(t('いまはあなたの枠の時間ではありません', 'This is not your slot right now'), 'err');
+    return;
+  }
+  if (currentMode) currentMode.destroy();
+  currentMode = new AdminEventMode(ae);
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
 export function startSurvival() {
   if (currentMode) currentMode.destroy();
   currentMode = new SurvivalMode();
@@ -4668,6 +5501,7 @@ function endToMenu() {
   if (currentMode) { currentMode.destroy(); currentMode = null; }
   // Mode-installed view hooks/overlays must never leak into the next mode.
   if (view) {
+    view.modeTheme = null;   // release the stage a mode claimed
     view.onIntentPlace = null;
     view.onTrayDrop = null;
     view.glowCells = null;

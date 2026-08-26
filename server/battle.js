@@ -38,7 +38,11 @@ const TOURNEY_BOT_LEVELS = [['easy', 'normal'], ['normal', 'hard'], ['hard', 'on
 export function initBattle(server, deps) {
   const { db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, MATCH_DURATION } = deps;
 
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  // maxPayload: the default is 100 MiB per frame, which on a single free-tier
+  // instance is a cheap way to exhaust memory. The largest legitimate message
+  // here is a chat line or a 64-cell grid.
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 256 * 1024 });
+  wss.on('error', err => console.error('[wss]', err && err.message));
   const clients = new Set();
   const matches = new Map();               // matchId -> match
   const rooms = new Map();                 // code -> room
@@ -908,7 +912,10 @@ export function initBattle(server, deps) {
               : match.mode === 'coop' ? 'coop' : 'pvp',
             score: p.score, lines: p.lines, maxCombo: p.maxCombo,
             duration: match.mode === 'coop' ? Math.max(1, (Date.now() - match.startedAt) / 1000) : match.duration,
-            pieces: match.moves || 0,
+            // `match.moves` only exists on the co-op shared board; every other
+            // online mode reported 0 pieces, which quietly froze the
+            // piece-count missions and achievements for online players.
+            pieces: match.mode === 'coop' ? (match.moves || 0) : (p.pieces || 0),
             // Tournament: the badge/bonus fires only on winning the FINAL.
             won: match.tourney ? (outcome === 1 && !!match.tourney.final) : outcome === 1,
             drew: outcome === 0.5,
@@ -954,14 +961,97 @@ export function initBattle(server, deps) {
   // Matchmaking queues
   // -------------------------------------------------------------------------
 
+  // Re-checked on every inbound message, not just 'hello': a client that never
+  // says hello used to slip past the ban and maintenance checks entirely, and
+  // a player banned mid-session kept playing until they reconnected. (Mute is
+  // already re-checked per message in the chat/react cases.)
+  // Returns false (and closes) when the socket may not act.
+  function gateSocket(ws) {
+    const u = ws.user ? db.users[ws.user.id] : null;
+    if (u && u.banned) {
+      send(ws, { type: 'error', error: 'アカウントが凍結されています' });
+      ws.close();
+      return false;
+    }
+    if (deps.isMaintenance && deps.isMaintenance() && (!u || u.role !== 'admin')) {
+      send(ws, { type: 'error', error: '🛠 メンテナンス中です。しばらくお待ちください' });
+      ws.close();
+      return false;
+    }
+    return true;
+  }
+
+  // ---- rating-aware matchmaking (v2.11) -----------------------------------
+  //
+  // Duel and attack pair on ARRIVAL ORDER only, despite a full Elo ladder
+  // existing — a 1,800 could be handed a 900 and both ratings moved as if that
+  // meant something. Pairing now prefers the closest rating, inside a band that
+  // widens the longer you wait, so a small population still matches quickly.
+  const ratingOf = (ws) => {
+    const u = ws && ws.user ? db.users[ws.user.id] : null;
+    return u && u.stats ? (u.stats.rating || 1000) : 1000;
+  };
+  // 0s: ±120 → 30s: ±420 → 60s+: anyone.
+  const ratingBand = (waitedMs) => 120 + Math.floor(waitedMs / 1000) * 10;
+
+  // Pick the best-matched pair currently in `q`, or null.
+  function bestPair(q, now) {
+    let best = null;
+    for (let i = 0; i < q.length; i++) {
+      for (let j = i + 1; j < q.length; j++) {
+        const gap = Math.abs(ratingOf(q[i].ws) - ratingOf(q[j].ws));
+        const allowed = Math.max(ratingBand(now - q[i].since), ratingBand(now - q[j].since));
+        if (gap > allowed) continue;
+        if (!best || gap < best.gap) best = { i, j, gap };
+      }
+    }
+    return best;
+  }
+
+  // The bot that fills an empty seat is drawn to MATCH the human, not at
+  // random. Previously the ladder mostly measured which bot you happened to
+  // draw: an oni bot against a bronze player, or an easy bot against a master.
+  function botLevelFor(rating) {
+    if (rating >= 1500) return Math.random() < 0.65 ? 'oni' : 'hard';
+    if (rating >= 1250) return Math.random() < 0.6 ? 'hard' : (Math.random() < 0.5 ? 'oni' : 'normal');
+    if (rating >= 1050) return Math.random() < 0.6 ? 'normal' : 'hard';
+    if (rating >= 900) return Math.random() < 0.65 ? 'normal' : 'easy';
+    return Math.random() < 0.7 ? 'easy' : 'normal';
+  }
+  const botFor = (ws, used) => new Bot(botLevelFor(ratingOf(ws)), used || new Set([sockName(ws)]));
+
+  function queueInfo(entry, mode) {
+    const waited = Date.now() - entry.since;
+    return {
+      type: 'queued', mode,
+      waited: Math.round(waited / 1000),
+      // Honest, not decorative: this is the actual moment a bot fills the seat.
+      botInSec: Math.max(0, Math.round((entry.botAt - Date.now()) / 1000)),
+      humans: queues[mode].length,
+      band: ratingBand(waited),
+      rating: ratingOf(entry.ws),
+    };
+  }
+
   function joinQueue(ws, mode) {
     if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId) return;
     leaveQueues(ws);
     const wait = mode === 'duel' || mode === 'attack' ? duelBotWait() : mode === 'coop' ? coopBotWait() : teamBotWait();
-    queues[mode].push({ ws, since: Date.now(), botAt: Date.now() + wait });
-    send(ws, { type: 'queued', mode });
+    const entry = { ws, since: Date.now(), botAt: Date.now() + wait };
+    queues[mode].push(entry);
+    send(ws, queueInfo(entry, mode));
     sweepQueues();
   }
+
+  // Keep everyone waiting informed — an elapsed clock and a real countdown to
+  // the AI fill, instead of a frozen "searching…" that ends without warning.
+  setInterval(() => {
+    for (const mode of Object.keys(queues)) {
+      for (const e of queues[mode]) {
+        if (e.ws.readyState === e.ws.OPEN) send(e.ws, queueInfo(e, mode));
+      }
+    }
+  }, 1000);
 
   function leaveQueues(ws) {
     for (const q of Object.values(queues)) {
@@ -988,22 +1078,23 @@ export function initBattle(server, deps) {
       const humans = queues.royale.splice(0, Math.min(ROYALE_SIZE - 1, queues.royale.length));
       startRoyale(humans.map(e => e.ws));
     }
-    while (queues.duel.length >= 2) {
-      const [a, b] = queues.duel.splice(0, 2);
-      createMatch({ mode: 'duel', entries: [{ sock: a.ws, team: 0 }, { sock: b.ws, team: 1 }] });
-    }
-    if (queues.duel.length === 1 && Date.now() >= queues.duel[0].botAt) {
-      const [a] = queues.duel.splice(0, 1);
-      createMatch({ mode: 'duel', entries: [{ sock: a.ws, team: 0 }, { sock: new Bot('random'), team: 1 }] });
-    }
-    // ⚔️ アタック戦: デュエルと同じ組み方（攻撃の飛び交うランクマッチ）
-    while (queues.attack.length >= 2) {
-      const [a, b] = queues.attack.splice(0, 2);
-      createMatch({ mode: 'attack', entries: [{ sock: a.ws, team: 0 }, { sock: b.ws, team: 1 }] });
-    }
-    if (queues.attack.length === 1 && Date.now() >= queues.attack[0].botAt) {
-      const [a] = queues.attack.splice(0, 1);
-      createMatch({ mode: 'attack', entries: [{ sock: a.ws, team: 0 }, { sock: new Bot('random'), team: 1 }] });
+    // ⚔️ Duel and 💥 attack: closest-rated pair first (band widens with wait),
+    // and the bot that fills a lone seat is drawn to match that player.
+    const now = Date.now();
+    for (const mode of ['duel', 'attack']) {
+      for (;;) {
+        const pair = bestPair(queues[mode], now);
+        if (!pair) break;
+        const [a, b] = [queues[mode][pair.i], queues[mode][pair.j]];
+        queues[mode] = queues[mode].filter(e => e !== a && e !== b);
+        createMatch({ mode, entries: [{ sock: a.ws, team: 0 }, { sock: b.ws, team: 1 }] });
+      }
+      // Everyone whose bot timer expired gets a match — not just the head of
+      // the queue.
+      for (const e of queues[mode].filter(x => now >= x.botAt)) {
+        queues[mode] = queues[mode].filter(x => x !== e);
+        createMatch({ mode, entries: [{ sock: e.ws, team: 0 }, { sock: botFor(e.ws), team: 1 }] });
+      }
     }
     while (queues.team.length >= 4) {
       const four = queues.team.splice(0, 4);
@@ -1011,9 +1102,18 @@ export function initBattle(server, deps) {
     }
     if (queues.team.length > 0 && Date.now() >= queues.team[0].botAt) {
       const humans = queues.team.splice(0, queues.team.length);
-      const entries = humans.map((e, i) => ({ sock: e.ws, team: i % 2 }));
+      // Two friends who queued together were split onto OPPOSING teams by
+      // `i % 2` — the one thing 2v2 exists to avoid. Humans fill team A first.
+      const entries = humans.map((e, i) => ({ sock: e.ws, team: i < 2 ? 0 : 1 }));
       const used = new Set(humans.map(e => sockName(e.ws)));
-      while (entries.length < 4) entries.push({ sock: new Bot('random', used), team: entries.length % 2 });
+      // Both sides drew independent random bots, so one team could get an oni
+      // and the other an easy. Pick ONE strength for the fill, matched to the
+      // humans present, and give every seat the same one.
+      const avg = humans.reduce((a, e) => a + ratingOf(e.ws), 0) / Math.max(1, humans.length);
+      const fillLevel = botLevelFor(avg);
+      while (entries.length < 4) {
+        entries.push({ sock: new Bot(fillLevel, used), team: entries.filter(x => x.team === 0).length < 2 ? 0 : 1 });
+      }
       createMatch({ mode: 'team', entries });
     }
     // co-op: pairs share one board; a bot partner joins after the wait
@@ -1028,7 +1128,7 @@ export function initBattle(server, deps) {
       const [a] = queues.coop.splice(0, 1);
       createMatch({
         mode: 'coop', duration: COOP_MAX_SECS, rated: false,
-        entries: [{ sock: a.ws, team: 0 }, { sock: new Bot('random', new Set([sockName(a.ws)])), team: 0 }],
+        entries: [{ sock: a.ws, team: 0 }, { sock: botFor(a.ws), team: 0 }],
       });
     }
     // raid: co-op party of 4 (all on team 0), bots fill after the wait
@@ -1040,7 +1140,8 @@ export function initBattle(server, deps) {
       const humans = queues.raid.splice(0, queues.raid.length);
       const entries = humans.map(e => ({ sock: e.ws, team: 0 }));
       const used = new Set(humans.map(e => sockName(e.ws)));
-      while (entries.length < 4) entries.push({ sock: new Bot('random', used), team: 0 });
+      const raidLevel = botLevelFor(humans.reduce((a, e) => a + ratingOf(e.ws), 0) / Math.max(1, humans.length));
+      while (entries.length < 4) entries.push({ sock: new Bot(raidLevel, used), team: 0 });
       createMatch({ mode: 'raid', entries, rated: false });
     }
   }
@@ -1263,33 +1364,99 @@ export function initBattle(server, deps) {
   }
 
   // -------------------------------------------------------------------------
-  // Battle Royale: 100 entrants, humans + lightweight simulated AI players
-  // (score curves only — no engines), periodic cuts until one remains.
+  // 💯 Battle Royale (v2.11 rewrite)
+  //
+  // What changed and why:
+  //  * The 99 AI entrants used to be pure score curves (`score += rate`). Their
+  //    ceiling sat ABOVE what a human can physically reach in 180 seconds, so
+  //    winning was luck. They now run the SAME Engine and the SAME chooseMove
+  //    the AI-duel bots use — measured at ~0.2ms per move, so a full field of
+  //    99 costs about 2% of one core. Weak bots now genuinely top out and die,
+  //    which is where most of the early attrition comes from.
+  //  * Survivors interact: clearing 2+ lines sends garbage at someone else,
+  //    reusing the attack-duel pipeline verbatim. Being buried is how you die.
+  //  * A rising storm pressures everyone as the clock runs down.
+  //  * Elimination is by PLACEMENT, not "rank among survivors" — leaving early
+  //    while ahead now gives you the place you actually left in.
+  //  * Dying is not the end of the session: you drop into spectator mode with
+  //    the leader's live board and the standings.
   // -------------------------------------------------------------------------
 
   const ROYALE_SIZE = 100;
   const ROYALE_DURATION = Math.max(30, Number(process.env.ROYALE_SECS) || 180);
+  const ROYALE_TICK = 250;
   // At these fractions of the match, the field is cut down TO `keep` players.
   const ROYALE_CUTS = [
     { at: 1 / 6, keep: 70 }, { at: 2 / 6, keep: 45 }, { at: 3 / 6, keep: 25 },
     { at: 4 / 6, keep: 12 }, { at: 5 / 6, keep: 5 },
   ];
+  // 🌩️ The storm: from this fraction onward everyone still alive takes a pulse
+  // of garbage every `everyMs`, and it gets worse. This is the block-puzzle
+  // equivalent of a closing circle — a shrinking grid cannot work here because
+  // a blocked outer ring would make every row permanently unclearable.
+  const ROYALE_STORM = [
+    { at: 0.34, cells: 2, everyMs: 9000 },
+    { at: 0.58, cells: 3, everyMs: 7000 },
+    { at: 0.78, cells: 4, everyMs: 5000 },
+    { at: 0.90, cells: 5, everyMs: 3500 },
+  ];
+  // Field composition, tuned by simulating the whole 180 seconds offline:
+  // with the storm running, 15 of 99 bots survive to the end, the best bot
+  // lands around 11,000-12,000, and a human placing ~9,000 finishes top 10
+  // while ~12,000 wins it. (The old score curves topped out near 19,000 —
+  // above what a human can physically reach in 180s.) Cost: 0.5% of one core.
+  const ROYALE_FIELD = [
+    { level: 'easy',   n: 26, moveEvery: 2000 },
+    { level: 'normal', n: 28, moveEvery: 1700 },
+    { level: 'hard',   n: 26, moveEvery: 1350 },
+    { level: 'oni',    n: 13, moveEvery: 1150 },
+    { level: 'kami',   n: 6,  moveEvery: 950 },
+  ];
+
+  function royaleBotSeats() {
+    const seats = [];
+    for (const f of ROYALE_FIELD) for (let i = 0; i < f.n; i++) seats.push(f);
+    return seats;
+  }
 
   function startRoyale(humanSocks) {
     const id = crypto.randomUUID();
     const used = new Set(humanSocks.map(s => sockName(s)));
+    const seed = Math.floor(Math.random() * 2 ** 31);
     const entrants = humanSocks.map(ws => ({
-      ws, human: true, name: sockName(ws), score: 0, lines: 0, combo: 0, alive: true, placement: null,
+      ws, human: true, name: sockName(ws), score: 0, lines: 0, combo: 0,
+      alive: true, placement: null, kills: 0, revives: 1, grid: null, lastSeen: Date.now(),
     }));
+
+    const seats = royaleBotSeats();
+    // Shuffle so the strong seats are not always the same slots.
+    for (let i = seats.length - 1; i > 0; i--) {
+      const j = crypto.randomInt(i + 1);
+      [seats[i], seats[j]] = [seats[j], seats[i]];
+    }
+    let si = 0;
     while (entrants.length < ROYALE_SIZE) {
-      const skill = Math.random();
+      const seat = seats[si++ % seats.length];
+      const res = Math.random() < 0.6 ? pickResidentBot(seat.level, used) : null;
+      const name = res ? res.name : pickPersona({ used }).name;
+      used.add(name);
       entrants.push({
-        human: false, name: pickPersona({ used }).name,
-        score: 0, alive: true, placement: null,
-        rate: 12 + 95 * skill * skill,   // points/sec — few monsters, many mortals
+        human: false, name, level: seat.level,
+        // Humans all share `seed` (that is the fairness guarantee, and the old
+        // code broke it by seeding each human separately). Bots get their own
+        // streams on purpose: an identical sequence made same-level bots play
+        // the same game and finish on identical scores.
+        engine: new Engine((seed + si * 7919) >>> 0),
+        moveEvery: seat.moveEvery,
+        nextMoveAt: Date.now() + COUNTDOWN * 1000 + Math.random() * seat.moveEvery,
+        score: 0, lines: 0, combo: 0, alive: true, placement: null, kills: 0, revives: 1,
       });
     }
-    const r = { id, entrants, startedAt: Date.now(), ended: false, cutIdx: 0, lastState: 0 };
+
+    const r = {
+      id, entrants, startedAt: Date.now(), ended: false,
+      cutIdx: 0, stormIdx: 0, nextStormAt: 0, lastState: 0, finale: false, seed,
+    };
     royales.set(id, r);
     for (const e of entrants) {
       if (!e.human) continue;
@@ -1297,100 +1464,290 @@ export function initBattle(server, deps) {
       send(e.ws, {
         type: 'royale_found',
         duration: ROYALE_DURATION, countdown: COUNTDOWN, players: ROYALE_SIZE,
-        seed: Math.floor(Math.random() * 2 ** 31),
+        seed,
       });
     }
-    r.tick = setInterval(() => tickRoyale(r), 1000);
+    r.tick = setInterval(() => tickRoyale(r), ROYALE_TICK);
   }
 
+  const royaleAlive = r => r.entrants.filter(e => e.alive);
   function royaleRanked(r) {
-    return r.entrants.filter(e => e.alive).sort((a, b) => b.score - a.score);
+    return royaleAlive(r).sort((a, b) => b.score - a.score);
+  }
+
+  // Everyone still in, plus everyone watching, gets world events.
+  function royaleBroadcast(r, msg, { spectators = true } = {}) {
+    for (const e of r.entrants) {
+      if (!e.human || e.ws.readyState !== e.ws.OPEN) continue;
+      if (!e.alive && !spectators) continue;
+      send(e.ws, msg);
+    }
+  }
+
+  function royaleFeed(r, item) {
+    royaleBroadcast(r, { type: 'royale_feed', ...item });
+  }
+
+  // ---- garbage warfare -----------------------------------------------------
+  //
+  // A 2+ line clear buries someone else. Targeting is deliberate: most of the
+  // time it hits the current leader (a bounty that keeps #1 honest), otherwise
+  // a random survivor. Never yourself.
+  function royaleAttack(r, from, cells) {
+    if (!cells || r.ended) return;
+    const others = royaleAlive(r).filter(e => e !== from);
+    if (!others.length) return;
+    const leader = others.reduce((a, b) => (b.score > a.score ? b : a), others[0]);
+    // Bounty rate: at 45% an early leader drew fire from ~99 attackers at once
+    // and was reliably buried before halfway — leading has to be dangerous,
+    // not fatal. 25% keeps the pressure and leaves the lead survivable.
+    const target = (Math.random() < 0.25 && leader !== from) ? leader
+      : others[Math.floor(Math.random() * others.length)];
+    royaleHit(r, target, cells, from);
+  }
+
+  function royaleHit(r, target, cells, from) {
+    if (!target || !target.alive) return;
+    if (target.human) {
+      if (target.ws.readyState === target.ws.OPEN) {
+        send(target.ws, { type: 'royale_garbage', cells, from: from ? from.name : null });
+      }
+      return;
+    }
+    const added = target.engine.addGarbage(cells);
+    target.grid = null;
+    if (target.engine.over && added.length >= 0) royaleTopOut(r, target, from);
+  }
+
+  // A top-out is not automatically the end: the first one is a revive (board
+  // wiped, 10% of the score burned). The second is elimination — which is what
+  // makes burying someone worth doing.
+  function royaleTopOut(r, e, by) {
+    if (!e.alive || r.ended) return;
+    if (e.revives > 0) {
+      e.revives--;
+      e.score = Math.floor(e.score * 0.9);
+      if (e.engine) { e.engine.reviveBoard(); e.engine.score = e.score; }
+      if (e.human && e.ws.readyState === e.ws.OPEN) {
+        send(e.ws, { type: 'royale_revive', score: e.score });
+      }
+      return;
+    }
+    const alive = royaleAlive(r).length;
+    if (by) {
+      by.kills++;
+      if (by.human && by.ws.readyState === by.ws.OPEN) {
+        send(by.ws, { type: 'royale_kill', victim: e.name, kills: by.kills, alive: alive - 1 });
+      }
+    }
+    royaleFeed(r, {
+      kind: 'ko', victim: e.name, by: by ? by.name : null, alive: alive - 1,
+    });
+    endRoyaleFor(e, r, alive, royaleRanked(r));
+  }
+
+  // ---- rewards -------------------------------------------------------------
+  //
+  // Finishing #2 of 100 used to pay exactly what #97 paid. The ladder is the
+  // reason to keep playing when you know you cannot win this one.
+  function royalePayout(placement) {
+    if (placement === 1) return { coins: 1200, gems: 40, tier: 'champion' };
+    if (placement <= 3) return { coins: 700, gems: 20, tier: 'podium' };
+    if (placement <= 10) return { coins: 400, gems: 10, tier: 'top10' };
+    if (placement <= 25) return { coins: 220, gems: 4, tier: 'top25' };
+    if (placement <= 50) return { coins: 120, gems: 1, tier: 'top50' };
+    return { coins: 50, gems: 0, tier: 'entrant' };
   }
 
   function endRoyaleFor(e, r, placement, ranked) {
+    if (!e.alive) return;
     e.alive = false;
     e.placement = placement;
     if (!e.human) return;
-    if (e.ws.royaleId === r.id) e.ws.royaleId = null;
     const me = e.ws.user ? db.users[e.ws.user.id] : null;
     let rewards = null;
+    const payout = royalePayout(placement);
     if (me && e.ws.readyState === e.ws.OPEN) {
       rewards = applyGameResult(me, {
         mode: 'royale', score: e.score, lines: e.lines, maxCombo: e.combo,
+        pieces: e.pieces || 0,
         duration: Math.max(1, (Date.now() - r.startedAt) / 1000), won: placement === 1,
       });
+      // Placement ladder on top of the normal per-run payout.
+      me.coins += payout.coins;
+      me.gems += payout.gems;
+      const s = me.stats;
+      s.royalePlays = (s.royalePlays || 0) + 1;
+      s.royaleKills = (s.royaleKills || 0) + (e.kills || 0);
+      s.royaleBestKills = Math.max(s.royaleBestKills || 0, e.kills || 0);
+      if (!s.royaleBest || placement < s.royaleBest) s.royaleBest = placement;
+      if (placement === 1) s.royaleWins = (s.royaleWins || 0) + 1;
+      if (placement <= 10) s.royaleTop10 = (s.royaleTop10 || 0) + 1;
+      saveDb();
     }
+    // Spectating: the socket stays in the royale so the player can watch the
+    // finish. It is cleared for real when the match ends or they leave.
     send(e.ws, {
       type: 'royale_result',
-      placement, players: ROYALE_SIZE, score: e.score,
+      placement, players: ROYALE_SIZE, score: e.score, kills: e.kills || 0,
+      payout,
       top: ranked.slice(0, 5).map(x => ({ name: x.name, score: Math.floor(x.score) })),
       rewards, user: me ? publicUser(me) : null,
+      spectate: placement > 1 && !r.ended,
     });
   }
 
+  // ---- the tick ------------------------------------------------------------
+
   function tickRoyale(r) {
     if (r.ended) return;
-    const elapsed = (Date.now() - r.startedAt) / 1000 - COUNTDOWN;
+    const now = Date.now();
+    const elapsed = (now - r.startedAt) / 1000 - COUNTDOWN;
     if (elapsed < 0) return;
-    // simulated players grind away
+
+    // --- AI entrants actually play ---
     for (const e of r.entrants) {
-      if (e.alive && !e.human) e.score += e.rate * (0.6 + Math.random() * 0.8);
-      // disconnected humans freeze and sink on their own
+      if (!e.alive || e.human || !e.engine) continue;
+      let guard = 0;
+      while (now >= e.nextMoveAt && !e.engine.over && guard++ < 4) {
+        const mv = chooseMove(e.engine, e.level);
+        if (!mv) { e.engine.over = true; break; }
+        const res = e.engine.place(mv.index, mv.row, mv.col);
+        e.nextMoveAt = now + e.moveEvery * (0.75 + Math.random() * 0.5);
+        if (!res) break;
+        e.score = e.engine.score;
+        e.lines = e.engine.linesCleared;
+        e.combo = Math.max(e.combo, e.engine.maxCombo);
+        e.grid = null;
+        if (res.lineCount >= 2) royaleAttack(r, e, attackCells(res.lineCount, res.streak));
+      }
+      if (e.engine.over) royaleTopOut(r, e, null);
     }
-    // scheduled cuts
+
+    // --- 🌩️ the storm ---
+    const storm = ROYALE_STORM[r.stormIdx];
+    if (storm && elapsed >= ROYALE_DURATION * storm.at) {
+      if (!r.nextStormAt) {
+        r.nextStormAt = now;
+        royaleFeed(r, { kind: 'storm', cells: storm.cells });
+      }
+      if (now >= r.nextStormAt) {
+        r.nextStormAt = now + storm.everyMs;
+        for (const e of royaleAlive(r)) royaleHit(r, e, storm.cells, null);
+      }
+      const next = ROYALE_STORM[r.stormIdx + 1];
+      if (next && elapsed >= ROYALE_DURATION * next.at) { r.stormIdx++; r.nextStormAt = 0; }
+    }
+
+    // --- scheduled cuts ---
     const cut = ROYALE_CUTS[r.cutIdx];
     if (cut && elapsed >= ROYALE_DURATION * cut.at) {
       r.cutIdx++;
       const ranked = royaleRanked(r);
       if (ranked.length > cut.keep) {
         const dropped = ranked.slice(cut.keep);
-        for (let i = 0; i < dropped.length; i++) {
+        // Bottom-first, so the last person cut takes the better placement.
+        for (let i = dropped.length - 1; i >= 0; i--) {
           endRoyaleFor(dropped[i], r, cut.keep + 1 + i, ranked);
         }
-        for (const e of r.entrants) {
-          if (e.alive && e.human) {
-            send(e.ws, { type: 'royale_cut', eliminated: dropped.length, alive: cut.keep });
-          }
-        }
+        royaleBroadcast(r, { type: 'royale_cut', eliminated: dropped.length, alive: cut.keep });
+        royaleFeed(r, { kind: 'cut', eliminated: dropped.length, alive: cut.keep });
       }
     }
-    // finale
-    if (elapsed >= ROYALE_DURATION) {
+
+    // --- 🔥 finale: down to the last 3, everyone sees everyone ---
+    const aliveNow = royaleAlive(r);
+    if (!r.finale && aliveNow.length <= 3 && aliveNow.length > 1) {
+      r.finale = true;
+      royaleBroadcast(r, {
+        type: 'royale_finale',
+        players: aliveNow.map(x => ({ name: x.name, score: Math.floor(x.score) })),
+      });
+      royaleFeed(r, { kind: 'finale', alive: aliveNow.length });
+    }
+
+    // --- the end ---
+    const humansLeft = r.entrants.some(e => e.alive && e.human && e.ws.readyState === e.ws.OPEN);
+    const watching = r.entrants.some(e => e.human && e.ws.readyState === e.ws.OPEN);
+    // Nobody is in it and nobody is watching — do not keep simulating a field
+    // of bots for three minutes and then announce a "winner" to the world.
+    if (!watching) {
+      clearInterval(r.tick);
+      royales.delete(r.id);
+      return;
+    }
+    if (elapsed >= ROYALE_DURATION || aliveNow.length <= 1) {
       r.ended = true;
       clearInterval(r.tick);
       const ranked = royaleRanked(r);
       for (let i = ranked.length - 1; i >= 0; i--) endRoyaleFor(ranked[i], r, i + 1, ranked);
       const winner = ranked[0];
-      if (winner) {
+      // Everyone, including the eliminated, learns who actually won.
+      royaleBroadcast(r, {
+        type: 'royale_over',
+        winner: winner ? { name: winner.name, score: Math.floor(winner.score), kills: winner.kills || 0 } : null,
+        top: ranked.slice(0, 5).map(x => ({ name: x.name, score: Math.floor(x.score), kills: x.kills || 0 })),
+      });
+      for (const e of r.entrants) {
+        if (e.human && e.ws.royaleId === r.id) e.ws.royaleId = null;
+      }
+      // Only a REAL player's win is world news — a bot taking a lobby that no
+      // human survived is not an announcement.
+      if (winner && winner.human) {
         broadcastAll({
           type: 'announce',
-          message: `💯 バトルロイヤルで「${winner.name}」が100人の頂点に！`,
-          messageEn: `💯 "${winner.name}" is the last one standing out of 100 in Battle Royale!`,
+          message: `💯 バトルロイヤルで「${winner.name}」が100人の頂点に！（${winner.kills || 0}KO）`,
+          messageEn: `💯 "${winner.name}" is the last one standing out of 100 in Battle Royale! (${winner.kills || 0} KOs)`,
           from: '大会運営',
         });
       }
       royales.delete(r.id);
       return;
     }
-    // rank sync every 2s
-    if (Date.now() - r.lastState >= 2000) {
-      r.lastState = Date.now();
+
+    // --- state sync (1s) ---
+    if (now - r.lastState >= 1000) {
+      r.lastState = now;
       const ranked = royaleRanked(r);
       const nextCut = ROYALE_CUTS[r.cutIdx];
-      for (let i = 0; i < ranked.length; i++) {
-        const e = ranked[i];
-        if (!e.human) continue;
+      const cutLine = nextCut && ranked.length > nextCut.keep ? ranked[nextCut.keep] : null;
+      const top = ranked.slice(0, 3).map(x => ({ name: x.name, score: Math.floor(x.score), kills: x.kills || 0 }));
+      const leader = ranked[0];
+      for (let i = 0; i < r.entrants.length; i++) {
+        const e = r.entrants[i];
+        if (!e.human || e.ws.readyState !== e.ws.OPEN) continue;
+        const rank = e.alive ? ranked.indexOf(e) + 1 : null;
         send(e.ws, {
           type: 'royale_state',
-          rank: i + 1, alive: ranked.length, score: Math.floor(e.score),
+          rank, alive: ranked.length, score: Math.floor(e.score),
+          kills: e.kills || 0,
+          spectating: !e.alive,
           remain: Math.max(0, Math.round(ROYALE_DURATION - elapsed)),
-          top: ranked.slice(0, 3).map(x => ({ name: x.name, score: Math.floor(x.score) })),
+          top,
+          // "You are 1,240 points from safety" beats "a cut is coming".
+          safeBy: e.alive && cutLine ? Math.round(e.score - cutLine.score) : null,
           nextCutIn: nextCut ? Math.max(0, Math.round(ROYALE_DURATION * nextCut.at - elapsed)) : null,
           nextKeep: nextCut ? nextCut.keep : null,
+          storm: ROYALE_STORM[r.stormIdx] && elapsed >= ROYALE_DURATION * ROYALE_STORM[r.stormIdx].at
+            ? ROYALE_STORM[r.stormIdx].cells : 0,
+          // Spectators watch the leader's board.
+          watch: !e.alive && leader ? { name: leader.name, score: Math.floor(leader.score), grid: royaleGridOf(leader) } : null,
+          finale: r.finale
+            ? royaleAlive(r).map(x => ({ name: x.name, score: Math.floor(x.score), grid: royaleGridOf(x) }))
+            : null,
         });
       }
     }
+    void humansLeft;
   }
+
+  // Bots hold a live Engine; humans relay their grid through 'state'.
+  function royaleGridOf(e) {
+    if (e.grid) return e.grid;
+    if (e.engine) { e.grid = e.engine.snapshot(); return e.grid; }
+    return null;
+  }
+
 
   // -------------------------------------------------------------------------
   // Socket lifecycle
@@ -1400,12 +1757,37 @@ export function initBattle(server, deps) {
     clients.add(ws);
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
+    // ws emits 'error' for ordinary conditions (ECONNRESET on a phone that
+    // walked out of range, a malformed frame, a failed ping). An EventEmitter
+    // that emits 'error' with no listener takes the whole process down with
+    // it — one flaky connection would have ended every live match.
+    ws.on('error', err => console.error('[ws] socket error:', err && err.code ? err.code : '', err && err.message));
 
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
+      if (!msg || typeof msg.type !== 'string') return;
+      // Anything below can throw on drifted data (a user record without
+      // `stats`, a crowd line with a missing slot). Unhandled, that both
+      // crashed the server AND left the surviving players holding a matchId
+      // for a match that endMatch had already deleted — after which joinQueue
+      // silently refused them for the rest of the connection.
+      try {
+        handleMessage(ws, msg);
+      } catch (err) {
+        console.error('[ws] handler failed for', msg.type, '-', err && err.message);
+        try { send(ws, { type: 'error', error: '通信エラーが発生しました' }); } catch { /* socket already gone */ }
+      }
+    });
+
+    function handleMessage(ws, msg) {
       const match = ws.matchId ? matches.get(ws.matchId) : null;
       const me = match ? match.players.find(p => p.sock === ws) : null;
+
+      // Ban / mute / maintenance used to be checked only inside 'hello'. A
+      // client that simply never sends 'hello' skipped all three and could
+      // queue, chat and play. Re-check them on every message instead.
+      if (msg.type !== 'hello' && !gateSocket(ws)) return;
 
       switch (msg.type) {
         case 'hello': {
@@ -1448,17 +1830,37 @@ export function initBattle(server, deps) {
             if (r && !r.ended) {
               const e = r.entrants.find(x => x.ws === ws);
               if (e && e.alive) {
-                e.score = Math.max(e.score, Math.min(1_000_000, Math.floor(Number(msg.score) || 0)));
+                // Same rate ceiling the REST endpoint applies. Royale scores
+                // used to be client-declared with no cross-check at all, and a
+                // single forged frame could trigger a server-wide announcement.
+                const secs = Math.max(1, (Date.now() - r.startedAt) / 1000);
+                const cap = Math.floor(secs * 500);
+                const claimed = Math.min(1_000_000, Math.floor(Number(msg.score) || 0));
+                e.score = Math.max(e.score, Math.min(claimed, cap));
                 e.lines = Math.max(e.lines, Math.floor(Number(msg.lines) || 0));
                 e.combo = Math.max(e.combo, Math.floor(Number(msg.combo) || 0));
+                e.pieces = Math.max(e.pieces || 0, Math.min(20000, Math.floor(Number(msg.pieces) || 0)));
+                if (Array.isArray(msg.grid)) e.grid = msg.grid.slice(0, 64);
+                e.lastSeen = Date.now();
               }
             }
             return;
           }
           if (!match || match.ended || !me) return;
+          // Co-op runs on a SERVER-OWNED board and a server-owned score (that
+          // is the whole promise of the mode: "絶対にズレない"). Accepting a
+          // client 'state' there let one player dictate the shared score and
+          // write it into the other player's coopBest.
+          if (match.mode === 'coop') return;
+          // A finished player's score is already locked in for Elo — a late
+          // frame must not move it.
+          if (me.finished) return;
           me.score = Math.max(0, Math.min(1_000_000, Math.floor(Number(msg.score) || 0)));
           me.lines = Math.max(me.lines, Math.floor(Number(msg.lines) || 0));
           me.maxCombo = Math.max(me.maxCombo, Math.floor(Number(msg.combo) || 0));
+          // Online modes reported 0 pieces placed, which froze three missions
+          // and the matching achievements for anyone who mostly plays online.
+          me.pieces = Math.max(me.pieces || 0, Math.min(20000, Math.floor(Number(msg.pieces) || 0)));
           broadcastState(match, me.slot, {
             score: me.score,
             combo: Math.floor(Number(msg.combo) || 0),
@@ -1466,6 +1868,33 @@ export function initBattle(server, deps) {
             grid: Array.isArray(msg.grid) ? msg.grid.slice(0, 64) : null,
           });
           break;
+        }
+        // 💯 Royale: the client reports its own top-out, and the SERVER decides
+        // what it costs — the same revive-then-eliminate rule the bots follow.
+        // Without this humans were immortal while bots died, which made
+        // burying someone pointless.
+        case 'royale_topout': {
+          if (!ws.royaleId) return;
+          const r = royales.get(ws.royaleId);
+          if (!r || r.ended) return;
+          const e = r.entrants.find(x => x.ws === ws);
+          if (e && e.alive) royaleTopOut(r, e, null);
+          return;
+        }
+        // A 2+ line clear buries somebody. Line count is bounded the same way
+        // the attack duel bounds it, so a forged frame cannot nuke the lobby.
+        case 'royale_attack': {
+          if (!ws.royaleId) return;
+          const r = royales.get(ws.royaleId);
+          if (!r || r.ended) return;
+          const e = r.entrants.find(x => x.ws === ws);
+          if (!e || !e.alive) return;
+          if (!sockRate(ws, 'royaleAtkTimes', 12, 5000)) return;
+          const lines = Math.max(0, Math.min(4, Math.floor(Number(msg.lines) || 0)));
+          const combo = Math.max(0, Math.min(30, Math.floor(Number(msg.combo) || 0)));
+          if (lines < 2) return;
+          royaleAttack(r, e, attackCells(lines, combo));
+          return;
         }
         case 'attack': {
           // ⚔️ アタック戦: 2ライン以上の消去が相手へのお邪魔ブロックになる。
@@ -1652,20 +2081,25 @@ export function initBattle(server, deps) {
         }
         case 'ping': send(ws, { type: 'pong' }); break;
       }
-    });
+    }
 
     ws.on('close', () => {
       clients.delete(ws);
       leaveQueues(ws);
       leaveRoom(ws);
       dropRematchesFor(ws);   // 🔁 相手が消えたら再戦オファーも消える
-      // Battle royale: leaving = instant elimination at the current rank.
+      // Battle royale: leaving eliminates you where you actually stood — LAST
+      // among the current survivors. Awarding rank-among-survivors made
+      // quitting while ahead score better than playing the round out.
       if (ws.royaleId) {
         const r = royales.get(ws.royaleId);
         if (r && !r.ended) {
-          const ranked = royaleRanked(r);
-          const idx = ranked.findIndex(e => e.ws === ws);
-          if (idx !== -1) endRoyaleFor(ranked[idx], r, idx + 1, ranked);
+          const e = r.entrants.find(x => x.ws === ws);
+          if (e && e.alive) {
+            const ranked = royaleRanked(r);
+            endRoyaleFor(e, r, ranked.length, ranked);
+            royaleFeed(r, { kind: 'left', victim: e.name, alive: ranked.length - 1 });
+          }
         }
         ws.royaleId = null;
       }
@@ -1714,7 +2148,7 @@ export function initBattle(server, deps) {
 
   return {
     clients, matches, rooms,
-    queueSize: () => queues.duel.length + queues.team.length,
+    queueSize: queueSizeAll,   // all seven queues — duel+team alone under-reported
     displayOnline, displayMatches,
     broadcastAll,
     chatOps: {

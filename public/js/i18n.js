@@ -100,6 +100,8 @@ const CATALOG_EN = {
   souzouslayer: { name: 'Beyond Creation', desc: 'Beat "Creator God" difficulty' },
   tourneyking: { name: 'Tournament King', desc: 'Win an online tournament' },
   apex100: { name: 'Apex of 100', desc: 'Take #1 in Battle Royale' },
+  hunter: { name: 'The Hunter', desc: '25 lifetime knockouts in Battle Royale' },
+  guest: { name: 'Honoured Guest', desc: 'Take part in 10 Admin Event runs' },
   streak5: { name: 'Streak Rider', desc: 'Win 5 ranked duels in a row' },
   diamond: { name: 'Diamond Pride', desc: 'Reach 1500 rating' },
   grandmaster: { name: 'Peak Master', desc: 'Reach 1700 rating' },

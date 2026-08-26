@@ -77,18 +77,21 @@ export const BOOST_ITEMS = [
 // dispatched client-side (modes.js BOSS_MOVES). atk2 = phase-2 attack-interval
 // multiplier. Telegraphed moves flash their target cells first and can be CUT
 // by clearing a line through them.
+// `nameEn` mirrors CATALOG_EN in public/js/i18n.js (which is what the CLIENT
+// renders). The server needs its own copy because it writes English live-feed
+// lines — without it, English readers got "X defeated スライムキング".
 export const BOSSES = [
-  { id: 'slime',  name: 'スライムキング',   emoji: '🟢', hp: 3000,  atkSec: 12, atkCells: 3, gemsFirst: 50,
+  { id: 'slime',  name: 'スライムキング',   nameEn: 'Slime King',       emoji: '🟢', hp: 3000,  atkSec: 12, atkCells: 3, gemsFirst: 50,
     moves: ['garbage'], moves2: ['garbage'], atk2: 0.75 },
-  { id: 'golem',  name: 'アイアンゴーレム', emoji: '🗿', hp: 8000,  atkSec: 10, atkCells: 4, gemsFirst: 80,
+  { id: 'golem',  name: 'アイアンゴーレム', nameEn: 'Iron Golem',       emoji: '🗿', hp: 8000,  atkSec: 10, atkCells: 4, gemsFirst: 80,
     moves: ['garbage', 'quake'], moves2: ['garbage', 'quake'], atk2: 0.75 },
-  { id: 'dragon', name: 'ドラゴン',         emoji: '🐉', hp: 15000, atkSec: 9,  atkCells: 5, gemsFirst: 120,
+  { id: 'dragon', name: 'ドラゴン',         nameEn: 'Dragon',           emoji: '🐉', hp: 15000, atkSec: 9,  atkCells: 5, gemsFirst: 120,
     moves: ['garbage', 'breath_row'], moves2: ['breath_row', 'garbage'], atk2: 0.75 },
-  { id: 'maou',   name: 'まおう',           emoji: '😈', hp: 25000, atkSec: 8,  atkCells: 6, gemsFirst: 200,
+  { id: 'maou',   name: 'まおう',           nameEn: 'Demon Lord',       emoji: '😈', hp: 25000, atkSec: 8,  atkCells: 6, gemsFirst: 200,
     moves: ['garbage', 'curse_hand'], moves2: ['garbage', 'curse_hand', 'breath_row'], atk2: 0.7 },
-  { id: 'mecha',  name: '機械神エクスマキナ', emoji: '⚙️', hp: 40000, atkSec: 8, atkCells: 6, gemsFirst: 300,
+  { id: 'mecha',  name: '機械神エクスマキナ', nameEn: 'Deus Ex Machina', emoji: '⚙️', hp: 40000, atkSec: 8, atkCells: 6, gemsFirst: 300,
     moves: ['garbage', 'laser_col', 'quake'], moves2: ['laser_col', 'laser_col2', 'quake'], atk2: 0.72 },
-  { id: 'frost',  name: '氷雪女王フリオーネ', emoji: '🧊', hp: 60000, atkSec: 8, atkCells: 7, gemsFirst: 500,
+  { id: 'frost',  name: '氷雪女王フリオーネ', nameEn: 'Frost Queen Frione', emoji: '🧊', hp: 60000, atkSec: 8, atkCells: 7, gemsFirst: 500,
     moves: ['garbage', 'curse_hand'], moves2: ['garbage', 'curse_hand2', 'breath_row'], atk2: 0.7 },
 ];
 
@@ -96,9 +99,9 @@ export const BOSSES = [
 // Tougher than anything there — more HP (further scaled by party size)
 // and harder-hitting, faster attacks.
 export const RAID_BOSSES = [
-  { id: 'kraken',  name: '深海のクラーケン', emoji: '🐙', hp: 35000, atkSec: 7, atkCells: 7 },
-  { id: 'tiamat',  name: '魔竜ティアマト',   emoji: '🐲', hp: 45000, atkSec: 7, atkCells: 8 },
-  { id: 'hades',   name: '冥王ハデス',       emoji: '💀', hp: 60000, atkSec: 6, atkCells: 8 },
+  { id: 'kraken',  name: '深海のクラーケン', nameEn: 'Abyssal Kraken',            emoji: '🐙', hp: 35000, atkSec: 7, atkCells: 7 },
+  { id: 'tiamat',  name: '魔竜ティアマト',   nameEn: 'Tiamat the Dread Dragon',   emoji: '🐲', hp: 45000, atkSec: 7, atkCells: 8 },
+  { id: 'hades',   name: '冥王ハデス',       nameEn: 'Hades, Lord of the Dead',   emoji: '💀', hp: 60000, atkSec: 6, atkCells: 8 },
 ];
 
 // ---- Titles (称号) — earned from stats, one equippable ----
@@ -119,6 +122,8 @@ export const TITLES = [
   { id: 'souzouslayer', name: '創造を超えし者', color: '#b06bff', desc: '難易度「創造神」に勝利' },
   { id: 'tourneyking', name: '大会王者',        color: '#ffd75e', desc: 'オンライントーナメントで優勝' },
   { id: 'apex100',  name: '百人の頂点',         color: '#ff5d5d', desc: 'バトルロイヤルで1位' },
+  { id: 'hunter',   name: '狩る者',             color: '#ff6bd4', desc: 'バトルロイヤルで通算25KO' },
+  { id: 'guest',    name: '招かれし来賓',       color: '#ffd75e', desc: '管理者イベントに10回参加' },
   { id: 'streak5',  name: '連勝街道',           color: '#ffa93d', desc: 'ランクマッチ5連勝' },
   { id: 'diamond',  name: 'ダイヤの誇り',       color: '#43d9e8', desc: 'レート1500に到達' },
   { id: 'grandmaster', name: '頂のマスター',    color: '#fff3b0', desc: 'レート1700に到達' },
@@ -176,6 +181,8 @@ export function earnedTitles(user) {
   if (has('souzou')) out.push('souzouslayer');
   if (has('tourney')) out.push('tourneyking');
   if (has('royale')) out.push('apex100');
+  if ((s.royaleKills || 0) >= 25) out.push('hunter');
+  if ((s.aePlays || 0) >= 10) out.push('guest');
   if ((s.winStreak || 0) >= 5) out.push('streak5');
   if (s.rating >= 1500) out.push('diamond');
   if (s.rating >= 1700) out.push('grandmaster');
