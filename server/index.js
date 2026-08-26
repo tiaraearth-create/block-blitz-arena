@@ -1416,7 +1416,26 @@ const SEED_NEWS = [
       '[🐲 Raid / 2v2 screen] Three allies\' mini boards used to stack above your own and squeeze it flat. Allies are now a single compact row and the boss HP is a slim bar — on an iPhone SE-sized screen your board goes from 210px to 347px, the same size as in solo. The landscape bug that made the board vanish entirely is fixed. Tap ▾ to bring the ally boards back.\n' +
       '[🌐 Matchmaking] Players are now paired by rating (the search widens the longer you wait), the AI opponent\'s strength is chosen to match your rating instead of at random, two players who queue together for 2v2 always land on the same team, and the search screen honestly shows your elapsed time, how many real people are waiting in that mode, the rating range being searched, and exactly when an AI player will step in.\n' +
       '[🐛 Fixes] A socket error could take the whole server down; a dropped connection while waiting for results left an undismissable modal covering the app; pieces could still be placed after a run had ended; a hand change mid-drag placed a different piece than the one you were holding; deleting an account left a guild permanently stuck at "full"; co-op scores could be forged by a client; with 10 items the leftmost four sat off-screen and were unreachable; online modes recorded 0 pieces placed so those missions never advanced — and more.' },
-  { id: 'seed-v2111', pinned: true,
+  { id: 'seed-zero', pinned: true,
+    title: '👁️ 断罪 ── 管理者ゼロが七つの王座を人質に取りました',
+    titleEn: '👁️ CONDEMNED — Admin Zero has taken all seven thrones',
+    body: '【👁️ 管理者ゼロが、七つの王座を人質に取りました】新しい管理者イベント「断罪」がはじまります。ゼロはHPバーではありません。画面の上であなたと同じように**本当にブロックを積んでいて**、列を消せばあなたの盤面にお邪魔が降り、名前を呼んで野次ってきます。段が進むごとに言葉づかいが崩れていきます。\n' +
+      '【🔒 点をいくら稼いでも、段は落ちません】ここがこのイベントの全部です。段のHPは7割までしか点数で削れません。残り3割には「封印」があり、通常のダメージが一切通りません。封印を貫通できるのは、30秒ごとに来る【断罪】を斬った一撃だけ。AI住人には斬れません。つまり ── **住人＝火力／あなた＝鍵**。何点入れても、あなたが斬らなければ段は絶対に落ちません。\n' +
+      '【⚔️ 断罪 ── 30秒ごとに来る山場】画面が赤く走り、あなたの名前が出て、盤面に赤いマスが3.5秒だけ点灯します。その赤マスを通るラインを消せば【斬った】。うち1つは金色の「急所」で、含めて斬れば貫通が倍になります。間に合わなければ赤マスがそのままお邪魔になり、ゼロが少し回復し、**アリーナの住人が1人、名前つきで処刑されます**。消えた住人はその日ずっと戻ってきません。\n' +
+      '【🪧 今夜の的】段のはじめにゼロが1つの列を宣言します。断罪の赤マスの6割がその列に置かれるので、その列を縦に消すと「杭」が1本入り、3本で次の予告が3.5秒→5.0秒に伸びます。ただし特定の1列を縦に消すのは点効率が悪い ── **点を稼ぐ置き方と、斬りやすくする置き方がぶつかります。**\n' +
+      '【🤝 取引 ── 60秒の生投票】20分地点でゼロが2択を持ちかけます。「この段のHPを半分にしてやる。かわりに予告を1秒縮める」。**あなたと、いまオンラインの住人全員が本当に投票します。** あなたの1票は住人5票ぶん。1人では決まりませんが、票が割れればあなたが決定打になります。住人は性格どおりに投票するので、毎回結果が違います。\n' +
+      '【🕐 段は世界で1本】18:00の枠で段2まで割れば、19:00の人は段3から始めます。足し算ではなく直列です。処刑された住人も、次の枠に席が空いたまま引き継がれます ── **あなたの取りこぼしが、会ったことのない21:00の誰かの火力を削ります。**\n' +
+      '【📜 断罪録】その日ゼロが誰に何を言ったかが、実名つきで時系列に残ります。メニューからいつでも読めます。段にとどめを刺した人は、次の枠へ**40字の伝言**を残せます。次の枠の開幕でゼロがそれを読み上げます。\n' +
+      '【🏵️ 残るもの】段が割れた瞬間その場に居た人だけに👁️バッジ。あとから点を足しても手に入りません。称号は3つ ── 「断罪を斬りし者」（封印を破るとどめ）／「名指しの常連」（通算50回名指しされる）／「七冠奪還」（七段すべてが割れた日に居合わせる）。',
+    bodyEn: '[👁️ Admin Zero has taken all seven thrones hostage] A new admin event, CONDEMNED, begins. Zero is not an HP bar. He plays a real board above yours, and when he clears lines the garbage lands on you for real. He calls you by name and heckles you — and the further you push him, the more his manners fall away.\n' +
+      '[🔒 No amount of score will bring a stage down] This is the whole event. Only 70% of a stage can be worn away by score. The last 30% is sealed, and ordinary damage does not touch it. The seal yields only to a CONDEMNATION cut — one that arrives every 30 seconds, and that no AI resident can make. So: residents are the firepower, and you are the key. However many points go in, the stage will not fall unless you cut.\n' +
+      '[⚔️ Condemnation — a moment that comes every 30 seconds] The screen runs red, your name appears, and cells light up on your board for 3.5 seconds. Clear a line through them and you have CUT. One of them is gold — the keystone — and including it doubles the damage. Miss, and the cells turn to garbage, Zero recovers a little, and a resident of the arena is executed by name. They do not come back for the rest of the day.\n' +
+      '[🪧 Tonight\'s mark] At the start of each stage Zero names one column, and 60% of the condemnation cells will fall there. Clear that column vertically to drive a stake; three stakes stretch your next warning from 3.5s to 5.0s. But clearing one specific column vertically is poor for score — so the way to score and the way to stay alive pull against each other.\n' +
+      '[🤝 The bargain — 60 seconds, live] Twenty minutes in, Zero offers a choice. "I will halve this stage. In exchange, your warning shrinks by one second." You vote, and so does every resident currently online — really. Your vote counts as five of theirs. You cannot decide it alone, but when they split, you decide it. Residents vote in character, so it lands differently every time.\n' +
+      '[🕐 One stage for the whole world] If the 18:00 slot breaks through to stage 2, the 19:00 players start at stage 3. Not addition — a single line. Executed residents carry over too, their seats still empty. Your miss thins the firepower of someone at 21:00 you will never meet.\n' +
+      '[📜 The Chronicle] Everything Zero said, and to whom, stays on record by name, in order. Readable from the menu at any time. Whoever lands the finishing blow on a stage may leave a 40-character message for the next slot — and Zero reads it aloud when they arrive.\n' +
+      '[🏵️ What remains] The 👁️ badge goes only to those present the moment a stage falls; no amount of later scoring earns it. Three titles: Sealbreaker (land the blow that breaks a seal), Marked (be condemned 50 times), Seven Reclaimed (be there when all seven fall).' },
+  { id: 'seed-v2111',
     title: '🛡️ v2.11.1 遊んだまま更新できるように ＆ 大量のバグ修正',
     titleEn: '🛡️ v2.11.1 — Updates Without Losing Your Run, and a Pile of Fixes',
     body: '【🛡️ 遊んだまま更新できるようになりました】アップデートでサーバーを入れ替えるとき、これまでは遊んでいる最中の人が黙って切断されていました。これからは全員に予告が出て、進行中のものがきちんと終わります — オンライン対戦は引き分け（記録も報酬も残り、勝敗はどちらにもつきません）、バトルロイヤルはその時点の順位で確定、ソロやダンジョンは自動で保存して終了します。\n' +
@@ -1447,7 +1466,7 @@ const SEED_NEWS = [
 // これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
 // 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
 // v2.11.1 の本文を差し替えるのに必要になった。
-const NEWS_BODY_REV = 2;
+const NEWS_BODY_REV = 3;
 
 // id で引いたユーザー。`__proto__` や `constructor` を渡されると
 // Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
@@ -1500,9 +1519,10 @@ function seedNews() {
 //
 // 一度きり（db.meta.newsUnpinned で記録）。管理者があとで📌し直したものを
 // 起動のたびに剥がしてしまわないため。
-const KEEP_PINNED = ['seed-v2111', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
+const KEEP_PINNED = ['seed-zero', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
 function unpinOldReleaseNotes() {
-  if (db.meta.newsUnpinned) return;
+  // KEEP_PINNED を変えたら、もう一度だけ剥がし直す必要がある。
+  if (db.meta.newsUnpinned === NEWS_BODY_REV) return;
   let n = 0;
   for (const item of db.news) {
     if (!item || !item.pinned) continue;
@@ -1510,7 +1530,7 @@ function unpinOldReleaseNotes() {
     item.pinned = false;
     n++;
   }
-  db.meta.newsUnpinned = true;
+  db.meta.newsUnpinned = NEWS_BODY_REV;
   if (n) console.log(`[news] 過去の更新履歴 ${n}件の📌を外しました（最新版のみ📌）`);
 }
 
