@@ -18,7 +18,9 @@ import { speakerDamp } from './chatgen.js';
 
 export const POP_SCALE = process.env.POP_SCALE === undefined ? 1 : Math.max(0, Number(process.env.POP_SCALE) || 0);
 
-export const MAX_LIVE_SCALE = 100;
+// 表示人数の倍率上限。住人の実数は MAX_ROSTER（×88 相当）で頭打ちになるので、
+// そこから先は「表示される人数」だけが増える — お祭り演出用の見た目の数字。
+export const MAX_LIVE_SCALE = 500;
 
 let liveScale = 1;
 export function setLiveScale(x) {
@@ -38,7 +40,7 @@ export const DEFAULT_TOGGLES = { chat: true, dialogues: true, feed: true, greeti
 const custom = {
   names: [],            // extra persona names mixed into guests/bots
   lines: [],            // custom chat lines mixed into the crowd
-  chatPace: 1,          // 0.25 quiet … 4 party
+  chatPace: 1,          // 0.25 しずか … 1 標準 … 8 限界
   toggles: { ...DEFAULT_TOGGLES },
   quiet: null,          // { from, to } JST hours during which the crowd is silent
   removed: [],          // resident ids the admin retired
@@ -54,7 +56,7 @@ export function setCustom(c = {}) {
     custom.lines = c.lines.map(s => String(s).trim().slice(0, 100)).filter(Boolean).slice(0, 200);
   }
   if (c.chatPace !== undefined && Number.isFinite(Number(c.chatPace))) {
-    custom.chatPace = Math.max(0.25, Math.min(4, Number(c.chatPace)));
+    custom.chatPace = Math.max(0.25, Math.min(MAX_CHAT_PACE, Number(c.chatPace)));
   }
   if (c.toggles && typeof c.toggles === 'object') {
     for (const k of Object.keys(DEFAULT_TOGGLES)) {
@@ -85,7 +87,16 @@ export function getCustom() {
     removed: [...custom.removed], extra: custom.extra.map(x => ({ ...x })), rosterSeed: custom.rosterSeed,
   };
 }
+export const MAX_CHAT_PACE = 8;
 export function chatPaceFactor() { return custom.chatPace; }
+
+// 発言間隔の下限（ms）。以前は 2500ms 固定だったので、チャット頻度を
+// 「大騒ぎ」にしても混雑時は必ず 2.5 秒で頭打ちになり、設定が効いていない
+// ように見えていた。標準（×2以下）の挙動はそのままに、速い側だけ解放する。
+// 1000ms は安全弁 — これ以上速いと読む前に流れていく。
+export function chatFloorMs(base = 2500) {
+  return Math.max(1000, Math.round(base / Math.max(1, custom.chatPace / 2)));
+}
 export function toggles() { return custom.toggles; }
 
 // Quiet hours: the crowd goes silent (chat/feed), population still shows.
@@ -104,7 +115,11 @@ export function isQuietNow(now = Date.now()) {
 // still has enough named residents to chat, vote and fill the boards.
 // buildRoster is deterministic per index, so growing only APPENDS residents —
 // r0..r63 keep their identity (and the admin's removed-list stays valid).
-const MAX_ROSTER = 240;
+// 住人の実数の上限。240 だと rosterSize() が ×14 で頭打ちになり、そこから先は
+// 倍率を上げても「表示人数」しか増えなかった（住人240人・オンライン118人・
+// チャット速度が全部張り付く）。600 なら ×88 まで住人が増え続ける。
+// 実測: 生成 1ms / 141KB（起動時に1度だけ・以後キャッシュ）、名前の重複ゼロ。
+const MAX_ROSTER = 600;
 export function rosterSize() {
   const scale = effectiveScale();
   return Math.min(MAX_ROSTER, Math.round(64 * Math.max(1, Math.sqrt(scale))));

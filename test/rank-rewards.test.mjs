@@ -80,11 +80,15 @@ try {
   const meMid = await j('/api/me', {}, b.token);
   check('no reward mid-week', meMid.status === 200 && meMid.user.rankRewards.length === 0);
 
-  // ---- crowd scale cap: ×100 now allowed, above is clamped ----
+  // ---- crowd scale cap: ×500 allowed (v2.11), above is clamped ----
   const pop100 = await j('/api/admin/pop', { method: 'POST', body: { scale: 100 } }, admin.token);
   check('admin can set にぎわい ×100', pop100.status === 200 && pop100.scale === 100, `scale=${pop100.scale}`);
-  const pop150 = await j('/api/admin/pop', { method: 'POST', body: { scale: 150 } }, admin.token);
-  check('scale above 100 is clamped', pop150.status === 200 && pop150.scale === 100, `scale=${pop150.scale}`);
+  const pop500 = await j('/api/admin/pop', { method: 'POST', body: { scale: 500 } }, admin.token);
+  check('admin can set にぎわい ×500', pop500.status === 200 && pop500.scale === 500, `scale=${pop500.scale}`);
+  const pop999 = await j('/api/admin/pop', { method: 'POST', body: { scale: 999 } }, admin.token);
+  check('scale above 500 is clamped', pop999.status === 200 && pop999.scale === 500, `scale=${pop999.scale}`);
+  // 住人の実数が倍率でどう伸びるかは crowd.test.mjs 側で検証する
+  // （このサーバーは POP_SCALE=0 で起動しているので、ここでは常に基本64人）。
   await j('/api/admin/pop', { method: 'POST', body: { scale: 0 } }, admin.token);
 
   // ---- simulate the week rolling over: rewind everyone's weekly record ----

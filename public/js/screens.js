@@ -2765,7 +2765,8 @@ const TOGGLE_LABELS = [
 ];
 const PRESETS = [
   ['normal', '🙂 標準', '人口×1・ふつうのにぎわい'], ['party', '🎉 お祭り', '人口×3・おしゃべり×2.5'],
-  ['fever', '🔥 フィーバー', '人口×25・住人も大増員'], ['mega', '🌋 伝説の夜', '人口×100・限界ににぎやか'],
+  ['fever', '🔥 フィーバー', '人口×25・住人320人'], ['mega', '🌋 伝説の夜', '人口×88・住人600人(上限)'],
+  ['ultra', '🌠 祭りの極み', '人口×500・表示30万人'],
   ['quiet', '🤫 しずか', '人口×0.5・会話と挨拶なし'], ['night', '🌙 深夜の秘密基地', '人口×0.7・ゆったり'],
   ['silent', '🔇 人口だけ', '人数は出るが誰も喋らない'], ['off', '⚫ 完全オフ', 'AIプレイヤーを全停止'],
 ];
@@ -2807,11 +2808,12 @@ async function showCrowdModal(tab = 'basic') {
         ${PRESETS.map(([id, l, d]) => `<button class="preset-btn" data-preset="${id}"><b>${l}</b><small>${d}</small></button>`).join('')}
       </div>
       <div class="settings-row" style="margin-top:12px"><label>👥 人口倍率 <b>×${st.scale}</b></label></div>
+      <p class="muted" style="font-size:11px;margin:-4px 0 6px">住人の実数は ×88 で上限（600人）。それより上は表示人数だけが増えます</p>
       <div class="seg seg-wrap" id="popSeg" style="justify-content:center">
-        ${[0, 0.5, 1, 1.5, 2, 3, 5, 10, 25, 50, 100].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
+        ${[0, 0.5, 1, 1.5, 2, 3, 5, 10, 25, 50, 88, 150, 300, 500].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
       </div>
-      <div class="settings-row" style="margin-top:10px"><label>💬 チャット頻度</label><div class="seg" id="paceSeg">
-        ${[[0.5, 'ひかえめ'], [1, '標準'], [2, 'おしゃべり'], [4, '大騒ぎ']].map(([v, l]) =>
+      <div class="settings-row" style="margin-top:10px"><label>💬 チャット頻度<br><span class="muted" style="font-size:10px">住人の発言とライブフィードの速さ</span></label><div class="seg" id="paceSeg">
+        ${[[0.25, 'しずか'], [0.5, 'ひかえめ'], [1, '標準'], [2, 'おしゃべり'], [4, '大騒ぎ'], [6, '爆速'], [8, '限界']].map(([v, l]) =>
           `<button data-v="${v}" ${Number(amb.chatPace) === v ? 'class="active"' : ''}>${l}</button>`).join('')}
       </div></div>
       <p class="muted" style="font-size:12px;margin:12px 0 6px">機能のON/OFF</p>

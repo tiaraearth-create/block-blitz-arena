@@ -5,7 +5,7 @@
 import { buildRoster, ARCHETYPES } from '../server/residents.js';
 import { composeLine, composeDialogue, composeFeed, composeReaction, chooseReplies, buildCtx } from '../server/crowd.js';
 import { _resetForTest } from '../server/chatgen.js';
-import { setWorldProvider, activeResidents } from '../server/ambient.js';
+import { setWorldProvider, activeResidents, setCustom, chatPaceFactor, chatFloorMs } from '../server/ambient.js';
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push([ok ? '✅' : '❌', name, detail]); if (!ok) process.exitCode = 1; };
@@ -214,6 +214,56 @@ _resetForTest();
     if (/王座|玉座|王冠|防衛|挑戦者|頂点|throne|crown|defend|challenger/i.test(s)) championy++;
   }
   check(`champion flavor lines appear (~16% of ${N})`, championy >= 6 && championy <= 50, `championy=${championy}`);
+}
+
+// ---------------------------------------------------------------------------
+// 👥 にぎわい倍率で住人が本当に増えるか（v2.11）
+//
+// MAX_ROSTER が 240 だった頃は rosterSize() が ×14 で頭打ちになり、そこから
+// 上は「表示人数」だけが増えて住人・チャット・ランキングは一切変わらなかった。
+// 600 に引き上げたので ×88 まで伸び続ける。名前が枯れないことも合わせて見る。
+// ---------------------------------------------------------------------------
+{
+  const sizes = [64, 240, 400, 600];
+  for (const n of sizes) {
+    const r = buildRoster('v1', n);
+    const names = new Set(r.map(x => x.name));
+    check(`住人${n}人を生成できる`, r.length === n, `${r.length}人`);
+    check(`住人${n}人でも名前が重複しない`, names.size === n, `unique=${names.size}/${n}`);
+  }
+  // 性格の偏りが極端になっていないこと（600人でも全アーキタイプが出る）
+  const big = buildRoster('v1', 600);
+  const missing = ARCHETYPES.filter(a => !big.some(r => r.arch === a.id));
+  check('600人でも全アーキタイプが登場する', missing.length === 0, missing.map(a => a.id).join(',') || 'すべて出現');
+
+  // 生成コスト（起動時に1度だけ・以後キャッシュ）
+  const t0 = Date.now();
+  buildRoster('bench', 600);
+  const ms = Date.now() - t0;
+  check('600人の生成が十分速い（<100ms）', ms < 100, `${ms}ms`);
+}
+
+// ---------------------------------------------------------------------------
+// 💬 チャット速度が本当に設定どおり変わるか（v2.11）
+// ---------------------------------------------------------------------------
+{
+  const gapAt = pace => {
+    setCustom({ chatPace: pace });
+    // battle.js の directChat と同じ式（平均値で評価）
+    return Math.max(chatFloorMs(2500), 45000 / chatPaceFactor() / 4);
+  };
+  const slow = gapAt(0.25), normal = gapAt(1), loud = gapAt(4), max = gapAt(8);
+  check('遅い側ほど間隔が長い', slow > normal && normal > loud && loud > max,
+    `0.25=${Math.round(slow)}ms 1=${Math.round(normal)}ms 4=${Math.round(loud)}ms 8=${Math.round(max)}ms`);
+  check('標準以下は従来の下限2500msのまま', (setCustom({ chatPace: 1 }), chatFloorMs(2500)) === 2500
+    && (setCustom({ chatPace: 2 }), chatFloorMs(2500)) === 2500, '');
+  check('速い側では下限も下がる', (setCustom({ chatPace: 8 }), chatFloorMs(2500)) === 1000, '');
+  check('下限は1000ms未満にならない（安全弁）', (setCustom({ chatPace: 999 }), chatFloorMs(2500)) >= 1000, '');
+  setCustom({ chatPace: 999 });
+  check('チャット頻度は上限8でクランプされる', chatPaceFactor() === 8, `pace=${chatPaceFactor()}`);
+  setCustom({ chatPace: 0 });
+  check('チャット頻度は下限0.25でクランプされる', chatPaceFactor() === 0.25, `pace=${chatPaceFactor()}`);
+  setCustom({ chatPace: 1 });
 }
 
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

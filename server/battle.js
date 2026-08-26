@@ -7,7 +7,7 @@ import { chooseMove } from '../public/js/ai.js';
 import { RAID_BOSSES } from './catalog.js';
 import {
   effectiveScale, pickPersona, pickResidentBot, residentLine, residentById, residentByName,
-  ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor,
+  ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor, chatFloorMs,
   toggles, isQuietNow, popFactor, worldCtx,
 } from './ambient.js';
 import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
@@ -214,7 +214,7 @@ export function initBattle(server, deps) {
   let lastDialogueAt = 0;
   const directChat = () => {
     // Absolute floor keeps a ×100 crowd lively without a broadcast storm.
-    const gap = Math.max(2500, (20000 + Math.random() * 50000) / chatPaceFactor() / Math.max(0.5, Math.min(4, popFactor())));
+    const gap = Math.max(chatFloorMs(2500), (20000 + Math.random() * 50000) / chatPaceFactor() / Math.max(0.5, Math.min(4, popFactor())));
     setTimeout(() => {
       try {
         if (crowdOn('chat')) {
@@ -243,7 +243,7 @@ export function initBattle(server, deps) {
     return entry;
   }
   const directFeed = () => {
-    const gap = Math.max(6000, (25000 + Math.random() * 60000) / Math.max(0.5, Math.min(4, popFactor())));
+    const gap = Math.max(chatFloorMs(6000), (25000 + Math.random() * 60000) / chatPaceFactor() / Math.max(0.5, Math.min(4, popFactor())));
     setTimeout(() => {
       try {
         if (crowdOn('feed')) {

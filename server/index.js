@@ -3145,7 +3145,9 @@ const CROWD_PRESETS = {
   normal: { scale: 1,   chatPace: 1,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
   party:  { scale: 3,   chatPace: 2.5, toggles: { ...DEFAULT_TOGGLES }, quiet: null },
   fever:  { scale: 25,  chatPace: 3.5, toggles: { ...DEFAULT_TOGGLES }, quiet: null },
-  mega:   { scale: 100, chatPace: 4,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  // 住人が増え続ける上限は ×88（MAX_ROSTER）。それより上は表示人数だけが伸びる。
+  mega:   { scale: 88,  chatPace: 4,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  ultra:  { scale: 500, chatPace: 4,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
   night:  { scale: 0.7, chatPace: 0.75, toggles: { ...DEFAULT_TOGGLES }, quiet: null },
   silent: { scale: 1,   chatPace: 1,   toggles: { ...DEFAULT_TOGGLES, chat: false, dialogues: false, feed: false, greetings: false, reactions: false }, quiet: null },
 };
