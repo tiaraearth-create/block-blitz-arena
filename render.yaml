@@ -31,6 +31,14 @@ services:
         generateValue: true        # long random string; keeps logins across deploys
       - key: ADMIN_PASSWORD
         sync: false                # prompted on first deploy; pins the admin password
+      # DATA_DIR を明示するのは保険。server/db.js は未設定だと
+      # <このファイルの場所>/data を使うので、Render のチェックアウト先が
+      # 変わったり、リポジトリ同梱の Dockerfile（WORKDIR /app）が使われたり
+      # すると、下の disk とパスがズレて「空のディスクを見に行く」状態になる。
+      # そうなると全起動が初回起動あつかいになり、同梱 seed が毎回適用される。
+      # ここを固定しておけば、どう動かしてもディスクを指す。
+      - key: DATA_DIR
+        value: /opt/render/project/src/server/data
     # --- permanent data ---
     # mountPath must match DATA_DIR (defaults to <repo>/server/data, and Render
     # checks the repo out at /opt/render/project/src).
