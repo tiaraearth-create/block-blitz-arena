@@ -11,6 +11,7 @@ import {
   toggles, isQuietNow, popFactor, worldCtx,
 } from './ambient.js';
 import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
+import { zeroSay, moodFor } from './zero.js';
 import { translateChat, translateLocal, detectLang } from './translate.js';
 import { isOpen as pollIsOpen, vote as pollVote, residentChoice, residentVoteAt, isSwingVoter } from './polls.js';
 
@@ -126,6 +127,30 @@ export function initBattle(server, deps) {
     pushHistory(entry);
     broadcastAll(entry);
     return entry;
+  }
+
+  // ---- 👁️ 管理者ゼロ の声 ----
+  //
+  // ゼロはHPバーではなくキャラクターなので、喋る口が要る。実体は postChat の
+  // from を差し替えるだけ。名前は登録できないよう予約してあるので、
+  // 他人がゼロを騙ることはできない。
+  //
+  // 憑依: るみまきさんが管理画面から打った文字は、この同じ口から出る。
+  // 自動台詞より先にこれを作るのが正しい順序 —— 実装はほぼ無いのに、
+  // 「今日のゼロ、なんか喋りが違う」が起きるのはこちらだけ。
+  const ZERO_NAME = '管理者ゼロ';
+  function zeroChat(text, tr) {
+    if (!text) return null;
+    return postChat(ZERO_NAME, String(text).slice(0, 300), {
+      role: 'zero',
+      ...(tr ? { tr } : {}),
+    });
+  }
+  // 台詞テーブルから1行選んで喋る（日英そろって出る）
+  function zeroSpeak(kind, danIndex, ctx = {}) {
+    const line = zeroSay(kind, moodFor(danIndex | 0), ctx);
+    if (!line) return null;
+    return zeroChat(line.ja, line.en);
   }
 
   // ---- reactions (絵文字スタンプ) ----
@@ -2333,6 +2358,13 @@ export function initBattle(server, deps) {
     queueSize: queueSizeAll,   // all seven queues — duel+team alone under-reported
     displayOnline, displayMatches,
     broadcastAll,
+    zero: {
+      name: ZERO_NAME,
+      // 憑依（管理画面から）
+      say: (text, tr) => zeroChat(text, tr),
+      // 台詞テーブルから
+      speak: (kind, danIndex, ctx) => zeroSpeak(kind, danIndex, ctx),
+    },
     chatOps: {
       clear: () => {
         chatHistory.length = 0;

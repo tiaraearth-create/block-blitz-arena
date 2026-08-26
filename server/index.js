@@ -854,6 +854,11 @@ app.post('/api/register', (req, res) => {
   // AI住人と同名のアカウントは作れない — チャットの返信/プロフィールで
   // 住人と人間の区別がつかなくなる。
   if (residentByName(username)) return res.status(409).json({ error: 'その名前はアリーナの住人が使っています。別の名前でどうぞ' });
+  // 👁️ 管理者ゼロ を騙れると、イベント中に偽の宣告を撒けてしまう。
+  // 名前だけ見ている相手には本物と区別がつかない。
+  if (RESERVED_NAMES.some(n => n.toLowerCase() === username.toLowerCase())) {
+    return res.status(409).json({ error: 'その名前は使えません。別の名前でどうぞ' });
+  }
 
   const user = newUser(username, password);
   const token = issueToken(user.id);
@@ -922,6 +927,10 @@ app.post('/api/me/rename', requireAuth, (req, res) => {
     const exists = Object.values(db.users).some(u => u.id !== user.id && u.username.toLowerCase() === username.toLowerCase());
     if (exists) return res.status(409).json({ error: 'そのユーザー名は既に使われています' });
     if (residentByName(username)) return res.status(409).json({ error: 'その名前はアリーナの住人が使っています。別の名前でどうぞ' });
+    // 登録で塞いでも、改名で取れては意味がない。
+    if (RESERVED_NAMES.some(n => n.toLowerCase() === username.toLowerCase())) {
+      return res.status(409).json({ error: 'その名前は使えません。別の名前でどうぞ' });
+    }
   }
   const DAY = 24 * 60 * 60 * 1000;
   if (user.role !== 'admin' && user.lastRename && Date.now() - user.lastRename < DAY) {
@@ -3527,6 +3536,38 @@ app.post('/api/admin/chat/say', requireAuth, requireAdmin, (req, res) => {
   res.json({ ok: true, from: entry.from, text: entry.text });
 });
 
+// 👁️ 憑依 ── 管理者ゼロの口から、るみまきさんが打った言葉をそのまま出す。
+//
+// ゼロの自動台詞は必ず尽きる。同じ台詞を2回目に見た瞬間にキャラクターは
+// 死ぬので、生の言葉が入る口を先に用意しておく。実装はほぼ無いのに、
+// 「今日のゼロ、なんか喋りが違う」が起きるのはこちら。
+//
+// 名前は RESERVED_NAMES で予約してあるので、他人がゼロを騙ることはできない。
+app.post('/api/admin/zero/say', requireAuth, requireAdmin, (req, res) => {
+  const text = String(req.body.text || '').trim().slice(0, 300);
+  if (!text) return res.status(400).json({ error: '言わせたい言葉を入力してください' });
+  // 英訳を添えられる（省略可）。ゼロは日英どちらの画面にも出る。
+  const tr = String(req.body.en || '').trim().slice(0, 300) || undefined;
+  const entry = battle.zero.say(text, tr);
+  adminLog(req, 'zero-say', battle.zero.name, { text: text.slice(0, 80) });
+  res.json({ ok: true, from: entry.from, text: entry.text });
+});
+
+// 台詞テーブルから喋らせる（動作確認用）。
+app.post('/api/admin/zero/speak', requireAuth, requireAdmin, (req, res) => {
+  const kind = String(req.body.kind || 'verdict');
+  const dan = Math.max(0, Math.min(6, Math.floor(Number(req.body.dan) || 0)));
+  const entry = battle.zero.speak(kind, dan, {
+    you: String(req.body.you || req.user.username).slice(0, 24),
+    name: String(req.body.name || '').slice(0, 24) || undefined,
+    n: Number(req.body.n) || undefined,
+    dan: dan + 1,
+    seed: Date.now(),
+  });
+  if (!entry) return res.status(400).json({ error: `そんな台詞は無い: ${kind}` });
+  res.json({ ok: true, from: entry.from, text: entry.text });
+});
+
 // Test tools: instantly finish the caller's own mission board / achievements.
 app.post('/api/admin/missions/complete', requireAuth, requireAdmin, (req, res) => {
   migrateUser(req.user);
@@ -3600,6 +3641,9 @@ setWorldProvider(() => ({
 // ---------------------------------------------------------------------------
 
 const ADMIN_NAME = 'るみまき';
+// 誰にも取らせない名前。ゼロはイベント中に名指しで宣告するので、
+// 騙られると偽の宣告が撒ける。改名(/api/me/rename)でも同じ検査をする。
+const RESERVED_NAMES = ['管理者ゼロ', 'ゼロ', 'ZERO', '管理者', '運営', '大会運営', 'admin'];
 
 // With ADMIN_PASSWORD set (e.g. on Render), the admin password is pinned to it
 // on every boot — it survives redeploys and data resets.

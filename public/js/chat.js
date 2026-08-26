@@ -205,7 +205,10 @@ function appendMsg(msg, scroll = true) {
   const me = session.user && msg.from === session.user.username;
   const isAdmin = msg.role === 'admin';
   const isMod = msg.role === 'mod';
-  el.className = `chat-msg ${me ? 'mine' : ''} ${isAdmin ? 'admin-msg' : ''}`;
+  // 👁️ 管理者ゼロ。イベントの敵役なので、ふつうの発言とは別物に見せる。
+  // 名前はサーバー側で予約されているので、これを騙る発言は存在しない。
+  const isZero = msg.role === 'zero';
+  el.className = `chat-msg ${me ? 'mine' : ''} ${isAdmin ? 'admin-msg' : ''} ${isZero ? 'zero-msg' : ''}`;
   if (msg.id) el.dataset.id = msg.id;
   const time = new Date(msg.at || Date.now());
   const hh = String(time.getHours()).padStart(2, '0');
@@ -214,7 +217,7 @@ function appendMsg(msg, scroll = true) {
   const tag = msg.tag ? `<span class="cm-tag">[${escapeHtml(msg.tag)}]</span>` : '';
   const reply = msg.reply ? `<span class="cm-reply">↩ <b>${escapeHtml(msg.reply.from)}</b> ${escapeHtml(msg.reply.text)}</span>` : '';
   el.innerHTML = `
-    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''} ${Number(msg.crown) ? `crowned${Math.min(3, Number(msg.crown))}` : ''}">${msg.crown ? '👑' : ''}${isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${hh}:${mm}</span>
+    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''} ${isZero ? 'cm-zero' : ''} ${Number(msg.crown) ? `crowned${Math.min(3, Number(msg.crown))}` : ''}">${msg.crown ? '👑' : ''}${isZero ? '👁️' : isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${hh}:${mm}</span>
     ${reply}
     <span class="cm-bubble">${escapeHtml(useTr ? msg.tr.text : msg.text)}</span>
     ${useTr ? `<button class="cm-tr" title="${t('原文を表示', 'Show original')}">🌐 ${msg.tr.engine !== 'table' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}</button>` : ''}

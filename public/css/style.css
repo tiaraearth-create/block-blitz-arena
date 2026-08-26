@@ -1879,3 +1879,17 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
   font-size: 10.5px; color: var(--dim, var(--muted)); line-height: 1.6;
   word-break: break-word; font-family: ui-monospace, 'SFMono-Regular', monospace;
 }
+
+/* 👁️ 管理者ゼロ ── イベントの敵役。ふつうの発言に埋もれると台無しなので、
+   赤い縁と細い字で「システムが喋っている」感じにする。 */
+.chat-msg.zero-msg .cm-bubble {
+  background: linear-gradient(180deg, #2a1116, #1a0d11);
+  border: 1px solid #6d1a22;
+  border-left: 3px solid #e03546;
+  color: #f2d4d7;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.85;
+  letter-spacing: .01em;
+}
+.cm-name.cm-zero { color: #e03546; font-weight: 800; letter-spacing: .04em; }
