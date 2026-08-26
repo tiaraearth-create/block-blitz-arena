@@ -25,27 +25,55 @@ const args = process.argv.slice(2);
 const urlIdx = args.indexOf('--url');
 const BASE = (urlIdx >= 0 && args[urlIdx + 1] ? args[urlIdx + 1] : DEFAULT_URL).replace(/\/$/, '');
 
-function ask(question, { hidden = false } = {}) {
+// パスワードを伏せ字で読む。
+//
+// 前の実装は readline に入力を任せたまま、echo された文字の上から * を
+// 重ね書きしていた。表示は伏せられても入力の実体には一切触れておらず、
+// バックスペースを押すと表示と中身がずれ、端末によっては制御文字が値に
+// 紛れ込みうる。「打ったつもりのものと違うものが送られる」ので、原因が
+// 分からないままログインに失敗する。
+//
+// ここでは raw モードにして1文字ずつ自分で受け取る。値に何が入るかを
+// こちらが完全に決められるので、表示と中身がずれようがない。
+function askHidden(question) {
+  const { stdin, stdout } = process;
+  if (!stdin.isTTY) {
+    // パイプ経由（echo pw | node scripts/pull-backup.mjs）。1行目をそのまま使う。
+    return new Promise(resolve => {
+      const rl = readline.createInterface({ input: stdin });
+      rl.once('line', line => { rl.close(); resolve(line); });
+    });
+  }
   return new Promise(resolve => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    if (hidden && process.stdin.isTTY) {
-      // Echo * instead of the typed characters.
-      const onData = ch => {
-        const s = String(ch);
-        if (s === '\n' || s === '\r' || s === '') return;
-        readline.moveCursor(process.stdout, -s.length, 0);
-        process.stdout.write('*'.repeat(s.length));
-      };
-      process.stdin.on('data', onData);
-      rl.question(question, answer => {
-        process.stdin.off('data', onData);
-        rl.close();
-        process.stdout.write('\n');
-        resolve(answer.trim());
-      });
-    } else {
-      rl.question(question, answer => { rl.close(); resolve(answer.trim()); });
-    }
+    stdout.write(question);
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    let buf = '';
+    const done = value => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.off('data', onData);
+      stdout.write('\n');
+      resolve(value);
+    };
+    const onData = chunk => {
+      // 貼り付けは複数文字がまとめて届く。コードポイント単位で回す。
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n') return done(buf);
+        // Ctrl+C
+        if (ch === '\u0003') { stdout.write('\n中止しました\n'); process.exit(1); }
+        // Backspace
+        if (ch === '\u007f' || ch === '\b') {
+          if (buf.length) { buf = buf.slice(0, -1); stdout.write('\b \b'); }
+          continue;
+        }
+        if (ch < ' ') continue;   // その他の制御文字は値に入れない
+        buf += ch;
+        stdout.write('*');
+      }
+    };
+    stdin.on('data', onData);
   });
 }
 
@@ -93,7 +121,23 @@ async function req(url, opts = {}, { label = '通信', tries = 4 } = {}) {
 
 async function main() {
   console.log(`[backup:pull] 対象サーバー: ${BASE}`);
-  const password = process.env.ADMIN_PASSWORD || await ask(`${ADMIN_NAME} の管理者パスワード: `, { hidden: true });
+  const fromEnv = !!process.env.ADMIN_PASSWORD;
+  const password = process.env.ADMIN_PASSWORD
+    || await askHidden(`${ADMIN_NAME} の管理者パスワード: `);
+  // 受け取った文字数を出す。値そのものは出さない。
+  // 「打ったはずの文字数と違う」= 入力が化けている、とその場で分かるようにする。
+  // 原因の分からないログイン失敗を、いちばん早く切り分けられるのがこれ。
+  // 環境変数が残っていると、入力を求めずそちらを黙って使ってしまう。
+  // 「打ったパスワードは合っているのに弾かれる」の原因になるので明示する。
+  if (fromEnv) {
+    console.log(`[backup:pull] 環境変数 ADMIN_PASSWORD を使用します（${password.length} 文字）`);
+    console.log('[backup:pull] 入力を求められたい場合は、その環境変数を消してください。');
+  } else {
+    console.log(`[backup:pull] パスワードを ${password.length} 文字ぶん受け取りました`);
+  }
+  if (password !== password.trim()) {
+    console.warn('[backup:pull] 前後に空白が入っています。貼り付けミスの可能性があります。');
+  }
   if (!password) { console.error('パスワードが空です。中止しました。'); process.exit(1); }
 
   console.log('[backup:pull] ログイン中…（再デプロイ直後は少し時間がかかることがあります）');
