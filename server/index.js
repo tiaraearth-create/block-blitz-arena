@@ -3071,6 +3071,15 @@ app.post('/api/admin/maintenance', requireAuth, requireAdmin, (req, res) => {
   res.json({ maintenance: db.meta.maintenance });
 });
 
+// 🔧 更新の準備 — 進行中の対戦を引き分けで終わらせ、ソロの人に保存を促す。
+// デプロイ時は SIGTERM で自動的に同じ処理が走るが、Windows のように信号が
+// 届かない環境や、push の前に手動で人を逃がしたいときのために残してある。
+app.post('/api/admin/prepare-update', requireAuth, requireAdmin, (_req, res) => {
+  const ended = battle.endAllForShutdown();
+  console.log(`[shutdown] 管理者操作で${ended}件の対戦を終了しました`);
+  res.json({ ok: true, ended });
+});
+
 app.post('/api/admin/broadcast', requireAuth, requireAdmin, async (req, res) => {
   const message = String(req.body.message || '').slice(0, 200);
   if (!message) return res.status(400).json({ error: 'メッセージが空です' });
@@ -3529,5 +3538,35 @@ server.listen(PORT, () => {
   console.log(`Block Blitz Arena server: http://localhost:${PORT}`);
 });
 
-process.on('SIGINT', () => { flushDb(); process.exit(0); });
-process.on('SIGTERM', () => { flushDb(); process.exit(0); });
+// ---------------------------------------------------------------------------
+// Graceful shutdown
+//
+// 永続ディスクを付けた副作用で、Render は新旧インスタンスを同時に動かせない
+// （ディスクは1つにしかマウントできない）ため、更新のたびに必ず停止時間が出る。
+// 以前はプロセスがそのまま消えて、対戦中の人は原因不明の切断、ソロプレイ中の
+// 人は結果送信が失敗して1回ぶんの記録が黙って消えていた。
+//
+// 停止する前に:
+//   ・オンライン対戦は「引き分け」で正式に終わらせる（記録も報酬も残る）
+//   ・ソロなどの人には「保存して終了して」と伝え、送信を待ってから落ちる
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} — 対戦を引き分けで終了し、プレイ中の人に保存を促します`);
+  let ended = 0;
+  try {
+    ended = battle.endAllForShutdown();
+  } catch (err) {
+    console.error('[shutdown] 対戦の終了に失敗:', err && err.message);
+  }
+  console.log(`[shutdown] ${ended}件の対戦を終了。5秒待ってから停止します`);
+  // クライアントが結果を送り終える猶予。Render の SIGTERM 猶予内に収める。
+  setTimeout(() => {
+    flushDb();
+    console.log('[shutdown] 保存完了。終了します');
+    process.exit(0);
+  }, 5000).unref?.();
+}
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

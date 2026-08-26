@@ -2447,6 +2447,16 @@ export function bindAdminActions() {
   $('#btnEvent').onclick = () => showEventModal();
   $('#btnAdminEvent').onclick = () => showAdminEventModal();
 
+  // 🔧 デプロイ直前に人を安全に逃がす。Render では SIGTERM で自動的に同じ
+  // 処理が走るが、押しておけば「いつ落ちるか」を管理者が選べる。
+  $('#btnPrepareUpdate').onclick = async () => {
+    if (!confirm('進行中のオンライン対戦をすべて引き分けで終了し、プレイ中の人に保存を促します。よろしいですか？')) return;
+    try {
+      const r = await api('/api/admin/prepare-update', { method: 'POST' });
+      toast(`🔧 ${r.ended}件の対戦を引き分けで終了しました。いま push すると安全です`, 'ok', 5000);
+    } catch (err) { toast(err.message, 'err'); }
+  };
+
   // ---- user search filter ----
   $('#adminUserSearch').oninput = () => {
     const q = $('#adminUserSearch').value.trim().toLowerCase();

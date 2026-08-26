@@ -181,6 +181,24 @@ const GHOST_DEFS = [
   { name: '天界騎士団',       tag: 'HEAVN', icon: '👑', desc: '天国ダンジョン攻略中' },
   { name: 'ガチ勢連合',       tag: 'GACHI', icon: '⚡', desc: 'レート1500以上推奨' },
   { name: 'エンジョイ部',     tag: 'ENJOY', icon: '🍀', desc: '初心者歓迎！' },
+  // v2.11: 住人が600人まで増えたので、受け皿もそのぶん要る。8ギルドでは
+  // 160席しかなく、残り440人が全員無所属になっていた。
+  { name: '朝活ブロック部',   tag: 'MORN',  icon: '☀️', desc: '出勤前に1戦' },
+  { name: 'Crystal Cascade', tag: 'CRYST', icon: '💠', desc: 'chase the perfect clear' },
+  { name: '塔の踏破者たち',   tag: 'TOWER', icon: '🏰', desc: '100Fの先へ' },
+  { name: 'ぬるま湯同盟',     tag: 'NURU',  icon: '♨️', desc: '勝敗は気にしない' },
+  { name: 'タイムアタック党', tag: 'SPRNT', icon: '⏱️', desc: '60秒に全部賭ける' },
+  { name: 'Midnight Mochi',  tag: 'MOCHI', icon: '🍡', desc: 'snacks and stacks' },
+  { name: '深淵探検隊',       tag: 'ABYSS', icon: '🌑', desc: '帰ってこれた者だけ' },
+  { name: 'ガチャの民',       tag: 'GACHA', icon: '🎰', desc: '爆死報告はこちら' },
+  { name: 'パズル研究会',     tag: 'RUINS', icon: '🧩', desc: '★3以外は認めない' },
+  { name: '採掘ギルド',       tag: 'MINE',  icon: '⛏️', desc: '虹鉱石を掘り当てろ' },
+  { name: 'Royale Rumble',   tag: 'RUMBL', icon: '💯', desc: 'last one standing' },
+  { name: 'コンボ研究所',     tag: 'LAB',   icon: '🧪', desc: '連鎖の理論を解明する' },
+  { name: 'のんびり夜長',     tag: 'YONAG', icon: '🌌', desc: '寝る前に数戦だけ' },
+  { name: 'Sunrise Squad',   tag: 'SUNRS', icon: '🌅', desc: 'early birds only' },
+  { name: '不屈の挑戦者',     tag: 'GRIT',  icon: '🔥', desc: '負けても次がある' },
+  { name: 'ブロック美学会',   tag: 'ARTS',  icon: '🎨', desc: '積み方に品を' },
 ];
 
 let ghostCache = null;
@@ -189,7 +207,11 @@ export function ghostGuilds() {
   const roster = getRoster();
   const key = roster.map(r => r.id).join(',');
   if (ghostCache && ghostCacheKey === key) return ghostCache;
-  const guilds = GHOST_DEFS.map((d, i) => ({ ...d, id: `ghost${i}`, members: [], ghost: true }));
+  // ギルド数も人口に合わせる。小さい世界に24個の過疎ギルドが並ぶのも、
+  // 大きい世界で8個が満員のまま440人が無所属なのも、どちらも不自然。
+  // 1ギルドおよそ14人になるように選び、4〜GHOST_DEFS.length の範囲に収める。
+  const want = Math.max(4, Math.min(GHOST_DEFS.length, Math.round(roster.length * 0.7 / 14)));
+  const guilds = GHOST_DEFS.slice(0, want).map((d, i) => ({ ...d, id: `ghost${i}`, members: [], ghost: true }));
   for (const r of roster) {
     const h = unit(r.id, 'guild');
     if (h < 0.3) continue;                          // ~30% of residents are guildless

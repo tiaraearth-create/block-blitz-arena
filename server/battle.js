@@ -7,7 +7,7 @@ import { chooseMove } from '../public/js/ai.js';
 import { RAID_BOSSES } from './catalog.js';
 import {
   effectiveScale, pickPersona, pickResidentBot, residentLine, residentById, residentByName,
-  ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor, chatFloorMs,
+  ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor, chatFloorMs, getRoster,
   toggles, isQuietNow, popFactor, worldCtx,
 } from './ambient.js';
 import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
@@ -321,8 +321,13 @@ export function initBattle(server, deps) {
           // Fresh voters whose personal moment has arrived (a busier arena
           // lets more of them through per tick).
           const tagMemo = new Map();
-          const due = ctx.active.filter(r => !poll.voters[`r:${r.id}`] && elapsed >= residentVoteAt(poll, r));
-          const burst = Math.min(due.length, 1 + Math.floor(popFactor()));
+          // 投票は「いま画面の前にいる住人」ではなく、登録済みの住人ぜんぶが
+          // 対象。投票は一日のうちの自分のタイミングで済ませるものなので、
+          // オンライン中の数十人に絞ると票数が実人口とかけ離れて少なくなる。
+          // （residentVoteAt が投票期間内に一人ずつ散らしてくれる）
+          const voters = getRoster().filter(r => r.registered);
+          const due = voters.filter(r => !poll.voters[`r:${r.id}`] && elapsed >= residentVoteAt(poll, r));
+          const burst = Math.min(due.length, 2 + Math.floor(popFactor() * 2));
           for (let i = 0; i < burst && due.length; i++) {
             if (Math.random() > 0.75) continue;
             const r = due.splice(Math.floor(Math.random() * due.length), 1)[0];
@@ -824,6 +829,9 @@ export function initBattle(server, deps) {
     if (match.mode === 'raid') winTeam = match.bossDead ? 0 : -2;
     // Co-op has no opponent — it is a shared run, never a win or a loss.
     if (match.mode === 'coop') winTeam = -1;
+    // 更新のためにサーバーを落とすとき。誰のせいでもないので必ず引き分け
+    // （スコアで勝っていた人が敗北になる、の逆もない）。記録と報酬は残る。
+    if (reason === 'shutdown') winTeam = match.mode === 'raid' ? -2 : -1;
 
     const playersInfo = match.players.map(p => ({
       slot: p.slot, team: p.team, name: sockName(p.sock),
@@ -2146,8 +2154,38 @@ export function initBattle(server, deps) {
     }
   }, 30000);
 
+  // 更新で落ちる前に、進行中のものを正式に終わらせる。
+  // 対戦は引き分け（記録も報酬も残る）、ロイヤルはその時点の順位で確定、
+  // ソロなど対戦していない人には「保存して終わって」と伝える。
+  function endAllForShutdown() {
+    let ended = 0;
+    // 先に全員へ通知しておく。クライアントはこれを見てソロを畳み、結果を送る。
+    broadcastAll({ type: 'server_shutdown', graceSec: 5 });
+    for (const m of [...matches.values()]) {
+      if (m.ended) continue;
+      try { endMatch(m, 'shutdown'); ended++; } catch { /* 1件の失敗で全部止めない */ }
+    }
+    for (const r of [...royales.values()]) {
+      if (r.ended) continue;
+      try {
+        r.ended = true;
+        clearInterval(r.tick);
+        const ranked = royaleRanked(r);
+        for (let i = ranked.length - 1; i >= 0; i--) endRoyaleFor(ranked[i], r, i + 1, ranked);
+        royales.delete(r.id);
+        ended++;
+      } catch { /* 同上 */ }
+    }
+    for (const t of [...tourneys.values()]) {
+      try { endTourney(t); ended++; } catch { /* 同上 */ }
+    }
+    for (const q of Object.values(queues)) q.length = 0;
+    return ended;
+  }
+
   return {
     clients, matches, rooms,
+    endAllForShutdown,
     queueSize: queueSizeAll,   // all seven queues — duel+team alone under-reported
     displayOnline, displayMatches,
     broadcastAll,

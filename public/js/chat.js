@@ -310,6 +310,13 @@ function connect() {
     } else if (msg.type === 'react') {
       const el = document.querySelector(`.chat-msg[data-id="${msg.msgId}"]`);
       if (el) renderReacts(el, msg.reacts);
+    } else if (msg.type === 'server_shutdown') {
+      // 更新でサーバーが落ちる。対戦はサーバー側が引き分けで畳んでくれるので、
+      // こちらはソロなどの「まだ結果を送っていない run」を今のうちに確定させる。
+      // これをやらないと、終了時の送信が失敗して1回ぶんの記録が黙って消える。
+      toast(t('🔧 アップデートのためサーバーを更新します。プレイ中の記録を保存しました',
+        '🔧 The server is updating. Your current run has been saved'), 'announce', 6000);
+      if (window.__bbaSaveNow) window.__bbaSaveNow();
     } else if (msg.type === 'announce') {
       appendMsg({ from: msg.from || t('運営', 'Staff'), role: 'admin', text: `📢 ${LANG === 'en' && msg.messageEn ? msg.messageEn : msg.message}`, at: Date.now() });
     } else if (msg.type === 'error') {

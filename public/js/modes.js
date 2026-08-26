@@ -5497,6 +5497,21 @@ export function startSurvival() {
 // Public API
 // ---------------------------------------------------------------------------
 
+// サーバーが更新で落ちる直前に呼ばれる（chat.js の server_shutdown）。
+// いま遊んでいる run を、その時点のスコアで正式に終わらせて送信する。
+// 対戦はサーバー側が引き分けで畳むので、ここで触るのはソロ系だけ。
+window.__bbaSaveNow = () => {
+  const m = currentMode;
+  if (!m || m.ended) return;
+  if (m.mode === 'pvp' || m.mode === 'ae') return;   // 対戦系はサーバーが処理する
+  try {
+    if (view) view.inputLocked = true;
+    if (typeof m.finish === 'function') m.finish();
+  } catch (err) {
+    console.warn('shutdown save failed:', err && err.message);
+  }
+};
+
 function endToMenu() {
   if (currentMode) { currentMode.destroy(); currentMode = null; }
   // Mode-installed view hooks/overlays must never leak into the next mode.
