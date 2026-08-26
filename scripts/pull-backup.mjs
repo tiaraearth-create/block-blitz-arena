@@ -92,6 +92,14 @@ function explain(err) {
     UND_ERR_CONNECT_TIMEOUT: '接続がタイムアウトしました（再デプロイ中の可能性があります）',
     UND_ERR_HEADERS_TIMEOUT: '応答が返ってきませんでした（再デプロイ中の可能性があります）',
     UND_ERR_SOCKET: 'サーバー側から接続を閉じられました（再デプロイ中の可能性が高いです）',
+    // ウイルス対策ソフト（Norton など）や社内プロキシ、VPN は HTTPS を
+    // 一度ほどいて自前の証明書に付け替える。その発行元は Windows の
+    // 証明書ストアには入っているのでブラウザは通るが、Node は自前のCA一覧を
+    // 見るため検証に失敗する。パスワードの問題と紛らわしいので明示する。
+    UNABLE_TO_VERIFY_LEAF_SIGNATURE: '証明書を検証できません（ウイルス対策ソフトやVPNがHTTPSを傍受しています）',
+    SELF_SIGNED_CERT_IN_CHAIN: '自己署名の証明書が挟まっています（ウイルス対策ソフトやVPNの傍受）',
+    DEPTH_ZERO_SELF_SIGNED_CERT: '自己署名の証明書です（ウイルス対策ソフトやVPNの傍受）',
+    CERT_HAS_EXPIRED: '証明書の期限が切れています（傍受ソフトの証明書が古い可能性）',
   };
   const why = known[code] || (c && c.message) || String(err);
   return code ? `${why}（${code}）` : why;
@@ -113,14 +121,39 @@ async function req(url, opts = {}, { label = '通信', tries = 4 } = {}) {
       }
     }
   }
-  console.error(`[backup:pull] ${label}できませんでした: ${explain(last)}`);
-  console.error('[backup:pull] サーバーが再デプロイ中かもしれません。数分おいてもう一度お試しください。');
-  console.error(`[backup:pull] ブラウザで ${BASE} が開けるかどうかも確認の目安になります。`);
+  console.error(`[backup:pull] ${label}に失敗しました: ${explain(last)}`);
+  const code = last && (last.cause ? last.cause.code : last.code);
+  if (String(code).includes('CERT') || String(code).includes('SELF_SIGNED')) {
+    // ここに来たら回線ではなく証明書の問題。パスワードは一切関係ない。
+    console.error('');
+    console.error('[backup:pull] これは通信の暗号化の問題で、パスワードは関係ありません。');
+    console.error('[backup:pull] ウイルス対策ソフトやVPNがHTTPSを傍受しているときに起きます。');
+    console.error('[backup:pull] 次のどれかで通ります:');
+    console.error('  1. ターミナルを新しく開き直してから、もう一度実行する（多くはこれで直ります）');
+    console.error('  2. Norton VPN を使っている場合は、一度切ってから実行する');
+    console.error('  3. それでも駄目なら次を実行する:');
+    console.error('     node --use-system-ca scripts/pull-backup.mjs');
+  } else {
+    console.error('[backup:pull] サーバーが再デプロイ中かもしれません。数分おいてもう一度お試しください。');
+    console.error(`[backup:pull] ブラウザで ${BASE} が開けるかどうかも確認の目安になります。`);
+  }
   process.exit(1);
 }
 
 async function main() {
   console.log(`[backup:pull] 対象サーバー: ${BASE}`);
+
+  // 先に「繋がるか」だけ確かめる。認証の要らない /api/status を叩くので、
+  // ここで落ちれば原因は通信側だと確定できる。
+  // パスワードを聞いたあとに通信で落ちると、「パスワードが違うのでは」と
+  // 疑ってしまう。実際それで、変える必要のないパスワードを変えさせてしまった。
+  console.log('[backup:pull] サーバーに繋がるか確認中…');
+  const probe = await req(`${BASE}/api/status`, {}, { label: 'サーバーへの接続' });
+  if (!probe.ok) {
+    console.error(`[backup:pull] サーバーが応答しません: HTTP ${probe.status}`);
+    process.exit(1);
+  }
+  console.log('[backup:pull] 接続OK。ここから先で失敗したら、原因は通信ではありません。');
   const fromEnv = !!process.env.ADMIN_PASSWORD;
   const password = process.env.ADMIN_PASSWORD
     || await askHidden(`${ADMIN_NAME} の管理者パスワード: `);
