@@ -334,6 +334,21 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   lines = Math.max(0, Math.min(5000, Math.floor(Number(lines) || 0)));
   maxCombo = Math.max(0, Math.min(200, Math.floor(Number(maxCombo) || 0)));
   duration = Math.max(1, Math.min(7200, Number(duration) || 1));
+  // `duration` is CLIENT-DECLARED, and the rate cap below divides by it — so
+  // claiming "I played for 7200 seconds" unlocked the full 1,000,000 ceiling on
+  // a run that actually took a second. The wall clock since this account's last
+  // submission is an upper bound nobody can forge: you cannot have played for
+  // longer than the time that has passed. The first submission of a session has
+  // no previous mark, so it gets the benefit of the doubt (capped at an hour).
+  {
+    const now = Date.now();
+    const last = user.stats.lastResultAt || 0;
+    // +90s of slack: a run can start before the previous one is submitted
+    // (menus, result screens), and clocks drift.
+    const elapsed = last ? (now - last) / 1000 + 90 : 3600;
+    if (duration > elapsed) duration = Math.max(1, Math.floor(elapsed));
+    user.stats.lastResultAt = now;
+  }
   // Cheat guard: cap plausible score rate. Time attack is *about* scoring
   // fast; Meltdown runs hot multipliers (×15+ near critical) in short bursts
   // and Chimera stacks up to ×3 — both need looser ceilings than the endless
@@ -900,6 +915,41 @@ app.delete('/api/me', requireAuth, (req, res) => {
 // carried a stale one. Expiry is now noticed on the first read after the fact
 // (there is no timer to lose across a restart).
 let battleReady = false;
+
+// ---------------------------------------------------------------------------
+// 🧾 管理者操作の記録
+//
+// 🎒インベントリ編集で通貨も権限もバッジも自由に書けるようになった以上、
+// 「誰がいつ何を変えたか」がどこにも残らないのは無理がある。アカウントを
+// 共有したり、あとでモデレーターを増やしたときに効く。
+// パスワードのような値そのものは絶対に残さない（変えた事実だけ）。
+// ---------------------------------------------------------------------------
+const ADMIN_LOG_MAX = 500;
+const SECRET_FIELDS = new Set(['setPassword', 'password', 'passHash', 'salt']);
+
+function adminLog(req, action, target, detail = {}) {
+  if (!db.meta.adminLog) db.meta.adminLog = [];
+  const safe = {};
+  for (const [k, v] of Object.entries(detail)) {
+    if (SECRET_FIELDS.has(k)) { safe[k] = '(伏せ字)'; continue; }
+    if (Array.isArray(v)) safe[k] = v.length > 8 ? `${v.length}件` : v;
+    else if (v && typeof v === 'object') safe[k] = `${Object.keys(v).length}項目`;
+    else safe[k] = v;
+  }
+  db.meta.adminLog.push({
+    at: Date.now(),
+    by: req.user ? req.user.username : '(未ログイン)',
+    byId: req.user ? req.user.id : null,
+    ip: req.ip,
+    action,
+    target: target || null,
+    detail: safe,
+  });
+  if (db.meta.adminLog.length > ADMIN_LOG_MAX) {
+    db.meta.adminLog.splice(0, db.meta.adminLog.length - ADMIN_LOG_MAX);
+  }
+  saveDb();
+}
 
 function currentEvent() {
   const e = db.meta.event;
@@ -2836,6 +2886,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
 
   // Leave the record in a shape the rest of the server can read.
   migrateUser(target);
+  adminLog(req, 'user_edit', target.username, b);
   saveDb();
   // NOT publicUser(): for an admin target that view fakes the entire shop as
   // owned, and echoing it back would let the editor write that fiction in.
@@ -2848,6 +2899,7 @@ app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   if (!target) return res.status(404).json({ error: 'ユーザーが見つかりません' });
   if (target.role === 'admin') return res.status(400).json({ error: '管理者は削除できません' });
   revokeAllTokens(req.params.id);
+  adminLog(req, 'user_delete', target.username, { id: req.params.id });
   leaveGuild(db, target);   // same reason as DELETE /api/me — before the record goes
   delete db.users[req.params.id];
   db.deleted[req.params.id] = Date.now();
@@ -2900,7 +2952,8 @@ app.post('/api/admin/season/set', requireAuth, requireAdmin, (req, res) => {
 });
 
 // Reset competitive stats for all users (scores, ratings, PvP records).
-app.post('/api/admin/leaderboard/reset', requireAuth, requireAdmin, (_req, res) => {
+app.post('/api/admin/leaderboard/reset', requireAuth, requireAdmin, (req, res) => {
+  adminLog(req, 'leaderboard_reset', null, {});
   let count = 0;
   for (const u of Object.values(db.users)) {
     u.stats.bestScore = 0;
@@ -2998,6 +3051,7 @@ app.post('/api/admin/restore', (req, res) => {
   // Dry run: let the admin see what would happen before committing.
   if (body.dryRun) return res.json({ preview: check.stats, mode, actor: actor.username });
 
+  adminLog(req, 'restore', actor.username, { mode, fromBackup: !!actor.fromBackup, users: check.stats.users });
   const snap = snapshot(db, 'pre-restore');
   let report;
   try {
@@ -3071,6 +3125,12 @@ app.post('/api/admin/maintenance', requireAuth, requireAdmin, (req, res) => {
   res.json({ maintenance: db.meta.maintenance });
 });
 
+// 🧾 管理者操作の履歴（新しい順）
+app.get('/api/admin/log', requireAuth, requireAdmin, (_req, res) => {
+  const log = (db.meta.adminLog || []).slice().reverse();
+  res.json({ log, max: ADMIN_LOG_MAX });
+});
+
 // 🔧 更新の準備 — 進行中の対戦を引き分けで終わらせ、ソロの人に保存を促す。
 // デプロイ時は SIGTERM で自動的に同じ処理が走るが、Windows のように信号が
 // 届かない環境や、push の前に手動で人を逃がしたいときのために残してある。
@@ -3128,6 +3188,7 @@ app.post('/api/admin/grant-all', requireAuth, requireAdmin, (req, res) => {
   const coins = Math.max(0, Math.min(1_000_000, Math.floor(Number(req.body.coins) || 0)));
   const gems = Math.max(0, Math.min(100_000, Math.floor(Number(req.body.gems) || 0)));
   if (!coins && !gems) return res.status(400).json({ error: 'コインかジェムを指定してください' });
+  adminLog(req, 'grant_all', null, { coins, gems });
   let affected = 0;
   for (const u of Object.values(db.users)) {
     if (u.banned) continue;
@@ -3560,13 +3621,16 @@ function gracefulShutdown(signal) {
   } catch (err) {
     console.error('[shutdown] 対戦の終了に失敗:', err && err.message);
   }
-  console.log(`[shutdown] ${ended}件の対戦を終了。5秒待ってから停止します`);
-  // クライアントが結果を送り終える猶予。Render の SIGTERM 猶予内に収める。
+  // 待つ理由があるのは「誰か繋がっているとき」だけ。無人なら即終了する
+  // （テストや手元の再起動を5秒ずつ遅くしても意味がない）。
+  const waiting = battle.clients.size > 0;
+  const graceMs = waiting ? 5000 : 0;
+  console.log(`[shutdown] ${ended}件の対戦を終了。${waiting ? '5秒待ってから' : 'すぐに'}停止します`);
   setTimeout(() => {
     flushDb();
     console.log('[shutdown] 保存完了。終了します');
     process.exit(0);
-  }, 5000).unref?.();
+  }, graceMs).unref?.();
 }
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

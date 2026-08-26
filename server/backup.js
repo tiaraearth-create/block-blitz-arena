@@ -256,7 +256,7 @@ export function applyRestore(db, data, mode = 'merge') {
     // drops it — that is how the admin-event schedule would vanish on the
     // first redeploy after it was set.
     for (const k of ['event', 'poll', 'popScale', 'ambient', 'maintenance', 'seasonOverride', 'createdAt',
-      'adminEvent', 'adminEventRun', 'thrones']) {
+      'adminEvent', 'adminEventRun', 'thrones', 'adminLog', 'chatLog']) {
       if (db.meta[k] == null && data.meta[k] != null) db.meta[k] = data.meta[k];
     }
     // Weekly payouts: an empty post-deploy boot may have stamped the current

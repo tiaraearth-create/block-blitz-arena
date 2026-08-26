@@ -61,8 +61,23 @@ export function initBattle(server, deps) {
   const displayMatches = () => matches.size + ambientMatches();
 
   // ---- global chat (in-memory history) ----
-  const chatHistory = [];   // { type:'chat', from, role, text, at }
+  // チャット履歴。以前はメモリだけに置いていたので、更新のたびに会話が全部
+  // 消えて、戻ってきた人には空のチャットが出迎えていた。db.meta.chatLog に
+  // 直近ぶんを残し、起動時に読み直す（ディスクがあるので更新をまたげる）。
+  // 実プレイヤーの発言だけを残す — 住人のセリフは無限に作れるので、
+  // 保存するとただの水増しになる。
+  const chatHistory = (db.meta.chatLog || []).slice(-60);   // { type:'chat', from, role, text, at }
   const feedHistory = [];   // { icon, text, textEn, at, real, who }
+  let chatSaveTimer = null;
+  const persistChat = () => {
+    if (chatSaveTimer) return;
+    chatSaveTimer = setTimeout(() => {
+      chatSaveTimer = null;
+      db.meta.chatLog = chatHistory.filter(e => e && e.human).slice(-40);
+      saveDb();
+    }, 4000);
+    chatSaveTimer.unref?.();
+  };
 
   // =========================================================================
   // Crowd director — the simulated residents live here.
@@ -116,6 +131,7 @@ export function initBattle(server, deps) {
       const old = chatHistory.shift();
       if (old && old.id) reactOwners.delete(old.id);
     }
+    persistChat();
   }
 
   function reactOwnerKey(ws) {
@@ -2033,7 +2049,9 @@ export function initBattle(server, deps) {
             u.stats = u.stats || {};
             u.stats.chatMessages = (u.stats.chatMessages || 0) + 1;   // 実績用の生涯カウンター
           }
-          const entry = { type: 'chat', id: crypto.randomUUID(), from: sockName(ws), role, text, at: Date.now(), tag: tagOf(sockName(ws), u) };
+          // human: 本物のプレイヤーの発言。更新をまたいで残すのはこれだけ
+          // （住人のセリフは無限に作れるので、保存しても水増しにしかならない）。
+          const entry = { type: 'chat', id: crypto.randomUUID(), from: sockName(ws), role, text, at: Date.now(), tag: tagOf(sockName(ws), u), human: true };
           // 👑 王座ホルダーはチャットでも王冠つき — 個数で名前の色も変わる
           if (u && db.meta.thrones) {
             const cn = Object.values(db.meta.thrones).filter(t2 => t2 && t2.userId === u.id).length;

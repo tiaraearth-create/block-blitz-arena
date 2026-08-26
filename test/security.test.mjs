@@ -153,6 +153,31 @@ try {
   const bystander = await j('/api/register', { method: 'POST', body: { username: '無関係さん', password: 'pass1234' } });
   const rb = await j('/api/game/result', { method: 'POST', body: { mode: 'solo', score: 5000, lines: 8, maxCombo: 3, duration: 60 } }, bystander.token);
   check('別のプレイヤーは巻き込まれない', rb.status === 200, `${rb.status}`);
+
+  // ---------------------------------------------------------------------
+  // 3. duration 詐称
+  //
+  // レート上限は score / duration で判定するが、その duration はクライアント
+  // 申告だった。「7200秒プレイした」と偽れば上限が事実上外れ、1回で
+  // 1,000,000点まで通せた（レート制限があっても分あたり3万コインは作れる）。
+  // 直前の送信からの実経過時間は誰にも偽れないので、それを上界にする。
+  // ---------------------------------------------------------------------
+  {
+    const c = await j('/api/register', { method: 'POST', body: { username: '詐称太郎', password: 'pass1234' } });
+    const ct = c.token;
+    // 1回目は基準になる直前送信が無いので猶予つき（それでも1時間ぶんが上限）
+    await j('/api/game/result', { method: 'POST', body: { mode: 'solo', score: 3000, lines: 5, maxCombo: 2, duration: 30 } }, ct);
+    const base = (await j('/api/me', {}, ct)).user;
+    check('正当な範囲のスコアはそのまま通る', base.stats.bestScore === 3000, `bestScore=${base.stats.bestScore}`);
+
+    // 2回目: 直後に「7200秒プレイした」と主張して上限いっぱいを狙う
+    await j('/api/game/result', { method: 'POST', body: { mode: 'solo', score: 1000000, lines: 500, maxCombo: 50, duration: 7200 } }, ct);
+    const after = (await j('/api/me', {}, ct)).user;
+    check('duration を偽っても実経過時間までしか通らない',
+      after.stats.bestScore < 100000,
+      `bestScore=${after.stats.bestScore}（7200秒を申告しても1,000,000は通らない）`);
+    check('稼げるコインも有限にとどまる', after.coins < 5000, `${after.coins}🪙`);
+  }
 } catch (err) {
   check('test harness', false, err.stack || String(err));
 } finally {

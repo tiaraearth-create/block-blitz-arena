@@ -2446,6 +2446,7 @@ export function bindAdminActions() {
 
   $('#btnEvent').onclick = () => showEventModal();
   $('#btnAdminEvent').onclick = () => showAdminEventModal();
+  $('#btnAdminLog').onclick = () => showAdminLogModal();
 
   // 🔧 デプロイ直前に人を安全に逃がす。Render では SIGTERM で自動的に同じ
   // 処理が走るが、押しておけば「いつ落ちるか」を管理者が選べる。
@@ -2558,6 +2559,53 @@ function aeFmtDate(ts) {
   // The schedule is authored in JST; show it in JST regardless of the device.
   const d = new Date(ts + 9 * 3600 * 1000);
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${AE_WEEKDAY_LABELS[d.getUTCDay()]}) ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+// 🧾 管理者操作の履歴。🎒編集で何でも書けるようになった以上、
+// 「誰がいつ何を変えたか」を見られる場所が要る。
+const ADMIN_ACTION_LABEL = {
+  user_edit: '🎒 ユーザー編集',
+  user_delete: '🗑️ ユーザー削除',
+  restore: '♻️ データ復元',
+  grant_all: '🎁 全員に配布',
+  leaderboard_reset: '🏆 ランキング初期化',
+};
+
+async function showAdminLogModal() {
+  let data;
+  try { data = await api('/api/admin/log'); } catch (err) { toast(err.message, 'err'); return; }
+  const rows = data.log || [];
+  const fmtDetail = d => {
+    const parts = Object.entries(d || {})
+      .filter(([, v]) => v !== undefined && v !== null && v !== '')
+      .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`);
+    return parts.length ? parts.join(' ・ ') : '—';
+  };
+  const m = showModal(`
+    <h2>🧾 操作ログ</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">
+      通貨・権限・バッジの書き換え、削除、復元、全体配布を記録しています（最新${data.max}件）。<br>
+      パスワードなどの値そのものは記録されません。
+    </p>
+    ${rows.length ? `
+      <div class="ue-body">
+        ${rows.map(r => `
+          <div class="alog-row">
+            <div class="alog-head">
+              <b>${escapeHtml(ADMIN_ACTION_LABEL[r.action] || r.action)}</b>
+              <span class="muted">${new Date(r.at).toLocaleString('ja-JP')}</span>
+            </div>
+            <div class="alog-sub">
+              👤 ${escapeHtml(r.by)}${r.target ? ` → <b>${escapeHtml(r.target)}</b>` : ''}
+            </div>
+            <div class="alog-detail">${escapeHtml(fmtDetail(r.detail))}</div>
+          </div>`).join('')}
+      </div>`
+    : '<p class="muted center" style="padding:20px 0">まだ記録がありません</p>'}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="alClose">とじる</button>
+    </div>`);
+  m.querySelector('#alClose').onclick = closeModal;
 }
 
 async function showAdminEventModal() {

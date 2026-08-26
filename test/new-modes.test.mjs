@@ -58,9 +58,16 @@ try {
   check('meltdown stays OFF the global bestScore', me.user.stats.bestScore === 5000, `bestScore=${me.user.stats.bestScore}`);
 
   // Meltdown gets the loose 2000/s cap.
-  await j('/api/game/result', { method: 'POST', body: { mode: 'meltdown', score: 500000, lines: 60, maxCombo: 8, duration: 100 } }, tok);
+  // NOTE: `duration` is now also bounded by the wall clock since this account's
+  // previous submission (+90s slack), so a burst of test submissions cannot
+  // claim more play time than has actually passed. 60s stays inside that slack,
+  // which keeps this assertion about the RATE CAP rather than about timing.
+  await j('/api/game/result', { method: 'POST', body: { mode: 'meltdown', score: 500000, lines: 60, maxCombo: 8, duration: 60 } }, tok);
   me = await j('/api/me', {}, tok);
-  check('meltdown rate-capped at 2000/s', me.user.stats.meltdownBest === 200000, `meltdownBest=${me.user.stats.meltdownBest}`);
+  check('meltdown rate-capped at 2000/s', me.user.stats.meltdownBest === 120000, `meltdownBest=${me.user.stats.meltdownBest}`);
+
+  // （duration 詐称への対策は test/security.test.mjs で検証している。
+  //   ここでやると詐称用アカウントが王座テストの順位に割り込んでしまう）
 
   // Chimera: chaos-scale multipliers — counts toward the global board.
   const c1 = await j('/api/game/result', { method: 'POST', body: { mode: 'chimera', score: 30000, lines: 25, maxCombo: 7, duration: 120 } }, tok);
