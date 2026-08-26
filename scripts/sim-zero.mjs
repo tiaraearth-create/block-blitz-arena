@@ -47,6 +47,11 @@ const DAN = [
 ];
 
 const SEAL = 0.30;                 // 人間しか割れない割合
+// 断罪を落とすとゼロが回復する（段HP比）。最初のモデルはこれを入れておらず、
+// 実装して初めて破綻に気づいた: 2%だと1枠60回落として段HPの120%が回復し、
+// 住人の火力が丸ごと消える。ここに入れておけば次からは机上で分かる。
+const MISS_HEAL = 0.003;
+const TOPOUT_HEAL = 0.010;
 const SEATS_BASE = 12;             // 住人ぶんを含めた席数の下限
 const SEATS_MAX = 24;
 // 人が増えたぶん段を重くする係数と、同時に走る断罪の本数。
@@ -191,7 +196,11 @@ function runDay(humans, skill, perMin, danTable = DAN) {
         const lanes = Math.max(1, Math.min(MAX_LANES, Math.ceil(humans / LANE_PER_HUMANS)));
         for (let l = 0; l < lanes && l < Math.max(1, humans); l++) {
           if (Math.random() < skill.cut) { cuts++; slotCuts++; }
-          else slotMiss++;
+          else {
+            slotMiss++;
+            // 落とすとゼロが回復する ＝ 点で削った分が戻る
+            dealt = Math.max(0, dealt - hp * MISS_HEAL / lanes);
+          }
         }
       }
 

@@ -34,6 +34,19 @@ export const MIN_BOT_SEATS = 4;        // 住人の席は最低これだけ残�
 export const HP_PER_EXTRA_HUMAN = 0.20;
 export const LANE_PER_HUMANS = 3;      // 何人につき断罪1本
 export const MAX_LANES = 10;
+// 断罪を落としたとき／トップアウトしたときに、ゼロが回復する量（段HP比）。
+//
+// 当初この2つを 2% / 3% にしていたが、実際に30分ぶん回すと破綻した:
+// 断罪は30秒ごとに来るので1枠で約60回。一度も斬らないと 60×2% = 段HPの
+// 120% が回復し、住人の火力が丸ごと打ち消されて、点が永久に溜まらなかった
+// （実測: 住人が合計489,000点入れたのに run.dealt が17,523しか残らない）。
+// 罰は効いてほしいが、火力を無意味にしてはいけない。1枠ぶん全部落としても
+// 点の2割程度に収まる量にする。
+// ※ 回復量は同時に走る断罪の本数で割る。割らないと人数に比例して膨らみ、
+//   50人の回では回復が段HPの349%に達して何も進まなくなった（実測）。
+//   本数で割れば、何人居ても1枠あたりの回復量がほぼ一定になる。
+export const MISS_HEAL = 0.003;        // 断罪を落とす（本数で割る前の値）
+export const TOPOUT_HEAL = 0.010;      // トップアウト（60秒に1回が上限）
 export const REVIVE_SEC = 60;          // トップアウトからの自動復帰
 export const EXECUTIONS_PER_SLOT = 3;  // 1枠で処刑される住人の上限
 export const EXECUTIONS_PER_DAY = 9;
@@ -72,6 +85,11 @@ export function cutDamageFor(index, humans, { keystone = false } = {}) {
   const d = danAt(index);
   const base = Math.round(danHpFor(index, humans) * d.cut);
   return keystone ? base * 2 : base;      // 急所（金マス）を含めて斬れば倍
+}
+
+// 断罪を1回落としたときにゼロが回復する量。
+export function missHealFor(index, humans) {
+  return Math.round(danHpFor(index, humans) * MISS_HEAL / lanesFor(humans));
 }
 
 export function cutsNeededFor(index) {
