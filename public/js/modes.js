@@ -720,6 +720,7 @@ class SoloMode {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     showItemBar(true);
@@ -797,6 +798,7 @@ class MeltdownMode {
   start() {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     $('#hudTimer').classList.remove('hidden');
@@ -1005,6 +1007,7 @@ class ChimeraMode {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     showItemBar(false);   // ミニブロック等は錬成した手札を壊してしまう
@@ -1224,6 +1227,7 @@ class PuzzleMode {
   start() {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     $('#hudTimer').classList.remove('hidden');
@@ -1370,6 +1374,7 @@ class DigMode {
   start() {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     $('#hudTimer').classList.remove('hidden');
@@ -1590,6 +1595,7 @@ class GhostMode {
   start() {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
@@ -1693,6 +1699,7 @@ class VersusBase {
     showScreen('game');
     $('#oppPanel').classList.remove('hidden');
     $('#hudTimer').classList.remove('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     $('#teamTotals').classList.add('hidden');
@@ -2389,6 +2396,7 @@ class BossMode {
   destroy() {
     this.ended = true;
     clearInterval(this.atkInt);
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#bossAtkBar').classList.remove('danger');
     if (view) view.dangerCells = null;
@@ -2697,6 +2705,7 @@ class BossRushMode {
   destroy() {
     this.ended = true;
     clearInterval(this.atkInt);
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#bossAtkBar').classList.remove('danger');
     if (view) view.dangerCells = null;
@@ -2724,6 +2733,7 @@ class WeeklyMode {
   start() {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     $('#hudTimer').classList.remove('hidden');
@@ -3371,6 +3381,7 @@ class DungeonMode {
     this.ended = true;
     clearInterval(this.atkInt);
     clearInterval(this.rainInt);
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
   }
 }
@@ -3909,6 +3920,7 @@ class OnlineMode extends VersusBase {
     this.sawRoyaleResult = false;
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     $('#hudTimer').classList.remove('hidden');
@@ -4272,6 +4284,7 @@ class OnlineMode extends VersusBase {
 
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#hudTimer').classList.add('hidden');
     $('#coopBar').classList.remove('hidden');
@@ -4818,6 +4831,7 @@ class OnlineMode extends VersusBase {
     clearInterval(this.stateInt);
     clearInterval(this.coopInt);
     clearTimeout(this.resultTimeout);
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#bossPanel').classList.remove('slim');
     $('#coopBar').classList.add('hidden');
@@ -4842,6 +4856,7 @@ class SurvivalMode {
   start() {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     $('#hudTimer').classList.remove('hidden');
@@ -4965,6 +4980,7 @@ class SprintMode {
   start() {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     $('#hudTimer').classList.remove('hidden');
@@ -5502,6 +5518,7 @@ class AdminEventMode extends VersusBase {
     this.stopTimer();
     this.clearTimers();
     $('#chaosBar').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
     $('#bossPanel').classList.remove('slim');
     const wrap = document.querySelector('.game-canvas-wrap');
@@ -5572,6 +5589,10 @@ class ZeroMode extends VersusBase {
       .on('zero_missed', m => this.onSomeoneMissed(m))
       .on('zero_dan', m => this.onDanBroken(m))
       .on('zero_garbage', m => this.onGarbage(m))
+      .on('zero_deal', m => this.onDeal(m.deal))
+      .on('zero_deal_vote', m => this.onDealVote(m))
+      .on('zero_deal_done', m => this.onDealDone(m))
+      .on('zero_stake', m => this.onStake(m))
       .on('zero_revive', () => this.onRevived())
       .on('error', m => toast(m.error || t('エラー', 'Error'), 'err', 3000))
       .on('close', () => { if (!this.ended) toast(t('接続が切れました', 'Disconnected'), 'err'); });
@@ -5641,6 +5662,11 @@ class ZeroMode extends VersusBase {
       el('zeroHpText').textContent = t(`残り ${fmt(m.left)} ／ 封印 ${fmt(m.sealLeft)}`,
         `${fmt(m.left)} left / seal ${fmt(m.sealLeft)}`);
     }
+    if (el('zeroTarget') && m.stakes) {
+      el('zeroTarget').textContent = t(
+        '今夜の的：第' + (m.targetCol + 1) + '列　🪧' + m.stakes.have + '/' + m.stakes.need,
+        'Mark: col ' + (m.targetCol + 1) + '  🪧' + m.stakes.have + '/' + m.stakes.need);
+    }
     if (el('zeroCuts')) {
       el('zeroCuts').textContent = t(`斬 ${this.myCuts} ／ 落 ${this.myMissed}`,
         `cut ${this.myCuts} / miss ${this.myMissed}`);
@@ -5686,6 +5712,12 @@ class ZeroMode extends VersusBase {
   onPlace(result) {
     this.updateMyHud(this.engine);
     updateRerollHud(this.engine);
+    // 🪧 今夜の的の列を縦に消したら杭が入る。
+    // 縦消しは点効率で損なので、ここで「点を取るか、斬りやすくするか」の
+    // 選択がそのまま手番の中に生まれる。
+    if (result && result.fullCols && result.fullCols.length) {
+      this.client.send({ type: 'zero_stake', cols: result.fullCols });
+    }
     const v = this.verdict;
     if (!v || !result || result.lineCount === 0) return;
     const hit = v.cells.filter(k => {
@@ -5699,6 +5731,89 @@ class ZeroMode extends VersusBase {
     view2.keystoneCell = -1;
     // どのマスを消したかをそのまま送る。サーバーが予告時間内かどうかを見る。
     this.client.send({ type: 'zero_cut', id: v.id, cells: hit });
+  }
+
+  // ---- 🤝 取引（60秒の生投票）----
+  //
+  // ゼロが2択を出し、あなたと住人全員が本当に投票する。
+  // 票が割れていく60秒がそのまま見世物になるので、途中経過を出し続ける。
+  onDeal(deal) {
+    if (!deal || this.ended) return;
+    this.deal = deal;
+    this.dealVoted = false;
+    audio.countdown(false);
+    const wrap = document.createElement('div');
+    wrap.className = 'zero-deal';
+    wrap.id = 'zeroDeal';
+    wrap.innerHTML = [
+      '<div class="zd-q">👁️ ' + escapeHtml(t(deal.q, deal.qEn)) + '</div>',
+      '<div class="zd-bar"><div class="zd-yes" id="zdYes"></div><div class="zd-no" id="zdNo"></div></div>',
+      '<div class="zd-tally" id="zdTally"></div>',
+      '<div class="zd-btns">',
+      deal.options.map(function (o) {
+        return '<button class="btn btn-ghost zd-btn" data-pick="' + o.id + '">' + escapeHtml(t(o.text, o.textEn)) + '</button>';
+      }).join(''),
+      '</div>',
+      '<div class="zd-left" id="zdLeft"></div>',
+    ].join('');
+    document.body.appendChild(wrap);
+    const self = this;
+    wrap.querySelectorAll('.zd-btn').forEach(function (btn) {
+      btn.onclick = function () {
+        if (self.dealVoted) return;
+        self.dealVoted = true;
+        audio.click();
+        self.client.send({ type: 'zero_vote', pick: btn.dataset.pick });
+        wrap.querySelectorAll('.zd-btn').forEach(function (b2) { b2.disabled = true; });
+        btn.classList.add('picked');
+      };
+    });
+    this.renderTally(deal.tally);
+    // 残り時間
+    this.dealTimer = this.every(250, function () {
+      const left = Math.max(0, deal.closesAt - Date.now());
+      const el = $('#zdLeft');
+      if (el) el.textContent = t('残り ' + Math.ceil(left / 1000) + '秒', Math.ceil(left / 1000) + 's left');
+      if (left <= 0) clearInterval(self.dealTimer);
+    });
+  }
+
+  renderTally(tally) {
+    if (!tally) return;
+    const total = Math.max(1, tally.yes + tally.no);
+    const y = $('#zdYes'), n = $('#zdNo'), tl = $('#zdTally');
+    if (y) y.style.width = (tally.yes / total * 100) + '%';
+    if (n) n.style.width = (tally.no / total * 100) + '%';
+    if (tl) tl.textContent = t('飲む ' + tally.yes + ' ／ 断る ' + tally.no,
+      'take ' + tally.yes + ' / refuse ' + tally.no);
+  }
+
+  onDealVote(m) {
+    this.renderTally(m.tally);
+    if (!m.human) return;                 // 住人の票はいちいち出さない（流れる）
+    toast(t(m.by + ' が投票した', m.by + ' voted'), 'ok', 1200);
+  }
+
+  onDealDone(m) {
+    const el = $('#zeroDeal');
+    if (el) el.remove();
+    if (this.dealTimer) clearInterval(this.dealTimer);
+    this.deal = null;
+    const yes = m.win === 'yes';
+    audio[yes ? 'victory' : 'putback']();
+    toast(yes
+      ? t('🤝 取引成立 ── ' + m.tally.yes + ' 対 ' + m.tally.no, '🤝 Deal struck — ' + m.tally.yes + ' to ' + m.tally.no)
+      : t('🤝 取引は断られた ── ' + m.tally.no + ' 対 ' + m.tally.yes, '🤝 Refused — ' + m.tally.no + ' to ' + m.tally.yes),
+      'announce', 4000);
+  }
+
+  onStake(m) {
+    if (m.ready) {
+      audio.victory();
+      toast(t('🪧 杭 ' + m.need + '本！ 次の断罪は予告が長くなる', '🪧 ' + m.need + ' stakes! Longer warning next time'), 'ok', 2400);
+    } else {
+      toast(t('🪧 杭 ' + m.have + '/' + m.need, '🪧 stake ' + m.have + '/' + m.need), 'ok', 1100);
+    }
   }
 
   onSomeoneCut(m) {
@@ -5765,6 +5880,7 @@ class ZeroMode extends VersusBase {
     this.clearTimers();
     const v = getView();
     if (v) { v.dangerCells = null; v.keystoneCell = -1; v.inputLocked = true; }
+    const dl0 = $('#zeroDeal'); if (dl0) dl0.remove();
     if (this.client) {
       try { this.client.send({ type: 'zero_leave' }); this.client.ws.close(); } catch { /* もう閉じている */ }
     }
@@ -5813,6 +5929,7 @@ class ZeroMode extends VersusBase {
     if (this.client && this.client.ws) { try { this.client.ws.close(); } catch { /* 既に閉じている */ } }
     const v = getView();
     if (v) { v.dangerCells = null; v.keystoneCell = -1; }
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
   }
 }

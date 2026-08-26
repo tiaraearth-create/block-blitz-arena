@@ -15,9 +15,11 @@ import { Engine } from '../public/js/engine.js';
 import { chooseMove } from '../public/js/ai.js';
 import {
   createSession, tick, submitCut, topOut, stateView, aliveHumans, liveBots, COUNTDOWN,
+  submitStake, submitDealVote, dealView,
 } from '../server/zero-session.js';
 import {
   DAN, danHpFor, sealHpFor, softCapFor, cutDamageFor, EXECUTIONS_PER_SLOT, MIN_BOT_SEATS,
+  DEAL_AT_SEC, DEAL_SEC, HUMAN_VOTE_WEIGHT, dealForDay,
 } from '../server/zero.js';
 
 const results = [];
@@ -207,6 +209,82 @@ const freshRun = () => ({ dan: 0, dealt: 0, sealDealt: 0, cuts: 0, fallen: [], b
   CLOCK += 61_000; tick(s, run, d);
   check('60秒で自動復帰する', aliveHumans(s).length === 1, '');
   check('復帰が通知される', d.sent.some(m => m.type === 'zero_revive'), '');
+}
+
+// ---- 🪧 杭（盤面の中の選択）------------------------------------------------
+{
+  CLOCK = 8_000_000; SEED = 1212;
+  const d = deps();
+  const sess = createSession(d, [fakeSock('杭を打つ人')]);
+  const run = freshRun();
+  for (let i = 0; i < 60; i++) { CLOCK += 250; tick(sess, run, d); }
+  const mark = sess.targetCol;
+  check('今夜の的の列が決まっている', mark >= 0 && mark < 8, `第${mark}列`);
+  check('違う列を縦に消しても杭は入らない',
+    !submitStake(sess, run, '杭を打つ人', [(mark + 1) % 8], d).ok, '');
+  const a = submitStake(sess, run, '杭を打つ人', [mark], d);
+  check('的の列を縦に消すと杭が入る', a.ok && !a.ready, `${sess.stakes2}本`);
+  submitStake(sess, run, '杭を打つ人', [mark], d);
+  const c = submitStake(sess, run, '杭を打つ人', [mark], d);
+  check('3本たまると予告が伸びる', c.ready && sess.warnBonus > 0, `+${sess.warnBonus}ms`);
+  check('たまったら数え直す', sess.stakes2 === 0, `${sess.stakes2}`);
+}
+
+// ---- 🤝 取引 --------------------------------------------------------------
+{
+  CLOCK = 9_000_000; SEED = 3434;
+  const d = deps();
+  // 住人が本当に投票する。polls.js の仕掛けをそのまま渡す。
+  const voters = Array.from({ length: 14 }, (_, i) => ({ id: 'rv' + i, name: '住民' + i, arch: 'casual', lang: 'ja' }));
+  d.residentVoters = () => voters;
+  d.residentChoice = (poll, r) => (Number(r.id.slice(2)) % 3 === 0 ? 'yes' : 'no');
+  const sess = createSession(d, [fakeSock('決める人')]);
+  const run = freshRun();
+  run.dayKey = '2026-08-29';
+
+  // 20分地点まで進める
+  const need = Math.ceil((DEAL_AT_SEC + COUNTDOWN + 2) * 4);
+  for (let i = 0; i < need; i++) { CLOCK += 250; tick(sess, run, d); }
+  check('20分で取引が始まる', !!run.deal, run.deal ? run.deal.dealId : 'なし');
+  check('取引がプレイヤーに届く', d.sent.some(m => m.type === 'zero_deal'), '');
+  check('ゼロが取引を持ちかける', d.said.some(x => x.kind === 'deal'), '');
+
+  if (run.deal) {
+    const v = dealView(run.deal);
+    check('2択で出る', v.options.length === 2, v.options.map(o => o.id).join('/'));
+    check('日英そろっている', !!(v.q && v.qEn), '');
+    // 人間の1票は住人5票ぶん
+    const r1 = submitDealVote(run, 'u1', 'yes');
+    check('人間が投票できる', r1.ok, JSON.stringify(r1.tally));
+    check('人間の1票は住人5票ぶん', r1.tally.yes >= HUMAN_VOTE_WEIGHT, `yes=${r1.tally.yes}`);
+    check('二度は投票できない', !submitDealVote(run, 'u1', 'no').ok, '');
+    check('でたらめな選択は通らない', !submitDealVote(run, 'u2', 'maybe').ok, '');
+
+    // 締切まで進める（住人が投票していく）
+    for (let i = 0; i < DEAL_SEC * 4 + 8; i++) { CLOCK += 250; tick(sess, run, d); }
+    check('締切で決着する', run.deal.settled, '');
+    check('住人が実際に投票した', Object.keys(run.deal.residentVoted).length > 0,
+      `${Object.keys(run.deal.residentVoted).length}人`);
+    check('結果が届く', d.sent.some(m => m.type === 'zero_deal_done'), '');
+    check('締切後は投票できない', !submitDealVote(run, 'u9', 'yes').ok, '');
+
+    // 「飲む」が通っていれば効果が乗る
+    const applied = run.dealHalve || run.dealRevive || run.dealMarkAll;
+    const win = d.sent.filter(m => m.type === 'zero_deal_done').pop();
+    check('飲めば効果が乗り、断れば乗らない',
+      win && (win.win === 'yes' ? !!applied : !applied), win ? win.win : '?');
+  }
+}
+
+// ---- 取引でHPが半分になる ---------------------------------------------------
+{
+  const base = danHpFor(0, 1, null);
+  const halved = danHpFor(0, 1, { dealHalve: true });
+  check('取引でHPが半分になる', halved === Math.round(base / 2), `${base}→${halved}`);
+  const seal = sealHpFor(0, 1, null);
+  const bigger = sealHpFor(0, 1, { dealSeal: 0.40 });
+  check('取引で封印が4割に上がる', bigger > seal, `${seal}→${bigger}`);
+  check('でたらめな割合は無視される', sealHpFor(0, 1, { dealSeal: 9 }) === seal, '');
 }
 
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

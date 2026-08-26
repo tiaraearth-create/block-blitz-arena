@@ -22,6 +22,8 @@ import {
   seatsFor, lanesFor, moodFor, pickVerdictCells, verdictAccepts,
   MIN_BOT_SEATS, REVIVE_SEC, EXECUTIONS_PER_SLOT, EXECUTIONS_PER_DAY, SIZE,
   MISS_HEAL, TOPOUT_HEAL, SEATS_MAX, missHealFor,
+  makeDeal, dealTally, dealWinner, clearDealEffects, dealForDay,
+  DEAL_AT_SEC, DEAL_SEC, HUMAN_VOTE_WEIGHT,
 } from './zero.js';
 
 export const ZERO_TICK = 250;
@@ -126,7 +128,7 @@ export function tick(s, run, deps) {
   const danIndex = run.dan | 0;
   if (danIndex >= DAN.length) return;          // 7段すべて割れている
   const dan = danAt(danIndex);
-  const softCap = softCapFor(danIndex, s.humans);
+  const softCap = softCapFor(danIndex, s.humans, run);
 
   // --- 住人ボットが実際に打つ（これが段の7割を削る火力）---
   for (const e of liveBots(s)) {
@@ -182,8 +184,11 @@ export function tick(s, run, deps) {
     }
   }
 
+  // --- 🤝 取引（20分地点の60秒）---
+  runDeal(s, run, danIndex, deps, elapsed, t);
+
   // --- 段が落ちたか ---
-  const seal = sealHpFor(danIndex, s.humans);
+  const seal = sealHpFor(danIndex, s.humans, run);
   if ((run.dealt || 0) >= softCap - 0.5 && (run.sealDealt || 0) >= seal) {
     breakDan(s, run, danIndex, deps);
   }
@@ -209,7 +214,7 @@ function resolveExpiredVerdicts(s, run, danIndex, deps) {
     if (e) e.missed = (e.missed || 0) + 1;
     // 落とすと段が少し回復し、住人が1人処刑される。
     const dan = danAt(danIndex);
-    run.dealt = Math.max(0, (run.dealt || 0) - missHealFor(danIndex, s.humans));
+    run.dealt = Math.max(0, (run.dealt || 0) - missHealFor(danIndex, s.humans, run));
     const victim = executeResident(s, run, deps, random);
     if (say) say('missed', danIndex, { you: v.target, name: victim ? victim.name : undefined, seed: v.at });
     if (emit) {
@@ -235,19 +240,45 @@ function fireVerdicts(s, run, danIndex, deps) {
   for (let i = 0; i < lanes; i++) {
     const e = order[i];
     e.lastVerdictAt = t;
-    const { cells, keystone } = pickVerdictCells(e.grid, danIndex, s.targetCol, random);
+    // 取引「今夜の的を八列すべてにしてやる」= 寄せる列を無効化する
+    const mark = run.dealMarkAll ? -1 : s.targetCol;
+    const { cells, keystone } = pickVerdictCells(e.grid, danIndex, mark, random);
     if (!cells.length) continue;
+    // 杭が効いていれば予告が伸びる。取引で縮むこともある。
+    const warnMs = Math.max(1200, dan.warnMs + (s.warnBonus || 0) - (run.dealWarnCut || 0));
+    if (s.warnBonus) s.warnBonus = 0;      // 1回ぶんだけ
     const v = {
-      id: `${t}-${i}`, target: e.name, at: t, warnMs: dan.warnMs,
+      id: `${t}-${i}`, target: e.name, at: t, warnMs,
       cells, keystone, resolved: false,
     };
     s.verdicts.push(v);
-    if (emit) emit(e, { type: 'zero_verdict', id: v.id, cells, keystone, warnMs: dan.warnMs });
+    if (emit) emit(e, { type: 'zero_verdict', id: v.id, cells, keystone, warnMs });
     if (say && i === 0) say('verdict', danIndex, { you: e.name, seed: t });
   }
 }
 
 // カットの申告。クライアント申告だが、時間で頭打ちになる（zero.js の注記参照）。
+// 🪧 杭 ── 「今夜の的」の列を縦に消すと1本入り、3本で次の予告が伸びる。
+//
+// これが効くのは、特定の1列を縦に消すのが**点効率で損**だから。
+// 横消しのほうがスコアは出る。つまり「点を稼ぐ置き方」と
+// 「斬りやすくする置き方」が同じ手番の中で衝突する。
+// 今の3モードには一度も無かった、盤面の中の選択。
+export function submitStake(s, run, name, cols, deps) {
+  const { emit } = deps;
+  if (!Array.isArray(cols) || !cols.includes(s.targetCol)) return { ok: false };
+  const need = run.dealStakeCost || 3;
+  s.stakes2 = (s.stakes2 || 0) + 1;
+  const ready = s.stakes2 >= need;
+  if (ready) { s.stakes2 = 0; s.warnBonus = 1500; }
+  if (emit) {
+    for (const x of s.entrants) if (x.human) {
+      emit(x, { type: 'zero_stake', by: name, have: s.stakes2, need, ready });
+    }
+  }
+  return { ok: true, ready };
+}
+
 export function submitCut(s, run, name, verdictId, clearedCells, deps) {
   const { now = () => Date.now(), say, emit } = deps;
   const t = now();
@@ -260,7 +291,7 @@ export function submitCut(s, run, name, verdictId, clearedCells, deps) {
   const e = s.entrants.find(x => x.name === name);
   if (e) e.cuts = (e.cuts || 0) + 1;
   const danIndex = run.dan | 0;
-  const dmg = cutDamageFor(danIndex, s.humans, { keystone: r.keystone });
+  const dmg = cutDamageFor(danIndex, s.humans, { keystone: r.keystone, run });
   run.sealDealt = (run.sealDealt || 0) + dmg;
   run.cuts = (run.cuts || 0) + 1;
   if (say) say('cut', danIndex, { you: name, seed: t });
@@ -280,7 +311,7 @@ export function topOut(s, run, name, deps) {
   e.alive = false;
   e.downUntil = now() + REVIVE_SEC * 1000;
   const danIndex = run.dan | 0;
-  run.dealt = Math.max(0, (run.dealt || 0) - Math.round(danHpFor(danIndex, s.humans) * TOPOUT_HEAL));
+  run.dealt = Math.max(0, (run.dealt || 0) - Math.round(danHpFor(danIndex, s.humans, run) * TOPOUT_HEAL));
   if (say) say('revive', danIndex, { you: name, seed: now() });
   return true;
 }
@@ -307,6 +338,11 @@ function breakDan(s, run, danIndex, deps) {
   run.dan = danIndex + 1;
   run.dealt = 0;
   run.sealDealt = 0;
+  // 取引は1段ぶん。段が変わったら効果は切れる。
+  clearDealEffects(run);
+  delete run.deal;
+  delete run.dealDoneFor;
+  s.stakes2 = 0; s.warnBonus = 0;
   run.broken = run.broken || [];
   const top = aliveHumans(s).sort((a, b) => (b.cuts || 0) - (a.cuts || 0))[0];
   const rec = { dan: danIndex + 1, at: now(), by: top ? top.name : null };
@@ -322,14 +358,89 @@ function breakDan(s, run, danIndex, deps) {
 }
 
 // ---------------------------------------------------------------------------
+// 🤝 取引
+// ---------------------------------------------------------------------------
+
+function runDeal(s, run, danIndex, deps, elapsed, t) {
+  const { emit, say, residentVoters, residentChoice, random = Math.random } = deps;
+  // 開幕
+  if (!run.deal && elapsed >= DEAL_AT_SEC && run.dealDoneFor !== danIndex) {
+    run.deal = makeDeal(run.dayKey || 'x', danIndex, t);
+    if (say) say('deal', danIndex, { seed: t });
+    if (emit) for (const x of s.entrants) if (x.human) emit(x, { type: 'zero_deal', deal: dealView(run.deal) });
+    return;
+  }
+  if (!run.deal || run.deal.settled) return;
+
+  // 住人が本当に投票する。誰がいつ入れるかは polls.js の仕掛けに任せる ——
+  // 同調・逆張り・ギルド連帯・締切間際の鞍替えが全部そのまま効く。
+  if (residentVoters && residentChoice) {
+    const left = run.deal.closesAt - t;
+    const frac = 1 - Math.max(0, left) / (DEAL_SEC * 1000);
+    for (const r of residentVoters()) {
+      if (run.deal.residentVoted[r.id]) continue;
+      // 締切に近いほど入りやすい（票が割れていく60秒が見世物になる）
+      if (random() > 0.02 + frac * 0.06) continue;
+      const pick = residentChoice(run.deal, r);
+      if (!pick) continue;
+      run.deal.residentVoted[r.id] = true;
+      const o = run.deal.options.find(x => x.id === pick);
+      if (o) o.votes++;
+      if (emit) for (const x of s.entrants) if (x.human) {
+        emit(x, { type: 'zero_deal_vote', by: r.name, pick, tally: dealTally(run.deal) });
+      }
+    }
+  }
+
+  // 締切
+  if (t >= run.deal.closesAt) {
+    run.deal.settled = true;
+    run.dealDoneFor = danIndex;
+    const win = dealWinner(run.deal);
+    if (win === 'yes') {
+      dealForDay(run.dayKey || 'x').apply(run);
+      // 「処刑した住人を全員returnさせる」は席にも反映する
+      if (run.dealRevive) {
+        for (const x of s.entrants) if (!x.human && x.executed) { x.executed = false; x.alive = true; }
+        run.fallen = [];
+        s.executed = 0;
+      }
+    }
+    if (emit) for (const x of s.entrants) if (x.human) {
+      emit(x, { type: 'zero_deal_done', win, tally: dealTally(run.deal) });
+    }
+    if (say) say(win === 'yes' ? 'dealYes' : 'dealNo', danIndex, { seed: t });
+  }
+}
+
+export function dealView(deal) {
+  if (!deal) return null;
+  return {
+    id: deal.id, q: deal.q, qEn: deal.qEn,
+    options: deal.options.map(o => ({ id: o.id, text: o.text, textEn: o.textEn })),
+    closesAt: deal.closesAt, settled: !!deal.settled,
+    tally: dealTally(deal), humanWeight: HUMAN_VOTE_WEIGHT,
+  };
+}
+
+// 人間の1票は住人5票ぶん。1人1回だけ。
+export function submitDealVote(run, userId, pick) {
+  if (!run || !run.deal || run.deal.settled) return { ok: false, why: 'closed' };
+  if (pick !== 'yes' && pick !== 'no') return { ok: false, why: 'bad' };
+  if (run.deal.humanVotes[userId]) return { ok: false, why: 'already' };
+  run.deal.humanVotes[userId] = pick;
+  return { ok: true, tally: dealTally(run.deal) };
+}
+
+// ---------------------------------------------------------------------------
 // 画面に送る形
 // ---------------------------------------------------------------------------
 
 export function stateView(s, run) {
   const danIndex = Math.min(DAN.length - 1, run.dan | 0);
-  const hp = danHpFor(danIndex, s.humans);
-  const seal = sealHpFor(danIndex, s.humans);
-  const soft = softCapFor(danIndex, s.humans);
+  const hp = danHpFor(danIndex, s.humans, run);
+  const seal = sealHpFor(danIndex, s.humans, run);
+  const soft = softCapFor(danIndex, s.humans, run);
   return {
     type: 'zero_state',
     dan: danIndex + 1,
@@ -344,6 +455,8 @@ export function stateView(s, run) {
     mood: moodFor(danIndex),
     cuts: run.cuts || 0,
     fallen: (run.fallen || []).map(f => f.name),
+    deal: run.deal && !run.deal.settled ? dealView(run.deal) : null,
+    stakes: { have: s.stakes2 || 0, need: run.dealStakeCost || 3 },
     zeroGrid: s.zero.engine ? s.zero.engine.snapshot() : null,
     seats: s.entrants.map(e => ({
       name: e.name, human: !!e.human, score: Math.floor(e.score || 0),

@@ -13,6 +13,7 @@ import {
 import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
 import { zeroSay, moodFor } from './zero.js';
 import { createSession as createZeroSession, tick as tickZero, submitCut as zeroCut,
+  submitStake as zeroStake, submitDealVote as zeroDealVote,
   topOut as zeroTopOut, stateView as zeroStateView, ZERO_TICK } from './zero-session.js';
 import { danAt, DAN as ZERO_DAN } from './zero.js';
 import { getSchedule as getAeSchedule, liveSlotFor as aeLiveSlotFor,
@@ -179,6 +180,11 @@ export function initBattle(server, deps) {
           send(e.ws, { type: 'zero_garbage', cells });
         }
       },
+      // 取引の投票。誰がどう入れるかは polls.js の仕掛けをそのまま使う ——
+      // 同調・逆張り・ギルド連帯・締切間際の鞍替えが全部効くので、
+      // 同じ2択でも毎回結果が違う。
+      residentVoters: () => (worldCtx().active || []).slice(0, 40),
+      residentChoice: (poll, r) => residentChoice(poll, r),
       onDanBroken: (rec) => {
         saveDb();
         broadcastAll({
@@ -193,6 +199,7 @@ export function initBattle(server, deps) {
 
   function startZeroSession(humanSocks, run) {
     if (!run) return null;
+    if (!run.dayKey) run.dayKey = String(run.dayKey || '');
     const sess = createZeroSession(zeroDeps(null), humanSocks);
     zeroSessions.set(sess.id, sess);
     for (const e of sess.entrants) {
@@ -2167,6 +2174,33 @@ export function initBattle(server, deps) {
           const cells = Array.isArray(msg.cells) ? msg.cells.slice(0, 64).map(n => n | 0) : [];
           zeroCut(sess, run, sockName(ws), String(msg.id || ''), cells, zeroDeps(sess));
           saveDb();
+          return;
+        }
+        // 🪧 今夜の的の列を縦に消した
+        case 'zero_stake': {
+          const sess = zeroSessionOf(ws);
+          const run = db.meta.adminEventRun;
+          if (!sess || !run) return;
+          if (!sockRate(ws, 'zeroStakeTimes', 20, 10_000)) return;
+          const cols = Array.isArray(msg.cols) ? msg.cols.slice(0, 8).map(n => n | 0) : [];
+          zeroStake(sess, run, sockName(ws), cols, zeroDeps(sess));
+          return;
+        }
+        // 🤝 取引への投票
+        case 'zero_vote': {
+          const sess = zeroSessionOf(ws);
+          const run = db.meta.adminEventRun;
+          if (!sess || !run || !ws.user) return;
+          if (!sockRate(ws, 'zeroVoteTimes', 5, 10_000)) return;
+          const r = zeroDealVote(run, ws.user.id, String(msg.pick || ''));
+          if (r.ok) {
+            saveDb();
+            for (const e of sess.entrants) if (e.human && e.ws && e.ws.readyState === e.ws.OPEN) {
+              send(e.ws, { type: 'zero_deal_vote', by: sockName(ws), pick: msg.pick, tally: r.tally, human: true });
+            }
+          } else {
+            send(ws, { type: 'error', error: r.why === 'already' ? 'もう投票しました' : '投票を受け付けられません' });
+          }
           return;
         }
         case 'zero_topout': {

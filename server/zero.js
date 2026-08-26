@@ -67,29 +67,37 @@ export function danAt(index) {
 
 // 人数ぶん段を重くする。人が増えると同時に走る断罪の本数も増えるので、
 // この2つは噛み合っていないと「人が増えるほど進まない」逆転が起きる。
-export function danHpFor(index, humans) {
+export function danHpFor(index, humans, run) {
   const d = danAt(index);
-  return Math.round(d.hp * (1 + HP_PER_EXTRA_HUMAN * Math.max(0, (humans | 0) - 1)));
+  const base = Math.round(d.hp * (1 + HP_PER_EXTRA_HUMAN * Math.max(0, (humans | 0) - 1)));
+  // 取引「この段のHPを半分にしてやる」
+  return run && run.dealHalve ? Math.round(base / 2) : base;
 }
 
-export function sealHpFor(index, humans) {
-  return Math.round(danHpFor(index, humans) * SEAL_RATIO);
+// 取引で封印が4割に上がることがある（run.dealSeal）。
+export function sealRatioOf(run) {
+  const r = run && Number(run.dealSeal);
+  return Number.isFinite(r) && r > 0 && r <= 0.6 ? r : SEAL_RATIO;
+}
+
+export function sealHpFor(index, humans, run) {
+  return Math.round(danHpFor(index, humans, run) * sealRatioOf(run));
 }
 
 // 点数で削れる上限（＝ここから先は人間が斬らないと1ミリも減らない）
-export function softCapFor(index, humans) {
-  return danHpFor(index, humans) - sealHpFor(index, humans);
+export function softCapFor(index, humans, run) {
+  return danHpFor(index, humans, run) - sealHpFor(index, humans, run);
 }
 
-export function cutDamageFor(index, humans, { keystone = false } = {}) {
+export function cutDamageFor(index, humans, { keystone = false, run = null } = {}) {
   const d = danAt(index);
-  const base = Math.round(danHpFor(index, humans) * d.cut);
+  const base = Math.round(danHpFor(index, humans, run) * d.cut);
   return keystone ? base * 2 : base;      // 急所（金マス）を含めて斬れば倍
 }
 
 // 断罪を1回落としたときにゼロが回復する量。
-export function missHealFor(index, humans) {
-  return Math.round(danHpFor(index, humans) * MISS_HEAL / lanesFor(humans));
+export function missHealFor(index, humans, run) {
+  return Math.round(danHpFor(index, humans, run) * MISS_HEAL / lanesFor(humans));
 }
 
 export function cutsNeededFor(index) {
@@ -224,6 +232,22 @@ export const ZERO_LINES = {
     annoyed: [L('一人、減りましたね', 'One fewer.')],
     raw: [L('また来たか', 'Back again.')],
   },
+  // 取引を持ちかける
+  deal: {
+    polite: [L('……ひとつ、取引をしましょう。60秒差し上げます', '…A bargain, then. You have sixty seconds.')],
+    annoyed: [L('取引だ。断ってもいいが、後悔はするな', 'A deal. Refuse if you like — do not complain later.')],
+    raw: [L('選べ。60秒だ', 'Choose. Sixty seconds.')],
+  },
+  dealYes: {
+    polite: [L('……賢明です。では、約束どおりに', '…Wise. As agreed, then.')],
+    annoyed: [L('飲みましたね。覚えておきます', 'You took it. I will remember.')],
+    raw: [L('取引成立だ', 'Done.')],
+  },
+  dealNo: {
+    polite: [L('断りましたか。……いいでしょう', 'Refused. …Very well.')],
+    annoyed: [L('断ったか。ならば、このまま続けます', 'Refused. Then we continue as we are.')],
+    raw: [L('……そうか', '…I see.')],
+  },
   // 総括
   wrap: {
     polite: [L('本日はここまで。{n}段、返されました', 'That is all for now. {n} stages returned.')],
@@ -263,6 +287,103 @@ export function zeroSay(kind, mood, ctx = {}) {
     .replace(/\{dan\}/g, String(ctx.dan != null ? ctx.dan : ''))
     .replace(/\{n\}/g, String(ctx.n != null ? ctx.n : ''));
   return { ja: fill(line.ja), en: fillEn(line.en) };
+}
+
+
+// ---------------------------------------------------------------------------
+// 🤝 取引 ── 20分地点の60秒
+// ---------------------------------------------------------------------------
+//
+// ゼロが2択を出し、**あなたと、いまオンラインの住人全員が本当に投票する**。
+// 投票のクセ（同調・逆張り・ギルド連帯・締切間際の鞍替え）は polls.js の
+// residentChoice がすでに全部持っているので、そのまま使う。
+// だから毎回結果が違う。
+//
+// なぜこれを切らないか:
+// 台詞は必ず尽きる。250行書いても3回目には読まれる。取引は「毎週書き換える
+// 2択」だけで展開が自動で変わるので、賞味期限を延ばすのはここしかない。
+//
+// 人間の1票 ＝ 住人5票ぶん。ソロなら「あなた5票 対 住人14票」。
+// あなた1人では決まらないが、住人の票が割れれば**あなたが決定打になる**。
+export const HUMAN_VOTE_WEIGHT = 5;
+// 枠の20分地点。動作確認のときだけ ZERO_DEAL_AT で早められる
+// （20分待たないと一度も見られないので、確認の手が止まる）。
+export const DEAL_AT_SEC = Number(process.env.ZERO_DEAL_AT) > 0
+  ? Number(process.env.ZERO_DEAL_AT) : 20 * 60;
+export const DEAL_SEC = 60;
+
+// 毎週差し替える想定。効果は「代償つきの得」で統一する ——
+// ただ得なだけの選択肢は、選んで終わりで見世物にならない。
+export const DEALS = [
+  {
+    id: 'halve',
+    q: 'この段のHPを半分にしてやる。かわりに、残り時間は断罪の予告を1秒縮める',
+    qEn: 'I will halve this stage. In exchange, your warning shrinks by one second.',
+    yes: { text: '飲む', textEn: 'Take it' },
+    no: { text: '断る', textEn: 'Refuse' },
+    apply: run => { run.dealHalve = true; run.dealWarnCut = 1000; },
+  },
+  {
+    id: 'revive',
+    q: '処刑した住人を全員returnさせてやる。かわりに、この段の封印を4割に上げる',
+    qEn: 'I will return everyone I executed. In exchange, this stage’s seal rises to 40%.',
+    yes: { text: '飲む', textEn: 'Take it' },
+    no: { text: '断る', textEn: 'Refuse' },
+    apply: run => { run.dealRevive = true; run.dealSeal = 0.40; },
+  },
+  {
+    id: 'markall',
+    q: '今夜の的を八列すべてにしてやる。かわりに、杭は二本で効かなくなる',
+    qEn: 'I will mark all eight columns. In exchange, stakes need three, not two.',
+    yes: { text: '飲む', textEn: 'Take it' },
+    no: { text: '断る', textEn: 'Refuse' },
+    apply: run => { run.dealMarkAll = true; run.dealStakeCost = 3; },
+  },
+];
+
+export function dealForDay(dayKey) {
+  let h = 0;
+  for (const ch of String(dayKey)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return DEALS[h % DEALS.length];
+}
+
+// 取引の投票箱。polls.js の residentChoice にそのまま渡せる形にしておく。
+export function makeDeal(dayKey, danIndex, now) {
+  const d = dealForDay(dayKey);
+  return {
+    id: `zero-deal-${dayKey}-${danIndex}`,
+    kind: 'zero',
+    dealId: d.id,
+    q: d.q, qEn: d.qEn,
+    options: [
+      { id: 'yes', text: d.yes.text, textEn: d.yes.textEn, votes: 0 },
+      { id: 'no', text: d.no.text, textEn: d.no.textEn, votes: 0 },
+    ],
+    opensAt: now,
+    closesAt: now + DEAL_SEC * 1000,
+    humanVotes: {},        // userId -> 'yes' | 'no'
+    residentVoted: {},     // residentId -> true
+    settled: false,
+  };
+}
+
+export function dealTally(deal) {
+  const out = { yes: 0, no: 0 };
+  for (const o of deal.options) out[o.id] = o.votes;
+  for (const v of Object.values(deal.humanVotes)) out[v] += HUMAN_VOTE_WEIGHT;
+  return out;
+}
+
+export function dealWinner(deal) {
+  const t = dealTally(deal);
+  // 同数は「断る」。ゼロの申し出は、押し切られない限り通らない。
+  return t.yes > t.no ? 'yes' : 'no';
+}
+
+// 段が変わったら取引の効果は切れる（1段ぶんの取引なので）
+export function clearDealEffects(run) {
+  delete run.dealHalve; delete run.dealWarnCut; delete run.dealRevive;
+  delete run.dealSeal; delete run.dealMarkAll; delete run.dealStakeCost;
 }
 
 // ---------------------------------------------------------------------------
