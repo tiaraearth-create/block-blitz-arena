@@ -112,6 +112,22 @@ export const BOARDS = {
     accent: '#ffd75e',
     holy: true,
   },
+  // 👑 王座の宝物庫。第2段を割った世界でだけ棚に並ぶ。
+  board_throne: {
+    bg: ['#3a2c08', '#120c02'],
+    cell: 'rgba(240,180,41,0.075)',
+    cellLine: 'rgba(240,180,41,0.11)',
+    accent: '#f0b429',
+    stars: true,
+  },
+  // 断罪録の間。紫の封印色で、記録がずっと流れている壁。
+  board_chronicle: {
+    bg: ['#241a4a', '#0a0714'],
+    cell: 'rgba(139,108,255,0.08)',
+    cellLine: 'rgba(139,108,255,0.12)',
+    accent: '#8b6cff',
+    nebula: true,
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -407,6 +423,43 @@ function drawAdminRainbow(ctx, x, y, s, ci, alpha = 1) {
   ctx.globalAlpha = 1;
 }
 
+// 👑 断罪の刻印: 赤い判決線が斜めに1本、どのブロックにも入っている。
+function drawVerdict(ctx, x, y, s, colorIndex, r) {
+  const [light, dark] = PALETTE[colorIndex] || PALETTE[6];
+  const g = ctx.createLinearGradient(x, y, x, y + s);
+  g.addColorStop(0, dark); g.addColorStop(1, '#14060a');
+  ctx.fillStyle = g;
+  roundRect(ctx, x + 1, y + 1, s - 2, s - 2, r);
+  ctx.fill();
+  ctx.strokeStyle = light; ctx.lineWidth = Math.max(1, s * 0.05);
+  roundRect(ctx, x + 1, y + 1, s - 2, s - 2, r);
+  ctx.stroke();
+  ctx.save();
+  ctx.beginPath(); roundRect(ctx, x + 1, y + 1, s - 2, s - 2, r); ctx.clip();
+  ctx.strokeStyle = '#e03546'; ctx.lineWidth = Math.max(1.4, s * 0.09);
+  ctx.globalAlpha = 0.9;
+  ctx.beginPath(); ctx.moveTo(x + s * 0.12, y + s * 0.82); ctx.lineTo(x + s * 0.88, y + s * 0.18); ctx.stroke();
+  ctx.restore();
+}
+
+// 👁️ ゼロの眼: 見返してくる。虹彩の色だけピースの色に染まる。
+function drawZeroEye(ctx, x, y, s, colorIndex, r) {
+  const [light, dark] = PALETTE[colorIndex] || PALETTE[6];
+  ctx.fillStyle = '#120d16';
+  roundRect(ctx, x + 1, y + 1, s - 2, s - 2, r);
+  ctx.fill();
+  ctx.strokeStyle = dark; ctx.lineWidth = Math.max(1, s * 0.05);
+  roundRect(ctx, x + 1, y + 1, s - 2, s - 2, r);
+  ctx.stroke();
+  const cx = x + s / 2, cy = y + s / 2;
+  ctx.fillStyle = '#efeaf5';
+  ctx.beginPath(); ctx.ellipse(cx, cy, s * 0.34, s * 0.21, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = light;
+  ctx.beginPath(); ctx.arc(cx, cy, s * 0.155, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#0a0610';
+  ctx.beginPath(); ctx.ellipse(cx, cy, s * 0.055, s * 0.135, 0, 0, Math.PI * 2); ctx.fill();
+}
+
 export const SKINS = {
   skin_default: drawClassic,
   skin_neon: drawNeon,
@@ -420,6 +473,8 @@ export const SKINS = {
   skin_dot: drawDot,
   skin_prism: drawPrism,
   skin_admin: drawAdminRainbow,
+  skin_verdict: drawVerdict,
+  skin_zero: drawZeroEye,
 };
 
 // fx ids map to particle presets handled in particles.js

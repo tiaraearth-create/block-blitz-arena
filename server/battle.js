@@ -17,8 +17,10 @@ import { createSession as createZeroSession, tick as tickZero, submitCut as zero
   submitWill as zeroWill, latestWill as zeroLatestWill,
   topOut as zeroTopOut, stateView as zeroStateView, ZERO_TICK } from './zero-session.js';
 import { danAt, DAN as ZERO_DAN } from './zero.js';
+import { createParties } from './party.js';
 import { getSchedule as getAeSchedule, liveSlotFor as aeLiveSlotFor,
-  ensureRun as aeEnsureRun, slotCounts as aeSlotCounts, entrantCount as aeEntrantCount } from './adminevent.js';
+  ensureRun as aeEnsureRun, slotCounts as aeSlotCounts, entrantCount as aeEntrantCount,
+  SHARD as AE_SHARD, recordThrone as aeRecordThrone } from './adminevent.js';
 import { translateChat, translateLocal, detectLang } from './translate.js';
 import { isOpen as pollIsOpen, vote as pollVote, residentChoice, residentVoteAt, isSwingVoter } from './polls.js';
 
@@ -52,6 +54,55 @@ export function initBattle(server, deps) {
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 256 * 1024 });
   wss.on('error', err => console.error('[wss]', err && err.message));
   const clients = new Set();
+  // userId -> その人が今つないでいる socket 全部。
+  // 今まではこれが無く、`[...clients].find(c => sockName(c) === name)` で
+  // 名前から1本だけ拾っていた。名前は hello 時点の控えなので改名すると
+  // 引けなくなるし、複数つないでいる人には最初の1本しか届かなかった。
+  // 通知は必ず「その人」に届いてほしいので、id で引ける表を持つ。
+  const userSockets = new Map();
+
+  function trackSocket(ws) {
+    if (!ws.user) return;
+    let set = userSockets.get(ws.user.id);
+    if (!set) { set = new Set(); userSockets.set(ws.user.id, set); }
+    set.add(ws);
+  }
+  function untrackSocket(ws) {
+    if (!ws.user) return;
+    const set = userSockets.get(ws.user.id);
+    if (!set) return;
+    set.delete(ws);
+    if (!set.size) userSockets.delete(ws.user.id);
+  }
+  function socketsOf(userId) {
+    const set = userSockets.get(userId);
+    if (!set) return [];
+    // 閉じ損ねた socket を掃除しながら返す（心拍でも掃除される）。
+    const live = [];
+    for (const w of set) { if (w.readyState === w.OPEN) live.push(w); else set.delete(w); }
+    if (!set.size) userSockets.delete(userId);
+    return live;
+  }
+  function isOnline(userId) { return socketsOf(userId).length > 0; }
+  // 何をしている最中か。パーティーの一覧と、いっしょに遊ぶ判定に使う。
+  function statusOf(userId) {
+    const live = socketsOf(userId);
+    if (!live.length) return 'offline';
+    for (const w of live) {
+      if (w.matchId || w.royaleId || w.zeroId || w.tourneyId || w.roomId) return 'playing';
+    }
+    return 'menu';
+  }
+  // 通知は primaryOnly で送ること。対戦画面に入ると同じ人が2本つなぐので、
+  // 全部に送ると招待が1つの画面に二重に出る。
+  function sendToUser(userId, msg, { primaryOnly = false } = {}) {
+    const live = socketsOf(userId);
+    if (!live.length) return false;
+    if (!primaryOnly) { for (const w of live) send(w, msg); return true; }
+    const primary = live.find(w => !w.secondary) || live[0];
+    send(primary, msg);
+    return true;
+  }
   // 接続の上限。以前は認証も上限も無く、無言のソケットを何本でも張れた
   // （実測で200本つないでオンライン人数を 0→200 に水増しできた）。
   // これが土台になって、リアクションの増幅・チャット制限のすり抜け・
@@ -168,13 +219,40 @@ export function initBattle(server, deps) {
     return ws.user ? db.users[ws.user.id] || null : null;
   }
 
+  // 👥 パーティー。db には保存しない（理由は party.js の冒頭）。
+  const party = createParties({
+    db, sendToUser, isOnline, statusOf,
+    uuid: () => crypto.randomUUID(),
+    rateLimit: (...args) => (deps.rateLimit ? deps.rateLimit(...args) : true),
+    adminLog: (...args) => (deps.adminLog ? deps.adminLog(...args) : undefined),
+    // 翻訳は必ず手元の対訳表だけ。外部の翻訳サーバー(translateChat)には
+    // 絶対に渡さない ── 4人だけの私語が箱の外に出る。
+    // translateLocal は { lang, text, engine } を返す。文字列だけ取り出す
+    // （そのまま渡すと画面に [object Object] が出る）。
+    translateLocal: (text) => {
+      const tr = translateLocal(text, detectLang(text) === 'ja' ? 'en' : 'ja');
+      return tr && tr.text ? tr.text : null;
+    },
+  });
+
   function zeroDeps(sess) {
     return {
       Engine, chooseMove, sockName,
+      SHARD: AE_SHARD,
       pickResidentBot, pickPersona,
       uuid: () => crypto.randomUUID(),
       emit: (e, msg) => { if (e.human && e.ws && e.ws.readyState === e.ws.OPEN) send(e.ws, msg); },
       say: (kind, danIndex, ctx) => zeroSpeak(kind, danIndex, ctx),
+      // 👑 王座の欠片。管理者イベントの中でしか増えないので、
+      // 配るのもここ（HTTP 側ではなく、実際に斬った瞬間）でやる。
+      shard: (name, n) => {
+        const sock = [...clients].find(c => !c.isBot && c.user && sockName(c) === name);
+        const u = sock && sock.user ? db.users[sock.user.id] : null;
+        if (!u || !n) return;
+        u.shards = (u.shards || 0) + n;
+        if (sock.readyState === sock.OPEN) send(sock, { type: 'shards', gained: n, total: u.shards });
+        saveDb();
+      },
       // 出来事をプレイヤーの記録に残す。これが無いと称号もバッジも解除されない。
       onStat: (name, key, n = 1) => {
         const sock = [...clients].find(c => !c.isBot && c.user && sockName(c) === name);
@@ -209,6 +287,8 @@ export function initBattle(server, deps) {
       residentVoters: () => (worldCtx().active || []).slice(0, 40),
       residentChoice: (poll, r) => residentChoice(poll, r),
       onDanBroken: (rec) => {
+        // 世界の最高到達段。管理者イベント専用ショップの棚がこれで開く。
+        aeRecordThrone(db, rec.dan);
         saveDb();
         broadcastAll({
           type: 'announce',
@@ -1389,7 +1469,12 @@ export function initBattle(server, deps) {
       createMatch({ mode: 'raid', entries, rated: false });
     }
   }
-  setInterval(() => { sweepQueues(); sweepRematches(); }, 2000);
+  // パーティーの掃除（招待の期限・全員オフラインの猶予・12時間で店じまい）も
+  // 同じループに相乗りさせる。タイマーは増やさない。
+  setInterval(() => {
+    sweepQueues(); sweepRematches();
+    try { party.sweep(); } catch (err) { console.error('[party] sweep', err); }
+  }, 2000);
 
   // -------------------------------------------------------------------------
   // Custom rooms
@@ -2129,6 +2214,12 @@ export function initBattle(server, deps) {
           } else {
             ws.guestName = null;
           }
+          trackSocket(ws);
+          if (user) {
+            // 5分に1回だけ書く。毎回書くと接続のたびにディスクを叩く。
+            const live = db.users[user.id];
+            if (live && Date.now() - (live.lastSeen || 0) > 300_000) { live.lastSeen = Date.now(); saveDb(); }
+          }
           send(ws, {
             type: 'hello_ok',
             name: user ? user.username : ws.guestName,
@@ -2141,6 +2232,8 @@ export function initBattle(server, deps) {
           // Only a fresh arrival gets greeted, not a reconnecting chat socket
           // — nor the 2本目 that opens when the same person enters online play.
           if (!ws.greeted && !ws.secondary) { ws.greeted = true; maybeGreet(ws); }
+          // 再接続でもパーティーは続いている（所属は socket ではなく人に付く）。
+          if (ws.user) party.socketArrived(ws.user.id);
           break;
         }
         case 'queue': {
@@ -2502,12 +2595,64 @@ export function initBattle(server, deps) {
           }
           break;
         }
+        // ---- 👥 パーティー ----------------------------------------------
+        // 全部アカウント限定。ゲストは名前が毎回変わってミュートも
+        // ブロックも効かないので、4人だけの非公開の場には入れない。
+        case 'party_create':
+        case 'party_join':
+        case 'party_leave':
+        case 'party_kick':
+        case 'party_invite':
+        case 'party_invite_accept':
+        case 'party_invite_decline':
+        case 'party_chat':
+        case 'party_play':
+        case 'party_code': {
+          if (!ws.user) {
+            send(ws, { type: 'party_error', error: 'フレンド機能を使うにはアカウント登録が必要です' });
+            break;
+          }
+          const uid = ws.user.id;
+          const live = db.users[uid];
+          if (!live) { send(ws, { type: 'party_error', error: 'ログインが必要です' }); break; }
+          let r = { error: '' };
+          switch (msg.type) {
+            case 'party_create': r = party.create(uid); break;
+            case 'party_join':
+              // 合言葉の総当たりを防ぐ。join_room には今も制限が無い。
+              if (!sockRate(ws, 'partyJoinTimes', 5, 10_000)) { r = { error: 'すこし早すぎます' }; break; }
+              r = party.join(uid, String(msg.code || '').slice(0, 12));
+              break;
+            case 'party_leave': r = party.leave(uid); break;
+            case 'party_kick': r = party.kick(uid, String(msg.userId || '')); break;
+            case 'party_invite':
+              if (!sockRate(ws, 'partyInviteTimes', 6, 20_000)) { r = { error: 'すこし早すぎます' }; break; }
+              r = party.invite(uid, String(msg.userId || ''));
+              break;
+            case 'party_invite_accept': r = party.acceptInvite(uid, String(msg.inviteId || '')); break;
+            case 'party_invite_decline': r = party.declineInvite(uid, String(msg.inviteId || '')); break;
+            case 'party_chat':
+              // 全体チャットと同じ持ち分を使う。別枠にすると、
+              // パーティーに入るだけで発言できる量が倍になる。
+              if (!sockRate(ws, 'chatTimes', 5, 10_000)) { r = { error: 'すこし早すぎます' }; break; }
+              r = party.chat(uid, msg.text);
+              break;
+            case 'party_play': r = party.play(uid, String(msg.mode || ''), Number(msg.seats) || 0); break;
+            case 'party_code': r = party.launchCode(uid, String(msg.code || '').slice(0, 12)); break;
+          }
+          if (r && r.error) send(ws, { type: 'party_error', error: r.error });
+          break;
+        }
         case 'ping': send(ws, { type: 'pong' }); break;
       }
     }
 
     ws.on('close', () => {
       clients.delete(ws);
+      untrackSocket(ws);
+      // パーティーの所属はここでは落とさない。1人が最大6本つなぐし、
+      // 対戦用の socket は試合から抜けるたびに閉じる。落とすと点滅する。
+      if (ws.user) party.socketGone(ws.user.id);
       leaveQueues(ws);
       leaveRoom(ws);
       dropRematchesFor(ws);   // 🔁 相手が消えたら再戦オファーも消える
@@ -2600,7 +2745,10 @@ export function initBattle(server, deps) {
   }
 
   return {
-    clients, matches, rooms,
+    clients,
+    party,
+    presence: { isOnline, statusOf, sendToUser },
+    matches, rooms,
     endAllForShutdown,
     queueSize: queueSizeAll,   // all seven queues — duel+team alone under-reported
     displayOnline, displayMatches,

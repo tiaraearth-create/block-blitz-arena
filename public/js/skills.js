@@ -22,6 +22,7 @@ export const ULT_META = {
   ult_fortress:  { icon: '🛡️', color: '#9fd8ff' },
   ult_timestop:  { icon: '⏳', color: '#b06bff' },
   ult_judgement: { icon: '⚡', color: '#fff3b0' },
+  ult_condemn:   { icon: '👁️', color: '#e03546' },
   ult_admin:     { icon: '👑', color: '#ffd75e' },
 };
 
@@ -202,8 +203,11 @@ const EFFECTS = {
   // 🔥 Triple score for 15 seconds.
   ult_overdrive(ctx) {
     const { engine, view } = ctx;
-    engine.feverUntil = Date.now() + 15000;
-    engine.feverMult = 3;
+    // こちらも同じ。弱いフィーバーが先に効いていても ×3 まで引き上げるだけで、
+    // 残り時間も短いほうに切り詰めない。
+    const on = engine.feverUntil > Date.now();
+    engine.feverMult = Math.max(on ? (engine.feverMult || 1) : 1, 3);
+    engine.feverUntil = Math.max(engine.feverUntil || 0, Date.now() + 15000);
     view.screenFlash = 0.45;
     audio.combo(8);
     document.querySelector('#hudScore').classList.add('fever');
@@ -341,6 +345,28 @@ const EFFECTS = {
     view.particles.confetti(cx, cy, view.cell, 90);
     emit(ctx, { clearedCells: filled, gained, anchor: [filled[0][0], filled[0][1]] });
     return { msg: t('⚡ 神の裁き！！盤面が消滅した！！', '⚡ DIVINE JUDGEMENT — the board is no more!!') };
+  },
+
+  // 👁️ 断罪の一撃。いちばん埋まった縦1列と横1列を、埋まり具合に関係なく
+  // 問答無用で消し飛ばす ── 断罪の「通るか通らないか」をそのまま持ち込んだ技。
+  // 消える量は多くないが、狙った1列を必ず通せるのが値打ち。
+  ult_condemn(ctx) {
+    const { engine, view } = ctx;
+    const { rows, cols } = densities(engine);
+    const row = rows.filter(r => r.n > 0).sort((a, b) => b.n - a.n)[0];
+    const col = cols.filter(c => c.n > 0).sort((a, b) => b.n - a.n)[0];
+    if (!row && !col) return { error: t('盤面が空です！', 'The board is empty!') };
+    const res = clearLines(engine, row ? [row.i] : [], col ? [col.i] : []);
+    // 断罪は通れば必ず刺さる。コンボを1つぶん確実に繋ぐのがその表現。
+    engine.streak += 1;
+    if (engine.streak > engine.maxCombo) engine.maxCombo = engine.streak;
+    view.shake = 20;
+    view.screenFlash = 0.6;
+    audio.bossAttack();
+    const [cx, cy] = boardCenter(view);
+    view.particles.ring(cx, cy, view.boardSize * 0.7, '#e03546');
+    emit(ctx, { ...res, rows: row ? [row.i] : [], cols: col ? [col.i] : [] });
+    return { msg: t('👁️ 断罪の一撃！ 縦横を斬り抜いた！', '👁️ Condemnation — cut clean through!') };
   },
 
   // 👑 Staff-only: judgement, and the gauge refills instantly.

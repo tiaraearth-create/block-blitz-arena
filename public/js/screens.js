@@ -731,7 +731,9 @@ export async function openLeaderboard(board = 'score') {
         </div>
         <div class="lb-score">${board === 'dungeon' ? `F${fmt(r.dungeonMax || 0)}`
           : board === 'weekly' ? fmt(r.weeklyBest || 0)
-          : board === 'sprint' ? fmt(r.sprintBest || 0)
+          // 順位を決めているのは1分のほう。ラベルが無いせいで、下の行にある
+          // 「3分 …」だけが説明つきに見え、順位と無関係な数字を読んでしまう。
+          : board === 'sprint' ? tr(`1分 ${fmt(r.sprintBest || 0)}`, `1min ${fmt(r.sprintBest || 0)}`)
           : board === 'puzzle' ? tr(`ステージ${fmt(r.puzzleStage || 0)}`, `Stage ${fmt(r.puzzleStage || 0)}`)
           : board === 'dig' ? `${fmt(r.digDepth || 0)}m`
           : board === 'rating' ? `${rankOf(r.rating).icon}${fmt(r.rating)}` : fmt(r.bestScore)}</div>
@@ -799,7 +801,7 @@ function renderShop() {
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
     el.innerHTML = `
       <div class="shop-preview" data-pv="${item.id}"></div>
-      <div class="shop-name">${item.adminOnly ? '👑 ' : ''}${catName(item)}</div>
+      <div class="shop-name">${item.adminOnly || item.throneOnly ? '👑 ' : ''}${catName(item)}</div>
       <div class="shop-desc">${catDesc(item)}</div>
       ${equipped
         ? `<button class="btn btn-sm btn-ghost" disabled>${tr('✓ 装備中', '✓ Equipped')}</button>`
@@ -807,6 +809,8 @@ function renderShop() {
           ? `<button class="btn btn-sm btn-primary" data-act="equip">${tr('装備する', 'Equip')}</button>`
           : item.adminOnly
             ? `<button class="btn btn-sm btn-ghost" disabled>${tr('👑 運営専用', '👑 Staff only')}</button>`
+            : item.throneOnly
+              ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${tr('👑 イベント専用', '👑 Event only')}</button>`
             : item.gachaOnly
               ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${tr('🎰 ガチャ限定', '🎰 Gacha only')}</button>`
               : `<button class="btn btn-sm btn-gold" data-act="buy">${cur} ${fmt(item.price)}</button>`}
@@ -895,7 +899,7 @@ export async function openInventory(tab = invTab) {
 const invIsStaff = () => !!session.user && session.user.role === 'admin';
 
 function invCollectibles() {
-  return shopItems.filter(i => !i.adminOnly && !i.default);
+  return shopItems.filter(i => !i.adminOnly && !i.throneOnly && !i.default);
 }
 
 function renderInvSummary() {
@@ -933,17 +937,19 @@ function renderInvGear() {
     const all = shopItems.filter(i => i.cat === cat && (!i.adminOnly || staffExtras()));
     const owned = all.filter(i => i.adminOnly ? invIsStaff()
       : u ? (u.owned || []).includes(i.id) : !!i.default);
-    const total = all.filter(i => !i.adminOnly).length;
+    // 👑 専用ショップの品はここでは数えない ── 「あとN種」を押すと
+    // 通常ショップに飛ぶが、そこでは買えないので数に入れると嘘になる。
+    const total = all.filter(i => !i.adminOnly && !i.throneOnly).length;
     const equippedId = cat === 'ult' ? equippedUlt()
       : u ? (u.equipped || {})[cat] : `${cat}_default`;
-    const missing = total - owned.filter(i => !i.adminOnly).length;
+    const missing = total - owned.filter(i => !i.adminOnly && !i.throneOnly).length;
 
     const sec = document.createElement('div');
     sec.className = 'inv-sec';
     sec.innerHTML = `
       <div class="inv-sec-head">
         <span>${tr(CAT_TITLE[cat].ja, CAT_TITLE[cat].en)}</span>
-        <span class="muted">${invIsStaff() ? '∞' : `${owned.filter(i => !i.adminOnly).length} / ${total}`}</span>
+        <span class="muted">${invIsStaff() ? '∞' : `${owned.filter(i => !i.adminOnly && !i.throneOnly).length} / ${total}`}</span>
       </div>
       <div class="inv-grid"></div>
       ${missing > 0 && !invIsStaff()
@@ -955,7 +961,7 @@ function renderInvGear() {
       const card = document.createElement('button');
       card.className = `inv-card ${isEq ? 'equipped' : ''}`;
       card.innerHTML = `<div class="inv-pv" data-pv="${item.id}"></div>
-        <div class="inv-name">${item.adminOnly ? '👑 ' : ''}${catName(item)}</div>
+        <div class="inv-name">${item.adminOnly || item.throneOnly ? '👑 ' : ''}${catName(item)}</div>
         ${isEq ? `<div class="inv-eq">${tr('装備中', 'Equipped')}</div>` : ''}`;
       renderPreview(card.querySelector('.inv-pv'), item);
       card.onclick = () => { if (!isEq) equipItem(item); };

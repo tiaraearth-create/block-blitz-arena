@@ -44,6 +44,17 @@ export const SHOP_ITEMS = [
   { id: 'skin_prism',   cat: 'skin',  name: 'プリズム【ガチャ限定】',   desc: '光を分解する虹の結晶ブロック', price: 0, currency: 'gems', gachaOnly: true },
   { id: 'board_aurora', cat: 'board', name: 'オーロラ【ガチャ限定】',   desc: '極光が揺らめく夜のステージ',   price: 0, currency: 'gems', gachaOnly: true },
   { id: 'fx_comet',     cat: 'fx',    name: '彗星【ガチャ限定】',       desc: '尾を引く彗星が走る消去エフェクト', price: 0, currency: 'gems', gachaOnly: true },
+  // ---- 👑 王座の欠片でしか買えない装備（throneOnly） ----
+  // 管理者イベント専用ショップの品。コイン・ジェム・ガチャのどれでも手に入らない。
+  // dan は「世界が第何段まで割ったら棚に並ぶか」。買えるかどうかが
+  // 個人の財布ではなく世界の進捗で決まるのがこの棚の面白いところ。
+  { id: 'skin_verdict',    cat: 'skin',  name: '断罪の刻印',   desc: '赤い判決線が走るブロック',       price: 0, currency: 'coins', throneOnly: true, dan: 1, shards: 120 },
+  { id: 'board_throne',    cat: 'board', name: '七つの王座',   desc: '奪還した数だけ玉座が灯るステージ', price: 0, currency: 'coins', throneOnly: true, dan: 2, shards: 180 },
+  { id: 'fx_seal',         cat: 'fx',    name: '封印砕き',     desc: '紫の封印が砕け散る消去エフェクト', price: 0, currency: 'coins', throneOnly: true, dan: 3, shards: 220 },
+  { id: 'skin_zero',       cat: 'skin',  name: 'ゼロの眼',     desc: '見返してくる眼が埋まったブロック', price: 0, currency: 'coins', throneOnly: true, dan: 4, shards: 300 },
+  { id: 'ult_condemn',     cat: 'ult',   icon: '👁️', name: '断罪の一撃', desc: '縦横1列ずつを問答無用で消し飛ばす', price: 0, currency: 'coins', throneOnly: true, dan: 5, shards: 400 },
+  { id: 'board_chronicle', cat: 'board', name: '断罪録の間',   desc: '壁に名前が流れ続ける記録の間',     price: 0, currency: 'coins', throneOnly: true, dan: 6, shards: 500 },
+  { id: 'fx_crown',        cat: 'fx',    name: '王冠還る',     desc: '砕けた王冠が組み上がる消去エフェクト', price: 0, currency: 'coins', throneOnly: true, dan: 7, shards: 700 },
   // ---- Admin-exclusive gear (adminOnly: hidden from everyone else, unbuyable) ----
   { id: 'skin_admin',    cat: 'skin',  name: 'レインボー【管理者】', desc: '虹色に輝く運営専用ブロック', price: 0, currency: 'coins', adminOnly: true },
   { id: 'board_admin',   cat: 'board', name: '王の間【管理者】',     desc: '黄金に輝く運営専用ステージ', price: 0, currency: 'coins', adminOnly: true },
@@ -52,6 +63,10 @@ export const SHOP_ITEMS = [
 ];
 
 // 装備スロット一覧（/api/equip が受け付けるスロット）
+// 👑 王座の欠片で買えるものだけ。ここに入ったものは /api/shop にも
+// ガチャの抽選対象にも絶対に出さない（出したら専用の意味が消える）。
+export const THRONE_ITEMS = SHOP_ITEMS.filter(i => i.throneOnly);
+
 export const EQUIP_SLOTS = ['skin', 'board', 'fx', 'ult'];
 
 export const DEFAULT_OWNED = SHOP_ITEMS.filter(i => i.default).map(i => i.id);

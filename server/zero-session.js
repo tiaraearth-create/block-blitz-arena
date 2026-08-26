@@ -280,7 +280,10 @@ function fireVerdicts(s, run, danIndex, deps) {
 // 今の3モードには一度も無かった、盤面の中の選択。
 export function submitStake(s, run, name, cols, deps) {
   const { emit } = deps;
-  if (!Array.isArray(cols) || !cols.includes(s.targetCol)) return { ok: false };
+  // 取引「八列すべてを的に」を飲んだ夜は、どの列を縦に消しても杭になる。
+  // ここを直さないと、赤マスだけが散って杭は元の1列のまま＝ただの損だった。
+  if (!Array.isArray(cols)) return { ok: false };
+  if (!run.dealMarkAll && !cols.includes(s.targetCol)) return { ok: false };
   const need = run.dealStakeCost || 3;
   s.stakes2 = (s.stakes2 || 0) + 1;
   const ready = s.stakes2 >= need;
@@ -305,6 +308,8 @@ export function submitCut(s, run, name, verdictId, clearedCells, deps) {
   const e = s.entrants.find(x => x.name === name);
   if (e) e.cuts = (e.cuts || 0) + 1;
   if (deps.onStat) deps.onStat(name, 'zeroCuts');
+  // 👑 王座の欠片。急所ごと斬れば上乗せ。
+  if (deps.shard) deps.shard(name, (deps.SHARD ? deps.SHARD.cut : 3) + (r.keystone ? (deps.SHARD ? deps.SHARD.keystone : 5) : 0));
   const danIndex = run.dan | 0;
   const dmg = cutDamageFor(danIndex, s.humans, { keystone: r.keystone, run });
   run.sealDealt = (run.sealDealt || 0) + dmg;
@@ -373,6 +378,15 @@ function breakDan(s, run, danIndex, deps) {
   }
   // 段が割れた瞬間そこに居た人だけにバッジ。あとから点を足しても手に入らない。
   if (deps.onDanBadge) deps.onDanBadge(s.entrants.filter(x => x.human).map(x => x.name));
+  // 欠片も同じ扱い ── 居合わせた人だけ。とどめを刺した人はさらに上乗せ。
+  if (deps.shard) {
+    const P = deps.SHARD ? deps.SHARD.danPresent : 40;
+    const F = deps.SHARD ? deps.SHARD.danFinish : 80;
+    for (const x of s.entrants) {
+      if (!x.human) continue;
+      deps.shard(x.name, P + (rec.by === x.name ? F : 0));
+    }
+  }
   if (onDanBroken) onDanBroken(rec, s);
 }
 

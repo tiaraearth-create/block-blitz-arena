@@ -5,7 +5,7 @@ import { GameView, MiniBoard } from './game.js';
 import { chooseMove, AI_LEVELS, planImmortalMove } from './ai.js';
 import { audio } from './audio.js';
 import { session, api, refreshMe, BattleClient } from './net.js';
-import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf, staffExtras } from './dom.js';
+import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf, staffExtras , applyScoreFit } from './dom.js';
 import { t, trServer, catName } from './i18n.js';
 import { fireUlt, ultIcon, ultColor, ultExists, DEFAULT_ULT } from './skills.js';
 
@@ -309,9 +309,17 @@ function spendItem(id) {
 // Boosters and ultimates share the same "PvE only" rule, so one switch drives
 // both bars — they can never drift apart.
 export function showItemBar(on) {
-  // Staff see their gear in every mode (toggle in settings).
-  const force = !!session.user && session.user.role === 'admin' && staffExtras();
-  const show = on || force;
+  // 運営は自分の装備をどのモードでも持ち歩ける（設定のトグル）。
+  // ただし、モードが「このモードではアイテム無し」と明示している場合は
+  // それを上書きしない。上書きしていた頃は2つ問題が出ていた:
+  //   ・公平のためにアイテムを切っているモード（順位戦・PvP・タイムアタック・
+  //     断罪）で、運営だけアイテムと奥義が使えてしまう
+  //   ・アイテムバー37px ＋ HUD の折り返し24px = 61px ぶん盤面が縮む。
+  //     運営アカウントで遊ぶと全モードで盤面が小さくなっていた。
+  // 運営トグル（staffExtras）は renderItemBar の側で「バーの中に運営専用
+  // アイテムを出すかどうか」を既に担当している。バーを出すか出さないかは
+  // モードの決定に任せる ── ここで2つを混ぜていたのが原因だった。
+  const show = on;
   renderItemBar();
   $('#itemBar').classList.toggle('hidden', !show);
   if (show) updateItemBar();
@@ -373,8 +381,12 @@ export function useGameItem(id) {
     audio.coin();
     toast(t(`🧹 ${n}マスを掃除しました！`, `🧹 Cleaned up ${n} cells!`), 'ok', 1500);
   } else if (id === 'item_fever') {
-    e.feverUntil = Date.now() + 15000;
-    e.feverMult = 2;
+    // すでに強い倍率がかかっているなら下げない。以前は上書きしていたので、
+    // 🔥オーバードライブ(×3)の最中に⭐フィーバー(400🪙)を使うと ×2 に
+    // 下がっていた ── お金を払って弱くなる、という状態だった。
+    const feverOn = e.feverUntil > Date.now();
+    e.feverMult = Math.max(feverOn ? (e.feverMult || 1) : 1, 2);
+    e.feverUntil = Math.max(e.feverUntil || 0, Date.now() + 15000);
     view.screenFlash = 0.35;
     $('#hudScore').classList.add('fever');
     audio.combo(6);
@@ -745,6 +757,7 @@ class SoloMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = `BEST ${fmt(Math.max(this.best(), this.engine.score))}`;
   }
@@ -779,7 +792,12 @@ class SoloMode {
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
 
-  quit() { this.finish(); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は何もしない。
+    // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
+    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    this.finish();
+  }
   destroy() {}
 }
 
@@ -907,6 +925,7 @@ class MeltdownMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = `×${this.mult().toFixed(1)} ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`;
     const timer = $('#hudTimer');
@@ -1104,6 +1123,7 @@ class ChimeraMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = t(`🧬 合体${this.welds}回 ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`, `🧬 ${this.welds} welds ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`);
   }
@@ -1143,7 +1163,12 @@ class ChimeraMode {
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
 
-  quit() { this.finish(); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は何もしない。
+    // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
+    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    this.finish();
+  }
 
   destroy() {
     this.ended = true;
@@ -1289,6 +1314,7 @@ class PuzzleMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     $('#hudSub').textContent = t(`ステージ${this.stage} ・ 残り${this.targets.size}マス`, `Stage ${this.stage} — ${this.targets.size} left`);
     $('#hudTimer').textContent = `🧩${this.remaining()}`;
   }
@@ -1514,6 +1540,7 @@ class DigMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     $('#hudSub').textContent = `🪙${this.mined.gold} 💠${this.mined.crystal} 🌈${this.mined.rainbow} ・ BEST ${this.best()}m`;
     $('#hudTimer').textContent = `⛏️${this.depth}m`;
     const fill = $('#chaosBarFill');
@@ -1554,7 +1581,12 @@ class DigMode {
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
 
-  quit() { this.finish(); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は何もしない。
+    // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
+    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    this.finish();
+  }
 
   destroy() {
     this.ended = true;
@@ -1641,6 +1673,7 @@ class GhostMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = t(`👻 見えないブロック ${this.ghostFx.hideAt.size}個 ・ BEST ${fmt(this.best())}`,
       `👻 ${this.ghostFx.hideAt.size} hidden blocks — BEST ${fmt(this.best())}`);
@@ -1675,7 +1708,12 @@ class GhostMode {
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
 
-  quit() { this.finish(); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は何もしない。
+    // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
+    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    this.finish();
+  }
 
   destroy() {
     this.ended = true;
@@ -1827,6 +1865,7 @@ class VersusBase {
   updateMyHud(engine) {
     const el = $('#hudScore');
     el.textContent = fmt(engine.score);
+    applyScoreFit(el, fmt(engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = engine.streak >= 2 ? `${engine.streak} COMBO` : 'SCORE';
   }
@@ -2282,6 +2321,7 @@ class BossMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = t('⚔️ 与ダメージ', '⚔️ Damage dealt');
   }
@@ -2532,6 +2572,7 @@ class BossRushMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = t(`⚔️ 深度${this.kills + 1} ・ 遺物${this.relics.length}`, `⚔️ Depth ${this.kills + 1} ・ ${this.relics.length} relics`);
   }
@@ -2759,6 +2800,7 @@ class WeeklyMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = t(`🎯 ${this.info.week} ・ ベスト ${fmt(this.best())}`, `🎯 ${this.info.week} ・ Best ${fmt(this.best())}`);
     const tm = $('#hudTimer');
@@ -2824,7 +2866,12 @@ class WeeklyMode {
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startWeekly({ ...this.info, best: Math.max(this.info.best || 0, e.score) }); };
   }
 
-  quit() { this.finish(); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は何もしない。
+    // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
+    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    this.finish();
+  }
   destroy() { this.ended = true; }
 }
 
@@ -3080,6 +3127,7 @@ class DungeonMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = `${this.realm.icon} ${this.realm.prefix}${this.floor}/${this.realm.floors} ・ ❤️×${this.lives}${this.engine.scoreMult > 1 ? ` ・ 💪×${this.engine.scoreMult.toFixed(1)}` : ''}${this.curse ? ' ・ ☠️' + (cu => cu ? t(cu.name, cu.nameEn || cu.name) : '')(ABYSS_CURSES.find(c => c.id === this.curse)) : ''}`;
   }
@@ -3708,7 +3756,12 @@ class OnlineMode extends VersusBase {
     try {
       const hello = await this.client.connect(localStorage.getItem('bba_guest_name') || undefined);
       this.onlineCount = hello.online;
-      $('#mmOnline').textContent = hello.online;
+      // パーティーからの起動。つながった直後に部屋を作る／入る。
+      if (this._autoCreate) { const o = this._autoCreate; this._autoCreate = null; this.client.createRoom(o); }
+      else if (this._autoJoin) { const cd = this._autoJoin; this._autoJoin = null; this.client.joinRoom(cd); }
+      // 万一この要素が無くても、オンライン対戦ごと死なせない。
+      const onlineEl = $('#mmOnline');
+      if (onlineEl) onlineEl.textContent = hello.online;
       this.showQueueCount(hello.queueing);
       if (!session.user) localStorage.setItem('bba_guest_name', hello.name);
     } catch (err) {
@@ -3792,9 +3845,10 @@ class OnlineMode extends VersusBase {
         : this.kind === 'attack'
         ? t('💥 アタック戦の相手を探しています…', '💥 Looking for an attack-duel opponent…')
         : t('対戦相手を探しています…', 'Looking for an opponent…');
-      $('#mmSub').innerHTML = t('オンライン: <span id="mmOnline">-</span>人 ・ 対戦相手を検索中…',
-        'Online: <span id="mmOnline">-</span> players ・ searching…');
-      $('#mmOnline').textContent = this.onlineCount ?? '-';
+      // 接続人数は #mmOnlineLine が持っている。ここで作り直すと id が重複する。
+      $('#mmSub').textContent = t('対戦相手を検索中…', 'Searching…');
+      const oe = $('#mmOnline');
+      if (oe) oe.textContent = this.onlineCount ?? '-';
       this.client.queue(this.kind);
     }
   }
@@ -3858,6 +3912,8 @@ class OnlineMode extends VersusBase {
 
   onRoomUpdate(msg) {
     this.roomInfo = msg;
+    // パーティーから作った部屋なら、合言葉を待っている人がいる。
+    if (this._onRoomCode) this._onRoomCode(msg.code);
     $('#roomJoin').classList.add('hidden');
     $('#roomLobby').classList.remove('hidden');
     $('#roomCodeLabel').textContent = msg.code;
@@ -3977,6 +4033,7 @@ class OnlineMode extends VersusBase {
   updateRoyaleHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = this.royaleRank
       ? `RANK ${this.royaleRank}/${this.royaleAlive}` : 'SCORE';
@@ -4396,6 +4453,7 @@ class OnlineMode extends VersusBase {
     if (!this.engine) return;
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     const mine = this.coopTurn === this.mySlot;
     $('#hudSub').textContent = this.engine.streak >= 2
@@ -4884,6 +4942,7 @@ class SurvivalMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = `WAVE ${this.wave}${this.bestWave() ? ` ・ BEST W${this.bestWave()}` : ''}`;
   }
@@ -4949,7 +5008,12 @@ class SurvivalMode {
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startSurvival(); };
   }
 
-  quit() { this.finish(); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は何もしない。
+    // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
+    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    this.finish();
+  }
   destroy() { this.ended = true; clearInterval(this.int); }
 }
 
@@ -5022,6 +5086,7 @@ class SprintMode {
   updateHud() {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     const best = sprintBest(this.duration);
     const rate = Math.round(this.engine.score / Math.max(1, (Date.now() - this.startedAt) / 1000));
@@ -5247,6 +5312,7 @@ class AdminEventMode extends VersusBase {
   updateMyHud(engine) {
     const el = $('#hudScore');
     el.textContent = fmt(engine.score);
+    applyScoreFit(el, fmt(engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = engine.streak >= 2 ? `${engine.streak} COMBO`
       : (this.modeId === 'roulette' && this.spinLabel) ? this.spinLabel
@@ -5511,7 +5577,12 @@ class AdminEventMode extends VersusBase {
     this.spinInt = this.riseInt = this.rainInt = null;
   }
 
-  quit() { this.finish(); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は何もしない。
+    // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
+    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    this.finish();
+  }
 
   destroy() {
     this.ended = true;
@@ -5633,12 +5704,24 @@ class ZeroMode extends VersusBase {
       '  <div class="zero-bars">',
       '    <div class="zero-title"><span id="zeroDan"></span><span id="zeroTarget"></span></div>',
       '    <div class="zero-hp"><div class="zero-hp-open" id="zeroOpen"></div><div class="zero-hp-seal" id="zeroSeal"></div></div>',
-      '    <div class="zero-sub"><span id="zeroHpText"></span><span id="zeroCuts"></span></div>',
+      // 席の開閉ボタンは残りHPの行に相乗りさせる。独立した行にすると
+      // それだけで24px、そのぶん手札が削られるので。
+      '    <div class="zero-sub"><span id="zeroHpText"></span><span id="zeroCuts"></span>',
+      '      <button class="zero-seats-toggle" id="zeroSeatsBtn">▾ 席</button></div>',
       '  </div>',
       '</div>',
-      '<div class="zero-seats" id="zeroSeats"></div>',
+      // 席は既定で畳む。開いたままだと手札の場所が半分になり、
+      // ピースが小さくなって掴みづらい（レイドで同じことが起きた）。
+      '<div class="zero-seats hidden" id="zeroSeats"></div>',
     ].join('');
     this.mini = new MiniBoard($('#zeroBoard'), { skinId: 'skin_shadow' });
+    const seatsBtn = $('#zeroSeatsBtn');
+    if (seatsBtn) seatsBtn.onclick = () => {
+      const box = $('#zeroSeats');
+      const open = box.classList.toggle('hidden');
+      seatsBtn.textContent = open ? t('▾ 席', '▾ Seats') : t('▴ とじる', '▴ Close');
+      if (view) view.resize();      // 手札の高さが変わるので測り直す
+    };
   }
 
   onFound(m) {
@@ -5919,20 +6002,61 @@ class ZeroMode extends VersusBase {
       `  <div><b>${this.myMissed}</b><span>${t('落とした', 'missed')}</span></div>`,
       `  <div><b>${fmt(e.score)}</b><span>${t('スコア', 'score')}</span></div>`,
       '</div>',
+      // 何をもらったのかを出す。ここが空だと、斬っても落としても
+      // 画面の見た目が変わらず「やっても意味がない」ように見える。
+      '<div class="result-stats">',
+      rewardsRows(res ? res.rewards : null),
+      res && res.shards ? `<div class="rs-row"><span>👑 ${t('王座の欠片', 'Throne Shards')}</span><b>+${fmt(res.shards)}</b></div>` : '',
+      res && res.chest && (res.chest.coins || res.chest.gems)
+        ? `<div class="rs-row"><span>🎁 ${t(`お宝ラッシュ（${res.chest.mult}倍）`, `Treasure Rush (${res.chest.mult}×)`)}</span><b>+${fmt(res.chest.coins)}🪙 +${fmt(res.chest.gems)}💎</b></div>`
+        : '',
+      '</div>',
       st ? `<p class="muted">${t(`段 ${st.dan}/${st.danMax} ／ 封印の残り ${fmt(st.sealLeft)}`,
         `Stage ${st.dan}/${st.danMax} — seal ${fmt(st.sealLeft)} left`)}</p>` : '',
       st && st.fallen && st.fallen.length
         ? `<p class="zero-fallen">${t('今日、消えた住人', 'Lost today')}: ${st.fallen.map(escapeHtml).join('、')}</p>` : '',
-      `<button class="btn btn-primary" id="zeroClose">${t('とじる', 'Close')}</button>`,
-    ].join(''));
+      '<div class="modal-buttons">',
+      `  <button class="btn btn-ghost" id="zeroChron">${t('📜 断罪録', '📜 Chronicle')}</button>`,
+      `  <button class="btn btn-primary" id="zeroClose">${t('メニュー', 'Menu')}</button>`,
+      `  <button class="btn btn-gold" id="zeroAgain">${t('もう一度', 'Again')}</button>`,
+      '</div>',
+    // 枠外タップでは閉じさせない。閉じてしまうと動かない盤面だけが残り、
+    // メニューに戻る手段が画面から消える（リロードしかなくなる）。
+    ].join(''), { dismissable: false });
     // ここでも元に戻す。destroy() は次のモードを始めるまで呼ばれないので、
     // 結果画面からメニューに戻った直後にボス戦を始めると壊れたままになる。
     this.restoreBossPanel();
     const btn = $('#zeroClose');
     if (btn) btn.onclick = () => { closeModal(); showScreen('menu'); };
+    // 枠が生きている間はその場から再入場できるようにする。
+    // 無いと再挑戦のたびにメニュー最下部までスクロールし直しになる。
+    const again = $('#zeroAgain');
+    if (again) again.onclick = () => {
+      const ae = this.ae;
+      closeModal();
+      this.destroy();
+      if (!ae || !ae.live || ae.live.endsAt <= Date.now()) {
+        toast(t('あなたの枠は終了しました。またの参加をお待ちしています！', 'Your slot has ended — see you next time!'), 'announce', 4000);
+        showScreen('menu');
+        return;
+      }
+      startAdminEventMode(ae);
+    };
+    const ch = $('#zeroChron');
+    // adminevent.js は modes.js を import しているので、静的に取ると循環する。
+    // 押されたときに読み込めば順序の問題は起きない。
+    if (ch) ch.onclick = async () => {
+      const mod = await import('./adminevent.js');
+      mod.openChronicle();
+    };
   }
 
-  quit() { this.finish(); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は何もしない。
+    // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
+    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    this.finish();
+  }
 
   // #bossPanel を、隠しただけの元の中身に戻す。
   restoreBossPanel() {
@@ -6051,6 +6175,31 @@ export function startOnline(kind = 'duel') {
   if (currentMode) currentMode.destroy();
   currentMode = new OnlineMode(kind);
   window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+// 👥 パーティー用。部屋を作るのはリーダーの画面で、できた合言葉を
+// サーバーへ返して全員に配ってもらう。こうすると create_room / join_room /
+// startRoom を1行も触らずに済む（あそこはいちばん壊しやすい場所なので）。
+export function createPartyRoom(mode) {
+  return new Promise((resolve) => {
+    if (currentMode) currentMode.destroy();
+    currentMode = new OnlineMode('custom');
+    window.__bbaMode = currentMode;
+    // 合言葉が room_update で返ってきたら1回だけ拾う。
+    currentMode._onRoomCode = code => { currentMode._onRoomCode = null; resolve(code); };
+    currentMode._autoCreate = { team: mode === 'team', mode };
+    currentMode.start();
+    // 返事が来ない場合に呼び出し側を待たせっぱなしにしない。
+    setTimeout(() => resolve(null), 9000);
+  });
+}
+
+export function joinPartyRoom(code) {
+  if (currentMode) currentMode.destroy();
+  currentMode = new OnlineMode('custom');
+  window.__bbaMode = currentMode;
+  currentMode._autoJoin = code;
   currentMode.start();
 }
 

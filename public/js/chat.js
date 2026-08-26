@@ -199,8 +199,9 @@ async function showProfileCard(name) {
 
 function fmtNum(n) { return Number(n || 0).toLocaleString('ja-JP'); }
 
-function appendMsg(msg, scroll = true) {
-  const box = $('#chatMsgs');
+// box を差し替えられるようにしてある。パーティー欄へ流すために、
+// 同じ描画をもう1本書き写すのを避ける。
+function appendMsg(msg, scroll = true, box = $('#chatMsgs')) {
   const el = document.createElement('div');
   const me = session.user && msg.from === session.user.username;
   const isAdmin = msg.role === 'admin';
@@ -293,6 +294,7 @@ function connect() {
         cycleTicker();
       }
       setMood(msg.mood);
+      for (const fn of readyHandlers) { try { fn(); } catch (err) { console.error('[chat] ready', err); } }
     } else if (msg.type === 'online') {
       // Server pushes the live count so every counter stays in sync.
       setOnlineCount(msg.online);
@@ -322,6 +324,12 @@ function connect() {
       if (window.__bbaSaveNow) window.__bbaSaveNow();
     } else if (msg.type === 'announce') {
       appendMsg({ from: msg.from || t('運営', 'Staff'), role: 'admin', text: `📢 ${LANG === 'en' && msg.messageEn ? msg.messageEn : msg.message}`, at: Date.now() });
+    } else if (extraHandlers.has(msg.type)) {
+      // パーティー系はここで受ける。常時つながっているこの socket に
+      // 相乗りさせるのが、メニュー→ソロ→対戦とパーティーがついてくる理由。
+      for (const fn of extraHandlers.get(msg.type)) {
+        try { fn(msg); } catch (err) { console.error('[chat] handler', msg.type, err); }
+      }
     } else if (msg.type === 'error') {
       toast(trServer(msg.error), 'err', 1800);
     }
@@ -363,6 +371,26 @@ function sendChat() {
   input.value = '';
   audio.click();
 }
+
+// 他のモジュール（パーティー）がこの常時接続を使うための口。
+// 1つの種類に複数の受け手を許す。set で上書きにしていた頃は、
+// 後から登録した側が前の受け手を黙って消してしまい、
+// 「サーバーは送っているのに画面が反応しない」が起きた。
+const extraHandlers = new Map();   // type -> Set<fn>
+const readyHandlers = new Set();
+export function onWsReady(fn) { readyHandlers.add(fn); if (wsReady()) fn(); }
+export function registerHandler(type, fn) {
+  let set = extraHandlers.get(type);
+  if (!set) { set = new Set(); extraHandlers.set(type, set); }
+  set.add(fn);
+  return () => set.delete(fn);
+}
+export function sendWs(obj) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify(obj));
+  return true;
+}
+export function wsReady() { return !!ws && ws.readyState === WebSocket.OPEN; }
 
 export function initChat() {
   $('#chatToggle').onclick = () => {

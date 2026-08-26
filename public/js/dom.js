@@ -5,7 +5,7 @@ import { t } from './i18n.js';
 export const $ = sel => document.querySelector(sel);
 export const $$ = sel => [...document.querySelectorAll(sel)];
 
-const SCREENS = ['menu', 'game', 'matchmaking', 'room', 'leaderboard', 'shop', 'inventory', 'battlepass', 'missions', 'guild', 'news', 'admin'];
+const SCREENS = ['menu', 'game', 'matchmaking', 'room', 'leaderboard', 'shop', 'inventory', 'battlepass', 'missions', 'friends', 'guild', 'news', 'admin'];
 
 export function showScreen(name) {
   for (const s of SCREENS) {
@@ -129,4 +129,30 @@ export function updateTopbar() {
   if (u) { lvl.classList.remove('hidden'); lvl.textContent = `Lv.${u.level}`; }
   else lvl.classList.add('hidden');
   $('#btnAdmin').classList.toggle('hidden', !u || (u.role !== 'admin' && u.role !== 'mod'));
+}
+
+// スコアがタイマーに重ならないようにする。
+// 桁が増えると数字が伸びて、実測で 6桁から既にはみ出し、8桁では 47px ぶん
+// タイマーの上に乗って両方読めなくなっていた。
+//
+// 桁数で決め打ちの段階に落とす案は 375px では通ったが 320px では通らなかった
+// （枠が 93px しか無く、6桁が 102px 必要）。画面幅・言語・モードで枠の広さが
+// 変わる以上、決め打ちでは追えない。ので、実際に測って入るところまで縮める。
+//
+// 文字幅はフォントサイズに比例するので、1回測れば必要な倍率がそのまま出る。
+// 桁数と枠の幅が変わらない限り再計算しないので、毎フレーム走っても実質ただ。
+const scoreFitCache = new WeakMap();
+export function applyScoreFit(el, text) {
+  if (!el) return;
+  const box = el.clientWidth;
+  const key = String(text).length + '/' + box;
+  if (scoreFitCache.get(el) === key) return;
+  scoreFitCache.set(el, key);
+  if (!box) return;                       // まだ画面に出ていない
+  el.style.fontSize = '';                 // CSS の既定に戻してから測る
+  const base = parseFloat(getComputedStyle(el).fontSize) || 26;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const w = range.getBoundingClientRect().width;
+  if (w > box) el.style.fontSize = Math.max(11, Math.floor(base * box / w)) + 'px';
 }

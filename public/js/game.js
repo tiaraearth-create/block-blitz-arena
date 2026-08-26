@@ -43,6 +43,16 @@ export class GameView {
 
     this._resize = () => this.resize();
     window.addEventListener('resize', this._resize);
+    // 画面の回転だけでなく、上のパネルが1行伸び縮みしただけでも測り直す。
+    // これが無いと canvas の CSS 高さだけが変わって view.H が古いまま残り、
+    // 盤面が縦に潰れた長方形として描かれ、手札の当たり判定も置き去りになる
+    // （見えているピースの上半分をタップしても掴めない、という形で出る）。
+    // #gameCanvas は CSS で width/height:100% なので、resize() が
+    // canvas.width（ビットマップ側）を書き換えても再帰しない。
+    if (typeof ResizeObserver === 'function') {
+      this._ro = new ResizeObserver(() => this.resize());
+      this._ro.observe(this.canvas);
+    }
     this.resize();
     this.initDeco();
 
@@ -52,6 +62,7 @@ export class GameView {
   destroy() {
     this.running = false;
     window.removeEventListener('resize', this._resize);
+    if (this._ro) { this._ro.disconnect(); this._ro = null; }
   }
 
   setEngine(engine) {
@@ -84,6 +95,10 @@ export class GameView {
   resize() {
     const rect = this.canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
+    // 寸法が変わっていなければ何もしない。ResizeObserver は小数の揺れでも
+    // 鳴るので、ここで止めないと毎フレーム作り直しかねない。
+    if (rect.width === this._lastW && rect.height === this._lastH) return;
+    this._lastW = rect.width; this._lastH = rect.height;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     this.canvas.width = Math.round(rect.width * dpr);
     this.canvas.height = Math.round(rect.height * dpr);
@@ -309,6 +324,10 @@ export class GameView {
       const dt = Math.min(0.05, (ts - this.lastTs) / 1000);
       this.lastTs = ts;
       this.time += dt;
+      // ResizeObserver が主。これは保険で、Observer が来ない環境でも
+      // 0.25秒以内には気づけるようにしてある。resize() は寸法が同じなら
+      // 即 return するので、実質の負担は計測1回ぶん。
+      if ((this._sizeTick = (this._sizeTick || 0) + 1) >= 15) { this._sizeTick = 0; this.resize(); }
       this.update(dt);
       this.render();
       requestAnimationFrame(loop);

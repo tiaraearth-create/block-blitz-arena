@@ -333,11 +333,14 @@ export const DEALS = [
   },
   {
     id: 'markall',
-    q: '今夜の的を八列すべてにしてやる。かわりに、杭は二本で効かなくなる',
-    qEn: 'I will mark all eight columns. In exchange, stakes need three, not two.',
+    q: '今夜の的を八列すべてにしてやる。どの列を縦に消しても杭が入る。かわりに、必要な杭を三本から五本に増やす',
+    qEn: 'I will mark all eight columns — any column you clear vertically drives a stake. In exchange, you will need five stakes instead of three.',
     yes: { text: '飲む', textEn: 'Take it' },
     no: { text: '断る', textEn: 'Refuse' },
-    apply: run => { run.dealMarkAll = true; run.dealStakeCost = 3; },
+    // 得も代償も、書いたとおりに効かせる。以前は代償が既定値と同じ 3 で
+    // 完全な無効果、得のほうは「的が無くなる」になっていて、
+    // 読むと得に見えるのに実際は純粋な損、という状態だった。
+    apply: run => { run.dealMarkAll = true; run.dealStakeCost = 5; },
   },
 ];
 

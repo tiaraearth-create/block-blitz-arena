@@ -118,12 +118,20 @@ try {
   // インベントリの「コレクション n/33」は非既定・非管理者専用の数と一致する
   // インベントリの「n / 33」とガチャの「n / 33」がズレると、同じものを数えて
   // いるのに違う数字が2画面に出る。母数はサーバー側の定義に合わせる。
-  const collectibles = shop.items.filter(i => !i.adminOnly && !i.default).length;
+  // throneOnly（👑管理者イベント専用ショップの品）は、ショップでもガチャでも
+  // 手に入らない。分母に入れると「あと7種」がいつまでも減らない見え方になる。
+  const collectibles = shop.items.filter(i => !i.adminOnly && !i.throneOnly && !i.default).length;
   const gacha = await j('/api/gacha/info', {}, tok);
   check('ガチャがコレクション集計を返す', !!(gacha.collection && typeof gacha.collection.total === 'number'),
     JSON.stringify(gacha.collection));
   check('コレクション母数がガチャの集計と一致する',
     gacha.collection.total === collectibles, `inv=${collectibles} gacha=${gacha.collection.total}`);
+  // 上の規則は画面側にも同じ形で入っていなければ意味がない。
+  const screensSrc = fs.readFileSync('public/js/screens.js', 'utf8');
+  check('在庫画面の母数も throneOnly を外している',
+    screensSrc.includes('!i.adminOnly && !i.throneOnly && !i.default'), '');
+  check('在庫の「あと何種」も throneOnly を数えていない',
+    screensSrc.includes('!i.adminOnly && !i.throneOnly).length'), '');
 
   // 称号タブ
   const titles = await j('/api/titles', {}, tok);

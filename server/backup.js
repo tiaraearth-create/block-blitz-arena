@@ -90,7 +90,10 @@ function progressOf(u) {
 // and the boot-time seed merge only ever applies a given seed once.
 function mergeEarned(winner, loser) {
   if (!winner || !loser) return;
-  for (const k of ['achievements', 'badges', 'owned']) {
+  // 🤝 フレンドとブロックも合流させる。とくに blocked は本人が身を守るために
+  // 付けたもので、進行度で負けたほうのコピーに入っていても落としてはいけない
+  // （BAN/ミュートを union しているのと同じ理由）。
+  for (const k of ['achievements', 'badges', 'owned', 'friends', 'blocked']) {
     const a = Array.isArray(winner[k]) ? winner[k] : (winner[k] = []);
     for (const v of (Array.isArray(loser[k]) ? loser[k] : [])) if (!a.includes(v)) a.push(v);
   }
@@ -104,6 +107,17 @@ function mergeEarned(winner, loser) {
   // 持っていると消えてしまう。新しいほうの予約を残す。
   const wr = winner.adminEvent, lr = loser.adminEvent;
   if (lr && (!wr || (lr.reservedAt || 0) > (wr.reservedAt || 0))) winner.adminEvent = lr;
+
+  // 受け取りの設定は「厳しいほう」を採る。安全に関わる設定は、
+  // 迷ったら閉じる側に倒す。
+  const ws2 = winner.social, ls = loser.social;
+  if (ws2 && ls) {
+    const rank = { none: 2, friends: 1, all: 0 };
+    if ((rank[ls.requests] || 0) > (rank[ws2.requests] || 0)) ws2.requests = ls.requests;
+    if ((rank[ls.invites] || 0) > (rank[ws2.invites] || 0)) ws2.invites = ls.invites;
+  }
+  // 申請と断りの記録は合流させない。あれは一時的なもので、
+  // union すると一度断った申請が復活する。
 
   const wb = winner.battlePass, lb = loser.battlePass;
   if (wb && lb && wb.season === lb.season) {
@@ -208,6 +222,7 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
   const byName = new Map();
   for (const u of Object.values(db.users)) byName.set(u.username.toLowerCase(), u);
 
+  const idRemap = new Map();   // 旧id -> 新id（下の付け替えで使う）
   for (const inc of Object.values(data.users)) {
     // Tombstone: an account the operator deleted stays deleted — a stale
     // backup/seed must not resurrect it (db.deleted survives merges below).
@@ -244,6 +259,12 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
       if (protectLiveCredentials) inc.role = live.role;
       if (live.banned) inc.banned = true;
       if (live.muted) inc.muted = true;
+      // 名前で照合して勝ったレコードは **id ごと** 入れ替わる。
+      // 他の人の friends / blocked / 申請には古い id が残ったままなので、
+      // ここで対応表に控えて、あとでまとめて付け替える。
+      // これをやらないと、復元のたびに黙って縁が切れ、しかも
+      // ブロックが「存在しない id をブロックしている」＝無効になる。
+      if (live.id !== inc.id) idRemap.set(live.id, inc.id);
       delete db.users[live.id];
       db.users[inc.id] = inc;
       byName.set(inc.username.toLowerCase(), inc);
@@ -255,6 +276,42 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
       mergeEarned(live, inc);
       report.kept++;
     }
+  }
+
+  // 🤝 付け替えの実行。全員の friends / blocked / 申請を新しい id に読み替える。
+  if (idRemap.size) {
+    const fix = arr => {
+      if (!Array.isArray(arr)) return arr;
+      const out = [];
+      for (const v of arr) {
+        const id = idRemap.get(v) || v;
+        if (!out.includes(id)) out.push(id);
+      }
+      return out;
+    };
+    for (const u of Object.values(db.users)) {
+      if (!u) continue;
+      u.friends = fix(u.friends);
+      u.blocked = fix(u.blocked);
+      u.friendReqOut = fix(u.friendReqOut);
+      if (Array.isArray(u.friendReqIn)) {
+        const seen = new Set();
+        u.friendReqIn = u.friendReqIn.filter(r => {
+          if (!r) return false;
+          r.from = idRemap.get(r.from) || r.from;
+          if (seen.has(r.from)) return false;
+          seen.add(r.from);
+          return true;
+        });
+      }
+      if (u.friendDeclines && typeof u.friendDeclines === 'object') {
+        for (const [old, at] of Object.entries(u.friendDeclines)) {
+          const nid = idRemap.get(old);
+          if (nid) { u.friendDeclines[nid] = at; delete u.friendDeclines[old]; }
+        }
+      }
+    }
+    report.remapped = idRemap.size;
   }
 
   // Tokens: union, dropping any that no longer point at a real user.

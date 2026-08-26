@@ -11,6 +11,8 @@ import { applySettings } from './settings.js';
 import { initChat, reconnectChat, showFeedModal, setMood, updateNewsDot } from './chat.js';
 import { setAdminEvent } from './adminevent.js';
 import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
+import { openFriends } from './friends.js';
+import { initParty } from './party.js';
 
 applyStaticI18n();
 
@@ -153,7 +155,14 @@ async function openBossSelect(preferIndex = null) {
     const token = localStorage.getItem('bba_token');
     if (token) headers.Authorization = `Bearer ${token}`;
     const data = await fetch('/api/bosses', { headers }).then(r => r.json());
-    const bossMax = Math.max(data.bossMax || 0, Number(localStorage.getItem('bba_boss_max') || 0));
+    // ログイン中はサーバーの記録だけを見る。localStorage を混ぜていたせいで、
+    // 同じ端末で別アカウントを作った人・ゲストのあと登録した人・家族と端末を
+    // 共有している人に、討伐数0なのに全ボスが解放されて見えていた。
+    // そこで最終ボスから始めると討伐順が一気に進み、下位ボスの初回ボーナスが
+    // 二度と手に入らなくなる（サーバー側も下で直してある）。
+    const bossMax = localStorage.getItem('bba_token')
+      ? (data.bossMax || 0)
+      : Number(localStorage.getItem('bba_boss_max') || 0);
     const m = showModal(`
       <h2>${t('🐲 ボス戦', '🐲 Boss Battle')}</h2>
       <p class="muted center" style="margin-bottom:12px">${t('ラインを消してダメージを与えろ！<br>ボスはお邪魔ブロックで反撃してくる。盤面が埋まったら敗北！', 'Clear lines to damage the boss!<br>It fights back with garbage blocks. Fill up the board and you lose!')}</p>
@@ -739,6 +748,7 @@ $('#btnWeekly').onclick = async () => {
 $('#btnGacha').onclick = () => openGacha();
 
 // ---- guilds + news ----
+$('#btnFriends').onclick = () => { audio.click(); openFriends(); };
 $('#btnGuild').onclick = () => { audio.click(); openGuild(); };
 $('#btnNews').onclick = () => { audio.click(); openNews(); };
 $$('[data-gd]').forEach(b => { b.onclick = () => { audio.click(); openGuild(b.dataset.gd); }; });
@@ -779,6 +789,8 @@ if (location.search.includes('purchase=success')) {
 // ---- session restore ----
 document.body.dataset.screen = 'menu';
 initChat();
+// 👥 パーティーは chat.js の常時接続に相乗りするので、initChat の後で。
+initParty();
 
 // Poll until the server has our account again (after a data restore), then
 // re-attach the session without asking the player to log in.

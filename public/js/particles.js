@@ -29,8 +29,43 @@ export class ParticleSystem {
       case 'fx_star': this.stars(x, y, size); break;
       case 'fx_flame': this.flames(x, y, size); break;
       case 'fx_comet': this.comet(x, y, size); break;
+      case 'fx_seal': this.sealBreak(x, y, size); break;
+      case 'fx_crown': this.crown(x, y, size); break;
       case 'fx_admin': this.rainbow(x, y, size); break;
       default: this.spark(x, y, size, light, dark);
+    }
+  }
+
+  // 👑 封印砕き: 紫の破片が外へ弾け、割れ目の白が一瞬だけ残る。
+  sealBreak(x, y, size) {
+    const hues = ['#8b6cff', '#5b46b8', '#c9b6ff', '#ffffff'];
+    for (let i = 0; i < this.n(9); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.9 + Math.random() * 1.5) * size * 4;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        g: size * 2.2, life: 1, decay: 1.3 + Math.random() * 0.7,
+        size: size * (0.09 + Math.random() * 0.11),
+        color: hues[(Math.random() * hues.length) | 0],
+        kind: 'square', rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 14,
+      });
+    }
+  }
+
+  // 👑 王冠還る: 金の粒が中心にいったん集まってから、上へ抜ける。
+  crown(x, y, size) {
+    const hues = ['#f0b429', '#ffe6a3', '#c98f10', '#fff8e1'];
+    for (let i = 0; i < this.n(10); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const rad = size * (0.5 + Math.random() * 0.9);
+      this.particles.push({
+        x: x + Math.cos(a) * rad, y: y + Math.sin(a) * rad,
+        vx: -Math.cos(a) * size * 2.2, vy: -Math.sin(a) * size * 2.2 - size * 3.4,
+        g: -size * 0.8, life: 1, decay: 1.0 + Math.random() * 0.6,
+        size: size * (0.07 + Math.random() * 0.08),
+        color: hues[(Math.random() * hues.length) | 0],
+        kind: 'glow', trail: true,
+      });
     }
   }
 

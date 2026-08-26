@@ -372,6 +372,30 @@ export function bossHpFor(entrants) {
   return 120_000 + Math.max(0, entrants - 1) * 45_000;
 }
 
+// 👑 王座の欠片。管理者イベントの中でしか増えない。
+// 「参加した」ではなく「何をしたか」に付くようにしてある ──
+// 座っているだけで貯まると、専用ショップが時給の店になってしまうので。
+export const SHARD = {
+  join:      10,   // その日はじめて席についた（1日1回）
+  cut:        3,   // 断罪を斬った
+  keystone:   5,   // 急所ごと斬った（cut に上乗せ）
+  danPresent: 40,  // 段が割れた瞬間その場に居た
+  danFinish:  80,  // その段にとどめを刺した（danPresent に上乗せ）
+  tier:      [25, 60, 120, 250],   // 共闘ゲージの各段
+  bossKill:  120,  // 侵攻ボスを倒した回に居合わせた
+};
+
+// 世界がこれまでに割った最高段。専用ショップの棚がこれで開く。
+// run は日ごとに作り直されるので、db.meta 側に別で残す必要がある。
+export function throneMax(db) {
+  return Math.max(0, Math.min(7, (db.meta && db.meta.throneMax) | 0));
+}
+export function recordThrone(db, dan) {
+  const n = Math.max(0, Math.min(7, dan | 0));
+  if (n > throneMax(db)) { db.meta.throneMax = n; return true; }
+  return false;
+}
+
 // Community gauge tiers, likewise sized off the turnout.
 export function communalTiers(entrants) {
   const unit = 60_000 + Math.max(0, entrants - 1) * 25_000;
