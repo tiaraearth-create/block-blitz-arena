@@ -553,40 +553,37 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // checkpoint decade, badge + big gem bonus for conquering all 100 floors.
   // The Abyss: the hardest realm — double gems per decade, a badge and a big
   // bonus for the bottom.
-  if (mode === 'dungeon_abyss') {
+  // 4つの世界を1つの表で回す。
+  //
+  // 以前は 'dungeon' と 'dungeon_abyss' の分岐を手書きで2つ並べているだけで、
+  // 地下(dungeon_under)と天国(dungeon_heaven)はどちらの分岐にも入らなかった。
+  // メニューには4つ並んでいて、地下は「上級者向け。敵が硬く攻撃も速い」と
+  // 書いてあるのに、100階を制覇してもジェム0・バッジ無し・到達階の記録すら
+  // 残らない ——「難しいほうを選ぶと損をする」状態だった。
+  // 表にしておけば、世界を足したときに報酬を書き忘れることがなくなる。
+  const DUNGEON_REALMS = {
+    dungeon:         { stat: 'dungeonMax', badge: 'dungeon', perDecade: 20, clear: 500 },
+    dungeon_under:   { stat: 'underMax',   badge: 'under',   perDecade: 30, clear: 750 },
+    dungeon_heaven:  { stat: 'heavenMax',  badge: 'heaven',  perDecade: 20, clear: 500 },
+    dungeon_abyss:   { stat: 'abyssMax',   badge: 'abyss',   perDecade: 40, clear: 1000 },
+  };
+  const realm = DUNGEON_REALMS[mode];
+  if (realm) {
     const fl = Math.max(0, Math.min(100, Math.floor(Number(floor) || 0)));
-    const prevMax = s.abyssMax || 0;
+    const prevMax = s[realm.stat] || 0;
     if (fl > prevMax) {
       const decades = Math.floor(fl / 10) - Math.floor(prevMax / 10);
       if (decades > 0) {
-        gems += decades * 40;
-        user.gems += decades * 40;
+        gems += decades * realm.perDecade;
+        user.gems += decades * realm.perDecade;
       }
-      s.abyssMax = fl;
+      s[realm.stat] = fl;
     }
-    if (fl >= 100 && !user.badges.includes('abyss')) {
-      user.badges.push('abyss');
-      badge = 'abyss';
-      gems += 1000;
-      user.gems += 1000;
-    }
-  }
-  if (mode === 'dungeon') {
-    const fl = Math.max(0, Math.min(100, Math.floor(Number(floor) || 0)));
-    const prevMax = s.dungeonMax || 0;
-    if (fl > prevMax) {
-      const decades = Math.floor(fl / 10) - Math.floor(prevMax / 10);
-      if (decades > 0) {
-        gems += decades * 20;
-        user.gems += decades * 20;
-      }
-      s.dungeonMax = fl;
-    }
-    if (fl >= 100 && !user.badges.includes('dungeon')) {
-      user.badges.push('dungeon');
-      badge = 'dungeon';
-      gems += 500;
-      user.gems += 500;
+    if (fl >= 100 && !user.badges.includes(realm.badge)) {
+      user.badges.push(realm.badge);
+      badge = realm.badge;
+      gems += realm.clear;
+      user.gems += realm.clear;
     }
   }
   // Boss battles: sequential progression + first-clear gem bonus + clear rank.
@@ -643,14 +640,19 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     const b = BOSSES.find(x => x.id === extraBossId);
     if (b) feedNotes.push({ icon: '🐲', ja: `${nm} が ${b.name} を初討伐！`, en: `${nm} defeated ${b.nameEn || b.name} for the first time!` });
   }
-  if (mode.startsWith('dungeon') && floor >= 10 && Math.floor(floor / 10) > Math.floor((s.dungeonPrev || 0) / 10)) {
+  // 到達フィードの「前回どこまで行ったか」を世界ごとに持つ。共通の1個だと、
+  // 地下でB100まで行ったあと塔でF100に着いても『もう到達済み』扱いになり、
+  // 速報が出なくなっていた。
+  const prevKey = mode.startsWith('dungeon') ? `${mode}Prev` : null;
+  const prevFloor = prevKey ? (s[prevKey] != null ? s[prevKey] : (mode === 'dungeon' ? s.dungeonPrev || 0 : 0)) : 0;
+  if (prevKey && floor >= 10 && Math.floor(floor / 10) > Math.floor(prevFloor / 10)) {
     feedNotes.push({ icon: '🏰', ja: `${nm} がダンジョン F${Math.floor(Number(floor) || 0)} に到達`, en: `${nm} reached dungeon F${Math.floor(Number(floor) || 0)}` });
   }
   if (newWaveBest && wave >= 10) feedNotes.push({ icon: '💀', ja: `${nm} がサバイバル WAVE ${wave} に到達`, en: `${nm} survived to wave ${wave}` });
   if (mode === 'sprint' && score >= 8000 && s.sprint && score >= (s.sprint[`s${[60, 180].includes(Number(sprintDur)) ? sprintDur : 60}`] || 0)) {
     feedNotes.push({ icon: '⏱️', ja: `${nm} がタイムアタック${sprintDur === 180 ? '3分' : '60秒'}で ${fmtNum(score)} 点！`, en: `${nm} scored ${score.toLocaleString('en-US')} in the ${sprintDur === 180 ? '3 min' : '60s'} time attack!` });
   }
-  s.dungeonPrev = Math.max(s.dungeonPrev || 0, mode.startsWith('dungeon') ? Math.floor(Number(floor) || 0) : 0);
+  if (prevKey) s[prevKey] = Math.max(prevFloor, Math.floor(Number(floor) || 0));
   postRealFeed(user, feedNotes);
 
   // Daily / weekly missions advance off the same event.
@@ -676,8 +678,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
 
 // Real players' notable moments go on the live feed (starred), and the crowd
 // may react. Capped per user so a hot streak doesn't flood the ticker.
-const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
-const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', adminevent: 'Admin Event', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination', ghost: 'Haunted House' };
+const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', abyss: '🌑', tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
+const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', under: 'Depths Conqueror', heaven: 'Ascent Conqueror', abyss: 'Abyss Conqueror', tourney: 'Tournament Champion', royale: 'Royale #1', adminevent: 'Admin Event', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination', ghost: 'Haunted House' };
 const feedAt = new Map();   // userId -> last feed timestamp
 function postRealFeed(user, notes) {
   if (!notes.length) return;
@@ -2696,8 +2698,10 @@ const EDITABLE_STATS = [
   { key: 'maxCombo', label: '最大コンボ', max: 999 },
   { key: 'pvpWins', label: 'PvP勝利', max: 1_000_000 },
   { key: 'pvpLosses', label: 'PvP敗北', max: 1_000_000 },
-  { key: 'dungeonMax', label: 'ダンジョン最高階', max: 100 },
-  { key: 'abyssMax', label: '深淵最高階', max: 100 },
+  { key: 'dungeonMax', label: '塔 最高階', max: 100 },
+  { key: 'underMax', label: '地下 最高階', max: 100 },
+  { key: 'heavenMax', label: '天国 最高階', max: 100 },
+  { key: 'abyssMax', label: '深淵 最高階', max: 100 },
   { key: 'bossMax', label: 'ボス討伐数', max: 6 },
   { key: 'puzzleStage', label: 'パズル遺跡ステージ', max: 9999 },
   { key: 'digDepth', label: '採掘深度', max: 9999 },
@@ -2708,7 +2712,7 @@ const EDITABLE_STATS = [
   { key: 'royaleKills', label: 'ロイヤル通算KO', max: 1_000_000 },
 ];
 
-const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
+const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
 
 app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   const target = db.users[req.params.id];

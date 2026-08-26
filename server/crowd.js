@@ -810,7 +810,7 @@ const REACTIONS = {
 
 export const BADGE_NAMES = {
   oni: '鬼討伐バッジ', kami: '神殺しバッジ', souzou: '創造神討伐バッジ', maou: '魔王討伐バッジ',
-  rush: 'ボスラッシュ制覇', dungeon: '百塔踏破', tourney: '大会優勝', royale: 'バトロワ1位',
+  rush: 'ボスラッシュ制覇', dungeon: '百塔踏破', under: '地底踏破', heaven: '天界踏破', tourney: '大会優勝', royale: 'バトロワ1位',
   weekly1: '週間チャンピオン', puzzle: '遺跡マスター', dig: 'マスター採掘士',
   adminevent: '管理者イベント制覇',
   crown2: '二冠バッジ', crown3: '三冠バッジ', crown5: '五冠バッジ', crown7: '全冠制覇バッジ',

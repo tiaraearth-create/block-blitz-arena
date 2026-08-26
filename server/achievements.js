@@ -2,8 +2,18 @@
 // Progress is derived (never stored), so old accounts get credit retroactively;
 // only the *claimed* list lives on the user record.
 
+import { SHOP_ITEMS } from './catalog.js';
+
 const a = (id, icon, cat, goal, coins, gems, name, nameEn, desc, descEn, value) =>
   ({ id, icon, cat, goal, coins, gems, name, nameEn, desc, descEn, value });
+
+// 収集系の上限は「一般プレイヤーが実際に持てるアイテム数」。
+// ここを数字で直書きしていたせいで、カタログを削ったあと目標45に対して
+// 実際は37種しか存在しない状態になり、この実績だけは誰にも達成できず、
+// 進捗バーが 37/45 で永久に止まっていた。しかも理由はゲーム内のどこにも
+// 書かれていないので、コンプリートを目指す人は原因不明のまま詰む。
+// カタログから導出しておけば、今後アイテムが増減しても勝手に追従する。
+const COLLECTIBLE_MAX = SHOP_ITEMS.filter(i => !i.adminOnly).length;
 
 const S = u => u.stats || {};
 const has = (u, b) => (u.badges || []).includes(b);
@@ -146,7 +156,8 @@ export const ACHIEVEMENTS = [
   a('ach_gacha10',  '🎰', 'collect', 10,  600,  5,  'ガチャデビュー', 'Gacha Debut',     'ガチャを10回引く',      'Pull the gacha 10 times',    u => S(u).gachaPulls || 0),
   a('ach_gacha100', '🎰', 'collect', 100, 3000, 25, 'ガチャの申し子', 'Gacha Prodigy',   'ガチャを100回引く',     'Pull the gacha 100 times',   u => S(u).gachaPulls || 0),
   a('ach_ssr',      '🌈', 'collect', 1,   1500, 12, '虹色の奇跡',    'Rainbow Miracle',  'SSR以上を引き当てる',   'Pull an SSR or better',      u => S(u).gachaSSR || 0),
-  a('ach_own45',    '🏵️', 'collect', 45,  8000, 70, '伝説の収集家',  'Legendary Collector', 'アイテムを45種所持',  'Own 45 catalog items',       u => (u.owned || []).length),
+  a('ach_own45',    '🏵️', 'collect', COLLECTIBLE_MAX, 8000, 70, '伝説の収集家',  'Legendary Collector',
+    `アイテムを全${COLLECTIBLE_MAX}種そろえる`, `Own all ${COLLECTIBLE_MAX} catalog items`, u => (u.owned || []).length),
   a('ach_lv50',     '⬆️', 'collect', 50,  6000, 55, 'レベル50',      'Level 50',         'レベル50に到達',        'Reach level 50',             u => 1 + Math.floor((u.xp || 0) / 1000)),
 
   // ---- 伝説 ----

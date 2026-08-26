@@ -90,8 +90,21 @@ try {
   edited.users[taroId].achievements = ['ach_play1'];
   edited.users[taroId].badges = ['oni'];
   edited.meta.popScale = 3;
-  const rs = await j('/api/admin/restore', { method: 'POST', body: { data: edited, mode: 'merge', password: adminPw } });
+  // 消去後は新しい管理者パスワードが発行されている（admin-credentials.txt は
+  // wipeDb が消さないので、消去前に読んだ古い値のままだと第2層＝「生きている
+  // 管理者のパスワード」に一致しない）。
+  //
+  // 以前はそれでも通っていた。第3層＝「アップロードしたファイルの中の管理者
+  // パスワード」が、プレイヤーが既に居るサーバーに対しても通ってしまう穴が
+  // あったため。ファイルの中身はアップロードする側が用意できるので、事実上
+  // 誰でも通る認証だった（未認証で管理者を乗っ取れた）。塞いだので、ここは
+  // 実運用と同じく「いまの管理者パスワード」を使う。
+  const adminPwNow = fs.readFileSync(path.join(DIR, 'admin-credentials.txt'), 'utf8').match(/password: (.+)/)[1].trim();
+  const rs = await j('/api/admin/restore', { method: 'POST', body: { data: edited, mode: 'merge', password: adminPwNow } });
   check('merge restore ok', rs.status === 200, JSON.stringify(rs.report || rs));
+  // （第3層＝ファイル内パスワードを塞いだことの検証は test/restore-auth.test.mjs。
+  //  ここでやろうとすると、1回目の復元で古い管理者アカウントごと戻ってしまい、
+  //  そのパスワードが第2層で正しく通るので、意図した検証にならない）
   const relog = await j('/api/login', { method: 'POST', body: { username: 'テスト太郎', password: 'pass1234' } });
   check('restored user logs in', relog.status === 200);
   const taro = relog.user;

@@ -10,7 +10,7 @@
 // overnight still shows the truth.
 
 import { api, session } from './net.js';
-import { $, showModal, closeModal, toast, fmt } from './dom.js';
+import { $, showModal, closeModal, toast, fmt, updateTopbar } from './dom.js';
 import { t } from './i18n.js';
 import { audio } from './audio.js';
 import { startAdminEventMode } from './modes.js';
@@ -185,11 +185,30 @@ function worldHtml() {
   if (ae.mode.id === 'communal' && w.tiers && w.tiers.length) {
     const goal = w.tiers[w.tiers.length - 1].at;
     const pct = Math.max(0, Math.min(100, Math.round((w.total / goal) * 100)));
+    // 段階報酬を受け取るボタンが、これまでクライアントに存在しなかった。
+    // サーバーには /api/adminevent/claim があり報酬を配る実装も入っているのに、
+    // 呼ぶ側が無いので「ゲージを満タンにしても所持金が1円も動かない」状態だった。
+    // 参加していて、まだ受け取っていない段階があるときだけ出す。
+    const claimed = (ae.mine && ae.mine.claimedTiers) || [];
+    const ready = [];
+    for (let i = 0; i < (w.tiersReached || 0); i++) if (!claimed.includes(i)) ready.push(i);
+    const joined = !!(ae.mine && ae.mine.runs);
+    const purse = ready.reduce((acc, i) => ({
+      coins: acc.coins + (w.tiers[i].coins || 0),
+      gems: acc.gems + (w.tiers[i].gems || 0),
+    }), { coins: 0, gems: 0 });
     return `
       <div class="ae-world">
         <div class="ae-world-label">${t('全員の合計スコア', 'Everyone’s combined score')}</div>
         <div class="ae-gauge"><div style="width:${pct}%"></div></div>
         <div class="ae-world-sub">${fmt(w.total)} / ${fmt(goal)} ・ ${t(`目標 ${w.tiersReached}/${w.tiers.length} 達成`, `${w.tiersReached}/${w.tiers.length} tiers cleared`)}</div>
+        ${joined && ready.length ? `
+        <button class="btn btn-primary ae-claim" id="aeClaim">
+          🎁 ${t(`報酬を受け取る（${ready.length}段階ぶん・${fmt(purse.coins)}🪙 ${purse.gems}💎）`,
+                 `Collect rewards (${ready.length} tier${ready.length > 1 ? 's' : ''} — ${fmt(purse.coins)}🪙 ${purse.gems}💎)`)}
+        </button>` : ''}
+        ${joined && !ready.length && w.tiersReached ? `
+        <div class="ae-world-sub ae-claimed">✅ ${t('この段階の報酬は受け取り済み', 'Rewards for these tiers collected')}</div>` : ''}
       </div>`;
   }
   if (w.board && w.board.length) {
@@ -263,6 +282,33 @@ export async function openAeSheet() {
       closeModal();
       openAeSheet();
     } catch (err) {
+      toast(err.message, 'err');
+    }
+  };
+
+  // 🏛️共同作業の段階報酬。サーバー側は最初からあったのに、押す場所が
+  // どこにも無かったので誰も受け取れていなかった。
+  const claim = m.querySelector('#aeClaim');
+  if (claim) claim.onclick = async () => {
+    audio.click();
+    claim.disabled = true;
+    try {
+      const res = await api('/api/adminevent/claim', { method: 'POST' });
+      if (res.event) setAdminEvent(res.event);
+      // コインとジェムが増えるので、画面上部の表示も合わせる。
+      if (res.user) { session.user = res.user; updateTopbar(); }
+      const g = res.reward || {};
+      const bits = [];
+      if (g.coins) bits.push(`${fmt(g.coins)}🪙`);
+      if (g.gems) bits.push(`${g.gems}💎`);
+      if (g.badge) bits.push(t('バッジ', 'a badge'));
+      audio.victory?.();
+      toast(t(`🎁 ${bits.join(' ') || '報酬'} を受け取りました！`,
+              `🎁 Collected ${bits.join(' ') || 'your rewards'}!`), 'ok', 3500);
+      closeModal();
+      openAeSheet();
+    } catch (err) {
+      claim.disabled = false;
       toast(err.message, 'err');
     }
   };

@@ -106,16 +106,25 @@ try {
   let r = await j('/api/admin/restore', { method: 'POST', body: { data: forged, mode: 'replace', password: FORGED_PW } });
   check('偽造ファイルでの置き換え復元は拒否される', r.status === 401, `${r.status} ${r.error || ''}`);
 
-  // (b) merge は通るが、未知の管理者は一般ユーザーとして取り込まれる
+  // (b) merge も、プレイヤーが既に居るサーバーには通らない。
+  //
+  // ここは以前『通るが未知の管理者は降格されるので安全』としていた。
+  // その前提が誤りだった: 降格は「この機体に居るスタッフと同名なら見送る」
+  // 実装だったため、公開情報である管理者名を騙るだけで admin のまま入り、
+  // マージの勝敗(進行度)を巨大な stats で取れば本物の資格情報を上書きできた。
+  // 未認証の1リクエストで管理者を奪える状態で、監査で実際に再現された。
+  //
+  // ファイル内のパスワードは**アップロードする側が用意できる**ので、
+  // これを守るべきものがあるサーバーで通してはいけない。復旧導線としては
+  // 「まだ誰も居ないサーバー」に限定して残してある（test/restore-auth.test.mjs）。
   r = await j('/api/admin/restore', { method: 'POST', body: { data: forged, mode: 'merge', password: FORGED_PW } });
-  check('偽造ファイルでのマージ復元自体は通る（復旧導線を残す）', r.status === 200, `${r.status} ${r.error || ''}`);
+  check('偽造ファイルでのマージ復元も拒否される', r.status === 401, `${r.status} ${r.error || ''}`);
 
   const evil = await j('/api/login', { method: 'POST', body: { username: '乗っ取り太郎', password: FORGED_PW } });
-  check('仕込んだアカウントは作られる', evil.status === 200, evil.error || '');
-  check('しかし管理者ではなく一般ユーザーに降格されている', evil.user && evil.user.role !== 'admin', `role=${evil.user && evil.user.role}`);
+  check('仕込んだアカウントは作られていない', evil.status !== 200, `${evil.status}`);
 
-  const stolen = await j('/api/admin/stats', {}, evil.token);
-  check('降格された結果、管理APIは使えない', stolen.status === 403, `${stolen.status}`);
+  const realAdminStill = await j('/api/login', { method: 'POST', body: { username: 'るみまき', password: adminPw } });
+  check('本物の管理者パスワードが奪われていない', realAdminStill.status === 200, `${realAdminStill.status}`);
 
   const stillThere = await j('/api/profile/常連プレイヤー');
   check('既存プレイヤーは無事', stillThere.status === 200, `${stillThere.status}`);

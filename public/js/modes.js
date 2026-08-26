@@ -3312,8 +3312,21 @@ class DungeonMode {
       // Floors beaten in THIS run (missions count progress, not absolute depth).
       floors: Math.max(0, cleared - this.startFloor + 1),
     });
-    if (rewards && rewards.badge === 'dungeon') {
-      setTimeout(() => { toast(t('🏰 バッジ「百塔踏破」を獲得！+500💎', '🏰 Badge earned: Hundred-Floor Conqueror! +500💎'), 'announce', 6000); confettiBurst(80); }, 1200);
+    // 以前は 'dungeon' 決め打ちだったので、深淵・地下・天国を制覇しても
+    // 専用の祝いが出なかった。世界ごとの名前とジェム額をそのまま出す。
+    const CLEAR_BADGE = {
+      dungeon: { icon: '🏰', ja: '百塔踏破', en: 'Hundred-Floor Conqueror', gems: 500 },
+      under:   { icon: '🕳️', ja: '地底踏破', en: 'Depths Conqueror',        gems: 750 },
+      heaven:  { icon: '☁️', ja: '天界踏破', en: 'Ascent Conqueror',        gems: 500 },
+      abyss:   { icon: '🌑', ja: '深淵踏破', en: 'Abyss Conqueror',         gems: 1000 },
+    };
+    const cb = rewards && CLEAR_BADGE[rewards.badge];
+    if (cb) {
+      setTimeout(() => {
+        toast(t(`${cb.icon} バッジ「${cb.ja}」を獲得！+${cb.gems}💎`,
+                `${cb.icon} Badge earned: ${cb.en}! +${cb.gems}💎`), 'announce', 6000);
+        confettiBurst(80);
+      }, 1200);
     }
     const cp = Math.floor(cleared / 10) * 10 + 1;
     const P = R.prefix;

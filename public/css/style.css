@@ -1692,6 +1692,9 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
 .ae-hpbar, .ae-gauge { height: 12px; background: rgba(0,0,0,0.4); border-radius: 6px; overflow: hidden; }
 .ae-hpbar > div { height: 100%; background: linear-gradient(90deg, #ff5d5d, #ffa93d); transition: width .4s; }
 .ae-gauge > div { height: 100%; background: linear-gradient(90deg, #43d9e8, #5ee86e); transition: width .4s; }
+/* 🏛️共同作業の段階報酬。押す場所が無くて誰も受け取れていなかったやつ。 */
+.ae-claim { width: 100%; margin-top: 8px; font-size: 12.5px; padding: 9px 10px; }
+.ae-claimed { color: var(--good, #5ee86e); }
 
 .ae-slot-label { font-size: 12px; font-weight: 800; color: var(--muted); text-align: center; margin: 10px 0 6px; }
 .ae-slots { display: flex; flex-direction: column; gap: 6px; }
