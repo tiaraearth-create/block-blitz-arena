@@ -1396,6 +1396,28 @@ function seedNews() {
       pinned: !!p.pinned, by: 'るみまき', at: Date.now(),
     });
   }
+  unpinOldReleaseNotes();
+}
+
+// 更新のたびに新しいお知らせを📌にしてきた結果、12件中8件が📌になっていた。
+// 全部が目立つということは、何も目立っていないのと同じで、しかも金枠の
+// カードが8枚も積まれて、📌でない4件が画面のはるか下に押しやられていた。
+// 過去の更新履歴の📌を一度だけ外し、最新版と常設のものだけを残す。
+//
+// 一度きり（db.meta.newsUnpinned で記録）。管理者があとで📌し直したものを
+// 起動のたびに剥がしてしまわないため。
+const KEEP_PINNED = ['seed-v2111', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
+function unpinOldReleaseNotes() {
+  if (db.meta.newsUnpinned) return;
+  let n = 0;
+  for (const item of db.news) {
+    if (!item || !item.pinned) continue;
+    if (KEEP_PINNED.includes(item.id)) continue;
+    item.pinned = false;
+    n++;
+  }
+  db.meta.newsUnpinned = true;
+  if (n) console.log(`[news] 過去の更新履歴 ${n}件の📌を外しました（最新版のみ📌）`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,7 +1472,11 @@ app.delete('/api/admin/bugreports/:id', requireAuth, requireAdmin, (req, res) =>
 function newsView() {
   return db.news
     .slice()
-    .sort((a, b) => (b.pinned - a.pinned) || (b.at - a.at))
+    // pinned が undefined/null だと b.pinned - a.pinned が NaN になり、
+    // 「0でも正でも負でもない」ので比較が黙って日付順に落ちる。
+    // 今は全経路が !! で正規化しているので発火しないが、1件混ざるだけで
+    // 📌が最上部に来なくなる。真偽値に落としてから引く。
+    .sort((a, b) => ((b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)) || (b.at - a.at))
     .slice(0, 40)
     .map(n => ({ id: n.id, title: n.title, titleEn: n.titleEn || null, body: n.body, bodyEn: n.bodyEn || null, pinned: !!n.pinned, at: n.at, by: n.by }));
 }
@@ -3032,6 +3058,9 @@ app.post('/api/admin/restore', (req, res) => {
   //      wipe this flow exists for, and it is worthless to an attacker because
   //      there is nothing there to take over.
   let actor = req.user && req.user.role === 'admin' ? { username: req.user.username } : null;
+  // ファイル内パスワードで通した復元では、生きているアカウントの
+  // パスワード・権限をファイル側に奪わせない（下の applyRestore へ渡す）。
+  let protectLiveCredentials = false;
   if (!actor) {
     if (!rateLimit(`restore:${req.ip}`, 10, 10 * 60 * 1000)) {
       return res.status(429).json({ error: '試行回数が多すぎます。しばらく待ってください' });
@@ -3044,6 +3073,25 @@ app.post('/api/admin/restore', (req, res) => {
     if (liveMatch) {
       actor = { username: liveMatch.username };
     } else {
+      // 🔒 第3層は「まだ誰も居ないサーバー」専用。
+      //
+      // 上のコメントはずっとそう書いてあったのに、その判定がコードに存在して
+      // いなかった。実際に効いていたのは mode !== 'merge' だけで、稼働中の
+      // 本番に対しても第3層が通っていた。ファイル内のパスワードは
+      // **アップロードする側が決められる**ので、これは事実上「誰でも通る認証」
+      // だった。監査で、未認証の1リクエストで管理者アカウントを奪取できることが
+      // 実サーバー上で再現されている。
+      //
+      // この経路が本当に必要なのは「再デプロイでデータが飛び、誰もログイン
+      // できないサーバーを復旧する」場面だけ。そこにはまだ守るべきものが無い。
+      const realPlayers = Object.values(db.users).filter(u => u.role !== 'admin').length;
+      if (realPlayers > 0) {
+        console.warn(`[restore] 拒否(第3層/稼働中): ip=${req.ip} 既存プレイヤー${realPlayers}人`);
+        return res.status(401).json({
+          error: 'このサーバーには既にプレイヤーデータがあります。現在の管理者パスワードを入力してください',
+        });
+      }
+
       const fileAdmins = Object.values(data.users).filter(u => u.role === 'admin');
       const fileMatch = fileAdmins.find(u => verifyPassword(pw, u.salt, u.passHash));
       // `replace` destroys whatever is live. Doing that needs the CURRENT
@@ -3059,21 +3107,21 @@ app.post('/api/admin/restore', (req, res) => {
       actor = { username: fileMatch.username, fromBackup: true };
       // The password that authorised this came out of the uploaded file, so the
       // uploader controls it — and therefore must not be able to hand
-      // themselves staff. Anyone who is not ALREADY staff on this server comes
-      // in as an ordinary player. Everything the recovery flow actually needs
-      // (accounts, scores, seasons, the real admin who is already here) is
-      // untouched; only role escalation is removed.
-      const liveStaff = new Set(Object.values(db.users)
-        .filter(u => u.role === 'admin' || u.role === 'mod')
-        .map(u => u.username.toLowerCase()));
+      // themselves staff.
+      //
+      // 以前は「この機体に既に居るスタッフと同じ名前なら降格しない」だったが、
+      // 管理者名は公開情報（クレジット画面・チャットの🛡️）なので、
+      // その名前を騙るだけで admin のまま取り込ませることができた。
+      // ファイル由来の昇格は一切認めない — 例外を作らない。
       let demoted = 0;
       for (const u of Object.values(data.users)) {
-        if ((u.role === 'admin' || u.role === 'mod') && !liveStaff.has(String(u.username).toLowerCase())) {
-          u.role = 'user';
-          demoted++;
-        }
+        if (u.role === 'admin' || u.role === 'mod') { u.role = 'user'; demoted++; }
       }
-      if (demoted) console.warn(`[restore] バックアップ内の未知の管理者/モデレーター ${demoted}件を一般ユーザーとして取り込みました`);
+      if (demoted) console.warn(`[restore] バックアップ内の管理者/モデレーター ${demoted}件を一般ユーザーとして取り込みました`);
+      // 生きているアカウントの資格情報を、ファイル側で上書きさせない。
+      // merge の勝敗判定(progressOf)は進行度で決まるので、巨大な stats を
+      // 積んだ偽レコードを送れば本物に勝ててしまう。ここで守る。
+      protectLiveCredentials = true;
     }
   }
 
@@ -3088,7 +3136,7 @@ app.post('/api/admin/restore', (req, res) => {
   // saveDb() でそれがディスクに焼かれてしまう。丸ごと退避してから実行する。
   const rollback = structuredClone(db);
   try {
-    report = applyRestore(db, data, mode);
+    report = applyRestore(db, data, mode, { protectLiveCredentials });
   } catch (err) {
     for (const k of Object.keys(db)) delete db[k];
     Object.assign(db, rollback);          // db.js が同じ参照を握っているので in-place で戻す
@@ -3131,8 +3179,20 @@ app.post('/api/admin/snapshots/restore', requireAuth, requireAdmin, (req, res) =
   const check = validateBackup(data);
   if (!check.ok) return res.status(400).json({ error: check.error });
   snapshot(db, 'pre-rollback');
-  const report = applyRestore(db, data, 'replace');
-  for (const u of Object.values(db.users)) migrateUser(u);
+  // /api/admin/restore と同じ理由で丸ごと退避する。applyRestore は db を
+  // その場で書き換えるので、途中で落ちると半端な db がメモリに残り、
+  // 次の saveDb() でディスクに焼かれる。この経路だけ保護が無かった。
+  const rollback = structuredClone(db);
+  let report;
+  try {
+    report = applyRestore(db, data, 'replace');
+    for (const u of Object.values(db.users)) migrateUser(u);
+  } catch (err) {
+    for (const k of Object.keys(db)) delete db[k];
+    Object.assign(db, rollback);        // db.js が同じ参照を握っているので in-place で戻す
+    console.error('[snapshot-restore] failed:', err);
+    return res.status(500).json({ error: '復元中にエラーが発生しました。変更は保存されていません' });
+  }
   adoptLegacySeason(data.season);
   db.season = null;
   setLiveScale(db.meta.popScale ?? 1);
@@ -3585,6 +3645,11 @@ function autoRestoreFromSeed() {
   }
   const check = validateBackup(data);
   if (!check.ok) { console.warn('[seed] seed-backup.json が不正です:', check.error); return; }
+  // 他の復元経路と同じく丸ごと退避してから実行する。ここは起動時に走るので、
+  // 半端にマージされた db のまま立ち上がると、そのまま全プレイヤーに配られる。
+  // 失敗したら「seed を当てなかった」状態へ戻すのが正しい（seedHash も立てない
+  // ので、seed を直せば次の起動でやり直せる）。
+  const rollback = structuredClone(db);
   try {
     // The instance's OWN stored legacy season must be adopted before the merge
     // can overwrite user records — and definitely before db.season is nulled.
@@ -3602,7 +3667,9 @@ function autoRestoreFromSeed() {
     flushDb();
     console.log(`[seed] 同梱バックアップを自動復元: 追加${report.added} 更新${report.updated} 維持${report.kept} → 合計${report.after}人${adopted ? `（バトルパス引き継ぎ${adopted}件）` : ''}`);
   } catch (err) {
-    console.error('[seed] 自動復元に失敗:', err.message);
+    for (const k of Object.keys(db)) delete db[k];
+    Object.assign(db, rollback);        // db.js が同じ参照を握っているので in-place で戻す
+    console.error('[seed] 自動復元に失敗（seed を当てる前の状態に戻しました）:', err.message);
   }
 }
 

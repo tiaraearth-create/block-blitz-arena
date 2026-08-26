@@ -141,7 +141,11 @@ export function readSnapshot(name) {
 
 // Mutates `db` in place (db.js holds the same object reference).
 // mode: 'merge' (default) | 'replace'
-export function applyRestore(db, data, mode = 'merge') {
+// opts.protectLiveCredentials: アップロード者がファイルの中身を握っている
+// 経路（未ログインでの復元）で真にする。生きているアカウントのパスワード・
+// 権限をファイル側に上書きさせない。
+export function applyRestore(db, data, mode = 'merge', opts = {}) {
+  const protectLiveCredentials = !!opts.protectLiveCredentials;
   const before = Object.keys(db.users || {}).length;
   const report = { mode, added: 0, updated: 0, kept: 0, tokens: 0, before, after: 0 };
 
@@ -155,7 +159,18 @@ export function applyRestore(db, data, mode = 'merge') {
     if (Array.isArray(data.bugreports)) db.bugreports = data.bugreports;
     if (data.revoked && typeof data.revoked === 'object') db.revoked = data.revoked;
     if (data.deleted && typeof data.deleted === 'object') db.deleted = data.deleted;
-    if (data.meta && typeof data.meta === 'object') db.meta = { ...db.meta, ...data.meta };
+    if (data.meta && typeof data.meta === 'object') {
+      // seedHash は「同梱 seed をもう適用したか」の記録で、この機体の履歴に
+      // 属するもの。バックアップ側の値で上書きしてはいけない。
+      // /api/admin/backup は db 全体を書き出すので seedHash も入っており、
+      // 古いバックアップを replace で流し込むと記録が当時に巻き戻る。
+      // すると次の起動で同梱 seed が「未適用」と判定されて再適用され、
+      // 復元したばかりのデータの上に古い seed が被さる。
+      const keepSeedHash = db.meta ? db.meta.seedHash : undefined;
+      db.meta = { ...db.meta, ...data.meta };
+      if (keepSeedHash === undefined) delete db.meta.seedHash;
+      else db.meta.seedHash = keepSeedHash;
+    }
     report.added = Object.keys(db.users).length;
     report.tokens = Object.keys(db.tokens).length;
     report.after = report.added;
@@ -190,11 +205,17 @@ export function applyRestore(db, data, mode = 'merge') {
       // A newer sessionsSince marks newer credentials (password changes bump
       // it); bans/mutes are unioned (an unbanned-then-restored account may be
       // re-banned once — far safer than a ban silently reverting).
-      if ((live.sessionsSince || 0) > (inc.sessionsSince || 0)) {
+      // sessionsSince はファイル側が自由に決められる値なので、これだけを
+      // 根拠にすると「巨大な sessionsSince を書いた偽レコード」に負ける。
+      // アップロード者がファイルの中身を握っている経路（未ログインでの復元）
+      // では、生きている資格情報を無条件で優先する。
+      if (protectLiveCredentials || (live.sessionsSince || 0) > (inc.sessionsSince || 0)) {
         inc.passHash = live.passHash;
         inc.salt = live.salt;
         inc.sessionsSince = live.sessionsSince;
       }
+      // 権限も同じ。生きているアカウントの role をファイル側に書き換えさせない。
+      if (protectLiveCredentials) inc.role = live.role;
       if (live.banned) inc.banned = true;
       if (live.muted) inc.muted = true;
       delete db.users[live.id];

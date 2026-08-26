@@ -7,8 +7,11 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { freePort } from './_port.mjs';
 
-const PORT = 3103;
+// ポート固定をやめた理由は test/_port.mjs を参照（他人のサーバーを
+// 自分のものと誤認して、緑のまま嘘をつく可能性があった）。
+const PORT = await freePort();
 const BASE = `http://localhost:${PORT}`;
 const DIR = path.join(os.tmpdir(), 'bba-persist-test');
 const SEED_FILE = path.join(os.tmpdir(), 'bba-persist-seed.json');
@@ -33,6 +36,7 @@ async function start(extraEnv = {}) {
   proc.stderr.on('data', d => { log += d; });
   for (let i = 0; i < 60; i++) {
     await sleep(250);
+    if (proc.exitCode !== null || proc.signalCode !== null) throw new Error(`サーバーが起動直後に終了しました (code=${proc.exitCode})`);
     try { const r = await fetch(BASE + '/api/status'); if (r.ok) return log; } catch {}
   }
   throw new Error('server did not start:\n' + log);

@@ -14,8 +14,11 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import WebSocket from 'ws';
+import { freePort } from './_port.mjs';
 
-const PORT = 3109;
+// ポート固定をやめた理由は test/_port.mjs を参照（他人のサーバーを
+// 自分のものと誤認して、緑のまま嘘をつく可能性があった）。
+const PORT = await freePort();
 const DIR = path.join(os.tmpdir(), 'bba-royale-test');
 // 30 is the server's own floor (Math.max(30, ...)), so asking for less is
 // silently clamped — match it rather than assert a value that cannot happen.
@@ -36,6 +39,7 @@ async function start() {
   });
   for (let i = 0; i < 60; i++) {
     await sleep(250);
+    if (proc.exitCode !== null || proc.signalCode !== null) throw new Error(`サーバーが起動直後に終了しました (code=${proc.exitCode})`);
     try { const r = await fetch(`http://localhost:${PORT}/api/status`); if (r.ok) return; } catch { /* not up yet */ }
   }
   throw new Error('server did not start');

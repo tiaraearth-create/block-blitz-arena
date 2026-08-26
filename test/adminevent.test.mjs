@@ -11,12 +11,15 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { freePort } from './_port.mjs';
 import {
   normalizeSchedule, currentOccurrence, reserve, liveSlotFor,
   ensureRun, contribute, bossHpFor, jstDayKey, weekModeId, AE_MODES,
 } from '../server/adminevent.js';
 
-const PORT = 3108;
+// ポート固定をやめた理由は test/_port.mjs を参照（他人のサーバーを
+// 自分のものと誤認して、緑のまま嘘をつく可能性があった）。
+const PORT = await freePort();
 const DIR = path.join(os.tmpdir(), 'bba-ae-test');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -34,6 +37,7 @@ async function start() {
   });
   for (let i = 0; i < 60; i++) {
     await sleep(250);
+    if (proc.exitCode !== null || proc.signalCode !== null) throw new Error(`サーバーが起動直後に終了しました (code=${proc.exitCode})`);
     try { const r = await fetch(`http://localhost:${PORT}/api/status`); if (r.ok) return; } catch { /* not up yet */ }
   }
   throw new Error('server did not start');

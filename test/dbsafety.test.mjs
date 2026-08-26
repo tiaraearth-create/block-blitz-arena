@@ -136,5 +136,39 @@ async function freshDbModule(dir) {
   check('その場合も seedHash は戻る', db.meta.seedHash === 'KEEP', String(db.meta.seedHash));
 }
 
+// ---- ⑤ 復元が seedHash を巻き戻さないか ------------------------------------
+// seedHash は「同梱 seed をもう適用したか」の記録で、この機体の履歴に属する。
+// /api/admin/backup は db を丸ごと書き出すので、バックアップにも seedHash が入る。
+// それを replace で戻すと記録が当時に巻き戻り、次の起動で古い seed が
+// 「未適用」と判定されて再適用される — 復元したばかりのデータの上に被さる。
+{
+  const { applyRestore } = await import('../server/backup.js');
+  const live = () => ({
+    users: { a: { id: 'a', username: 'いま', stats: { gamesPlayed: 5 } } },
+    tokens: {}, revoked: {}, deleted: {}, guilds: {}, news: [], season: null,
+    transactions: [], bugreports: [], meta: { createdAt: 1, seedHash: 'CURRENT' },
+  });
+  const oldBackup = {
+    users: { b: { id: 'b', username: 'むかし', stats: { gamesPlayed: 1 } } },
+    tokens: {}, meta: { createdAt: 1, seedHash: 'ANCIENT', popScale: 2 },
+  };
+
+  const db1 = live();
+  applyRestore(db1, oldBackup, 'replace');
+  check('replace: seedHash は現在の値のまま', db1.meta.seedHash === 'CURRENT', String(db1.meta.seedHash));
+  check('replace: seedHash 以外の meta は復元される', db1.meta.popScale === 2, String(db1.meta.popScale));
+  check('replace: ユーザーは置き換わる', !!db1.users.b && !db1.users.a, Object.keys(db1.users).join(','));
+
+  const db2 = live();
+  applyRestore(db2, oldBackup, 'merge');
+  check('merge: seedHash も現在の値のまま', db2.meta.seedHash === 'CURRENT', String(db2.meta.seedHash));
+
+  // seedHash をまだ持っていない機体（＝一度も seed を当てていない）に、
+  // seedHash 入りのバックアップを流し込んでも、勝手に「適用済み」にしない。
+  const db3 = live();
+  delete db3.meta.seedHash;
+  applyRestore(db3, oldBackup, 'replace');
+  check('seedHash 未設定の機体に持ち込まれない', db3.meta.seedHash === undefined, String(db3.meta.seedHash));
+}
 fs.rmSync(ROOT, { recursive: true, force: true });
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

@@ -17,8 +17,11 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import WebSocket from 'ws';
+import { freePort } from './_port.mjs';
 
-const PORT = 3112;
+// ポート固定をやめた理由は test/_port.mjs を参照（他人のサーバーを
+// 自分のものと誤認して、緑のまま嘘をつく可能性があった）。
+const PORT = await freePort();
 const BASE = `http://localhost:${PORT}`;
 const DIR = path.join(os.tmpdir(), 'bba-shutdown-test');
 const sleep = ms => new Promise(r => setTimeout(r, ms));

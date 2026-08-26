@@ -6,8 +6,11 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import WebSocket from 'ws';
+import { freePort } from './_port.mjs';
 
-const PORT = 3107;
+// ポート固定をやめた理由は test/_port.mjs を参照（他人のサーバーを
+// 自分のものと誤認して、緑のまま嘘をつく可能性があった）。
+const PORT = await freePort();
 const DIR = path.join(os.tmpdir(), 'bba-battle-test');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -22,6 +25,7 @@ async function start() {
   });
   for (let i = 0; i < 60; i++) {
     await sleep(250);
+    if (proc.exitCode !== null || proc.signalCode !== null) throw new Error(`サーバーが起動直後に終了しました (code=${proc.exitCode})`);
     try { const r = await fetch(`http://localhost:${PORT}/api/status`); if (r.ok) return; } catch {}
   }
   throw new Error('server did not start');
