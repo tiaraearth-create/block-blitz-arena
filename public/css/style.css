@@ -1893,3 +1893,55 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
   letter-spacing: .01em;
 }
 .cm-name.cm-zero { color: #e03546; font-weight: 800; letter-spacing: .04em; }
+
+/* 👁️ 断罪 ── アリーナ。
+   いちばん大事なのは「点で削れる7割」と「人間しか割れない3割」が
+   別物だと一目で分かること。ここが伝わらないとイベントの意味が伝わらない。 */
+.zero-top { display: flex; gap: 10px; align-items: center; }
+.zero-board {
+  width: 60px; height: 60px; flex: 0 0 auto; border-radius: 6px;
+  border: 1px solid #6d1a22; background: #100d12;
+}
+.zero-bars { flex: 1 1 auto; min-width: 0; }
+.zero-title {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 11px; font-weight: 800; color: #e03546;
+  letter-spacing: .04em; margin-bottom: 4px;
+}
+.zero-title span:last-child { color: var(--muted); font-weight: 700; }
+/* 帯: 左が「誰でも削れる」右が「封印」。色をはっきり分ける。 */
+.zero-hp {
+  display: flex; height: 13px; border-radius: 7px; overflow: hidden;
+  background: rgba(0,0,0,.45); border: 1px solid #2a1116;
+}
+.zero-hp-open { height: 100%; background: linear-gradient(90deg, #b8283a, #e03546); transition: width .35s; }
+.zero-hp-seal {
+  height: 100%; transition: width .35s;
+  background: repeating-linear-gradient(135deg, #3a2c73 0 6px, #5b46b8 6px 12px);
+  border-left: 2px solid #8b6cff;
+}
+.zero-sub {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 10.5px; font-weight: 700; color: var(--muted);
+  margin-top: 3px; font-variant-numeric: tabular-nums;
+}
+/* 席。処刑された住人は暗いまま残る —— 減っていくのが見えることが罰なので、
+   消してしまうと意味がなくなる。 */
+.zero-seats {
+  display: flex; flex-wrap: wrap; gap: 3px; margin-top: 7px;
+  max-height: 40px; overflow: hidden;
+}
+.zero-seat {
+  font-size: 9.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  background: rgba(255,255,255,.06); color: var(--muted);
+  white-space: nowrap; max-width: 88px; overflow: hidden; text-overflow: ellipsis;
+}
+.zero-seat.me { background: rgba(224,53,70,.22); color: #ffd7db; }
+.zero-seat.down { opacity: .45; }
+.zero-seat.gone { opacity: .3; text-decoration: line-through; color: #6d1a22; }
+/* 結果画面 */
+.zero-result { display: flex; gap: 14px; justify-content: center; margin: 14px 0; }
+.zero-result div { text-align: center; }
+.zero-result b { display: block; font-size: 26px; font-weight: 800; color: #e03546; font-variant-numeric: tabular-nums; }
+.zero-result span { font-size: 11px; color: var(--muted); font-weight: 700; }
+.zero-fallen { font-size: 12px; color: #8b6cff; }

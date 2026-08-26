@@ -5510,13 +5510,322 @@ class AdminEventMode extends VersusBase {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// 👁️ 断罪 ── 管理者ゼロ
+// ---------------------------------------------------------------------------
+//
+// 他の管理者イベントと違い、これはサーバー権威のセッション。
+// 段のHP・封印・処刑された住人はサーバーが持っていて、こちらは
+// 「見せる」ことと「斬った申告を送る」ことだけをする。
+//
+// 中核の演出（盤面に赤マスが出て、そこを通るラインを消すとカウンター）は
+// ボス戦の予告技として既に出荷済みで、view.dangerCells がそのまま使える。
+// 新しく要るのは「誰を狙うかをサーバーが決める」配線だけだった。
+class ZeroMode extends VersusBase {
+  constructor(ae) {
+    super();
+    this.mode = 'zero';
+    this.ae = ae;
+    this.timers = [];
+    this.client = null;
+    this.verdict = null;        // いま来ている断罪
+    this.myCuts = 0;
+    this.myMissed = 0;
+    this.state = null;
+    this.mini = null;
+  }
+
+  every(ms, fn) { const id = setInterval(fn, ms); this.timers.push(id); return id; }
+  after(ms, fn) { const id = setTimeout(fn, ms); this.timers.push(id); return id; }
+  clearTimers() { for (const id of this.timers) { clearInterval(id); clearTimeout(id); } this.timers = []; }
+
+  async start() {
+    this.setupHud(AE_RUN_SECONDS);
+    $('#oppPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    showItemBar(false);
+    showUltBar(false);
+    this.startedAt = Date.now();
+
+    const v = getView();
+    setModeTheme({ ...equippedTheme(), boardId: 'board_shadow' });
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = r => this.onPlace(r);
+    v.onGameOver = () => this.onTopOut();
+    this.updateMyHud(this.engine);
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('oni');
+
+    this.buildArena();
+
+    this.client = new BattleClient();
+    this.client
+      .on('zero_found', m => this.onFound(m))
+      .on('zero_state', m => this.onState(m))
+      .on('zero_verdict', m => this.onVerdict(m))
+      .on('zero_cut', m => this.onSomeoneCut(m))
+      .on('zero_missed', m => this.onSomeoneMissed(m))
+      .on('zero_dan', m => this.onDanBroken(m))
+      .on('zero_garbage', m => this.onGarbage(m))
+      .on('zero_revive', () => this.onRevived())
+      .on('error', m => toast(m.error || t('エラー', 'Error'), 'err', 3000))
+      .on('close', () => { if (!this.ended) toast(t('接続が切れました', 'Disconnected'), 'err'); });
+
+    try {
+      await this.client.connect();
+      this.client.send({ type: 'zero_join' });
+    } catch (err) {
+      toast(err.message, 'err', 4000);
+      this.finish();
+      return;
+    }
+
+    countdownOverlay(3, afterCountdown(this, () => {
+      if (this.ended || currentMode !== this) return;
+      v.inputLocked = false;
+      this.startTimer(() => this.finish());
+    }), audio);
+  }
+
+  // ---- アリーナ（席・ゼロの盤面・段のバー）----
+
+  buildArena() {
+    const panel = $('#bossPanel');
+    panel.classList.remove('hidden');
+    panel.innerHTML = [
+      '<div class="zero-top">',
+      '  <canvas id="zeroBoard" class="zero-board" width="120" height="120"></canvas>',
+      '  <div class="zero-bars">',
+      '    <div class="zero-title"><span id="zeroDan"></span><span id="zeroTarget"></span></div>',
+      '    <div class="zero-hp"><div class="zero-hp-open" id="zeroOpen"></div><div class="zero-hp-seal" id="zeroSeal"></div></div>',
+      '    <div class="zero-sub"><span id="zeroHpText"></span><span id="zeroCuts"></span></div>',
+      '  </div>',
+      '</div>',
+      '<div class="zero-seats" id="zeroSeats"></div>',
+    ].join('');
+    this.mini = new MiniBoard($('#zeroBoard'), { skinId: 'skin_shadow' });
+  }
+
+  onFound(m) {
+    this.state = m;
+    this.renderState(m);
+    toast(t(`👁️ 席につきました（${m.seats.length}席）── 段${m.dan}`,
+      `👁️ Seated (${m.seats.length}) — Stage ${m.dan}`), 'announce', 3000);
+  }
+
+  onState(m) {
+    this.state = m;
+    if (m.you) { this.myCuts = m.you.cuts; this.myMissed = m.you.missed; }
+    this.renderState(m);
+  }
+
+  renderState(m) {
+    if (!m || this.ended) return;
+    // 帯は「点で削れる7割」と「人間しか割れない3割」を別の色で見せる。
+    // これが伝わらないとイベントの意味が伝わらないので、ここは省かない。
+    const hp = m.hp || 1;
+    const openLeft = Math.max(0, m.left - m.sealLeft);
+    const el = id => $('#' + id);
+    if (el('zeroOpen')) el('zeroOpen').style.width = `${Math.min(100, (openLeft / hp) * 100)}%`;
+    if (el('zeroSeal')) el('zeroSeal').style.width = `${Math.min(100, (m.sealLeft / hp) * 100)}%`;
+    if (el('zeroDan')) el('zeroDan').textContent = t(`段 ${m.dan}/${m.danMax}`, `Stage ${m.dan}/${m.danMax}`);
+    if (el('zeroTarget')) {
+      el('zeroTarget').textContent = t(`今夜の的：第${m.targetCol + 1}列`, `Mark: col ${m.targetCol + 1}`);
+    }
+    if (el('zeroHpText')) {
+      el('zeroHpText').textContent = t(`残り ${fmt(m.left)} ／ 封印 ${fmt(m.sealLeft)}`,
+        `${fmt(m.left)} left / seal ${fmt(m.sealLeft)}`);
+    }
+    if (el('zeroCuts')) {
+      el('zeroCuts').textContent = t(`斬 ${this.myCuts} ／ 落 ${this.myMissed}`,
+        `cut ${this.myCuts} / miss ${this.myMissed}`);
+    }
+    if (this.mini && Array.isArray(m.zeroGrid)) this.mini.setGrid(m.zeroGrid);
+    const seats = el('zeroSeats');
+    if (seats && m.seats) {
+      seats.innerHTML = m.seats.map(s => {
+        const cls = ['zero-seat'];
+        if (s.human) cls.push('me');
+        if (s.executed) cls.push('gone');
+        else if (!s.alive) cls.push('down');
+        return `<span class="${cls.join(' ')}">${escapeHtml(s.name)}</span>`;
+      }).join('');
+    }
+  }
+
+  // ---- 断罪 ----
+
+  onVerdict(m) {
+    if (this.ended) return;
+    this.verdict = m;
+    const v = getView();
+    v.dangerCells = new Set(m.cells);
+    v.keystoneCell = m.keystone;
+    v.screenFlash = 0.45;
+    audio.countdown(false);
+    const name = (session.user && session.user.username) || t('あなた', 'you');
+    toast(t(`👁️ 断罪 ── ${name}　赤マスをラインで斬れ！`,
+      `👁️ CONDEMNED ── ${name}. Cut the red cells!`), 'err', Math.min(2600, m.warnMs));
+    // 予告時間で自動的に消える（サーバー側も同じ時刻で締める）
+    this.after(m.warnMs + 200, () => {
+      if (this.verdict && this.verdict.id === m.id) {
+        this.verdict = null;
+        v.dangerCells = null;
+        v.keystoneCell = -1;
+      }
+    });
+  }
+
+  // 置いた結果、赤マスを通るラインを消していたら「斬った」。
+  // 判定はボス戦の予告技とまったく同じ形。
+  onPlace(result) {
+    this.updateMyHud(this.engine);
+    updateRerollHud(this.engine);
+    const v = this.verdict;
+    if (!v || !result || result.lineCount === 0) return;
+    const hit = v.cells.filter(k => {
+      const r = (k / 8) | 0, c = k % 8;
+      return result.fullRows.includes(r) || result.fullCols.includes(c);
+    });
+    if (!hit.length) return;
+    this.verdict = null;
+    const view2 = getView();
+    view2.dangerCells = null;
+    view2.keystoneCell = -1;
+    // どのマスを消したかをそのまま送る。サーバーが予告時間内かどうかを見る。
+    this.client.send({ type: 'zero_cut', id: v.id, cells: hit });
+  }
+
+  onSomeoneCut(m) {
+    const me = session.user && m.by === session.user.username;
+    if (me) {
+      audio.combo(9);
+      const v2 = getView();
+      v2.screenFlash = 0.3;
+      v2.addFloatText(v2.boardX + v2.boardSize / 2, v2.boardY + v2.boardSize * 0.18,
+        m.keystone ? 'KEYSTONE!' : 'CUT!', m.keystone ? '#f0b429' : '#43d9e8', 2);
+      this.engine.chargeUlt(12);
+    }
+    toast(m.keystone
+      ? t(`⚔️ ${m.by} が急所を斬った！ 封印 −${fmt(m.damage)}`, `⚔️ ${m.by} hit the keystone! seal −${fmt(m.damage)}`)
+      : t(`⚔️ ${m.by} が斬った ── 封印 −${fmt(m.damage)}`, `⚔️ ${m.by} cut — seal −${fmt(m.damage)}`),
+      'ok', 1600);
+  }
+
+  onSomeoneMissed(m) {
+    if (!m.victim) return;
+    audio.bossAttack();
+    toast(t(`💀 ${m.victim} が処刑された（${m.target} が落とした）`,
+      `💀 ${m.victim} was executed (${m.target} let it slip)`), 'err', 2600);
+  }
+
+  onDanBroken(m) {
+    audio.victory();
+    confettiBurst(90);
+    toast(t(`👁️ 第${m.dan}段 陥落！ 王座がひとつ返ってきた${m.by ? `（とどめ：${m.by}）` : ''}`,
+      `👁️ Stage ${m.dan} has fallen — one throne returns${m.by ? ` (by ${m.by})` : ''}`), 'announce', 5000);
+  }
+
+  onGarbage(m) {
+    if (this.ended || !this.engine) return;
+    const n = Math.max(0, Math.min(9, m.cells | 0));
+    if (!n) return;
+    this.engine.addGarbage(n);
+    audio.bossAttack();
+    getView().screenFlash = 0.25;
+    toast(t(`👁️ ゼロの一手 ── お邪魔 ${n}個`, `👁️ Zero's move — ${n} garbage`), 'err', 1500);
+  }
+
+  onTopOut() {
+    if (this.ended) return;
+    this.client.send({ type: 'zero_topout' });
+    getView().inputLocked = true;
+    toast(t('盤面が詰みました。60秒後に復帰します', 'Board full — back in 60s'), 'err', 4000);
+  }
+
+  onRevived() {
+    if (this.ended || !this.engine) return;
+    this.engine.reviveBoard();
+    getView().inputLocked = false;
+    audio.victory();
+    toast(t('▶ 復帰しました', '▶ You are back'), 'ok', 2000);
+  }
+
+  // ---- 終わり ----
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    this.stopTimer();
+    this.clearTimers();
+    const v = getView();
+    if (v) { v.dangerCells = null; v.keystoneCell = -1; v.inputLocked = true; }
+    if (this.client) {
+      try { this.client.send({ type: 'zero_leave' }); this.client.ws.close(); } catch { /* もう閉じている */ }
+    }
+
+    const e = this.engine;
+    let res = null;
+    try {
+      res = await api('/api/adminevent/result', {
+        method: 'POST',
+        body: {
+          score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
+          duration: (Date.now() - this.startedAt) / 1000,
+          pieces: e.piecesPlaced || 0,
+        },
+      });
+      updateTopbar();
+    } catch (err) {
+      toast(err.message, 'err', 4000);
+    }
+    if (res && res.event) this.ae = res.event;
+
+    const st = this.state;
+    showModal([
+      `<h2>👁️ ${t('断罪 ── 記録', 'Condemned — record')}</h2>`,
+      '<div class="zero-result">',
+      `  <div><b>${this.myCuts}</b><span>${t('斬った', 'cut')}</span></div>`,
+      `  <div><b>${this.myMissed}</b><span>${t('落とした', 'missed')}</span></div>`,
+      `  <div><b>${fmt(e.score)}</b><span>${t('スコア', 'score')}</span></div>`,
+      '</div>',
+      st ? `<p class="muted">${t(`段 ${st.dan}/${st.danMax} ／ 封印の残り ${fmt(st.sealLeft)}`,
+        `Stage ${st.dan}/${st.danMax} — seal ${fmt(st.sealLeft)} left`)}</p>` : '',
+      st && st.fallen && st.fallen.length
+        ? `<p class="zero-fallen">${t('今日、消えた住人', 'Lost today')}: ${st.fallen.map(escapeHtml).join('、')}</p>` : '',
+      `<button class="btn btn-primary" id="zeroClose">${t('とじる', 'Close')}</button>`,
+    ].join(''));
+    const btn = $('#zeroClose');
+    if (btn) btn.onclick = () => { closeModal(); showScreen('menu'); };
+  }
+
+  quit() { this.finish(); }
+
+  destroy() {
+    this.ended = true;
+    this.stopTimer();
+    this.clearTimers();
+    if (this.client && this.client.ws) { try { this.client.ws.close(); } catch { /* 既に閉じている */ } }
+    const v = getView();
+    if (v) { v.dangerCells = null; v.keystoneCell = -1; }
+    $('#bossPanel').classList.add('hidden');
+  }
+}
+
+
 export function startAdminEventMode(ae) {
   if (!ae || !ae.live) {
     toast(t('いまはあなたの枠の時間ではありません', 'This is not your slot right now'), 'err');
     return;
   }
   if (currentMode) currentMode.destroy();
-  currentMode = new AdminEventMode(ae);
+  // 断罪だけはサーバー権威のセッション（他の3モードはクライアント完結）。
+  currentMode = (ae.mode && ae.mode.id === 'zero') ? new ZeroMode(ae) : new AdminEventMode(ae);
   window.__bbaMode = currentMode;
   currentMode.start();
 }

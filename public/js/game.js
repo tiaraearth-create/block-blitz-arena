@@ -34,6 +34,7 @@ export class GameView {
     this.onIllegal = null;
     this.glowCells = null;          // Set of r*8+c a mode wants highlighted
     this.dangerCells = null;        // Set of r*8+c flashing red (boss attack telegraph)
+    this.keystoneCell = -1;         // 👁️断罪の急所。含めて斬れば貫通が倍
     this.coolCells = null;          // Set of r*8+c pulsing cyan (meltdown coolant)
     this.onTrayDrop = null;         // callback(fromSlot, toSlot) -> true to handle (chimera weld)
 
@@ -63,6 +64,7 @@ export class GameView {
     this.drag = null;
     this.glowCells = null;
     this.dangerCells = null;
+    this.keystoneCell = -1;
     this.coolCells = null;
     this.oreCells = null;
     this.ghostFx = null;
@@ -562,12 +564,15 @@ export class GameView {
     for (const k of this.dangerCells) {
       const r = (k / SIZE) | 0, c = k % SIZE;
       const x = this.boardX + c * cell, y = this.boardY + r * cell;
-      ctx.globalAlpha = pulse;
-      ctx.fillStyle = '#ff3b3b';
+      // 👁️ 断罪の急所（金マス）。ここを含めて斬れば貫通が倍になるので、
+      // 赤マスの中から一目で見分けられないと意味がない。
+      const key = this.keystoneCell === k;
+      ctx.globalAlpha = key ? Math.min(1, pulse + 0.25) : pulse;
+      ctx.fillStyle = key ? '#f0b429' : '#ff3b3b';
       ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
       ctx.globalAlpha = Math.min(1, pulse + 0.35);
-      ctx.strokeStyle = '#ff6b6b';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = key ? '#ffd75e' : '#ff6b6b';
+      ctx.lineWidth = key ? 3 : 2;
       ctx.strokeRect(x + 2, y + 2, cell - 4, cell - 4);
     }
     ctx.globalAlpha = 1;
