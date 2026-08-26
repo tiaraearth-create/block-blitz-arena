@@ -193,6 +193,21 @@ function migrateUser(user) {
   if (!user.equipped.ult) user.equipped.ult = DEFAULT_EQUIPPED.ult;
   if (!Array.isArray(user.owned)) user.owned = [...DEFAULT_OWNED];
   for (const id of DEFAULT_OWNED) if (!user.owned.includes(id)) user.owned.push(id);
+  // Top-level fields, not just stats. Only `stats` was being repaired, so a
+  // record from an older schema (or a hand-edited backup) reached
+  // publicUser() → syncBattlePass() without a battlePass and 500'd the login.
+  // The Number() guards also stop a corrupted value writing NaN back to disk,
+  // which poisons every later read of that account.
+  if (!Array.isArray(user.badges)) user.badges = [];
+  if (!user.items || typeof user.items !== 'object') user.items = {};
+  for (const k of ['coins', 'gems', 'xp']) {
+    if (!Number.isFinite(user[k])) user[k] = 0;
+  }
+  if (!user.battlePass || typeof user.battlePass !== 'object') {
+    user.battlePass = { season: currentSeason().id, xp: 0, premium: false, claimed: [] };
+  }
+  if (!Array.isArray(user.battlePass.claimed)) user.battlePass.claimed = [];
+  if (user.role !== 'admin' && user.role !== 'mod') user.role = 'user';
   return user;
 }
 
@@ -1754,7 +1769,17 @@ app.post('/api/rank/claim', requireAuth, maintenanceGuard, (req, res) => {
 // Game results & leaderboard
 // ---------------------------------------------------------------------------
 
+// Per-game rewards are capped (score rate, coin ceiling), but the ENDPOINT had
+// no limit at all — a loop against it minted coins, gems, XP and badges as fast
+// as the network allowed. A real game takes 20+ seconds, and even the fastest
+// mode (a ★3 puzzle stage) tops out near 80 runs an hour, so these ceilings are
+// far above legitimate play and still turn "unlimited" into "bounded".
 app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
+  const tooFast = !rateLimit(`result:${req.user.id}`, 30, 60 * 1000)
+    || !rateLimit(`resulth:${req.user.id}`, 250, 60 * 60 * 1000);
+  if (tooFast) {
+    return res.status(429).json({ error: '結果の送信が多すぎます。しばらく待ってください' });
+  }
   const rewards = applyGameResult(req.user, req.body || {});
   res.json({ rewards, user: publicUser(req.user) });
 });
@@ -2660,20 +2685,64 @@ app.post('/api/admin/restore', (req, res) => {
   const check = validateBackup(data);
   if (!check.ok) return res.status(400).json({ error: check.error });
 
+  // Authorisation, in three tiers.
+  //
+  // This endpoint is deliberately reachable without a session: the whole point
+  // of /?restore=1 is to recover a server nobody can log into. But it used to
+  // accept ANY uploaded file whose own admin hash matched the typed password —
+  // and the attacker supplies that file, so they supply the hash too. Anyone
+  // who could reach the URL could overwrite a live server with a forged dump.
+  //
+  //   1. a signed-in admin                          → always allowed
+  //   2. the password of a LIVE admin account       → allowed
+  //   3. the password of the FILE's admin           → only onto a server with
+  //      no player data yet, and merge only. That is exactly the post-deploy
+  //      wipe this flow exists for, and it is worthless to an attacker because
+  //      there is nothing there to take over.
   let actor = req.user && req.user.role === 'admin' ? { username: req.user.username } : null;
   if (!actor) {
     if (!rateLimit(`restore:${req.ip}`, 10, 10 * 60 * 1000)) {
       return res.status(429).json({ error: '試行回数が多すぎます。しばらく待ってください' });
     }
     const pw = String(body.password || '');
-    const admins = Object.values(data.users).filter(u => u.role === 'admin');
-    const match = pw ? admins.find(u => verifyPassword(pw, u.salt, u.passHash)) : null;
-    if (!match) {
-      return res.status(401).json({ error: admins.length
-        ? 'バックアップ内の管理者パスワードが違います（バックアップを取った時点のパスワードを入力してください）'
-        : 'このバックアップに管理者アカウントが含まれていません' });
+    if (!pw) return res.status(401).json({ error: '管理者パスワードを入力してください' });
+
+    const liveAdmins = Object.values(db.users).filter(u => u.role === 'admin');
+    const liveMatch = liveAdmins.find(u => verifyPassword(pw, u.salt, u.passHash));
+    if (liveMatch) {
+      actor = { username: liveMatch.username };
+    } else {
+      const fileAdmins = Object.values(data.users).filter(u => u.role === 'admin');
+      const fileMatch = fileAdmins.find(u => verifyPassword(pw, u.salt, u.passHash));
+      // `replace` destroys whatever is live. Doing that needs the CURRENT
+      // password, not one supplied inside the file being uploaded.
+      if (!fileMatch || mode !== 'merge') {
+        console.warn(`[restore] 拒否: ip=${req.ip} mode=${mode} fileMatch=${!!fileMatch}`);
+        return res.status(401).json({ error: !fileAdmins.length
+          ? 'このバックアップに管理者アカウントが含まれていません'
+          : mode !== 'merge'
+            ? '置き換え復元には現在の管理者パスワードが必要です（マージ復元は可能です）'
+            : 'バックアップ内の管理者パスワードが違います（バックアップを取った時点のパスワードを入力してください）' });
+      }
+      actor = { username: fileMatch.username, fromBackup: true };
+      // The password that authorised this came out of the uploaded file, so the
+      // uploader controls it — and therefore must not be able to hand
+      // themselves staff. Anyone who is not ALREADY staff on this server comes
+      // in as an ordinary player. Everything the recovery flow actually needs
+      // (accounts, scores, seasons, the real admin who is already here) is
+      // untouched; only role escalation is removed.
+      const liveStaff = new Set(Object.values(db.users)
+        .filter(u => u.role === 'admin' || u.role === 'mod')
+        .map(u => u.username.toLowerCase()));
+      let demoted = 0;
+      for (const u of Object.values(data.users)) {
+        if ((u.role === 'admin' || u.role === 'mod') && !liveStaff.has(String(u.username).toLowerCase())) {
+          u.role = 'user';
+          demoted++;
+        }
+      }
+      if (demoted) console.warn(`[restore] バックアップ内の未知の管理者/モデレーター ${demoted}件を一般ユーザーとして取り込みました`);
     }
-    actor = { username: match.username, fromBackup: true };
   }
 
   // Dry run: let the admin see what would happen before committing.
