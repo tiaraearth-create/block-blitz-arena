@@ -49,27 +49,73 @@ function ask(question, { hidden = false } = {}) {
   });
 }
 
+// fetch が投げる Error は message が一律 'fetch failed' で、本当の理由は
+// err.cause の側に入っている。それを捨てていたので、原因が分からないまま
+// 「エラー: fetch failed」とだけ出ていた。原因を訳して見せる。
+function explain(err) {
+  const c = err && err.cause ? err.cause : err;
+  const code = c && c.code;
+  const known = {
+    ENOTFOUND: 'サーバー名を解決できません（インターネットに繋がっていないか、URLが違います）',
+    ECONNREFUSED: 'サーバーに接続を拒否されました（起動中か、停止しています）',
+    ECONNRESET: '接続が途中で切れました（再デプロイ中の可能性があります）',
+    ETIMEDOUT: '応答がありません（再デプロイ中か、回線が不安定です）',
+    EAI_AGAIN: '名前解決に一時的に失敗しました（回線が不安定です）',
+    UND_ERR_CONNECT_TIMEOUT: '接続がタイムアウトしました（再デプロイ中の可能性があります）',
+    UND_ERR_HEADERS_TIMEOUT: '応答が返ってきませんでした（再デプロイ中の可能性があります）',
+    UND_ERR_SOCKET: 'サーバー側から接続を閉じられました（再デプロイ中の可能性が高いです）',
+  };
+  const why = known[code] || (c && c.message) || String(err);
+  return code ? `${why}（${code}）` : why;
+}
+
+// 再デプロイ直後や無料プランのスピンアップ中は、数十秒つながらないことがある。
+// 一度で諦めず、間隔をあけて数回試す。
+async function req(url, opts = {}, { label = '通信', tries = 4 } = {}) {
+  let last;
+  for (let i = 1; i <= tries; i++) {
+    try {
+      return await fetch(url, { ...opts, signal: AbortSignal.timeout(90000) });
+    } catch (err) {
+      last = err;
+      if (i < tries) {
+        const wait = i * 5;
+        console.log(`[backup:pull] ${label}に失敗（${explain(err)}）— ${wait}秒後に再試行 ${i}/${tries - 1}`);
+        await new Promise(r => setTimeout(r, wait * 1000));
+      }
+    }
+  }
+  console.error(`[backup:pull] ${label}できませんでした: ${explain(last)}`);
+  console.error('[backup:pull] サーバーが再デプロイ中かもしれません。数分おいてもう一度お試しください。');
+  console.error(`[backup:pull] ブラウザで ${BASE} が開けるかどうかも確認の目安になります。`);
+  process.exit(1);
+}
+
 async function main() {
   console.log(`[backup:pull] 対象サーバー: ${BASE}`);
   const password = process.env.ADMIN_PASSWORD || await ask(`${ADMIN_NAME} の管理者パスワード: `, { hidden: true });
   if (!password) { console.error('パスワードが空です。中止しました。'); process.exit(1); }
 
-  console.log('[backup:pull] ログイン中…（無料プランは初回50秒ほどかかることがあります）');
-  const loginRes = await fetch(`${BASE}/api/login`, {
+  console.log('[backup:pull] ログイン中…（再デプロイ直後は少し時間がかかることがあります）');
+  const loginRes = await req(`${BASE}/api/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: ADMIN_NAME, password }),
-  });
+  }, { label: 'ログイン' });
   const login = await loginRes.json().catch(() => ({}));
   if (!loginRes.ok || !login.token) {
     console.error(`ログインに失敗しました: ${login.error || loginRes.status}`);
+    if (loginRes.status === 401) {
+      console.error('[backup:pull] パスワードが違います。Render の Environment の ADMIN_PASSWORD と同じものを入力してください。');
+      console.error('[backup:pull] 変更直後の場合は、再デプロイが終わるまで古いパスワードのままです。');
+    }
     process.exit(1);
   }
 
   console.log('[backup:pull] バックアップを取得中…');
-  const bakRes = await fetch(`${BASE}/api/admin/backup`, {
+  const bakRes = await req(`${BASE}/api/admin/backup`, {
     headers: { Authorization: `Bearer ${login.token}` },
-  });
+  }, { label: 'バックアップの取得' });
   if (!bakRes.ok) {
     console.error(`バックアップの取得に失敗しました: HTTP ${bakRes.status}`);
     process.exit(1);
