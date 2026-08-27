@@ -2228,3 +2228,18 @@ body[data-screen="game"] .pt-peek { opacity: 1; }
   color: var(--gold, #f0b429); font-family: inherit; font-size: 9px; font-weight: 800;
   line-height: 1.2; white-space: nowrap;
 }
+
+/* ============ 🎬 YouTubeスタジオ（横型／縦型） ============ */
+/* 縦型(9:16)のときに横長の枠へ押し込まないよう、canvas 自身の
+   aspect-ratio に従わせる。高さは画面に収まるところで頭打ち。 */
+.yt-stage {
+  display: flex; justify-content: center;
+  max-height: 46vh; margin-bottom: 8px;
+}
+.yt-stage canvas {
+  max-width: 100%; max-height: 46vh;
+  width: auto; height: auto;
+  border-radius: 10px; border: 1px solid rgba(255,255,255,0.15);
+  background: #0b0e1f;
+}
+#ytFmt button { white-space: nowrap; }

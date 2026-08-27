@@ -8,7 +8,7 @@
     "start": "node server/index.js",
     "dev": "node server/index.js",
     "backup:pull": "node scripts/pull-backup.mjs",
-    "test": "node test/viewresize.test.mjs && node test/i18n.test.mjs && node test/clientwiring.test.mjs && node test/zero.test.mjs && node test/zero-session.test.mjs && node test/dbsafety.test.mjs && node test/restore-auth.test.mjs && node test/session.test.mjs && node test/rank-rewards.test.mjs && node test/new-modes.test.mjs && node test/crowd.test.mjs && node test/persist.test.mjs && node test/gacha.test.mjs && node test/battle.test.mjs && node test/social.test.mjs && node test/adminevent.test.mjs && node test/throne.test.mjs && node test/royale.test.mjs && node test/security.test.mjs && node test/useredit.test.mjs && node test/ranking-ai.test.mjs && node test/inventory.test.mjs && node test/shutdown.test.mjs"
+    "test": "node test/viewresize.test.mjs && node test/i18n.test.mjs && node test/clientwiring.test.mjs && node test/ytexport.test.mjs && node test/zero.test.mjs && node test/zero-session.test.mjs && node test/dbsafety.test.mjs && node test/restore-auth.test.mjs && node test/session.test.mjs && node test/rank-rewards.test.mjs && node test/new-modes.test.mjs && node test/crowd.test.mjs && node test/persist.test.mjs && node test/gacha.test.mjs && node test/battle.test.mjs && node test/social.test.mjs && node test/adminevent.test.mjs && node test/throne.test.mjs && node test/royale.test.mjs && node test/security.test.mjs && node test/useredit.test.mjs && node test/ranking-ai.test.mjs && node test/inventory.test.mjs && node test/shutdown.test.mjs"
   },
   "engines": {
     "node": ">=18"

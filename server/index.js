@@ -148,6 +148,13 @@ app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
     "script-src 'self'",
+    // 🎬 YouTubeスタジオの録画は、ページ自身が組み立てた Blob の Worker で
+    // 時計を回している（タブが隠れても止まらないタイマーが要るため）。
+    // worker-src を書かないと script-src に落ちて blob: が弾かれ、
+    // **録画が丸ごと動かなくなる**。実際にそうなっていた。
+    // blob: の Worker はページで動いているコードしか作れないので、
+    // 外部スクリプトを締め出すという CSP の目的は損なわない。
+    "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",   // インラインstyle属性を多用しているため
     "img-src 'self' data: blob:",
     "media-src 'self' data: blob:",
