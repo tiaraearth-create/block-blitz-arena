@@ -145,6 +145,16 @@ app.use((req, res, next) => {
   // このゲームは外部のスクリプトも外部への通信も使っていない（フォントも
   // 画像も自前）。だから許可先を自分自身だけに絞れる。万一どこかに文字列を
   // 差し込まれても、外へ持ち出す先が無くなる。
+  //
+  // WebSocket の行き先は「このページと同じホスト」だけ。
+  // 以前は ws: wss: とスキーマごと許していたが、それは
+  // **どのホストでも良い** という意味なので、上の「外へ持ち出す先が無い」
+  // という狙いが WebSocket だけ素通しになっていた。
+  // Host ヘッダーは client が名乗るものなので、そのまま header に
+  // 差し込まない ── ホスト名として妥当な字だけを通す。
+  const rawHost = String(req.headers.host || '');
+  const wsHost = /^[A-Za-z0-9.\-:[\]]{1,120}$/.test(rawHost) ? rawHost : '';
+  const wsSrc = wsHost ? ` ws://${wsHost} wss://${wsHost}` : '';
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
     "script-src 'self'",
@@ -158,7 +168,7 @@ app.use((req, res, next) => {
     "style-src 'self' 'unsafe-inline'",   // インラインstyle属性を多用しているため
     "img-src 'self' data: blob:",
     "media-src 'self' data: blob:",
-    "connect-src 'self' ws: wss:",
+    `connect-src 'self'${wsSrc}`,
     "frame-ancestors 'self'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -270,6 +280,26 @@ function migrateUser(user) {
   ensureSocial(user);
   if (user.role !== 'admin' && user.role !== 'mod') user.role = 'user';
   return user;
+}
+
+// 結果送信の「前回はいつだったか」。まだ一度も送っていない人にも
+// 必ず基準を与える ── 無いと初回だけ一律の猶予になり、
+//   ・短すぎれば「初めての1回が長かった人」のスコアを切り詰める
+//   ・長すぎれば新規アカウントが1リクエストで上限まで通せる
+// の両方を同時に踏む。
+//
+// 基準は「アカウントが存在している時間」。誰も自分のアカウントより
+// 長くは遊べないので偽装できない。ただし上限は30分 ── 青天井にすると、
+// 何年も前に作って一度も遊んでいないアカウントが、その「初回」1回だけ
+// スコア上限まで通せてしまう。
+const FIRST_RESULT_GRACE_MS = 30 * 60 * 1000;
+function seedLastResultAt(user) {
+  const s = user.stats;
+  if (Number.isFinite(s.lastResultAt) && s.lastResultAt > 0) return s.lastResultAt;
+  const now = Date.now();
+  const age = Math.max(0, now - (Number.isFinite(user.createdAt) ? user.createdAt : now));
+  s.lastResultAt = now - Math.min(age, FIRST_RESULT_GRACE_MS);
+  return s.lastResultAt;
 }
 
 function levelOf(xp) { return 1 + Math.floor(xp / 1000); }
@@ -425,15 +455,19 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // 遊んでもコインもXPもミッション進捗も 90秒ぶんしか付かなかった。
   if (!preClamped) {
     const now = Date.now();
-    const last = user.stats.lastResultAt || 0;
+    const last = seedLastResultAt(user);
     // +90s of slack: a run can start before the previous one is submitted
     // (menus, result screens), and clocks drift.
     // 初回だけ 3600秒 の猶予を与えていたので、3600×500=180万点 が上限を
     // 上回り、スコアの絶対上限100万点に対して**一度も発動しない**状態だった。
     // しかもこの「初回」はセッション初回ではなくアカウント生涯の初回。
     // 実測で、新規アカウントが1リクエストで王座を6つ独占できた。
-    // 通常の1プレイに必要なぶんだけ与える。
-    const elapsed = last ? (now - last) / 1000 + 90 : 300;
+    //
+    // かといって初回を一律300秒にすると、今度は「初めての1回が長かった人」の
+    // スコアを 300×500 = 150,000点 で切り詰めてしまう。
+    // なので初回の基準は migrateUser が入れておく（アカウントの年齢に基づく、
+    // 最大30分ぶんの持ち時間）。ここでは常にその基準からの経過を使う。
+    const elapsed = (now - last) / 1000 + 90;
     if (duration > elapsed) duration = Math.max(1, Math.floor(elapsed));
     user.stats.lastResultAt = now;
   }
@@ -2160,9 +2194,11 @@ app.post('/api/adminevent/result', requireAuth, maintenanceGuard, (req, res) => 
   // 「前回の提出からの実経過時間」で頭を押さえる。ここが無かったので
   // duration:3600 を書くだけで毎回 score=1,000,000 を通せた。
   {
+    // 基準の入れ方は applyGameResult 側と同じ（seedLastResultAt）。
+    // ここだけ一律300秒にしていると、初参加の人の長い1回が切り詰められる。
     const now = Date.now();
-    const last = req.user.stats.lastResultAt || 0;
-    const elapsed = last ? (now - last) / 1000 + 90 : 300;
+    const last = seedLastResultAt(req.user);
+    const elapsed = (now - last) / 1000 + 90;
     if (duration > elapsed) duration = Math.max(1, Math.floor(elapsed));
     req.user.stats.lastResultAt = now;
   }
