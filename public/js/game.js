@@ -594,6 +594,29 @@ export class GameView {
       ctx.lineWidth = key ? 3 : 2;
       ctx.strokeRect(x + 2, y + 2, cell - 4, cell - 4);
     }
+    // 残り時間の輪。締切がどこにも出ておらず、落とすと住人が処刑される
+    // のに、あと何秒あるのか分からなかった。急所（金マス）の上に描く。
+    if (this.dangerUntil && this.dangerTotal) {
+      const left = Math.max(0, this.dangerUntil - Date.now());
+      const p = left / this.dangerTotal;
+      const k = this.keystoneCell >= 0 ? this.keystoneCell : [...this.dangerCells][0];
+      const r = (k / SIZE) | 0, c = k % SIZE;
+      const cx = this.boardX + (c + 0.5) * cell, cy = this.boardY + (r + 0.5) * cell;
+      const rad = cell * 0.42;
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = p > 0.35 ? '#ffffff' : '#ff3b3b';
+      ctx.lineWidth = Math.max(2.5, cell * 0.09);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(cx, cy, rad, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `900 ${Math.round(cell * 0.4)}px system-ui, sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText((left / 1000).toFixed(1), cx, cy);
+    }
     ctx.globalAlpha = 1;
   }
 

@@ -8,7 +8,7 @@
 // あれはメニュー画面でしか出ない作りなので、試合中に見えなくなる。
 
 import { $, showModal, closeModal, toast, showScreen } from './dom.js';
-import { t } from './i18n.js';
+import { t, trServer } from './i18n.js';
 import { audio } from './audio.js';
 import { session, api } from './net.js';
 import { sendWs, registerHandler, onWsReady } from './chat.js';
@@ -360,7 +360,7 @@ export function initParty() {
     };
   });
 
-  registerHandler('party_error', msg => { if (msg.error) toast(msg.error, 'err', 3000); });
+  registerHandler('party_error', msg => { if (msg.error) toast(trServer(msg.error), 'err', 3000); });
 
   // 画面が変わったら描き直す。試合中とメニューで棚の姿が変わるので、
   // ここを見ていないと、試合に入っても開いた棚のまま盤面に重なる。

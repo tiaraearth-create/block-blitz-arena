@@ -747,6 +747,12 @@ export async function openLeaderboard(board = 'score') {
 // Shop
 // ---------------------------------------------------------------------------
 
+// アイテム／奥義が使えるモードの一覧。以前は2か所に手書きしてあり、
+// 6モードぶん実態とずれていた（書いてある通りに使えないモードがあった）。
+// showItemBar(true) を呼んでいるモードが実際の答え。
+const JA = "ソロ・ボス・ボスラッシュ・ダンジョン・サバイバル・カオスの6モードで使えます。それ以外は公平のため使えません";
+const EN = "Usable in Solo, Boss, Boss Rush, Dungeon, Survival and Chaos. Every other mode disables them for fairness";
+
 let shopItems = null;
 let shopBoosters = null;
 let shopTab = 'skin';
@@ -784,14 +790,17 @@ function renderShop() {
     note.className = 'muted center';
     note.style.gridColumn = '1 / -1';
     note.innerHTML = tr(
-      'ラインを消すと⚡ゲージが溜まり、MAXでHUDの⚡ボタンから<b>必殺技</b>が撃てる！装備できるのは1つだけ。<br><small>ソロ・ボス・ダンジョン・サバイバル・カオスで使用可（AI／オンライン／ウィークリーは公平のため対象外）</small>',
-      'Clearing lines charges the ⚡ gauge — at MAX, fire your <b>ultimate</b> from the HUD button. One equipped at a time.<br><small>Usable in Solo, Boss, Dungeon, Survival and Chaos (disabled in AI / Online / Weekly for fairness)</small>');
+      'ラインを消すと⚡ゲージが溜まり、MAXでHUDの⚡ボタンから<b>奥義</b>が撃てる！装備できるのは1つだけ。<br><small>'+JA+'</small>',
+      'Clearing lines charges the ⚡ gauge — at MAX, fire your <b>ultimate</b> from the HUD button. One equipped at a time.<br><small>'+EN+'</small>');
     grid.appendChild(note);
   }
   items.forEach((item, idx) => {
     // Admin gear is implicitly owned by admins (never purchasable).
+    // ゲストは「値段0のもの」ではなく「初期装備」だけ所持扱いにする。
+    // 以前は price===0 だったので、ガチャ限定品（price:0）まで所持扱いになり、
+    // 押しても何も起きない「装備する」が出ていた。
     const owned = item.adminOnly ? (u && u.role === 'admin')
-      : u ? u.owned.includes(item.id) : item.price === 0;
+      : u ? u.owned.includes(item.id) : !!item.default;
     const equipped = item.cat === 'ult'
       ? equippedUlt() === item.id
       : u ? u.equipped[item.cat] === item.id : !!item.default;
@@ -926,7 +935,7 @@ const CAT_TITLE = {
   skin: { ja: '🧱 ブロックスキン', en: '🧱 Block skins' },
   board: { ja: '🎨 ボードテーマ', en: '🎨 Board themes' },
   fx: { ja: '✨ 消去エフェクト', en: '✨ Clear effects' },
-  ult: { ja: '⚡ アルティメット', en: '⚡ Ultimates' },
+  ult: { ja: '⚡ 奥義', en: '⚡ Ultimates' },
 };
 
 function renderInvGear() {
@@ -981,7 +990,7 @@ function renderInvItems() {
   const rows = shopBoosters.filter(i => !i.adminOnly || staffExtras());
   body.innerHTML = `
     <p class="muted center inv-note">${tr(
-      'ゲーム中のHUDから使えます。<br><small>ソロ・ボス・ダンジョン・サバイバル・カオスで使用可（AI戦／オンライン／ウィークリーは公平のため対象外）</small>',
+      'ゲーム中のHUDから使えます。<br><small>'+JA+'</small>',
       'Use them from the in-game HUD.<br><small>Available in Solo, Boss, Dungeon, Survival and Chaos (disabled in AI / Online / Weekly for fairness)</small>')}</p>
     <div class="inv-items">
       ${rows.map(i => {
@@ -1137,7 +1146,7 @@ function renderBoosterShop() {
   const note = document.createElement('p');
   note.className = 'muted center';
   note.style.gridColumn = '1 / -1';
-  note.textContent = tr('ソロ・ボス・ダンジョン・カオスで使える消費アイテム。ゲーム中のHUDから発動！', 'Consumables for Solo, Boss, Dungeon and Chaos. Activate them from the in-game HUD!');
+  note.textContent = tr('消費アイテム。ゲーム中のHUDから発動！'+JA, 'Consumables. Activate them from the in-game HUD. '+EN);
   grid.appendChild(note);
   shopBoosters.forEach((item, idx) => {
     const count = u ? (u.items && u.items[item.id]) || 0 : null;
@@ -1261,7 +1270,11 @@ function afterEquip() {
 async function equipItem(item) {
   // Guests can still pick an ultimate — the choice lives in localStorage.
   if (!session.user) {
-    if (item.cat !== 'ult') return;
+    if (item.cat !== 'ult') {
+      // 無言の return をやめる。押して何も起きないのが、いちばん困る。
+      toast(tr('装備を保存するにはアカウント登録が必要です', 'You need an account to save your loadout'), 'err', 3000);
+      return;
+    }
     setGuestUlt(item.id);
     audio.click();
     toast(tr(`${catName(item)} を装備しました`, `Equipped ${catName(item)}`), 'ok');
@@ -1612,7 +1625,33 @@ function renderBattlePass(data) {
     </div>`;
 
   const buyBtn = $('#bpBuyPremium');
-  if (buyBtn) buyBtn.onclick = async () => {
+  if (buyBtn) buyBtn.onclick = () => {
+    // 500💎 が確認なしのワンタップで飛んでいた。しかもシーズンが終われば
+    // 効果は消えるので、残り日数を必ず見せてから確認を取る。
+    const m = showModal([
+      `<h2>👑 ${tr('プレミアムパス', 'Premium Pass')}</h2>`,
+      `<p class="center">${tr(`💎 ${fmt(data.premiumPriceGems)} を使って解放します。`, `Unlock for 💎 ${fmt(data.premiumPriceGems)}.`)}</p>`,
+      `<p class="muted center" style="font-size:12px">${tr(
+        `このシーズン（残り ${daysLeft}日）だけ有効です。シーズンが変わると効果は無くなります。`,
+        `Valid for this season only — ${daysLeft} days left. It does not carry over.`)}</p>`,
+      daysLeft <= 3
+        ? `<p class="center" style="color:#ffa93d;font-size:12.5px;font-weight:700">${tr(
+            '⚠️ シーズン終了が近いです。次のシーズンまで待つほうがお得かもしれません。',
+            '⚠️ The season ends soon — waiting for the next one may be better value.')}</p>`
+        : '',
+      '<div class="modal-buttons">',
+      `  <button class="btn btn-ghost" id="bpNo">${tr('やめる', 'Cancel')}</button>`,
+      `  <button class="btn btn-gold" id="bpYes">${tr('解放する', 'Unlock')}</button>`,
+      '</div>',
+    ].join(''));
+    m.querySelector('#bpNo').onclick = closeModal;
+    m.querySelector('#bpYes').onclick = async () => {
+      closeModal();
+      await doBuyPremium();
+    };
+  };
+
+  async function doBuyPremium() {
     try {
       await api('/api/battlepass/premium', { method: 'POST' });
       audio.levelUp();
@@ -1623,6 +1662,16 @@ function renderBattlePass(data) {
   };
 
   tiersEl.innerHTML = '';
+  // どちらの列が無料で、どちらが課金かの見出しが無かった。
+  // 見出しが無いと、届いているのに受け取れない報酬が「受け取れそう」に見える。
+  const head = document.createElement('div');
+  head.className = 'bp-tier bp-head';
+  head.innerHTML = `
+    <div class="bp-tier-num"></div>
+    <div class="bp-cell bp-col-head">${tr('無料', 'Free')}</div>
+    <div class="bp-cell bp-col-head premium-cell">${(prog && prog.premium) ? tr('👑 プレミアム', '👑 Premium') : tr('👑 プレミアム（未解放）', '👑 Premium (locked)')}</div>`;
+  tiersEl.appendChild(head);
+
   data.tiers.forEach((t, idx) => {
     const unlocked = prog && t.tier <= unlockedTier;
     const el = document.createElement('div');
@@ -1633,10 +1682,14 @@ function renderBattlePass(data) {
       const { icon, label } = rewardLabel(reward);
       const claimed = prog && prog.claimed.includes(`${t.tier}:${track}`);
       const claimable = unlocked && !claimed && (track === 'free' || (prog && prog.premium));
+      // 到達しているのにプレミアム未加入で受け取れない場合、
+      // 何も出さないと「押せば取れそう」に見えてしまう。理由を書く。
+      const needPremium = unlocked && !claimed && track === 'premium' && prog && !prog.premium;
       return `
         <div class="bp-cell ${track === 'premium' ? 'premium-cell' : ''} ${!unlocked ? 'locked' : ''} ${claimed ? 'claimed' : ''}">
           <span class="rw-icon">${icon}</span><span>${label}</span>
           ${claimable ? `<button class="bp-claim-btn" data-tier="${t.tier}" data-track="${track}">${tr('受取', 'Claim')}</button>` : ''}
+          ${needPremium ? `<button class="bp-need-premium" data-need="1">${tr('👑 プレミアムで解放', '👑 Unlock with Premium')}</button>` : ''}
         </div>`;
     };
     el.innerHTML = `
@@ -1644,6 +1697,13 @@ function renderBattlePass(data) {
       ${cell(t.free, 'free')}
       ${cell(t.premium, 'premium')}`;
     tiersEl.appendChild(el);
+  });
+
+  tiersEl.querySelectorAll('[data-need]').forEach(btn => {
+    btn.onclick = () => {
+      const buy = $('#bpBuyPremium');
+      if (buy) { buy.scrollIntoView({ behavior: 'smooth', block: 'center' }); buy.click(); }
+    };
   });
 
   tiersEl.querySelectorAll('.bp-claim-btn').forEach(btn => {
@@ -1883,7 +1943,7 @@ function renderAdminUsers(users) {
 // POST にまとめる（途中で失敗して中途半端な状態になるのを避けるため）。
 // ---------------------------------------------------------------------------
 
-const CAT_LABEL = { skin: '🧱 ブロックスキン', board: '🎨 ボードテーマ', fx: '✨ 消去エフェクト', ult: '⚡ アルティメット' };
+const CAT_LABEL = { skin: '🧱 ブロックスキン', board: '🎨 ボードテーマ', fx: '✨ 消去エフェクト', ult: '⚡ 奥義' };
 const BADGE_LABEL = {
   bronze: '🥉ブロンズ', silver: '🥈シルバー', gold: '🥇ゴールド', oni: '👹鬼', kami: '🔱神',
   souzou: '🌌創造神', maou: '😈魔王', rush: '⚔️ラッシュ', dungeon: '🏰百塔', tourney: '🏆大会',

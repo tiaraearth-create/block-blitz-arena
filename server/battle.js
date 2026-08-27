@@ -964,7 +964,7 @@ export function initBattle(server, deps) {
   }
 
   // Apply one move to the shared board. Returns false when it is illegal.
-  function coopApply(match, slot, index, row, col) {
+  function coopApply(match, slot, index, row, col, opts = {}) {
     const e = match.engine;
     if (match.ended || e.over) return false;
     if (match.turn !== slot) return false;
@@ -985,7 +985,7 @@ export function initBattle(server, deps) {
     }
     match.turn = (slot + 1) % match.players.length;
     match.turnEndsAt = Date.now() + COOP_TURN_MS;
-    coopBroadcast(match, { slot, index, row, col });
+    coopBroadcast(match, { slot, index, row, col, auto: !!opts.auto });
     if (e.over) {
       clearInterval(match.coopTick);
       setTimeout(() => endMatch(match, 'coop_over'), 900);
@@ -1006,7 +1006,9 @@ export function initBattle(server, deps) {
       setTimeout(() => endMatch(match, 'coop_over'), 900);
       return;
     }
-    coopApply(match, match.turn, mv.index, mv.row, mv.col);
+    // 「サーバーが代わりに置いた」と分かるように印をつける。
+    // これが無いと、自分の手番なのに勝手に石が置かれる。
+    coopApply(match, match.turn, mv.index, mv.row, mv.col, { auto: true });
   }
 
   function coopTick(match) {

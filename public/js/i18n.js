@@ -40,6 +40,76 @@ export function catDesc(obj) {
 // ---------------------------------------------------------------------------
 
 const SERVER_MSG_EN = {
+  // v2.12: 英語面に日本語のトーストが出ていたぶんをまとめて追加。
+  // trServer は表に無い文字列をそのまま返すので、抜けても壊れない ──
+  // だから気づかれないまま残る。増やしたら必ずここも足すこと。
+  'ファイルが大きすぎます（最大12MB）': 'That file is too large (12MB max)',
+  'その名前は使えません。別の名前でどうぞ': 'That name is not available — please pick another',
+  '名前を入力してください': 'Enter a name',
+  'メッセージが空です': 'Your message is empty',
+  'すこし待ってからお試しください': 'Please wait a moment and try again',
+  'すこし早すぎます': 'A little too fast — slow down',
+  '連投しすぎです。少し待ってください': 'Too many messages in a row — please wait a moment',
+  '通信エラーが発生しました': 'A connection error occurred',
+  '権限がありません': 'You do not have permission',
+  'モデレーター権限が必要です': 'Moderator permission is required',
+  '接続数が上限に達しています。しばらくしてからお試しください': 'The server is at capacity — please try again shortly',
+  '同時接続が多すぎます': 'Too many simultaneous connections',
+  '同じアカウントの接続が多すぎます': 'Too many connections from this account',
+  'その名前は使われています。別の名前になりました': 'That name is taken — you have been given another',
+  '結果の送信が多すぎます。しばらく待ってください': 'Too many results submitted — please wait a moment',
+  '送信が多すぎます。しばらく待ってください': 'Too many submissions — please wait a moment',
+  'アイテムを持っていません': 'You do not have that item',
+  '所持していないアイテムです': 'You do not own that item',
+  'まだ獲得していない称号です': 'You have not earned that title yet',
+  'アリーナが満席です。次の枠でお待ちしています': 'The arena is full — see you in the next slot',
+  'いま開催予定の管理者イベントはありません': 'No Admin Event is scheduled right now',
+  'いまはあなたの枠の時間ではありません': 'This is not your slot',
+  '受け取れる報酬がありません': 'There is nothing to claim',
+  'この回に参加していません': 'You did not take part in this one',
+  'まだ目標に届いていません（ゲージを進めよう）': 'The goal has not been reached yet — keep filling the gauge',
+  '開催中のイベントがありません': 'No event is running',
+  '👑 管理者イベント専用ショップの品です（王座の欠片でのみ交換）': '👑 Admin Event exclusive — only Throne Shards can buy this',
+  'そんな品はありません': 'No such item',
+  'すでに持っています': 'You already have it',
+  'フレンド機能を使うにはアカウント登録が必要です': 'You need an account to use friends',
+  '申請できませんでした': 'The request could not be sent',
+  '自分には申請できません': 'You cannot send yourself a request',
+  'すでにフレンドです': 'You are already friends',
+  '申請ずみです': 'Already requested',
+  'その申請はありません': 'There is no such request',
+  '相手が見つかりません': 'That player could not be found',
+  '相手のフレンドがいっぱいです': 'Their friend list is full',
+  '自分はブロックできません': 'You cannot block yourself',
+  'すでにパーティーにいます': 'You are already in a party',
+  'いまパーティーがいっぱいです。少し待ってください': 'All party slots are busy — please wait a moment',
+  'パーティーを作れませんでした': 'The party could not be created',
+  'そのパーティーは見つかりません': 'No party with that code',
+  'パーティーがいっぱいです': 'That party is full',
+  'そのパーティーには参加できません': 'You cannot join that party',
+  'パーティーにいません': 'You are not in a party',
+  'リーダーだけができます': 'Only the leader can do that',
+  '自分は追い出せません': 'You cannot remove yourself',
+  'その人はいません': 'They are not in the party',
+  'パーティーから外れました': 'You were removed from the party',
+  'その人はすでに別のパーティーにいます': 'They are already in another party',
+  '招待できませんでした': 'The invite could not be sent',
+  'その人はいまオフラインです': 'They are offline right now',
+  'その招待は見つかりません': 'That invite no longer exists',
+  'その招待は期限切れです': 'That invite has expired',
+  'そのパーティーは解散しています': 'That party has broken up',
+  'そのパーティーはありません': 'No such party',
+  'パーティーは運営により解散されました': 'Staff broke up this party',
+  '対戦中のメンバーがいます。終わるまで待ってください': 'Someone is still in a match — wait until they finish',
+  '部屋を作れませんでした。もう一度お試しください': 'Could not open the room — please try again',
+  'サーバーの更新のため、パーティーを解散しました': 'The party was disbanded for a server update',
+  '通報が多すぎます。すこし待ってください': 'Too many reports — please wait a moment',
+  'いまは受け付けられません': 'That cannot be accepted right now',
+  'いまは読めません': 'That cannot be read right now',
+  'いまはできません': 'That cannot be done right now',
+  '報告が見つかりません': 'Report not found',
+  'お知らせが見つかりません': 'That notice no longer exists',
+  'タイトルと本文を入力してください': 'Enter a title and a body',
   '投票は開催されていません': 'No poll is running',
   'この投票は終了しています': 'This poll has closed',
   '選択肢が見つかりません': 'That option no longer exists',
@@ -186,7 +256,7 @@ export function applyStaticI18n() {
   }
 
   // nav (each is <span>icon</span> + text node)
-  const nav = { btnMissions: 'Missions', btnGuild: 'Guild', btnNews: 'News', btnLeaderboard: 'Ranking', btnShop: 'Shop', btnGacha: 'Gacha', btnGemShop: 'Gems', btnBattlePass: 'Pass', btnAdmin: 'Admin' };
+  const nav = { btnMissions: 'Missions', btnFriends: 'Friends', btnGuild: 'Guild', btnNews: 'News', btnLeaderboard: 'Ranking', btnInventory: 'Items', btnShop: 'Shop', btnGacha: 'Gacha', btnGemShop: 'Gems', btnBattlePass: 'Pass', btnAdmin: 'Admin' };
   for (const [id, label] of Object.entries(nav)) {
     const el = document.getElementById(id);
     if (!el) continue;
@@ -229,6 +299,18 @@ export function applyStaticI18n() {
   set('[data-gd="mine"]', 'My Guild');
   set('[data-gd="rank"]', 'Ranking');
   set('[data-gd="find"]', 'Find');
+  // 🎒 インベントリはここに1行も無く、英語で遊ぶと画面ごと日本語のままだった。
+  set('#screen-inventory .sub-header h2', '🎒 Inventory');
+  set('[data-inv="gear"]', 'Gear');
+  set('[data-inv="item"]', 'Items');
+  set('[data-inv="title"]', 'Titles');
+  set('[data-inv="badge"]', 'Badges');
+  // 🤝 フレンド（v2.12 で追加）
+  set('#screen-friends .sub-header h2', '🤝 Friends');
+  set('[data-fr="list"]', 'Friends');
+  set('[data-fr="requests"]', 'Requests');
+  set('[data-fr="find"]', 'Find');
+  set('[data-fr="settings"]', 'Settings');
   set('#screen-news .sub-header h2', '📰 News');
   set('#btnNewsPost', '✍️ Post');
   set('[data-ms="daily"]', 'Daily');

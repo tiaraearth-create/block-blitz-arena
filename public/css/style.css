@@ -1702,7 +1702,10 @@ body[data-screen="game"] #topbar { display: none; }
 .ae-head { text-align: center; margin-bottom: 10px; }
 .ae-mode-name { font-size: 20px; font-weight: 900; }
 .ae-mode-tag { font-size: 12px; font-weight: 800; color: var(--gold); margin-bottom: 6px; }
-.ae-mode-desc { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.ae-mode-desc {
+  /* 説明文に改行が入っている（斬りかた／落としたときの代償）。
+     pre-line にしないと1行に潰れて読めない。 */
+  white-space: pre-line; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 .ae-note {
   font-size: 12px; font-weight: 700; color: var(--cyan);
   background: rgba(67,217,232,0.1); border-radius: 8px; padding: 6px 10px; margin-top: 8px;
@@ -1739,8 +1742,11 @@ body[data-screen="game"] #topbar { display: none; }
 .ae-slot-pick { font-size: 12px; font-weight: 800; color: var(--blue); }
 
 /* 👁️ the admin's blindfold / the roulette's dark spin */
+/* 覆うのは盤面だけ。手札まで隠すと、見えないのではなく何もできない。
+   盤面は canvas の上から 6px、辺は幅で頭打ち（game.js の resize と同じ）。 */
 .game-canvas-wrap.ae-blind::after {
-  content: ''; position: absolute; inset: 0; z-index: 3;
+  content: ''; position: absolute; left: 0; right: 0; top: 0;
+  height: min(calc(100% - 130px), 100vw);
   background: rgba(2,3,10,0.82); border-radius: 12px;
   pointer-events: none; animation: fadeIn .25s ease;
 }
@@ -2183,4 +2189,21 @@ body[data-screen="game"] .pt-body { display: none; }
 body[data-screen="game"] .pt-peek { opacity: 1; }
 @media (max-width: 380px) {
   #partyDock { left: 4px; right: 4px; width: auto; }
+}
+
+/* ============ 🎫 バトルパスの列見出し ============ */
+/* どちらが無料でどちらが課金かの見出しが無く、届いているのに受け取れない
+   報酬が「押せば取れそう」に見えていた。 */
+.bp-head { position: sticky; left: 0; }
+.bp-col-head {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .04em;
+  color: var(--muted); background: none; border: none;
+  display: flex; align-items: center; justify-content: center; min-height: 26px;
+}
+.bp-col-head.premium-cell { color: var(--gold, #f0b429); }
+.bp-need-premium {
+  margin-top: 3px; padding: 3px 6px; border-radius: 6px; cursor: pointer;
+  border: 1px solid rgba(240,180,41,.4); background: rgba(240,180,41,.10);
+  color: var(--gold, #f0b429); font-family: inherit; font-size: 9px; font-weight: 800;
+  line-height: 1.2; white-space: nowrap;
 }

@@ -1774,9 +1774,12 @@ class VersusBase {
       cards.appendChild(card);
       this.scores[o.slot] = 0;
     }
-    this.applyOppDensity(this.oppList.length > 1 ? oppDensity() : 'cards');
+    // 1対1 も設定どおりに扱う。以前は相手が1人だと強制的に cards になり、
+    // しかも ⤢ ボタンも隠れていたので、いちばん人が遊ぶ 1対1 だけが
+    // 全モード中いちばん盤面の小さいモードで、直す手段も無かった。
+    this.applyOppDensity(oppDensity());
     const btn = $('#btnOppDensity');
-    btn.classList.toggle('hidden', this.oppList.length < 2);
+    btn.classList.remove('hidden');
     btn.onclick = () => {
       audio.click();
       const next = this.density === 'strip' ? 'cards' : 'strip';
@@ -3790,6 +3793,8 @@ class OnlineMode extends VersusBase {
         const b = document.querySelector('#rRematch');
         if (b) { b.disabled = true; b.textContent = t('🔁 相手が離脱', '🔁 Opponent left'); }
       })
+      // OnlineMode には error の受け口が無く、サーバーが送っても無反応だった。
+      .on('error', m => { if (m.error) toast(trServer(m.error), 'err', 3000); })
       .on('coop_state', msg => this.onCoopState(msg))
       .on('coop_reject', msg => this.onCoopReject(msg))
       .on('coop_partner_left', () => toast(t('相棒が離脱しました。残りはサーバーが代打します！', 'Your partner left — the server will play their turns!'), 'err', 4000))
@@ -4153,7 +4158,9 @@ class OnlineMode extends VersusBase {
     }
 
     if (msg.spectating && msg.watch) this.renderRoyaleSpectate(msg);
-    if (msg.finale && msg.finale.length) this.renderRoyaleFinale(msg.finale);
+    // ファイナルの一覧は観戦者だけに出す。生き残っている本人に出すと、
+    // 手札の上に重なって、いちばん大事な最後の3人で置けなくなる。
+    if (msg.finale && msg.finale.length && msg.spectating) this.renderRoyaleFinale(msg.finale);
   }
 
   // Dying at 30 seconds into a 3-minute mode used to eject you to a modal with
@@ -4396,6 +4403,11 @@ class OnlineMode extends VersusBase {
         if (msg.move.slot !== this.mySlot) {
           const el = $('#hudSub');
           el.classList.remove('coop-flash'); void el.offsetWidth; el.classList.add('coop-flash');
+        } else if (msg.move.auto) {
+          // 自分の手番が時間切れでサーバーに置かれた。今まで何の断りも
+          // 無く石が置かれていて、何が起きたのか分からなかった。
+          audio.error();
+          toast(t('⏰ 時間切れ ── かわりに置きました', '⏰ Out of time — the server placed it for you'), 'err', 2600);
         }
       }
     }
@@ -4442,6 +4454,9 @@ class OnlineMode extends VersusBase {
     this.coopTurn = msg.turn;
     this.applyCoopTurn();
     audio.putback();
+    // 無言で盤面が戻ると「バグった」ようにしか見えない。理由を出す。
+    toast(t('その手は間に合いませんでした（盤面を合わせ直しました）',
+      'That move did not make it in time — the board has been resynced'), 'err', 2400);
   }
 
   applyCoopTurn() {
@@ -5411,7 +5426,9 @@ class AdminEventMode extends VersusBase {
         this.timers.push(this.spinInt);
         break;
       case 'treasure': this.treasure = true; break;
-      case 'blind': this.blindFor(30000); break;
+      // 30秒も手札ごと真っ黒にすると、ただ何もできない時間になる。
+      // ルーレットの他の効果と同じ尺（数秒）に揃える。
+      case 'blind': this.blindFor(4000); break;
       case 'rise':
         this.riseInt = setInterval(() => {
           if (this.ended || e.over || (view && (view.inputLocked || view.drag))) return;
@@ -5665,7 +5682,8 @@ class ZeroMode extends VersusBase {
       .on('zero_deal_done', m => this.onDealDone(m))
       .on('zero_stake', m => this.onStake(m))
       .on('zero_revive', () => this.onRevived())
-      .on('error', m => toast(m.error || t('エラー', 'Error'), 'err', 3000))
+      // 生の文字列を出さない。英語で遊んでいる人に日本語のトーストが出る。
+      .on('error', m => toast(trServer(m.error) || t('エラー', 'Error'), 'err', 3000))
       .on('close', () => { if (!this.ended) toast(t('接続が切れました', 'Disconnected'), 'err'); });
 
     try {
@@ -5784,17 +5802,21 @@ class ZeroMode extends VersusBase {
     const v = getView();
     v.dangerCells = new Set(m.cells);
     v.keystoneCell = m.keystone;
+    // 締切を渡す。残り時間が見えないと、間に合わせようがない。
+    v.dangerUntil = Date.now() + m.warnMs;
+    v.dangerTotal = m.warnMs;
     v.screenFlash = 0.45;
     audio.countdown(false);
     const name = (session.user && session.user.username) || t('あなた', 'you');
     toast(t(`👁️ 断罪 ── ${name}　赤マスをラインで斬れ！`,
-      `👁️ CONDEMNED ── ${name}. Cut the red cells!`), 'err', Math.min(2600, m.warnMs));
+      `👁️ CONDEMNED ── ${name}. Cut the red cells!`), 'err', m.warnMs);
     // 予告時間で自動的に消える（サーバー側も同じ時刻で締める）
     this.after(m.warnMs + 200, () => {
       if (this.verdict && this.verdict.id === m.id) {
         this.verdict = null;
         v.dangerCells = null;
         v.keystoneCell = -1;
+        v.dangerUntil = 0;
       }
     });
   }

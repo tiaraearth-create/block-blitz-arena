@@ -97,8 +97,20 @@ export const WEEKLY_ALL_BONUS = { coins: 5000, gems: 40 };
 
 // --- period helpers -------------------------------------------------------
 
-export function todayId() {
-  return new Date().toISOString().slice(0, 10);
+// デイリーの区切りは日本時間の0時。UTC のままだと朝9時に切り替わり、
+// ログインボーナス（JST 0時）と半日ずれる ── 夜に遊ぶ人は毎日
+// ミッションを1セット取り逃していた。
+// jstDayKey と同じ計算をここで持つ（missions.js は依存を持たない方針なので）。
+export function todayId(ts = Date.now()) {
+  const d = new Date(ts + 9 * 3600 * 1000);
+  return d.toISOString().slice(0, 10);
+}
+
+// 次のJST0時までの残り（画面のカウントダウン用）
+export function msUntilDailyReset(ts = Date.now()) {
+  const jst = ts + 9 * 3600 * 1000;
+  const dayMs = 24 * 3600 * 1000;
+  return dayMs - (jst % dayMs);
 }
 
 // ISO week number, matching the weekly-challenge rollover (Monday 00:00 UTC).
@@ -203,10 +215,7 @@ export function missionsView(user, weekNum) {
     dailyBonus: DAILY_ALL_BONUS,
     weeklyBonus: WEEKLY_ALL_BONUS,
     // Milliseconds until each set regenerates.
-    dailyResetIn: (() => {
-      const d = new Date();
-      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) - Date.now();
-    })(),
+    dailyResetIn: msUntilDailyReset(),
   };
 }
 

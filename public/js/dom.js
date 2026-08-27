@@ -7,12 +7,73 @@ export const $$ = sel => [...document.querySelectorAll(sel)];
 
 const SCREENS = ['menu', 'game', 'matchmaking', 'room', 'leaderboard', 'shop', 'inventory', 'battlepass', 'missions', 'friends', 'guild', 'news', 'admin'];
 
-export function showScreen(name) {
+// 画面の履歴。端末の「戻る」と、画面左上の「←」の両方がこれを使う。
+// 以前はどちらも menu 直行で、しかも履歴を1つも積んでいなかったので、
+// Android では戻るを押すとアプリごと閉じていた（PWA は standalone）。
+const screenStack = [];
+let poppingBack = false;
+
+export function screenHistory() { return screenStack.slice(); }
+
+export function showScreen(name, { push = true } = {}) {
+  const prev = document.body.dataset.screen;
   for (const s of SCREENS) {
     const el = $(`#screen-${s}`);
     if (el) el.classList.toggle('hidden', s !== name);
   }
   document.body.dataset.screen = name;   // used by CSS (e.g. chat drawer on menu only)
+
+  if (!push || poppingBack || prev === name) return;
+  if (prev) screenStack.push(prev);
+  if (screenStack.length > 24) screenStack.shift();
+  try { history.pushState({ bbaScreen: name }, ''); } catch { /* file:// など */ }
+}
+
+// 1枚だけ戻す。戻り先が無ければメニュー。
+// onGameBack は試合中に呼ばれる（そのまま閉じずに確認を出すため）。
+export function goBack(onGameBack) {
+  if (document.body.dataset.screen === 'game') {
+    if (onGameBack) { onGameBack(); return true; }
+    return false;
+  }
+  const to = screenStack.pop() || 'menu';
+  poppingBack = true;
+  showScreen(to, { push: false });
+  poppingBack = false;
+  return true;
+}
+
+// 端末の戻る（Android のジェスチャー／ハードキー、ブラウザの ←）。
+// popstate が来た時点で履歴は1つ減っているので、こちらは画面を合わせるだけ。
+export function initHistory(onGameBack) {
+  try { history.replaceState({ bbaScreen: document.body.dataset.screen || 'menu' }, ''); } catch { /* ignore */ }
+  window.addEventListener('popstate', () => {
+    // モーダルが開いているなら、まずそれを閉じる（いちばん自然な戻り先）。
+    const modal = $('#modal-root');
+    if (modal && modal.firstChild) {
+      const dismissable = !modal.querySelector('.modal-backdrop[data-locked]');
+      // 閉じられないモーダルには印を付ける。端末の「戻る」で勝手に
+  // 閉じてしまうと、結果画面から出られなくなる類の事故が起きる。
+  if (!dismissable) backdrop.dataset.locked = '1';
+  if (dismissable) { closeModal(); repush(); return; }
+    }
+    if (document.body.dataset.screen === 'game') {
+      // 試合中は閉じない。✕ と同じ確認を出して、履歴だけ積み直す。
+      repush();
+      if (onGameBack) onGameBack();
+      return;
+    }
+    const to = screenStack.pop() || 'menu';
+    poppingBack = true;
+    showScreen(to, { push: false });
+    poppingBack = false;
+    // menu まで戻ったら、次の戻るでアプリを閉じてよい（＝積み直さない）。
+    if (to !== 'menu') repush();
+  });
+}
+
+function repush() {
+  try { history.pushState({ bbaScreen: document.body.dataset.screen || 'menu' }, ''); } catch { /* ignore */ }
 }
 
 export function toast(message, kind = '', ms = 2600) {

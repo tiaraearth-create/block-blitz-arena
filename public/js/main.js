@@ -1,6 +1,6 @@
 // App bootstrap: wire menu, session restore, global buttons.
 import { session, api, refreshMe, setToken } from './net.js';
-import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, staffExtras } from './dom.js';
+import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, staffExtras , goBack, initHistory } from './dom.js';
 import { audio } from './audio.js';
 import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
@@ -248,7 +248,16 @@ $$('[data-inv]').forEach(t => { t.onclick = () => { audio.click(); openInventory
 $$('[data-ms]').forEach(t => { t.onclick = () => { audio.click(); openMissions(t.dataset.ms); }; });
 
 // back buttons
-$$('[data-back]').forEach(b => { b.onclick = () => { audio.click(); showScreen('menu'); }; });
+// 「←」は1枚だけ戻す（以前は常にメニュー直行で、ショップ→インベントリと
+// 行き来したあとに元の画面へ戻れなかった）。
+$$('[data-back]').forEach(b => { b.onclick = () => { audio.click(); goBack(); }; });
+
+// 端末の戻る（Android のジェスチャー／ハードキー）。
+// 試合中は閉じずに、✕ と同じ確認を出す。
+initHistory(() => {
+  const q = $('#btnQuit');
+  if (q) q.click();
+});
 
 // quit game
 $('#btnQuit').onclick = () => {
@@ -257,7 +266,14 @@ $('#btnQuit').onclick = () => {
   if (cur && (cur.mode === 'chaos' || cur.mode === 'dungeon') && !cur.ended) { audio.click(); quitCurrent(); return; }
   const m = showModal(`
     <h2>${t('ゲームを終了しますか？', 'Quit this game?')}</h2>
-    <p class="muted center">${t('オンライン対戦の離脱は<b style="color:var(--red)">敗北</b>になります。<br>それ以外のモードは引き分け扱いです', 'Leaving an online battle counts as a <b style="color:var(--red)">loss</b>.<br>Other modes count as a draw')}</p>
+    ${(() => {
+      // モードによって「やめたらどうなるか」は全然ちがう。
+      // ソロで「引き分け扱い」と言われても、相手がいないので意味が通らない。
+      const online = cur && (cur.mode === 'pvp' || cur.kind);
+      return `<p class="muted center">${online
+        ? t('離脱は<b style="color:var(--red)">敗北</b>になります', 'Leaving counts as a <b style="color:var(--red)">loss</b>')
+        : t('ここまでのスコアで記録されます', 'Your score so far will be recorded')}</p>`;
+    })()}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="qNo">${t('続ける', 'Keep playing')}</button>
       <button class="btn btn-ai" id="qYes">${t('終了する', 'Quit')}</button>
@@ -676,7 +692,7 @@ $('#btnSprint').onclick = () => {
   const m = showModal(`
     <h2>${t('⏱️ タイムアタック', '⏱️ Time Attack')}</h2>
     <p class="muted center" style="margin-bottom:12px">
-      ${t('制限時間内にどれだけ稼げる？<br><small>専用ランキングあり。公平性のためアイテム・アルティメットは使えません</small>',
+      ${t('制限時間内にどれだけ稼げる？<br><small>専用ランキングあり。公平性のためアイテム・奥義は使えません</small>',
           'How much can you score against the clock?<br><small>Has its own ranking — items and ultimates are disabled for fairness</small>')}
     </p>
     <div class="form-col">

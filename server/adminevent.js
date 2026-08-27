@@ -101,8 +101,8 @@ export const AE_MODES = [
     name: '断罪', nameEn: 'Condemned',
     tagline: '人間しか封印を割れない',
     taglineEn: 'Only humans can break the seal',
-    desc: '管理者ゼロが七つの王座を人質に取った。段のHPは7割までしか点数で削れず、残り3割の「封印」を貫通できるのは、30秒ごとに来る【断罪】を斬った一撃だけ。住人は斬れない。鍵を持っているのは生身の人間だけです。',
-    descEn: 'Admin Zero has taken all seven thrones hostage. Only 70% of each stage can be worn down by score — the remaining 30% is sealed, and the seal yields only to a CONDEMNATION cut, which arrives every 30 seconds and which no resident can make. The key is held by living players alone.',
+    desc: '管理者ゼロが七つの王座を人質に取った。段のHPは7割までしか点数で削れず、残り3割の「封印」を貫通できるのは、30秒ごとに来る【断罪】を斬った一撃だけ。住人は斬れない。鍵を持っているのは生身の人間だけです。\n\n【断罪のしかた】赤いマスが3.5秒だけ点灯します。そのマスを通るラインを消せば「斬った」。金色のマスは急所で、含めて斬ると貫通が倍になります。\n【落とすとどうなるか】時間内に斬れないと、赤マスがそのままお邪魔になり、アリーナの住人が1人、名前つきで処刑されます。その日はもう戻ってきません。',
+    descEn: 'Admin Zero has taken all seven thrones hostage. Only 70% of each stage can be worn down by score — the remaining 30% is sealed, and the seal yields only to a CONDEMNATION cut, which arrives every 30 seconds and which no resident can make. The key is held by living players alone.\n\n[How to cut] Red cells light up for 3.5 seconds. Clear a line through them and you have cut. The gold cell is the keystone — include it and the damage doubles.\n[If you miss] The red cells turn to garbage, and one resident of the arena is executed by name. They do not come back for the rest of the day.',
   },
 ];
 
