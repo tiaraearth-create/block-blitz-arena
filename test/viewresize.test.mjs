@@ -109,7 +109,16 @@ check('現実的な高さの範囲で手札が潰れきらない（60px 以上�
 // そのとき横幅は576pxも余っていた。
 check('横持ちの分岐がソースに入っている', /sideTray/.test(SRC), '');
 check('掴み判定も横持ちに対応している',
-  SRC.includes('const slotH = this.H / 3;') && SRC.includes('if (x < this.trayX) return -1;'), '');
+  SRC.includes('const slotH = this.H / 3;'), '');
+// 右端も見ていないと、手札の右の余白でピースを掴めてしまう。
+check('掴み判定に右端の境がある',
+  SRC.includes('if (x < this.trayX || x > this.trayX + this.trayW) return -1;'), '');
+// 盤面の下に余白が無いと、持ち上げたぶん最下行に指が届かない。
+check('持ち上げ量が盤面の下の余白に合わせて縮む',
+  SRC.includes('const room = this.H - this.boardY - this.boardSize'), '');
+// 高さで決めた盤面と手札が横にはみ出さないよう、幅にも収める。
+check('横にもはみ出さないよう収めている',
+  SRC.includes('if (side + 10 + trayW > this.W - 12)'), '');
 check('描画も横持ちに対応している',
   SRC.includes('const slotW = this.sideTray ? this.trayW : this.W / 3;'), '');
 check('溶接の判定も横持ちに対応している',

@@ -129,6 +129,9 @@ export function createParties(deps) {
   function leave(userId) {
     const p = partyOf(userId);
     if (!p) return { error: 'パーティーにいません' };
+    // 部屋を作りにいった本人が抜けたら、待ちも畳む。
+    // 残しておくと10秒後に「部屋を作れませんでした」が全員に飛ぶ。
+    if (p.launch && p.launch.by === userId) p.launch = null;
     p.members = p.members.filter(m => m.userId !== userId);
     partyOfUser.delete(userId);
     sendToUser(userId, { type: 'party_state', party: null }, { primaryOnly: true });
@@ -148,6 +151,7 @@ export function createParties(deps) {
     if (p.leaderId !== leaderId) return { error: 'リーダーだけができます' };
     if (targetId === leaderId) return { error: '自分は追い出せません' };
     if (!p.members.some(m => m.userId === targetId)) return { error: 'その人はいません' };
+    if (p.launch && p.launch.by === targetId) p.launch = null;
     p.members = p.members.filter(m => m.userId !== targetId);
     partyOfUser.delete(targetId);
     sendToUser(targetId, { type: 'party_state', party: null }, { primaryOnly: true });
@@ -362,8 +366,11 @@ export function createParties(deps) {
     for (const p of [...parties.values()]) {
       // 部屋作りの返事が来ない（リーダーが落ちた等）。待たせっぱなしにしない。
       if (p.launch && t - p.launch.at > 10_000) {
+        // 失敗を知る必要があるのは、部屋を作りにいった本人だけ。
+        // 全員に投げると、何もしていない人に的外れなエラーが出る。
+        const by = p.launch.by;
         p.launch = null;
-        broadcast(p, { type: 'party_error', error: '部屋を作れませんでした。もう一度お試しください' });
+        sendToUser(by, { type: 'party_error', error: '部屋を作れませんでした。もう一度お試しください' }, { primaryOnly: true });
       }
       for (const m of p.members) {
         const online = isOnline(m.userId);
@@ -372,7 +379,15 @@ export function createParties(deps) {
       }
       const allGone = p.members.every(m => m.offlineAt && t - m.offlineAt > OFFLINE_GRACE_MS);
       if (allGone || t - p.createdAt > PARTY_TTL_MS) {
-        for (const m of p.members) partyOfUser.delete(m.userId);
+        // 消す前に、まだ繋がっている人には必ず知らせる。
+        // 黙って消すと、画面には解散したパーティーが残り続け、
+        // 話しかけても誰にも届かない状態になる（12時間で消えるので、
+        // 長く遊んでいる人ほど確実に踏む）。
+        for (const m of p.members) {
+          partyOfUser.delete(m.userId);
+          sendToUser(m.userId, { type: 'party_state', party: null }, { primaryOnly: true });
+          sendToUser(m.userId, { type: 'party_error', error: 'パーティーは時間切れで解散しました' }, { primaryOnly: true });
+        }
         parties.delete(p.id);
         continue;
       }
@@ -392,7 +407,13 @@ export function createParties(deps) {
   }
   function socketArrived(userId) {
     const p = partyOf(userId);
-    if (!p) return;
+    if (!p) {
+      // 繋ぎ直したときにパーティーが無いなら、画面に残っている
+      // 古いパーティーを消させる。何も送らないと、解散したはずの
+      // パーティーが出たままになる。
+      sendToUser(userId, { type: 'party_state', party: null }, { primaryOnly: false });
+      return;
+    }
     const m = p.members.find(x => x.userId === userId);
     if (m) m.offlineAt = 0;
     // 他のメンバーには在席の変化を配る（通知なので primaryOnly）。

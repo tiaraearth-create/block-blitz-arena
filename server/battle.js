@@ -79,7 +79,14 @@ export function initBattle(server, deps) {
     if (!set) return [];
     // 閉じ損ねた socket を掃除しながら返す（心拍でも掃除される）。
     const live = [];
-    for (const w of set) { if (w.readyState === w.OPEN) live.push(w); else set.delete(w); }
+    for (const w of set) {
+      // 開いているだけでなく「本当にこの人の socket か」も見る。
+      // hello は何度でも送れるので、1本の socket を別のアカウントで
+      // 名乗り直すと、古い方の表に残ったまま生きて見えてしまう。
+      const mine = w.user && w.user.id === userId;
+      if (mine && w.readyState === w.OPEN) live.push(w);
+      else set.delete(w);
+    }
     if (!set.size) userSockets.delete(userId);
     return live;
   }
@@ -89,7 +96,9 @@ export function initBattle(server, deps) {
     const live = socketsOf(userId);
     if (!live.length) return 'offline';
     for (const w of live) {
-      if (w.matchId || w.royaleId || w.zeroId || w.tourneyId || w.roomId) return 'playing';
+      // roomId ではなく roomCode。roomId はこのコードベースのどこにも
+      // 代入が無いので、合言葉ルームにいる人がずっと「メニュー」に見えていた。
+      if (w.matchId || w.royaleId || w.zeroId || w.tourneyId || w.roomCode) return 'playing';
     }
     return 'menu';
   }
@@ -2202,6 +2211,10 @@ export function initBattle(server, deps) {
               return;
             }
           }
+          // 名乗り直しに備えて、先に前の身分の表から外す。
+          // ws.user を書き換えたあとに外すと、外れるのは「新しい方」なので
+          // 古い方が表に残り、在席が嘘になって通知も古い宛先へ流れる。
+          untrackSocket(ws);
           ws.secondary = msg.role === 'battle';
           ws.user = user ? { id: user.id, username: user.username } : null;
           // 登録済みの名前をゲストが名乗れてしまうと、チャットで管理者や

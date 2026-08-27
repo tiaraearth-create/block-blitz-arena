@@ -215,7 +215,11 @@ function wire(body) {
       'Block them? They are never told. You will also be unfriended and cannot share a party.'),
     () => act('/api/friends/block', { userId: b.dataset.block })));
   on('[data-invite]', b => {
-    sendWs({ type: 'party_invite', userId: b.dataset.invite });
+    // 送れていないのに「送りました」と出さない。
+    if (!sendWs({ type: 'party_invite', userId: b.dataset.invite })) {
+      toast(t('接続中です。少し待ってからもう一度どうぞ', 'Reconnecting — try again in a moment'), 'err', 2400);
+      return;
+    }
     b.disabled = true;
     b.textContent = t('送りました', 'Sent');
   });

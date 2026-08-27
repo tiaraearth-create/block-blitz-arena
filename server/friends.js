@@ -31,6 +31,14 @@ export const REQ_EXPIRE_MS = 14 * 24 * 3600 * 1000;
 // この窓口が「あの人にブロックされているか」を調べる道具になる。
 const REFUSED = '申請できませんでした';
 
+// db.users を素の添字で引くと '__proto__' や 'constructor' が
+// Object.prototype 由来の値を返してしまう（実在しない相手が「いる」ことになる）。
+// 引くときは必ずこれを通す。index.js の userById と同じ理屈。
+function userOf(db, id) {
+  const key = String(id == null ? '' : id);
+  return Object.prototype.hasOwnProperty.call(db.users || {}, key) ? db.users[key] : null;
+}
+
 export function socialDefaults() {
   return { requests: 'all', invites: 'friends' };
 }
@@ -73,7 +81,7 @@ export function isFriend(a, bId) {
 export function sendRequest(db, from, toId) {
   if (!from || !toId) return { error: REFUSED };
   if (toId === from.id) return { error: '自分には申請できません' };
-  const to = db.users[toId];
+  const to = userOf(db, toId);
   if (!to) return { error: REFUSED };
   ensureSocial(from); ensureSocial(to);
 
@@ -83,15 +91,24 @@ export function sendRequest(db, from, toId) {
   if (isFriend(from, toId)) return { error: 'すでにフレンドです' };
   if (from.friendReqOut.includes(toId)) return { error: '申請ずみです' };
 
-  // 相手からすでに申請が来ていたら、その場で成立させる（すれ違い防止）
-  if (from.friendReqIn.some(r => r.from === toId)) return acceptRequest(db, from, toId);
+  // すれ違い（相手からも申請が来ていた）はその場で成立させる。
+  // 呼び出し側が「申請が届いた」ではなく「フレンドになった」を送れるよう、
+  // 成立したことが分かる印を付けて返す。
+  if (from.friendReqIn.some(r => r.from === toId)) {
+    const r = acceptRequest(db, from, toId);
+    return r.error ? r : { ...r, accepted: true };
+  }
 
   const declinedAt = to.friendDeclines[from.id] || 0;
   if (declinedAt && Date.now() - declinedAt < DECLINE_COOLDOWN_MS) return { error: REFUSED };
 
+  // 自分側の上限は「相手が誰か」に関係なく決まるので、先に見る。
+  // 相手側の事情（ブロック・受け取り拒否・満杯）より後ろに置くと、
+  // 上限に達した状態で送ったときの文言の違いから、
+  // 相手にブロックされているかどうかを読み取れてしまう。
   if (from.friends.length >= MAX_FRIENDS) return { error: `フレンドは${MAX_FRIENDS}人までです` };
-  if (to.friends.length >= MAX_FRIENDS) return { error: REFUSED };
   if (from.friendReqOut.length >= MAX_REQ_OUT) return { error: `申請は同時に${MAX_REQ_OUT}件までです` };
+  if (to.friends.length >= MAX_FRIENDS) return { error: REFUSED };
   // 受け取り側があふれている場合は、送り主を断る。
   // 古いものを押し出す作りにすると、大量申請で本物の申請を消せてしまう。
   if (to.friendReqIn.length >= MAX_REQ_IN) return { error: REFUSED };
@@ -104,7 +121,7 @@ export function sendRequest(db, from, toId) {
 export function acceptRequest(db, me, fromId) {
   if (!me || !fromId) return { error: '相手が見つかりません' };
   ensureSocial(me);
-  const other = db.users[fromId];
+  const other = userOf(db, fromId);
   if (!other) { me.friendReqIn = me.friendReqIn.filter(r => r.from !== fromId); return { error: '相手が見つかりません' }; }
   ensureSocial(other);
   if (!me.friendReqIn.some(r => r.from === fromId)) return { error: 'その申請はありません' };
@@ -131,7 +148,7 @@ export function declineRequest(db, me, fromId) {
   ensureSocial(me);
   const had = me.friendReqIn.some(r => r.from === fromId);
   me.friendReqIn = me.friendReqIn.filter(r => r.from !== fromId);
-  const other = db.users[fromId];
+  const other = userOf(db, fromId);
   if (other) { ensureSocial(other); other.friendReqOut = other.friendReqOut.filter(id => id !== me.id); }
   if (!had) return { error: 'その申請はありません' };
   me.friendDeclines[fromId] = Date.now();
@@ -142,7 +159,7 @@ export function cancelRequest(db, me, toId) {
   if (!me) return { error: '相手が見つかりません' };
   ensureSocial(me);
   me.friendReqOut = me.friendReqOut.filter(id => id !== toId);
-  const other = db.users[toId];
+  const other = userOf(db, toId);
   if (other) { ensureSocial(other); other.friendReqIn = other.friendReqIn.filter(r => r.from !== me.id); }
   return { ok: true };
 }
@@ -151,7 +168,7 @@ export function unfriend(db, me, otherId) {
   if (!me) return { error: '相手が見つかりません' };
   ensureSocial(me);
   me.friends = me.friends.filter(id => id !== otherId);
-  const other = db.users[otherId];
+  const other = userOf(db, otherId);
   if (other) { ensureSocial(other); other.friends = other.friends.filter(id => id !== me.id); }
   return { ok: true };
 }
@@ -170,7 +187,7 @@ export function block(db, me, otherId) {
   unfriend(db, me, otherId);
   me.friendReqIn = me.friendReqIn.filter(r => r.from !== otherId);
   me.friendReqOut = me.friendReqOut.filter(id => id !== otherId);
-  const other = db.users[otherId];
+  const other = userOf(db, otherId);
   if (other) {
     ensureSocial(other);
     other.friendReqIn = other.friendReqIn.filter(r => r.from !== me.id);
@@ -212,8 +229,12 @@ export function unfriendAll(db, user) {
 // migrateUser には置かない。あれは publicUser のたびに走るので、
 // 毎回全フレンドを走査することになる。
 export function healSocial(db) {
-  const alive = id => !!db.users[id];
-  const gone = new Set(Array.isArray(db.deleted) ? db.deleted.map(d => d && d.id).filter(Boolean) : []);
+  const alive = id => !!userOf(db, id);
+  // db.deleted は { userId: 消した時刻 } の形。配列だと思って map していたので、
+  // この番人はこれまで一度も働いていなかった。
+  const gone = new Set(db.deleted && typeof db.deleted === 'object' && !Array.isArray(db.deleted)
+    ? Object.keys(db.deleted)
+    : (Array.isArray(db.deleted) ? db.deleted.map(d => (d && d.id) || d).filter(Boolean) : []));
   const now = Date.now();
   const fixed = { friends: 0, requests: 0, blocked: 0, declines: 0, oneWay: 0 };
 
@@ -228,7 +249,9 @@ export function healSocial(db) {
     u.friendReqIn = u.friendReqIn.filter(r =>
       r && alive(r.from) && !gone.has(r.from) && (now - (r.at || 0)) < REQ_EXPIRE_MS);
     fixed.requests += rb - u.friendReqIn.length;
+    const ob = u.friendReqOut.length;
     u.friendReqOut = u.friendReqOut.filter(id => alive(id) && !gone.has(id));
+    fixed.requests += ob - u.friendReqOut.length;
 
     const bb = u.blocked.length;
     u.blocked = u.blocked.filter(id => alive(id) && !gone.has(id));
@@ -239,12 +262,25 @@ export function healSocial(db) {
     }
   }
 
+  // 送った申請は相手側が期限切れで消えても残り続けるので、
+  // 「相手の受信箱に無い送信控え」を落とす。放っておくと
+  // 申請枠(20件)が幽霊で埋まって、本当の申請が送れなくなる。
+  for (const u of Object.values(db.users || {})) {
+    if (!u) continue;
+    const ob = u.friendReqOut.length;
+    u.friendReqOut = u.friendReqOut.filter(id => {
+      const o = userOf(db, id);
+      return o && Array.isArray(o.friendReqIn) && o.friendReqIn.some(r => r && r.from === u.id);
+    });
+    fixed.requests += ob - u.friendReqOut.length;
+  }
+
   // 片側だけ残った関係を両側から落とす。ブロックしている相手との
   // フレンド関係も切る（復元でどちらか片方だけが巻き戻ることがある）。
   for (const u of Object.values(db.users || {})) {
     if (!u) continue;
     u.friends = u.friends.filter(id => {
-      const o = db.users[id];
+      const o = userOf(db, id);
       if (!o || !Array.isArray(o.friends) || !o.friends.includes(u.id)) { fixed.oneWay++; return false; }
       if (blocks(u, id) || blocks(o, u.id)) { fixed.oneWay++; return false; }
       return true;
@@ -259,7 +295,7 @@ export function healSocial(db) {
 // publicUser は財布も stats も丸ごと入っているので、他人の行には絶対に使わない。
 // ランキングの行と同じ範囲だけを出す。
 export function friendRow(db, id, levelOf, statusOf) {
-  const u = db.users[id];
+  const u = userOf(db, id);
   if (!u) return null;
   return {
     id: u.id,
@@ -281,7 +317,7 @@ export function friendsView(db, user, levelOf, statusOf) {
       .filter(Boolean),
     outgoing: user.friendReqOut.map(id => friendRow(db, id, levelOf, statusOf)).filter(Boolean),
     blocked: user.blocked.map(id => {
-      const u = db.users[id];
+      const u = userOf(db, id);
       return u ? { id: u.id, username: u.username } : null;
     }).filter(Boolean),
     social: { ...user.social },

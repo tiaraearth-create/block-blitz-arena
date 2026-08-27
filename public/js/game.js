@@ -97,9 +97,11 @@ export class GameView {
     if (rect.width === 0 || rect.height === 0) return;
     // 寸法が変わっていなければ何もしない。ResizeObserver は小数の揺れでも
     // 鳴るので、ここで止めないと毎フレーム作り直しかねない。
-    if (rect.width === this._lastW && rect.height === this._lastH) return;
-    this._lastW = rect.width; this._lastH = rect.height;
+    // dpr も見る ── 外部ディスプレイに移したときは箱の大きさが同じでも
+    // 画素密度だけが変わるので、これを見ないと絵がぼやけたままになる。
     const dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (rect.width === this._lastW && rect.height === this._lastH && dpr === this.dpr) return;
+    this._lastW = rect.width; this._lastH = rect.height;
     this.canvas.width = Math.round(rect.width * dpr);
     this.canvas.height = Math.round(rect.height * dpr);
     this.dpr = dpr;
@@ -115,8 +117,11 @@ export class GameView {
       // 盤面は高さで頭打ちになるので、先に盤面を決めてから手札を隣に置く。
       // そのあと2つまとめて中央に寄せる ── 先に手札の幅を確保すると、
       // 余った幅がぜんぶ手札側に付いて、間延びした帯になる。
-      const side = Math.min(this.H - 12, this.W - 130);
+      let side = Math.min(this.H - 12, this.W - 130);
       const trayW = Math.max(96, Math.min(side * 0.45, 170));
+      // 横に細長くない画面（比が1.25をわずかに超える程度）では、
+      // 高さで決めた盤面と手札を並べると横にはみ出す。幅にも収める。
+      if (side + 10 + trayW > this.W - 12) side = Math.max(96, this.W - 22 - trayW);
       const total = side + 10 + trayW;
       this.cell = side / SIZE;
       this.boardSize = side;
@@ -232,8 +237,9 @@ export class GameView {
   trayHit(x, y) {
     if (!this.engine) return -1;
     if (this.sideTray) {
-      // 横持ちは縦に3つ並ぶ。盤面の右側だけが手札。
-      if (x < this.trayX) return -1;
+      // 横持ちは縦に3つ並ぶ。盤面の右側「だけ」が手札 ──
+      // 右端を見ていないと、手札の右にある余白でもピースを掴んでしまう。
+      if (x < this.trayX || x > this.trayX + this.trayW) return -1;
       const slotH = this.H / 3;
       return Math.max(0, Math.min(2, Math.floor(y / slotH)));
     }
@@ -264,7 +270,11 @@ export class GameView {
     const { rows, cols } = shapeSize(piece.cells);
     const pw = cols * this.cell, ph = rows * this.cell;
     // Piece floats above the pointer for finger visibility.
-    const lift = this.cell * 1.2;
+    // ただし盤面の下に余白が無いと、持ち上げたぶん最下行に指が届かなくなる。
+    // 横持ちは盤面が画面いっぱいなので、実測で最下行(7段目)が
+    // 1行ピースでは絶対に置けない状態だった。余白に合わせて縮める。
+    const room = this.H - this.boardY - this.boardSize + this.cell * 0.45;
+    const lift = Math.min(this.cell * 1.2, Math.max(this.cell * 0.35, room));
     const left = this.drag.px - pw / 2;
     const top = this.drag.py - ph - lift + ph / 2;
     const c = Math.round((left - this.boardX) / this.cell);
@@ -690,28 +700,27 @@ export class GameView {
     const wslot = this.weldTargetAt(this.drag.px, this.drag.py, this.drag.index);
     const ghost = wslot === -1 ? this.ghostInfo() : null;
     if (wslot !== -1) {
-      const slotW = this.W / 3;
+      // 枠の寸法も横持ち／縦持ちで変わる。幅を W/3 のままにしていると、
+      // 横持ちで盤面の上まで紫の枠が伸びていた。
+      const slotW = this.sideTray ? this.trayW : this.W / 3;
+      const slotH = this.sideTray ? this.H / 3 : this.trayH;
+      const sx = this.sideTray ? this.trayX + 4 : wslot * slotW + 4;
+      const sy = this.sideTray ? wslot * slotH + 2 : this.trayY + 2;
       const pulse = 0.25 + 0.15 * Math.sin(this.time * 6);
       ctx.globalAlpha = pulse;
       ctx.fillStyle = '#b06bff';
-      ctx.fillRect(
-        this.sideTray ? this.trayX + 4 : wslot * slotW + 4,
-        this.sideTray ? wslot * (this.H / 3) + 2 : this.trayY + 2,
-        slotW - 8,
-        (this.sideTray ? this.H / 3 : this.trayH) - 6);
+      ctx.fillRect(sx, sy, slotW - 8, slotH - 6);
       ctx.globalAlpha = 1;
       ctx.strokeStyle = '#b06bff';
       ctx.lineWidth = 2;
-      ctx.strokeRect(
-        this.sideTray ? this.trayX + 4 : wslot * slotW + 4,
-        this.sideTray ? wslot * (this.H / 3) + 2 : this.trayY + 2,
-        slotW - 8,
-        (this.sideTray ? this.H / 3 : this.trayH) - 6);
+      ctx.strokeRect(sx, sy, slotW - 8, slotH - 6);
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 13px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('🧬', wslot * slotW + slotW / 2, this.trayY + 14);
+      // 印も枠と同じ場所へ。y を trayY(=0) のままにしていると、
+      // 横持ちでは盤面の上に 🧬 が浮いていた。
+      ctx.fillText('🧬', sx + (slotW - 8) / 2, sy + 14);
     }
 
     // ghost on board

@@ -48,6 +48,10 @@ function inGame() { return document.body.dataset.screen === 'game'; }
 export function renderParty() {
   const el = dock();
   if (!el) return;
+  // 組み直す前に、打ちかけの文と焦点を控える。
+  const old = $('#ptText');
+  const draft = old ? old.value : '';
+  const draftFocused = old ? document.activeElement === old : false;
   if (!state) {
     el.classList.add('hidden');
     el.innerHTML = '';
@@ -118,11 +122,22 @@ export function renderParty() {
     const input = $('#ptText');
     const v = input.value.trim();
     if (!v) return;
-    sendWs({ type: 'party_chat', text: v });
+    // 送れなかったら文を消さない。消すと、打った内容が黙って失われる。
+    if (!sendWs({ type: 'party_chat', text: v })) {
+      toast(t('接続中です。少し待ってからもう一度どうぞ', 'Reconnecting — try again in a moment'), 'err', 2400);
+      return;
+    }
     input.value = '';
   };
   $('#ptSend').onclick = send;
   $('#ptText').onkeydown = e => { if (e.key === 'Enter') send(); };
+  // 状態が届くたびに innerHTML を組み直しているので、打ちかけの文と
+  // カーソル位置が消えていた。誰かが出入りしただけで書きかけが飛ぶ。
+  if (draft) {
+    const input = $('#ptText');
+    input.value = draft;
+    if (draftFocused) { input.focus(); try { input.setSelectionRange(draft.length, draft.length); } catch { /* ignore */ } }
+  }
   renderChat();
 }
 
@@ -245,7 +260,12 @@ export function createParty() {
     toast(t('パーティーを使うにはアカウント登録が必要です', 'You need an account to use parties'), 'err', 3000);
     return;
   }
-  sendWs({ type: 'party_create' });
+  if (!sendWs({ type: 'party_create' })) notConnected();
+}
+
+// 押しても何も起きない、が起きないように。
+function notConnected() {
+  toast(t('接続中です。少し待ってからもう一度どうぞ', 'Reconnecting — try again in a moment'), 'err', 2400);
 }
 
 export function joinParty(code) {
@@ -253,10 +273,19 @@ export function joinParty(code) {
     toast(t('パーティーを使うにはアカウント登録が必要です', 'You need an account to use parties'), 'err', 3000);
     return;
   }
-  sendWs({ type: 'party_join', code });
+  if (!sendWs({ type: 'party_join', code })) notConnected();
 }
 
 export function currentParty() { return state; }
+
+// ログアウトやアカウント切り替えのときに呼ぶ。
+// 呼ばないと、前の人のパーティーが棚に出たままになる。
+export function resetParty() {
+  state = null;
+  chatLog = [];
+  pendingInvite = null;
+  renderParty();
+}
 
 // 再デプロイでパーティーは消える（サーバーのメモリにしか無い）。
 // 直前のメンバーを覚えておいて、ワンタップで組み直せるようにする。
@@ -311,16 +340,22 @@ export function initParty() {
       `  <button class="btn btn-primary" id="piYes">${t('参加する', 'Join')}</button>`,
       '</div>',
     ].join(''));
-    m.querySelector('#piYes').onclick = () => {
+    // 期限切れで自動的に閉じるが、先に答えたらタイマーを解除する。
+    // 解除していなかったので、60秒後に「そのとき開いていた別のモーダル」を
+    // 勝手に閉じていた（結果画面やショップの購入確認が消える）。
+    const timer = setTimeout(() => {
+      if (pendingInvite !== msg.inviteId) return;
+      pendingInvite = null;
       closeModal();
-      sendWs({ type: 'party_invite_accept', inviteId: msg.inviteId });
-    };
-    m.querySelector('#piNo').onclick = () => {
+    }, msg.expiresIn || 60000);
+    const answer = (type) => {
+      clearTimeout(timer);
+      pendingInvite = null;
       closeModal();
-      sendWs({ type: 'party_invite_decline', inviteId: msg.inviteId });
+      sendWs({ type, inviteId: msg.inviteId });
     };
-    // 期限が来たら勝手に閉じる（60秒）
-    setTimeout(() => { if (pendingInvite === msg.inviteId) { pendingInvite = null; closeModal(); } }, msg.expiresIn || 60000);
+    m.querySelector('#piYes').onclick = () => answer('party_invite_accept');
+    m.querySelector('#piNo').onclick = () => answer('party_invite_decline');
   });
 
   registerHandler('friend_request', msg => {

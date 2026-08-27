@@ -2054,9 +2054,33 @@ app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
   if (tooFast) {
     return res.status(429).json({ error: '結果の送信が多すぎます。しばらく待ってください' });
   }
-  const rewards = applyGameResult(req.user, req.body || {});
+  // req.body をそのまま渡してはいけない。applyGameResult は
+  // `trusted`（サーバー判定モードの申告を通す）と `preClamped`
+  // （時間の頭押さえを飛ばす）という内部専用の鍵を読むので、
+  // 素通しだと自己申告でどちらも立てられる。実測で
+  //   { mode:'royale', won:true, trusted:true }  → バトロワの勝利バッジ＋150💎
+  //   { score:1000000, duration:3600, preClamped:true } → 100万点がそのまま通る
+  // が通っていた。クライアントが名乗ってよい欄だけを写して渡す。
+  const rewards = applyGameResult(req.user, pickResultFields(req.body));
   res.json({ rewards, user: publicUser(req.user) });
 });
+
+// クライアントが申告してよい欄。ここに無いものは黙って捨てる。
+// 新しい欄を applyGameResult に足したら、ここにも足すか判断すること
+// （内部専用の鍵なら足さない）。
+const RESULT_FIELDS = [
+  'mode', 'score', 'lines', 'maxCombo', 'duration', 'won', 'drew',
+  'bossId', 'floor', 'wave', 'ults', 'items', 'pieces', 'floors',
+  'sprintDur', 'rank', 'depth', 'stage',
+];
+function pickResultFields(body) {
+  const src = (body && typeof body === 'object') ? body : {};
+  const out = {};
+  for (const k of RESULT_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(src, k)) out[k] = src[k];
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // 👑 管理者イベント — weekly, with per-player time slots
@@ -2142,7 +2166,8 @@ app.post('/api/adminevent/result', requireAuth, maintenanceGuard, (req, res) => 
   const delta = aeContribute(run, req.user, score);
 
   const rewards = applyGameResult(req.user, {
-    ...body,
+    // ここも素通しにしない。`trusted` を自己申告で立てられてしまう。
+    ...pickResultFields(body),
     mode: `ae_${run.modeId}`,
     score,
     duration,
@@ -2794,8 +2819,14 @@ app.post('/api/friends/request', requireAuth, maintenanceGuard, (req, res) => {
   if (r.error) return res.status(409).json({ error: r.error });
   saveDb();
   // 相手が今いるなら、その場で知らせる。
+  // すれ違いでその場で成立した場合は「申請が届いた」ではなく
+  // 「フレンドになった」を送る（申請はもう存在しない）。
   if (battleReady && battle.presence) {
-    battle.presence.sendToUser(target.id, { type: 'friend_request', from: req.user.username }, { primaryOnly: true });
+    battle.presence.sendToUser(target.id,
+      r.accepted
+        ? { type: 'friend_accepted', by: req.user.username }
+        : { type: 'friend_request', from: req.user.username },
+      { primaryOnly: true });
   }
   res.json(friendsView(db, req.user, levelOf, friendStatus()));
 });
@@ -2803,8 +2834,10 @@ app.post('/api/friends/request', requireAuth, maintenanceGuard, (req, res) => {
 app.post('/api/friends/accept', requireAuth, maintenanceGuard, (req, res) => {
   migrateUser(req.user);
   const r = acceptRequest(db, req.user, String(req.body.userId || ''));
-  if (r.error) return res.status(409).json({ error: r.error });
+  // 失敗した場合でも、途中まで直した内容（消えた申請の掃除など）は
+  // 書き戻す。保存しないと、次の再起動で古い状態が戻ってくる。
   saveDb();
+  if (r.error) return res.status(409).json({ error: r.error });
   if (battleReady && battle.presence && r.other) {
     battle.presence.sendToUser(r.other.id, { type: 'friend_accepted', by: req.user.username }, { primaryOnly: true });
   }
@@ -2815,8 +2848,8 @@ app.post('/api/friends/decline', requireAuth, (req, res) => {
   migrateUser(req.user);
   // 断ったことは相手に伝えない。伝えると、断る側が気まずさを負う。
   const r = declineRequest(db, req.user, String(req.body.userId || ''));
-  if (r.error) return res.status(409).json({ error: r.error });
   saveDb();
+  if (r.error) return res.status(409).json({ error: r.error });
   res.json(friendsView(db, req.user, levelOf, friendStatus()));
 });
 
@@ -3606,6 +3639,10 @@ app.post('/api/admin/restore', (req, res) => {
   }
   // Every restored account is brought up to the current schema right away.
   for (const u of Object.values(db.users)) migrateUser(u);
+  // 🤝 復元のあとは必ず均す。名前で照合したときに id が入れ替わるので、
+  // 付け替えの取りこぼし・片側だけになった関係・消えた相手への申請が残る。
+  // 起動時に一度やるだけでは、復元で作った歪みはその起動の間ずっと残る。
+  healSocial(db);
   // Battle passes minted under the old UUID-season scheme carry over, and the
   // restored world state (crowd scale, ambient config) takes effect now.
   adoptLegacySeason(data.season);
@@ -3648,6 +3685,8 @@ app.post('/api/admin/snapshots/restore', requireAuth, requireAdmin, (req, res) =
   try {
     report = applyRestore(db, data, 'replace');
     for (const u of Object.values(db.users)) migrateUser(u);
+    // 🤝 復元のあとは必ず均す（下の2か所と同じ理由）。
+    healSocial(db);
   } catch (err) {
     for (const k of Object.keys(db)) delete db[k];
     Object.assign(db, rollback);        // db.js が同じ参照を握っているので in-place で戻す
@@ -4183,6 +4222,10 @@ function autoRestoreFromSeed() {
     const adoptedLocal = adoptLegacySeason(db.season);
     const report = applyRestore(db, data, 'merge');
     for (const u of Object.values(db.users)) migrateUser(u);
+  // 🤝 復元のあとは必ず均す。名前で照合したときに id が入れ替わるので、
+  // 付け替えの取りこぼし・片側だけになった関係・消えた相手への申請が残る。
+  // 起動時に一度やるだけでは、復元で作った歪みはその起動の間ずっと残る。
+  healSocial(db);
     const adopted = adoptedLocal + adoptLegacySeason(data.season);
     db.season = null;   // stored seasons are legacy — everything derives from SEASON_EPOCH now
     db.meta.seedHash = seedHash;

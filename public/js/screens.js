@@ -106,6 +106,9 @@ function showProfileModal() {
     session.user = null;
     updateTopbar();
     closeModal();
+    // パーティーの棚も畳む。畳まないと、ログアウトしたあとも前の人の
+    // パーティーが出たままになる（次に入った人の画面にも残る）。
+    import('./party.js').then(p => p.resetParty()).catch(() => {});
     reconnectChat();
     refreshMissionDot();
     toast(tr('ログアウトしました', 'Logged out'));

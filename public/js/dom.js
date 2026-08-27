@@ -15,6 +15,8 @@ let poppingBack = false;
 
 export function screenHistory() { return screenStack.slice(); }
 
+let historyReady = false;
+
 export function showScreen(name, { push = true } = {}) {
   const prev = document.body.dataset.screen;
   for (const s of SCREENS) {
@@ -23,19 +25,30 @@ export function showScreen(name, { push = true } = {}) {
   }
   document.body.dataset.screen = name;   // used by CSS (e.g. chat drawer on menu only)
 
+  // メニューはいちばん下。ここに来たら積み上げを畳む ── そうしないと
+  // 「メニュー→ショップ→メニュー」で戻り先にメニューが溜まっていき、
+  // 戻るを何度押してもメニューのまま、という状態になる。
+  if (name === 'menu') screenStack.length = 0;
+
   if (!push || poppingBack || prev === name) return;
-  if (prev) screenStack.push(prev);
+  // 終わった試合には戻れない（動かない盤面に取り残される）。
+  // メニューへ戻るときも積まない。片方だけ積むと端末の履歴とズレるので、
+  // 「戻り先」と「履歴」はいつも一緒に積む／一緒に積まない。
+  if (!prev || prev === 'game' || name === 'menu') return;
+  screenStack.push(prev);
   if (screenStack.length > 24) screenStack.shift();
   try { history.pushState({ bbaScreen: name }, ''); } catch { /* file:// など */ }
 }
 
-// 1枚だけ戻す。戻り先が無ければメニュー。
-// onGameBack は試合中に呼ばれる（そのまま閉じずに確認を出すため）。
+// 画面の「←」。端末の戻るとまったく同じ道を通す ──
+// ここで画面だけ動かすと履歴が1つ余り、次に端末の戻るを押したときに
+// 何も起きない（ズレたぶんを消費するだけ）という挙動になる。
 export function goBack(onGameBack) {
   if (document.body.dataset.screen === 'game') {
     if (onGameBack) { onGameBack(); return true; }
     return false;
   }
+  if (historyReady && screenStack.length) { history.back(); return true; }
   const to = screenStack.pop() || 'menu';
   poppingBack = true;
   showScreen(to, { push: false });
@@ -46,16 +59,18 @@ export function goBack(onGameBack) {
 // 端末の戻る（Android のジェスチャー／ハードキー、ブラウザの ←）。
 // popstate が来た時点で履歴は1つ減っているので、こちらは画面を合わせるだけ。
 export function initHistory(onGameBack) {
+  historyReady = true;
   try { history.replaceState({ bbaScreen: document.body.dataset.screen || 'menu' }, ''); } catch { /* ignore */ }
   window.addEventListener('popstate', () => {
     // モーダルが開いているなら、まずそれを閉じる（いちばん自然な戻り先）。
+    // ただし閉じられない印のあるモーダル（結果画面など）は閉じない ──
+    // 閉じると動かない盤面に取り残される。
     const modal = $('#modal-root');
     if (modal && modal.firstChild) {
-      const dismissable = !modal.querySelector('.modal-backdrop[data-locked]');
-      // 閉じられないモーダルには印を付ける。端末の「戻る」で勝手に
-  // 閉じてしまうと、結果画面から出られなくなる類の事故が起きる。
-  if (!dismissable) backdrop.dataset.locked = '1';
-  if (dismissable) { closeModal(); repush(); return; }
+      const locked = modal.querySelector('.modal-backdrop[data-locked]');
+      if (!locked) { closeModal(); repush(); return; }
+      repush();
+      return;
     }
     if (document.body.dataset.screen === 'game') {
       // 試合中は閉じない。✕ と同じ確認を出して、履歴だけ積み直す。
@@ -93,6 +108,10 @@ export function showModal(html, { dismissable = true } = {}) {
   const root = $('#modal-root');
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
+  // 閉じられないモーダルには印を付ける。端末の「戻る」がこれを見て、
+  // 結果画面などを勝手に閉じないようにする（閉じると動かない盤面に
+  // 取り残される）。
+  if (!dismissable) backdrop.dataset.locked = '1';
   backdrop.innerHTML = `<div class="modal">${html}</div>`;
   if (dismissable) {
     backdrop.addEventListener('pointerdown', e => {

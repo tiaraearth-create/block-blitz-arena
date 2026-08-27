@@ -77,6 +77,18 @@ function openWs(token, role) {
     ws.on('error', reject);
   });
 }
+// 条件つきで待てるようにする。接続直後にサーバーが
+// 「あなたはどのパーティーにも居ません」(party:null) を送るので、
+// 単に最初の party_state を拾うと、そちらを掴んでしまう。
+const waitWhere = async (ws, type, pred, ms = 3000) => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const m = ws.inbox.find(x => x.type === type && pred(x));
+    if (m) return m;
+    await sleep(50);
+  }
+  return null;
+};
 const waitFor = async (ws, type, ms = 3000) => {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -267,7 +279,7 @@ try {
   await sleep(400);
 
   ws1.send(JSON.stringify({ type: 'party_create' }));
-  const st1 = await waitFor(ws1, 'party_state');
+  const st1 = await waitWhere(ws1, 'party_state', m => !!m.party);
   check('パーティーを作れる', !!(st1 && st1.party), JSON.stringify(st1 && st1.party ? st1.party.code : st1));
   const pcode = st1.party.code;
   check('作った人がリーダー', st1.party.youAreLeader === true, '');
@@ -278,7 +290,7 @@ try {
   check('フレンドを招待できる', !!inv, JSON.stringify(ws2.inbox.map(x => x.type)));
 
   ws2.send(JSON.stringify({ type: 'party_invite_accept', inviteId: inv.inviteId }));
-  const st2 = await waitFor(ws2, 'party_state');
+  const st2 = await waitWhere(ws2, 'party_state', m => !!m.party);
   check('招待から参加できる', !!(st2 && st2.party && st2.party.members.length === 2), '');
 
   // チャット

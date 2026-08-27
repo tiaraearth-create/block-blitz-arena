@@ -100,6 +100,7 @@ const SERVER_MSG_EN = {
   'そのパーティーは解散しています': 'That party has broken up',
   'そのパーティーはありません': 'No such party',
   'パーティーは運営により解散されました': 'Staff broke up this party',
+  'パーティーは時間切れで解散しました': 'The party broke up after everyone went offline',
   '対戦中のメンバーがいます。終わるまで待ってください': 'Someone is still in a match — wait until they finish',
   '部屋を作れませんでした。もう一度お試しください': 'Could not open the room — please try again',
   'サーバーの更新のため、パーティーを解散しました': 'The party was disbanded for a server update',

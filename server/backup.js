@@ -110,11 +110,20 @@ function mergeEarned(winner, loser) {
 
   // 受け取りの設定は「厳しいほう」を採る。安全に関わる設定は、
   // 迷ったら閉じる側に倒す。
-  const ws2 = winner.social, ls = loser.social;
-  if (ws2 && ls) {
+  // 勝った側にこの欄が無いときは、負けた側のものをそのまま引き継ぐ。
+  // 両方そろっているときだけ比べていたので、勝ったレコードが古くて
+  // social を持っていないと、閉めてあった扉が黙って開いていた。
+  const ls = loser.social;
+  if (ls && !winner.social) {
+    winner.social = { ...ls };
+  } else if (ls && winner.social) {
+    const ws2 = winner.social;
     const rank = { none: 2, friends: 1, all: 0 };
-    if ((rank[ls.requests] || 0) > (rank[ws2.requests] || 0)) ws2.requests = ls.requests;
-    if ((rank[ls.invites] || 0) > (rank[ws2.invites] || 0)) ws2.invites = ls.invites;
+    // 値が壊れている／欠けている場合は「いちばん閉じている」とみなさない。
+    // 既定（requests:'all' / invites:'friends'）に寄せてから比べる。
+    const r = (v, def) => (rank[v] === undefined ? rank[def] : rank[v]);
+    if (r(ls.requests, 'all') > r(ws2.requests, 'all')) ws2.requests = ls.requests;
+    if (r(ls.invites, 'friends') > r(ws2.invites, 'friends')) ws2.invites = ls.invites;
   }
   // 申請と断りの記録は合流させない。あれは一時的なもので、
   // union すると一度断った申請が復活する。
@@ -274,6 +283,11 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
       report.updated++;
     } else {
       mergeEarned(live, inc);
+      // 生きている側が勝った場合も、ファイル側の id は捨てられる。
+      // ファイルの中の他の人は相手をその古い id で覚えているので、
+      // 逆向きの対応も控えておかないと、取り込んだ縁が宙に浮いて
+      // healSocial に「片側だけ」と判断され、両側から消される。
+      if (live.id !== inc.id) idRemap.set(inc.id, live.id);
       report.kept++;
     }
   }
@@ -289,11 +303,14 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
       }
       return out;
     };
+    // 付け替えの結果、自分自身が相手として残ることがある
+    // （旧idの自分と新idの自分が両方入っていた場合）。落とす。
+    const notSelf = (u, arr) => (Array.isArray(arr) ? arr.filter(id => id !== u.id) : arr);
     for (const u of Object.values(db.users)) {
       if (!u) continue;
-      u.friends = fix(u.friends);
-      u.blocked = fix(u.blocked);
-      u.friendReqOut = fix(u.friendReqOut);
+      u.friends = notSelf(u, fix(u.friends));
+      u.blocked = notSelf(u, fix(u.blocked));
+      u.friendReqOut = notSelf(u, fix(u.friendReqOut));
       if (Array.isArray(u.friendReqIn)) {
         const seen = new Set();
         u.friendReqIn = u.friendReqIn.filter(r => {
@@ -369,6 +386,29 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     // re-run for the restored users (per-record `rewarded` flags keep it safe).
     delete db.meta.lastRankRewardWeek;
   }
+  // 🤝 ギルドの名簿にも同じ付け替えを効かせる。ここでやるのは、
+  // ギルドが db.guilds に入るのがこの直前だから。
+  // やらないと、id が入れ替わった人が名簿の中で存在しない id になり
+  // （名簿は埋まっているのに誰も居ない）、その人が所有者だった場合は
+  // ギルドが誰にも触れなくなる ── 一度やらかしている事故と同じ形。
+  if (idRemap.size && db.guilds) {
+    for (const g of Object.values(db.guilds)) {
+      if (!g) continue;
+      if (Array.isArray(g.members)) {
+        const out = [];
+        for (const id of g.members) {
+          const n = idRemap.get(id) || id;
+          if (!out.includes(n)) out.push(n);
+        }
+        g.members = out;
+      }
+      if (g.ownerId && idRemap.has(g.ownerId)) g.ownerId = idRemap.get(g.ownerId);
+      if (Array.isArray(g.applicants)) {
+        g.applicants = [...new Set(g.applicants.map(id => idRemap.get(id) || id))];
+      }
+    }
+  }
+
   // Members' guild pointers must agree with the guild roster after a merge.
   if (db.guilds) {
     const memberOf = {};
