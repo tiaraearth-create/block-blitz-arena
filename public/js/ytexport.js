@@ -260,7 +260,7 @@ export function showYouTubeStudio() {
       `<button data-d="${d}" class="${d === dur ? 'active' : ''}">${durLabel(d)}</button>`).join('');
     box.querySelectorAll('button').forEach(b => {
       b.onclick = () => {
-        if (recording) return;
+        if (recording || starting) return;
         box.querySelectorAll('button').forEach(x => x.classList.remove('active'));
         b.classList.add('active');
         dur = Number(b.dataset.d);
@@ -288,7 +288,7 @@ export function showYouTubeStudio() {
     // 録画中は曲を変えさせない。変えると sel だけが動いて、
     // 映像は新しい曲・音は古い曲・ファイル名も新しい曲、という
     // ちぐはぐな動画が出来上がる（音は preview() を呼ばないので変わらない）。
-    if (recording) {
+    if (recording || starting) {
       e.target.value = sel;
       toast(t('録画中は曲を変えられません', 'You cannot change track while recording'), 'err', 2200);
       return;
@@ -300,7 +300,7 @@ export function showYouTubeStudio() {
     b.onclick = () => {
       // 録画中に形を変えると、canvas を作り直すことになって
       // captureStream のトラックが死ぬ（映像が途中で止まった動画になる）。
-      if (recording) {
+      if (recording || starting) {
         toast(t('録画中は形を変えられません', 'You cannot change format while recording'), 'err', 2200);
         return;
       }
@@ -352,6 +352,9 @@ export function showYouTubeStudio() {
   const btnRec = m.querySelector('#ytRec');
   let currentRec = null;
   let fadeArmed = false;
+  // 「押したけどまだ録画は始まっていない」状態。頭出しの待ち時間のあいだ、
+  // recording はまだ false なので、曲や形の切り替えが素通りしてしまう。
+  let starting = false;
 
   // 🎯 頭出しの下ごしらえ。
   // audio.restart() が止められるのは「これから予約する音」だけで、すでに
@@ -368,21 +371,27 @@ export function showYouTubeStudio() {
       return;
     }
     const session = studioState;
-    audio.stopPreview();
+    // stopPreview() ではなく hush()。stopPreview() は「試聴をやめる」だけなので、
+    // 固定曲や画面のBGMに落ちて **別の曲が鳴り出す** ── 静かにするどころか、
+    // 待っている間にメニュー曲が頭に混ざる。hush() は予約だけ止める。
+    audio.hush();
+    starting = true;              // recording はまだ false。この間も操作を止める
     status(t('準備中…', 'Getting ready…'));
     btnRec.disabled = true;
     setTimeout(() => {
       btnRec.disabled = false;
-      if (studioState !== session || recording) return;   // 待つ間に閉じられた
+      starting = false;
+      if (studioState !== session || recording) { status(''); return; }   // 待つ間に閉じられた
       beginRec();
     }, Math.round((audio.lookahead || 0.35) * 1000) + 120);
   };
 
   const beginRec = () => {
-    if (!studioState) return;
+    if (!studioState) { status(''); return; }
     if (!MIME) {
       // ここに来るのは canRecord を無視して押された場合だけだが、
       // 例外を投げて音楽を掴んだまま放置するよりは、断って何もしない。
+      status('');
       toast(t('このブラウザは録画に対応していません（Chrome推奨）', 'This browser cannot record (use Chrome)'), 'err', 3500);
       return;
     }
@@ -413,6 +422,7 @@ export function showYouTubeStudio() {
       try { stream.getTracks().forEach(tr => tr.stop()); } catch { /* ok */ }
       if (studioState) studioState.dest = null;
       if (!wasMusicOn) audio.setMusicEnabled(false);
+      status('');   // 「準備中…」のまま固まらせない
       toast(t('録画を開始できませんでした（このブラウザでは非対応かもしれません）',
         'Could not start recording — this browser may not support it'), 'err', 4000);
       return;
@@ -484,7 +494,13 @@ export function showYouTubeStudio() {
       studioState.wakeLockPending = true;
       navigator.wakeLock.request('screen').then(wl => {
         // 待っている間に録画が終わっていたら、その場で返す。
-        if (studioState !== mySession || !recording) { try { wl.release(); } catch { /* ok */ } return; }
+        // このとき pending を戻し忘れると、同じスタジオでの2回目以降が
+        // 「取得中」のまま永久に札を取れなくなる。
+        if (studioState !== mySession || !recording) {
+          if (studioState === mySession) studioState.wakeLockPending = false;
+          try { wl.release(); } catch { /* ok */ }
+          return;
+        }
         studioState.wakeLockPending = false;
         if (studioState.wakeLock) { try { wl.release(); } catch { /* ok */ } return; }
         studioState.wakeLock = wl;
@@ -536,10 +552,15 @@ export function showYouTubeStudio() {
       if (el >= dur) rec.stop();
     };
     // Worker が使えなければ setInterval に退避する。
-    // 退避口は3つの経路から呼ばれうるので、二重に張らないようにする。
+    // 時計は常に1本だけ。Worker と interval が両方動くと、1フレームぶんの
+    // 描画とフレーム送出が二重になって、映像が倍速のように詰まる。
     const fallback = () => {
       if (!studioState) return;
-      clearInterval(studioState.timer);      // 二重に張らない
+      if (studioState.worker) {
+        try { studioState.worker.postMessage('stop'); studioState.worker.terminate(); } catch { /* gone */ }
+        studioState.worker = null;
+      }
+      clearInterval(studioState.timer);
       studioState.timer = setInterval(tick, 33);
     };
     studioState.worker = makeTickWorker(tick, fallback);

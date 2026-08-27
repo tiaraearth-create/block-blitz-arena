@@ -378,6 +378,11 @@ class AudioEngine {
   // track so screen changes stop switching the music (ループ固定).
   preview(name) { this.previewTrack = TRACKS[name] ? name : null; this.syncTrack(); }
   stopPreview() { this.previewTrack = null; this.syncTrack(); }
+  // 予約を止めるだけ。すでに積んだ音は最後まで鳴らす ──
+  // 「蛇口を閉めて、管に残っているぶんは流し切る」。
+  // stopPreview() だと lockedTrack/trackName に落ちて **別の曲が鳴り出す** ので、
+  // 本当に静かにしたいときはこちらを使う（YouTubeスタジオの頭出し）。
+  hush() { this.previewTrack = null; this.stopScheduler(); }
   setLockedTrack(name) { this.lockedTrack = name && TRACKS[name] ? name : null; this.syncTrack(); }
 
   syncTrack(force = false) {

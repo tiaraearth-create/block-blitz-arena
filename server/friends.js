@@ -181,6 +181,9 @@ export function unfriend(db, me, otherId) {
 export function block(db, me, otherId) {
   if (!me || !otherId) return { error: '相手が見つかりません' };
   if (otherId === me.id) return { error: '自分はブロックできません' };
+  // 実在しない id は受け取らない。受け取ると自分のブロック欄に
+  // 意味のない文字列が溜まり、上限(200)を無駄に食う。
+  if (!userOf(db, otherId)) return { error: '相手が見つかりません' };
   ensureSocial(me);
   if (me.blocked.length >= MAX_BLOCKED) return { error: `ブロックは${MAX_BLOCKED}人までです` };
   if (!me.blocked.includes(otherId)) me.blocked.push(otherId);

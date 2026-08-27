@@ -65,7 +65,8 @@ check('札を取る場所が1か所にまとまっている', /const takeWakeLoc
 const requests = (src.match(/wakeLock\.request\('screen'\)/g) || []).length;
 check('wakeLock.request の呼び出しは1か所だけ', requests === 1, `${requests}か所`);
 check('すでに持っていたら取らない', /studioState\.wakeLock \|\| studioState\.wakeLockPending/.test(src), '');
-check('録画が終わっていたら受け取った札をその場で返す', /!recording[\s\S]{0,60}wl\.release\(\)/.test(src), '');
+check('録画が終わっていたら受け取った札をその場で返す',
+  /!recording\) \{[\s\S]{0,200}wl\.release\(\)/.test(src), '');
 
 // ---------------------------------------------------------------------------
 // 5. 録画できない環境で黙って壊れない
@@ -108,7 +109,28 @@ check('サムネイルは別紙に描き直す（進行バーが写らない）'
   /off\.toBlob/.test(src), '');
 check('タブを切り替えてよいかを正直に出す',
   /この画面を開いたままにしてください/.test(src), '');
-check('頭出しの前に試聴を止めて予約ずみを流し切る',
-  /audio\.stopPreview\(\);[\s\S]{0,200}準備中/.test(src), '');
-
+// ---------------------------------------------------------------------------
+// 9. 最終確認で出た分
+// ---------------------------------------------------------------------------
+const audioSrc = read('public/js/audio.js');
+// stopPreview() は「試聴をやめる」だけ。固定曲や画面のBGMに落ちるので、
+// 静かになるどころか **別の曲が鳴り出す**。頭出しの前に使うと逆効果。
+check('audio に hush() がある（本当に静かにする口）',
+  audioSrc.includes('hush() {'), '');
+check('hush は syncTrack を呼ばない（別の曲が鳴り出さない）',
+  audioSrc.includes('hush() { this.previewTrack = null; this.stopScheduler(); }'), '');
+// 頭出しの前だけ hush。閉じるとき（stopStudio）の stopPreview は
+// 「通常のBGMに戻す」ための正しい呼び出しなので、そちらは残ってよい。
+const startRecBody = (src.match(/const startRec = \(\) => \{[\s\S]*?\n  \};/) || [''])[0];
+check('頭出しは stopPreview ではなく hush を使う',
+  startRecBody.includes('audio.hush();') && !startRecBody.includes('audio.stopPreview()'), '');
+check('録画開始を待つ間も曲・形・長さを変えられない',
+  (src.match(/recording \|\| starting/g) || []).length >= 3, '');
+check('時計は常に1本（Worker と interval が同時に動かない）',
+  src.includes('studioState.worker.terminate();')
+  && /studioState\.worker = null;[\s\S]{0,120}setInterval\(tick, 33\)/.test(src), '');
+check('取得待ちの札を返すとき pending も戻す',
+  src.includes('if (studioState === mySession) studioState.wakeLockPending = false;'), '');
+const statusResets = (src.match(/status\(''\)/g) || []).length;
+check('「準備中…」で固まらないよう複数の経路で消している', statusResets >= 3, statusResets + 'か所');
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');
