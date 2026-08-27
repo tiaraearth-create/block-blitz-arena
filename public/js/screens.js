@@ -3487,7 +3487,21 @@ function renderMyGuild() {
   const st = body.querySelector('#gdSettings');
   if (st) st.onclick = () => showGuildSettingsModal(g, d);
   body.querySelector('#gdLeave').onclick = async () => {
-    if (!confirm(tr(isOwner ? 'リーダーを離れるとメンバーの最古参に引き継がれます。脱退しますか？' : 'ギルドを脱退しますか？（1時間は再加入できません）', 'Leave the guild? (you cannot rejoin for an hour)'))) return;
+    // 1人だけのギルドでリーダーが抜けると、引き継ぐ相手がいないので
+    // その場で解散する。設立に払った 2,000🪙 も戻らない。
+    // 「引き継がれます」としか書いていなかったので、消えるとは思わずに押せた。
+    const alone = isOwner && (g.members || []).length <= 1;
+    const msg = alone
+      ? tr('あなた以外にメンバーがいません。脱退するとギルドは解散し、'
+         + 'ギルド名も設立に使った 2,000🪙 も戻りません。本当に解散しますか？',
+           'You are the only member. Leaving DISBANDS the guild for good — '
+         + 'the name and the 2,000🪙 you paid are not refunded. Disband it?')
+      : isOwner
+        ? tr('リーダーを離れるとメンバーの最古参に引き継がれます。脱退しますか？（1時間は再加入できません）',
+             'Leadership passes to the longest-serving member. Leave? (you cannot rejoin for an hour)')
+        : tr('ギルドを脱退しますか？（1時間は再加入できません）',
+             'Leave the guild? (you cannot rejoin for an hour)');
+    if (!confirm(msg)) return;
     try {
       const res = await api('/api/guilds/leave', { method: 'POST', body: {} });
       session.user = res.user; updateTopbar();

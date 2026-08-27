@@ -268,7 +268,13 @@ function renderItemBar() {
   bar.dataset.key = key;
   bar.innerHTML = ids.map(id => {
     const d = ITEM_DEFS[id];
-    return `<button class="chip icon-btn ${d.admin ? 'admin-item' : ''}" data-item="${id}" title="${t(d.tip, d.tipEn)}">${d.icon}<b>0</b></button>`;
+    // title のツールチップはスマホでは絶対に読めない（指を乗せ続けられない）。
+    // 何のボタンなのか分からないまま、買ったアイテムが使われずに終わっていた。
+    // 短い名前を下に常時出す。
+    return `<button class="chip icon-btn item-btn ${d.admin ? 'admin-item' : ''}" data-item="${id}" title="${t(d.tip, d.tipEn)}">`
+      + `<span class="ib-icon">${d.icon}<b>0</b></span>`
+      + `<span class="ib-label">${t(d.name, d.nameEn)}</span>`
+      + '</button>';
   }).join('');
   bar.querySelectorAll('[data-item]').forEach(b => { b.onclick = () => useGameItem(b.dataset.item); });
 }

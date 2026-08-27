@@ -106,14 +106,39 @@ export class GameView {
     this.W = rect.width;
     this.H = rect.height;
 
-    const trayH = this.showTray ? Math.min(this.H * 0.24, 130) : 0;
-    const side = Math.min(this.W - 12, this.H - trayH - 16);
-    this.cell = side / SIZE;
-    this.boardX = (this.W - side) / 2;
-    this.boardY = this.showTray ? 6 : (this.H - side) / 2;
-    this.boardSize = side;
-    this.trayY = this.boardY + side + 8;
-    this.trayH = Math.max(0, this.H - this.trayY - 4);
+    // 横持ちかどうかで手札の置き場所を変える。
+    // 縦なら盤面の下、横なら盤面の右。横持ちで下に置くと高さが足りず、
+    // 実測 812x375 で盤面228px・コマ12pxまで潰れていた（横幅は576px余り）。
+    this.sideTray = this.showTray && this.W > this.H * 1.25;
+
+    if (this.sideTray) {
+      // 盤面は高さで頭打ちになるので、先に盤面を決めてから手札を隣に置く。
+      // そのあと2つまとめて中央に寄せる ── 先に手札の幅を確保すると、
+      // 余った幅がぜんぶ手札側に付いて、間延びした帯になる。
+      const side = Math.min(this.H - 12, this.W - 130);
+      const trayW = Math.max(96, Math.min(side * 0.45, 170));
+      const total = side + 10 + trayW;
+      this.cell = side / SIZE;
+      this.boardSize = side;
+      this.boardX = Math.max(6, (this.W - total) / 2);
+      this.boardY = (this.H - side) / 2;
+      this.trayX = this.boardX + side + 10;
+      this.trayW = trayW;
+      // 縦持ちの側が使う値も、参照されたときに破綻しないように埋めておく。
+      this.trayY = 0;
+      this.trayH = this.H;
+    } else {
+      const trayH = this.showTray ? Math.min(this.H * 0.24, 130) : 0;
+      const side = Math.min(this.W - 12, this.H - trayH - 16);
+      this.cell = side / SIZE;
+      this.boardX = (this.W - side) / 2;
+      this.boardY = this.showTray ? 6 : (this.H - side) / 2;
+      this.boardSize = side;
+      this.trayX = 0;
+      this.trayW = this.W;
+      this.trayY = this.boardY + side + 8;
+      this.trayH = Math.max(0, this.H - this.trayY - 4);
+    }
   }
 
   initDeco() {
@@ -206,6 +231,12 @@ export class GameView {
 
   trayHit(x, y) {
     if (!this.engine) return -1;
+    if (this.sideTray) {
+      // 横持ちは縦に3つ並ぶ。盤面の右側だけが手札。
+      if (x < this.trayX) return -1;
+      const slotH = this.H / 3;
+      return Math.max(0, Math.min(2, Math.floor(y / slotH)));
+    }
     const slotW = this.W / 3;
     if (y < this.trayY) return -1;
     return Math.max(0, Math.min(2, Math.floor(x / slotW)));
@@ -216,7 +247,11 @@ export class GameView {
   // welding needs the finger clearly inside the tray.
   weldTargetAt(x, y, index) {
     if (!this.onTrayDrop || !this.engine) return -1;
-    if (y <= this.trayY + Math.min(40, this.trayH * 0.3)) return -1;
+    // 手札の縁ぎりぎりは「盤面の一番下に置こうとした指」なので、
+    // 溶接の対象にしない。横持ちのときは縁が左右になる。
+    if (this.sideTray) {
+      if (x <= this.trayX + Math.min(40, this.trayW * 0.3)) return -1;
+    } else if (y <= this.trayY + Math.min(40, this.trayH * 0.3)) return -1;
     const slot = this.trayHit(x, y);
     if (slot === -1 || slot === index || !this.engine.hand[slot]) return -1;
     return slot;
@@ -659,11 +694,19 @@ export class GameView {
       const pulse = 0.25 + 0.15 * Math.sin(this.time * 6);
       ctx.globalAlpha = pulse;
       ctx.fillStyle = '#b06bff';
-      ctx.fillRect(wslot * slotW + 4, this.trayY + 2, slotW - 8, this.trayH - 6);
+      ctx.fillRect(
+        this.sideTray ? this.trayX + 4 : wslot * slotW + 4,
+        this.sideTray ? wslot * (this.H / 3) + 2 : this.trayY + 2,
+        slotW - 8,
+        (this.sideTray ? this.H / 3 : this.trayH) - 6);
       ctx.globalAlpha = 1;
       ctx.strokeStyle = '#b06bff';
       ctx.lineWidth = 2;
-      ctx.strokeRect(wslot * slotW + 4, this.trayY + 2, slotW - 8, this.trayH - 6);
+      ctx.strokeRect(
+        this.sideTray ? this.trayX + 4 : wslot * slotW + 4,
+        this.sideTray ? wslot * (this.H / 3) + 2 : this.trayY + 2,
+        slotW - 8,
+        (this.sideTray ? this.H / 3 : this.trayH) - 6);
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 13px sans-serif';
       ctx.textAlign = 'center';
@@ -739,15 +782,21 @@ export class GameView {
   drawTray() {
     const { ctx } = this;
     const skin = getSkin(this.skinId);
-    const slotW = this.W / 3;
+    // 横持ちは縦に3つ、縦持ちは横に3つ。
+    const slotW = this.sideTray ? this.trayW : this.W / 3;
+    const slotH = this.sideTray ? this.H / 3 : this.trayH;
     for (let i = 0; i < 3; i++) {
       const piece = this.engine.hand[i];
       if (!piece || (this.drag && this.drag.index === i)) continue;
       const { rows, cols } = shapeSize(piece.cells);
-      const maxCell = Math.min((slotW - 20) / cols, (this.trayH - 14) / rows, this.cell * 0.6);
+      const maxCell = Math.min((slotW - 20) / cols, (slotH - 14) / rows, this.cell * 0.6);
       const pw = cols * maxCell, ph = rows * maxCell;
-      const ox = i * slotW + (slotW - pw) / 2;
-      const oy = this.trayY + (this.trayH - ph) / 2;
+      const ox = this.sideTray
+        ? this.trayX + (slotW - pw) / 2
+        : i * slotW + (slotW - pw) / 2;
+      const oy = this.sideTray
+        ? i * slotH + (slotH - ph) / 2
+        : this.trayY + (this.trayH - ph) / 2;
       const placeable = this.engine.placements(piece).length > 0;
       const alpha = placeable ? 1 : 0.3;
       // subtle idle bobbing

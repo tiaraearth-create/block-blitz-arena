@@ -100,4 +100,40 @@ for (let H = 380; H <= 900; H += 5) {
 }
 check('現実的な高さの範囲で手札が潰れきらない（60px 以上）', trayAlwaysUsable, '');
 
+
+// ---------------------------------------------------------------------------
+// 3. 横持ち（手札を盤面の右に置く）
+// ---------------------------------------------------------------------------
+// 手札をいつも下に置いていたので、横持ちだと高さが足りず盤面が半分以下に
+// 潰れていた（実測 812x375 で 盤面228px・1マス28.5・コマ12px）。
+// そのとき横幅は576pxも余っていた。
+check('横持ちの分岐がソースに入っている', /sideTray/.test(SRC), '');
+check('掴み判定も横持ちに対応している',
+  SRC.includes('const slotH = this.H / 3;') && SRC.includes('if (x < this.trayX) return -1;'), '');
+check('描画も横持ちに対応している',
+  SRC.includes('const slotW = this.sideTray ? this.trayW : this.W / 3;'), '');
+check('溶接の判定も横持ちに対応している',
+  SRC.includes('if (x <= this.trayX + Math.min(40, this.trayW * 0.3)) return -1;'), '');
+
+function landscape(W, H) {
+  const side = Math.min(H - 12, W - 130);
+  const trayW = Math.max(96, Math.min(side * 0.45, 170));
+  const total = side + 10 + trayW;
+  return { side, trayW, boardX: Math.max(6, (W - total) / 2), cell: side / SIZE, slack: W - total };
+}
+const before = (W, H) => Math.min(W - 12, H - Math.min(H * 0.24, 130) - 16);
+
+for (const [W, H] of [[812, 286], [740, 300], [667, 280], [1024, 500]]) {
+  const L = landscape(W, H);
+  const old = before(W, H);
+  check(`横持ち ${W}x${H}: 盤面が広くなる`, L.side > old, `${Math.round(old)} → ${Math.round(L.side)}`);
+  check(`横持ち ${W}x${H}: 画面からはみ出さない`,
+    L.boardX >= 0 && L.boardX + L.side + 10 + L.trayW <= W + 0.5,
+    `${Math.round(L.boardX)} + ${Math.round(L.side)} + ${Math.round(L.trayW)} vs ${W}`);
+  check(`横持ち ${W}x${H}: 手札が指で掴める幅`, L.trayW >= 96, `${Math.round(L.trayW)}px`);
+}
+
+// 縦持ちに戻る境目。1.25 未満は今までどおり下に置く。
+check('正方形に近い画面は縦持ち扱い', !(400 > 380 * 1.25), '');
+check('明らかな横長は横持ち扱い', 812 > 375 * 1.25, '');
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

@@ -874,6 +874,19 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
 .item-bar .chip:first-child { margin-inline-start: auto; }
 .item-bar .chip.off { opacity: 0.4; }
 .item-bar .chip b { margin-left: 3px; font-size: 11px; }
+/* アイテムの名前を常時出す。説明が title 属性にしか無かったので、
+   スマホでは何のボタンなのか読む方法が一つも無かった
+   （指を乗せ続けられないので、ツールチップは出ない）。 */
+.item-btn {
+  display: inline-flex; flex-direction: column; align-items: center; gap: 1px;
+  line-height: 1.15; padding: 4px 8px;
+}
+.item-btn .ib-icon { display: inline-flex; align-items: center; }
+.item-btn .ib-label {
+  font-size: 8.5px; font-weight: 700; color: var(--muted);
+  letter-spacing: -.02em; white-space: nowrap; max-width: 62px;
+  overflow: hidden; text-overflow: ellipsis;
+}
 
 /* Fever: score glows gold */
 .hud-score.fever {
@@ -1219,6 +1232,14 @@ body[data-screen="game"] #topbar { display: none; }
     width: min(30vw, 240px); max-width: none; margin: 0;
     background: rgba(10,13,30,0.9);
   }
+  /* 横持ちでは手札を盤面の右に置くようになった（game.js の sideTray）。
+     パネルを盤面の上に浮かせたままだと重なるので、canvas の箱そのものを
+     パネルのぶん内側にする ── そうすれば view の W が最初から正しくなる。
+     パネルが出ているときだけ内側に寄せる。いつも寄せると、
+     パネルの無いソロで盤面が無駄に小さくなる（実測 424px まで縮んだ）。 */
+  #screen-game:has(.opp-panel:not(.hidden)) .game-canvas-wrap { padding-left: min(24vw, 190px); }
+  #screen-game:has(.boss-panel:not(.hidden)) .game-canvas-wrap { padding-right: min(24vw, 190px); }
+  .opp-panel, .boss-panel { width: min(24vw, 190px); }
   .opp-panel { left: 6px; top: 46px; }
   .boss-panel { right: 6px; top: 46px; }
   #oppCards.strip { flex-direction: column; align-items: stretch; }
