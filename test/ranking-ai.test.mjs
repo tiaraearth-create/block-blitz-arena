@@ -107,20 +107,29 @@ const snap = t => roster.map(r => JSON.stringify(residentStats(r, t, 'W100')));
   check('ボードごとに顔ぶれが違う（上位15の重複が半分未満）', overlap < 8, `重複${overlap}/15人`);
 }
 
-// ---- 人間が勝てる余地があること --------------------------------------------
+// ---- 超強化されていること & 絶対上限は残っていること -------------------------
 //
-// 住人は日が経つほど強くなる設計なので、上限を明示していないと半年後には
-// 人間が到達しうる値を追い越してしまう。「いま」だけでなく1000日後も
-// 頭打ちになっていることを確かめる。
+// v2.14 で住人は大幅強化された — ランキング上位は化け物級の記録になる。
+// それでも各ボードには絶対上限を残す:
+//   ・スコアは 900,000 止まり（不正対策クランプ 500点/秒 の内側 — 人間が
+//     理論上到達しうる領域）
+//   ・タイムアタックは理論上限 60,000（1000点/秒×60秒）の内側 59,000 止まり
+//   ・塔100F制覇（🏰バッジ）は引き続き人間だけのもの（住人は99F止まり）
+// 王座は同値なら実プレイヤーが勝つので、どの王冠も理論上は奪還できる。
+// 「いま」だけでなく1000日後も頭打ちになっていることを確かめる。
 {
+  const st0 = registered.map(r => residentStats(r, NOON_JST, 'W100'));
+  const top0 = k => Math.max(...st0.map(s => s[k]));
+  check('強化されている: ハイスコア上位が化け物級（40万点超）', top0('bestScore') >= 400000, `最高 ${top0('bestScore')}`);
+  check('強化されている: レート上位が2000超え', top0('rating') >= 2000, `最高 ${top0('rating')}`);
   for (const days of [0, 90, 365, 1000]) {
     const at = NOON_JST + days * DAY;
     const st = registered.map(r => residentStats(r, at, 'W100'));
     const top = k => Math.max(...st.map(s => s[k]));
-    check(`+${days}日: ハイスコアが上限内`, top('bestScore') <= 160000, `最高 ${top('bestScore')}`);
-    check(`+${days}日: レートが上限1900以内`, top('rating') <= 1900, `最高 ${top('rating')}`);
-    check(`+${days}日: 塔100Fは人間だけ（住人は95F止まり）`, top('dungeonMax') <= 95, `最高 ${top('dungeonMax')}F`);
-    check(`+${days}日: タイムアタックは人間の射程内`, top('sprintBest') < 60000, `最高 ${top('sprintBest')}`);
+    check(`+${days}日: ハイスコアが上限900,000以内`, top('bestScore') <= 900000, `最高 ${top('bestScore')}`);
+    check(`+${days}日: レートが上限2600以内`, top('rating') <= 2600, `最高 ${top('rating')}`);
+    check(`+${days}日: 塔100Fは人間だけ（住人は99F止まり）`, top('dungeonMax') <= 99, `最高 ${top('dungeonMax')}F`);
+    check(`+${days}日: タイムアタックは理論上限60,000の内側`, top('sprintBest') <= 59000, `最高 ${top('sprintBest')}`);
   }
 }
 

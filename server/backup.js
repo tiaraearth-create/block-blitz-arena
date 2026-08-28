@@ -134,6 +134,32 @@ function mergeEarned(winner, loser) {
     wb.premium = !!(wb.premium || lb.premium);
     wb.claimed = [...new Set([...(wb.claimed || []), ...(lb.claimed || [])])];
   }
+
+  // 🏆 週間ランキング報酬の受け取り状況も EARNED として引き継ぐ。復元時に
+  // db.meta.lastRankRewardWeek を消して finalizeWeeklyRankings を再実行する
+  // 仕組み（restore 側）は、各レコードの「支払い済み」印だけを頼りに二重払いを
+  // 防いでいる。ところが勝ったレコードが（バックアップ側で）その印より古いと、
+  // 印と未受取の報酬が両方消え、同じ週がもう一度支払われて別人が「今週の優勝」に
+  // なり、受け取り前だった報酬は逆に消えていた。
+  //   ・同じ週なら「一度でも支払っていれば支払い済み」に倒す（best は大きいほう）
+  //   ・勝った側にその週の記録が無ければ、負けた側のものをそのまま引き継ぐ
+  //   ・保留中の順位報酬は id で和集合（受け取り前の分を落とさない）
+  const ww = winner.stats && winner.stats.weekly;
+  const lw = loser.stats && loser.stats.weekly;
+  if (lw && winner.stats) {
+    if (!ww) winner.stats.weekly = { ...lw };
+    else if (lw.week === ww.week) {
+      ww.rewarded = !!(ww.rewarded || lw.rewarded);
+      ww.best = Math.max(ww.best || 0, lw.best || 0);
+    }
+  }
+  const wrr = Array.isArray(winner.rankRewards) ? winner.rankRewards : (winner.rankRewards = []);
+  if (Array.isArray(loser.rankRewards)) {
+    const seenRR = new Set(wrr.map(r => r && r.id));
+    for (const r of loser.rankRewards) {
+      if (r && r.id && !seenRR.has(r.id)) { wrr.push(r); seenRR.add(r.id); }
+    }
+  }
 }
 
 // --- snapshots ------------------------------------------------------------

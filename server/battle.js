@@ -47,6 +47,8 @@ const TOURNEY_BOT_LEVELS = [['easy', 'normal'], ['normal', 'hard'], ['hard', 'on
 
 export function initBattle(server, deps) {
   const { db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, MATCH_DURATION } = deps;
+  // 予約名判定（無ければ何も予約しない安全側デフォルト）。index.js が渡す。
+  const reservedName = deps.reservedName || (() => false);
 
   // maxPayload: the default is 100 MiB per frame, which on a single free-tier
   // instance is a cheap way to exhaust memory. The largest legitimate message
@@ -1041,11 +1043,25 @@ export function initBattle(server, deps) {
     }
   }
 
+  // Anti-forge: a client cannot have scored faster than the match has actually
+  // run. Same 500/sec ceiling royale (above) and the REST result path apply.
+  // Without it, a rated duel / attack / team / tourney match decided its winner
+  // — and the Elo, rank tier and win/loss both players took — purely from a
+  // client-declared score, so one { type:'finish', score:999999 } (or a single
+  // forged 'state' frame) stole the win and tanked the honest opponent's rating
+  // every time. Bots feed their own authoritative engine score, so only
+  // client-declared scores are capped.
+  function matchScoreCap(match) {
+    return Math.floor(Math.max(1, (Date.now() - match.startedAt) / 1000) * 500);
+  }
+
   function finishPlayer(match, slot, score, lines = 0, maxCombo = 0) {
     const p = match.players[slot];
     if (!p || p.finished || match.ended) return;
     p.finished = true;
-    p.score = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
+    let s = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
+    if (!p.sock.isBot) s = Math.min(s, matchScoreCap(match));
+    p.score = Math.max(p.score, s);   // monotonic — never below the last live frame
     if (lines) p.lines = Math.max(p.lines, Math.floor(lines));
     if (maxCombo) p.maxCombo = Math.max(p.maxCombo, Math.floor(maxCombo));
     if (match.players.every(q => q.finished)) endMatch(match, 'finished');
@@ -2220,12 +2236,18 @@ export function initBattle(server, deps) {
           // 登録済みの名前をゲストが名乗れてしまうと、チャットで管理者や
           // 他人になりすませる（🛡️ の表示は role で出るので付かないが、
           // 名前だけ見ている相手には区別がつかない）。使われている名前は避ける。
+          // 予約名（運営/管理者ゼロ 等）とアリーナ住人の名前も同様に弾く ——
+          // これらは登録できないので db.users には載らず、衝突チェックだけでは
+          // 常にすり抜けた。断罪イベント中に偽の「運営」告知を流せる穴だった。
           if (!user) {
             const want = sanitizeName(msg.guestName) || '';
-            const taken = want && Object.values(db.users)
-              .some(u => u.username.toLowerCase() === want.toLowerCase());
+            const taken = want && (
+              Object.values(db.users).some(u => u.username.toLowerCase() === want.toLowerCase())
+              || reservedName(want)
+              || !!residentByName(want)
+            );
             ws.guestName = (want && !taken) ? want : `ゲスト${Math.floor(Math.random() * 9999)}`;
-            if (want && taken) send(ws, { type: 'error', error: 'その名前は使われています。別の名前になりました' });
+            if (want && taken) send(ws, { type: 'error', error: 'その名前は使えません。別の名前になりました' });
           } else {
             ws.guestName = null;
           }
@@ -2296,7 +2318,10 @@ export function initBattle(server, deps) {
           // A finished player's score is already locked in for Elo — a late
           // frame must not move it.
           if (me.finished) return;
-          me.score = Math.max(0, Math.min(1_000_000, Math.floor(Number(msg.score) || 0)));
+          // Same anti-forge cap as finishPlayer: bound the running score by the
+          // time the match has actually run, so a single forged frame can't
+          // dictate the winner. Monotonic — scores only ever climb.
+          me.score = Math.max(me.score, Math.min(matchScoreCap(match), Math.min(1_000_000, Math.floor(Number(msg.score) || 0))));
           me.lines = Math.max(me.lines, Math.floor(Number(msg.lines) || 0));
           me.maxCombo = Math.max(me.maxCombo, Math.floor(Number(msg.combo) || 0));
           // Online modes reported 0 pieces placed, which froze three missions

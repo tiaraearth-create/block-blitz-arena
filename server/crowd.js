@@ -100,8 +100,11 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'n': v = rint(2, 9); break;
     case 'wave': v = st ? Math.max(3, st.survivalWave + rint(-3, 2)) : 8; break;
     case 'combo': v = r ? Math.max(3, Math.round(3 + r.skill * 12 + rint(-1, 1))) : 6; break;
-    case 'score': v = r ? Math.round((4000 + r.skill * r.skill * 60000) / 100) * 100 + rint(0, 99) * 10 : 12000; break;
-    case 'sprint': v = r ? Math.round((1500 + r.skill * r.skill * 14000) / 100) * 100 : 6000; break;
+    // 自慢する点数はランキングの自己ベスト（residentStats）から出す。
+    // skill から別式で作ると、住人強化のたびに「チャットでは6万点なのに
+    // ランキングでは70万点」という嘘つきが生まれる。ベスト近辺の値にする。
+    case 'score': v = st ? Math.max(1500, Math.round(st.bestScore * (86 + rint(0, 14)) / 10000) * 100 + rint(0, 9) * 10) : 12000; break;
+    case 'sprint': v = st ? Math.max(800, Math.round(st.sprintBest * (85 + rint(0, 15)) / 10000) * 100) : 6000; break;
     case 'event': v = ctx.event || null; break;   // オブジェクトごと保持し言語別に描画
     case 'ai': v = r ? Math.min(3, Math.floor(r.skill * 4.2)) : 1; break;
     case 'name': {

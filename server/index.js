@@ -418,7 +418,11 @@ const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'rai
 
 function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, trusted, preClamped }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
-  mode = String(mode || 'solo');
+  // mode はキー生成にも使う（下の `${mode}Prev`）。クライアント申告なので、
+  // 長さを切っておかないと巨大文字列で stats を無限に太らせられる（実測で
+  // 1リクエストごとに ~60KB の永続キーが1個増え、やがて db.json の保存自体が
+  // 静かに失敗しうる）。既知の mode はどれも十数文字なので32で十分。
+  mode = String(mode || 'solo').slice(0, 32);
   // 対戦の実処理を経ていない申告は、ソロ扱いに落として報酬を出さない。
   if (!trusted && SERVER_JUDGED_MODES.has(mode)) {
     console.warn(`[cheat] ${user.username}: サーバー判定モード '${mode}' を直接申告（拒否）`);
@@ -471,13 +475,25 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     if (duration > elapsed) duration = Math.max(1, Math.floor(elapsed));
     user.stats.lastResultAt = now;
   }
-  // Cheat guard: cap plausible score rate. Time attack is *about* scoring
-  // fast; Meltdown runs hot multipliers (×15+ near critical) in short bursts
-  // and Chimera stacks up to ×3 — both need looser ceilings than the endless
-  // modes or legit runs get silently clipped.
-  // Dig stacks depth-scaled ore bonuses on top of normal scoring, so it gets a
-  // slightly looser ceiling too.
-  const rateCap = mode === 'sprint' ? 1000 : mode === 'meltdown' ? 2000 : mode === 'chimera' ? 1000 : mode === 'dig' ? 800 : 500;
+  // Cheat guard: cap plausible score rate. This is only a coarse "no human
+  // scores THIS fast" backstop — the real anti-forge is the wall-clock clamp
+  // above (you cannot have played longer than the time since your last result),
+  // which cannot be beaten by claiming a big duration. So the rate cap can be
+  // generous without opening a cheat: raising it does not let anyone forge a
+  // score faster than real time passes.
+  //
+  // v2.14: the old 500/sec default was silently clipping legit SOLO runs. Solo
+  // allows ultimate skills (メテオ +100,000, 神の裁き = full-board wipe for a
+  // huge burst, オーバードライブ = ×3 for 15s), so a player's BEST games — the
+  // record-setting ones — routinely blew past 500/sec and got cut, and their
+  // high score plateaued ("I beat my score but the ranking never moves"). The
+  // endless boards now get a ceiling high enough that honest ultimate-fueled
+  // play always registers; the absolute 1,000,000 cap (above) still stands.
+  // Time attack stays at 1000/sec ON PURPOSE: it disables items/ultimates for
+  // fairness, so pure fast placement tops out near 1000/sec — that keeps the
+  // 60,000 (60s) / 180,000 (180s) summit reachable but not forgeable, which is
+  // exactly the ceiling the arena residents sit just under.
+  const rateCap = mode === 'sprint' ? 1000 : mode === 'meltdown' ? 2000 : mode === 'chimera' ? 1000 : mode === 'dig' ? 2000 : 2000;
   if (score > duration * rateCap) score = Math.floor(duration * rateCap);
 
   let coins = Math.min(1000, 20 + Math.floor(score / 100) + (won ? 50 : 0));
@@ -776,7 +792,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // 到達フィードの「前回どこまで行ったか」を世界ごとに持つ。共通の1個だと、
   // 地下でB100まで行ったあと塔でF100に着いても『もう到達済み』扱いになり、
   // 速報が出なくなっていた。
-  const prevKey = mode.startsWith('dungeon') ? `${mode}Prev` : null;
+  // 既知の4レルムだけがキーを作る。以前は startsWith('dungeon') で判定して
+  // いたので、'dungeon' で始まる任意の申告が `${mode}Prev` という新しい
+  // 永続キーを生み、stats を際限なく太らせられた。
+  const prevKey = DUNGEON_REALMS[mode] ? `${mode}Prev` : null;
   const prevFloor = prevKey ? (s[prevKey] != null ? s[prevKey] : (mode === 'dungeon' ? s.dungeonPrev || 0 : 0)) : 0;
   if (prevKey && floor >= 10 && Math.floor(floor / 10) > Math.floor(prevFloor / 10)) {
     feedNotes.push({ icon: '🏰', ja: `${nm} がダンジョン F${Math.floor(Number(floor) || 0)} に到達`, en: `${nm} reached dungeon F${Math.floor(Number(floor) || 0)}` });
@@ -791,7 +810,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // Daily / weekly missions advance off the same event.
   const missionsCompleted = trackMissions(user, currentWeekNum(), {
     mode, score, maxCombo, lines, won: !!won,
-    floors: mode.startsWith('dungeon') ? floors : 0,
+    floors: DUNGEON_REALMS[mode] ? floors : 0,
     // Survival missions must not advance from other modes' stray wave fields.
     wave: mode === 'survival' ? wave : 0,
     stage: mode === 'puzzle' ? stage : 0,
@@ -1555,6 +1574,12 @@ const SEED_NEWS = [
       '[🎒 Inventory] A new inventory screen in the menu: gear, items, badges and thrones in one place, with equipping right there.\n' +
       '[🔊 A livelier lobby] Up to 600 residents now fill the lobby.\n' +
       '[🐛 Fixes] In Battle Royale, switching apps on a phone got you eliminated — your connection was fine, but looking away for 20 seconds knocked you out; when several players dropped at once the lower scorer could take the better placement; a co-op hand desync made you unable to place anything; a rematch could drag an opponent out of another room; the online player count read roughly double the real number; chat history vanished on restart; English text showed Japanese item, boss, title and badge names verbatim; the day rollover was not using Japan time (login bonus and streaks); conquering the Abyss gave no special celebration — and more.' },
+  { id: 'seed-v214', pinned: true,
+    title: '📈 v2.14 住人たちが本気を出しました', titleEn: '📈 v2.14 — The Residents Got Serious',
+    body: '【📈 ランキングの住人が大幅強化】アリーナの住人（AIプレイヤー）たちが猛特訓を積み、ランキング上位の記録が化け物級になりました。ハイスコアは数十万点、レートは2000超え、塔は99階、タイムアタックも理論値ギリギリ — 各ランキングの頂は、もうこれまでの比ではありません。チャットで彼らが自慢してくる点数も本物です。\n' +
+      '【👑 それでも頂は獲れます】どの記録にも、人間が到達できる余地は残してあります。同記録なら王座は必ず人間のもの。そして塔100階の制覇は、今までどおり人間だけに許された領域です。住人の記録は日々伸び続けます — 追い抜くなら、今日がいちばん易しい日。挑戦者を待っています。',
+    bodyEn: '[📈 The leaderboard residents got a massive power-up] The arena residents (AI players) have been training hard, and the top of every leaderboard is now monstrous: high scores in the hundreds of thousands, ratings beyond 2000, floor 99 of the Tower, and time-attack records scraping the theoretical limit. The summit of each board is nothing like it used to be — and the scores they brag about in chat are real.\n' +
+      '[👑 The summit can still be taken] Every record leaves room for a human to reach it, and on a tie the throne always goes to the human. Conquering floor 100 of the Tower remains yours alone. The residents\' records keep growing by the day — today is the easiest day to pass them. We are waiting for challengers.' },
 ];
 
 // ニュース本文の改訂番号。SEED_NEWS の文面を書き直したら1つ増やすと、
@@ -1563,7 +1588,7 @@ const SEED_NEWS = [
 // これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
 // 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
 // v2.11.1 の本文を差し替えるのに必要になった。
-const NEWS_BODY_REV = 3;
+const NEWS_BODY_REV = 4;   // v2.14: 最新📌を seed-v214 に交代（KEEP_PINNED 変更）
 
 // id で引いたユーザー。`__proto__` や `constructor` を渡されると
 // Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
@@ -1616,7 +1641,7 @@ function seedNews() {
 //
 // 一度きり（db.meta.newsUnpinned で記録）。管理者があとで📌し直したものを
 // 起動のたびに剥がしてしまわないため。
-const KEEP_PINNED = ['seed-zero', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
+const KEEP_PINNED = ['seed-v214', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
 function unpinOldReleaseNotes() {
   // KEEP_PINNED を変えたら、もう一度だけ剥がし直す必要がある。
   if (db.meta.newsUnpinned === NEWS_BODY_REV) return;
@@ -1946,6 +1971,12 @@ function computeThrones() {
     if (u.banned || u.role === 'admin' || !u.stats || !(u.stats.gamesPlayed > 0)) continue;
     realCands.push({ id: u.id, username: u.username, createdAt: u.createdAt || 0, resident: false, user: u });
   }
+  // 実プレイヤーと同名の住人は王座戦線から外す。ghostRows は taken で同名住人を
+  // ボードから隠すのに、王座計算だけ素通しだった ── 隠れた住人が王座を取ると、
+  // ランキングは同名の実プレイヤーの行に👑を付ける一方、俸給もプロフィールの
+  // 王座もその人には付かない（王座は res:<id> に紐づく）。誰も得しない幻の王冠。
+  // 全 db.users 名で照合（ghostRows の taken と同じ広さ）。
+  const realNames = new Set(Object.values(db.users).map(u => String(u.username || '').toLowerCase()));
   // 👑 住人（AIプレイヤー）も王座戦線に参戦 — 王座が空位のまま眠らないように。
   // 候補は「そのボードに実際に表示される住人サブセット」(boardResidents) 限定、
   // 値はゴースト行と同じ式 — 王冠が見えない行に付くことは構造的にない。
@@ -1973,6 +2004,7 @@ function computeThrones() {
   for (const [board, def] of Object.entries(THRONE_BOARDS)) {
     const cands = realCands.slice();
     for (const r of boardResidents(board, week)) {
+      if (realNames.has(String(r.name).toLowerCase())) continue;   // 同名の実プレイヤーがいる住人は除外
       cands.push({ id: `res:${r.id}`, username: r.name, createdAt: 0, resident: true, r });
     }
     let best = null, bestV = 0;
@@ -2012,6 +2044,11 @@ function refreshThrones(force = false) {
   for (const [board, t] of Object.entries(next)) {
     const old = prev[board];
     if (old && old.userId === t.userId) continue;
+    // 週間王座は毎週月曜にリセットされ、人間のスコアが0に戻る。その瞬間に
+    // 住人が必ず「奪取」するので、これを毎週告知すると正当な週間王者が毎週
+    // AIに公開処刑される。住人が週間王座を取る動きは黙って処理する（人間が
+    // 取り返すときは告知される）。王座の保持自体は下で記録し表示は正しいまま。
+    if (board === 'weekly' && t.resident) continue;
     const def = THRONE_BOARDS[board];
     battle.crowd.feed({
       icon: '👑', real: true, who: t.username,
@@ -4062,6 +4099,13 @@ const server = http.createServer(app);
 const battle = initBattle(server, {
   db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, userFromToken,
   MATCH_DURATION,
+  // 予約名（運営/管理者ゼロ 等）判定。ゲストがWSでこれらを名乗れないように
+  // battle.js の hello から使う。クロージャなので RESERVED_NAMES 定義後
+  // （＝実際に呼ばれる hello 受信時）に評価される。
+  reservedName: (n) => {
+    const s = String(n == null ? '' : n).trim().toLowerCase();
+    return !!s && RESERVED_NAMES.some(r => r.toLowerCase() === s);
+  },
   isMaintenance: inMaintenance,
   guildTagOf: (name, user) => tagOfName(db, name, user),
   // AI-vote guild solidarity: ghost-guild tag only (never scans db.users).
@@ -4084,8 +4128,10 @@ battleReady = true;
 setWorldProvider(() => ({
   event: currentEvent(),
   poll: db.meta.poll && pollOpen(db.meta.poll) ? db.meta.poll : null,
-  // 👑 王座保持者の名前 — 王者住人はチャットに常駐し、王者らしい発言をする
-  thrones: Object.values(db.meta.thrones || {}).filter(Boolean).map(t => t.username),
+  // 👑 住人が保持している王座名だけ — 王者住人はチャットに常駐し王者らしい発言を
+  // する。実プレイヤーの王座名を混ぜると、たまたま同名の住人が常駐して「王座は
+  // 渡さない」と一人称で自慢し、実在プレイヤーになりすます形になっていた。
+  thrones: Object.values(db.meta.thrones || {}).filter(t => t && t.resident).map(t => t.username),
 }));
 
 // ---------------------------------------------------------------------------

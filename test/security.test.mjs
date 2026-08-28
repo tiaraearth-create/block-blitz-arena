@@ -183,11 +183,15 @@ try {
     const base = (await j('/api/me', {}, ct)).user;
     check('正当な範囲のスコアはそのまま通る', base.stats.bestScore === 3000, `bestScore=${base.stats.bestScore}`);
 
-    // 2回目: 直後に「7200秒プレイした」と主張して上限いっぱいを狙う
+    // 2回目: 直後に「7200秒プレイした」と主張して上限いっぱいを狙う。
+    // v2.14 でレート上限は 500→2000/秒 に上げた（会心のプレイが切られる
+    // 悪仕様の解消）。だが本当の防御は「直前送信からの実経過時間」の方で、
+    // ここは据え置き。直後の連投なので猶予90秒しか経っておらず、
+    // 90秒 × 2000/秒 = 180,000 が上界。7200秒の申告は一切効かない。
     await j('/api/game/result', { method: 'POST', body: { mode: 'solo', score: 1000000, lines: 500, maxCombo: 50, duration: 7200 } }, ct);
     const after = (await j('/api/me', {}, ct)).user;
     check('duration を偽っても実経過時間までしか通らない',
-      after.stats.bestScore < 100000,
+      after.stats.bestScore < 200000,
       `bestScore=${after.stats.bestScore}（7200秒を申告しても1,000,000は通らない）`);
     check('稼げるコインも有限にとどまる', after.coins < 5000, `${after.coins}🪙`);
   }
@@ -219,12 +223,35 @@ try {
   // 初回だけ猶予3600秒を与えていたため、3600×500=180万点 が絶対上限の
   // 100万点を上回り、上限チェックが一度も発動しなかった。
   // 実測で、新規アカウントが1リクエストで王座を6つ独占できた。
+  // v2.14: レート上限は 2000/秒 に上げたが、初回の持ち時間は「アカウントの
+  // 年齢（最大30分）＋猶予90秒」のまま。作りたてのアカウント（年齢≒0）の
+  // 1リクエストは 90秒 × 2000/秒 = 180,000 が上界で、絶対上限100万には届かない。
   {
     const v = await j('/api/register', { method: 'POST', body: { username: '初回一撃太郎', password: 'pass1234' } });
     await j('/api/game/result', { method: 'POST', body: { mode: 'solo', score: 1000000, lines: 900, maxCombo: 99, duration: 7200 } }, v.token);
     const me = (await j('/api/me', {}, v.token)).user;
     check('初回でも100万点は通らない', me.stats.bestScore < 1000000, `bestScore=${me.stats.bestScore}`);
-    check('初回の上限が妥当な範囲', me.stats.bestScore <= 300 * 500, `bestScore=${me.stats.bestScore} (上限 ${300 * 500})`);
+    check('初回の上限が妥当な範囲', me.stats.bestScore <= 200000, `bestScore=${me.stats.bestScore} (上限 200,000)`);
+  }
+
+  // ---------------------------------------------------------------------
+  // mode 文字列で stats を無限に太らせられない
+  //
+  // mode はキー生成に使われる（`${mode}Prev`）のに検証されておらず、
+  // 'dungeon' で始まる巨大文字列を送ると、その文字列がまるごと永続キー名に
+  // なった。1リクエストごとに ~60KB の新キーが増え、やがて db.json の保存
+  // そのものが静かに失敗しうる（全プレイヤーの進捗が次の再起動で消える）。
+  // ---------------------------------------------------------------------
+  {
+    const v = await j('/api/register', { method: 'POST', body: { username: '肥大化太郎', password: 'pass1234' } });
+    const junk = 'dungeon' + 'x'.repeat(60000);
+    const r = await j('/api/game/result', { method: 'POST', body: { mode: junk, score: 100, floor: 10, duration: 30 } }, v.token);
+    check('巨大 mode の申告でもサーバーは落ちない', r.status === 200, `status=${r.status}`);
+    const me = (await j('/api/me', {}, v.token)).user;
+    const statsSize = JSON.stringify(me.stats).length;
+    check('巨大 mode が stats の永続キーにならない', statsSize < 4000, `stats=${statsSize}B`);
+    const bigKeys = Object.keys(me.stats).filter(k => k.length > 40);
+    check('mode 由来の巨大キーが1つも無い', bigKeys.length === 0, bigKeys.map(k => k.slice(0, 20) + '…').join(','));
   }
 
   // ---------------------------------------------------------------------

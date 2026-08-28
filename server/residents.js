@@ -268,16 +268,20 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   // レートは実力に長期の伸びを足し、そこに調子が乗る形。
   const climb = 1 - Math.exp(-age / (30 + (1 - s) * 60));
   const aptPvp = aptitude(r, 'pvp');
-  // 上限は明示する。伸び続ける設計なので、放っておくと半年後には理論値2140に
-  // 達して人間が到達しうるレートを追い越してしまう。1900 = マスター帯の上。
-  const rating = Math.min(1900, Math.round(850 + Math.pow(s, 1.3) * 1080 * aptPvp * (0.72 + 0.28 * climb) + mood * 70));
-  const level = Math.max(1, Math.min(60, 1 + Math.floor(age * (0.08 + s * 0.25))));
+  // v2.14: 住人は大幅強化 — ランキング上位は化け物級の記録になる。
+  // それでも各ボードに絶対上限を残す。根拠は「人間の理論上限の内側」:
+  //   ・スコアの不正対策クランプは 500点/秒 なので、長時間の本気の走りで
+  //     100万点级に届きうる。住人は 900,000 で頭打ち。
+  //   ・レートは 2600 止まり（Eloに上限は無いので、勝ち続ける人間は超えうる）
+  //   ・王座は同値なら実プレイヤーが勝つ — どの王冠も理論上は奪還できる。
+  const rating = Math.min(2600, Math.round(850 + Math.pow(s, 1.3) * 1600 * aptPvp * (0.72 + 0.28 * climb) + mood * 70));
+  const level = Math.max(1, Math.min(60, 1 + Math.floor(age * (0.10 + s * 0.45))));
   // ここから下は全部「自己ベスト」— 練習日に更新され、下がらず、住人ごとに
   // 更新日がずれる。得意ボードほど天井が高い。
-  const scoreSpan = 5000 + Math.pow(s, 2) * 230000;
-  const bestScore = Math.min(160000, personalBest(r, age, 'sc', 2500, scoreSpan, aptitude(r, 'solo')));
-  // 95止まり: 塔100F制覇（🏰バッジ）は人間だけのものにしておく。
-  const dungeonMax = Math.min(95, 1 + personalBest(r, age, 'dg', 0, Math.pow(s, 1.3) * 125, aptitude(r, 'dungeon')));
+  const scoreSpan = 5000 + Math.pow(s, 2) * 1000000;
+  const bestScore = Math.min(900000, personalBest(r, age, 'sc', 2500, scoreSpan, aptitude(r, 'solo')));
+  // 99止まり: 塔100F制覇（🏰バッジ）は人間だけのものにしておく。
+  const dungeonMax = Math.min(99, 1 + personalBest(r, age, 'dg', 0, Math.pow(s, 1.3) * 160, aptitude(r, 'dungeon')));
   const wk = unit(r.id, weekId);
   const weeklyMix = s * 0.6 + wk * 0.4;
   const badges = [];
@@ -306,15 +310,16 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   return {
     rating, level, bestScore, dungeonMax, age,
     tier: tierOf(rating),
-    pvpWins: Math.floor(age * s * 0.9 * aptPvp),
+    pvpWins: Math.floor(age * s * 1.8 * aptPvp),
     pvpLosses: Math.floor(age * (1 - s) * 0.8),
     // ウィークリーは週ごとにリセットされる記録なので、そこだけは階段ではなく
     // 「その週の調子」で決まる（本物のウィークリーと同じ性質）。
-    weeklyBest: Math.floor(Math.pow(weeklyMix, 2) * 30000 * aptitude(r, 'weekly') * (0.8 + 0.4 * ((mood + 1) / 2)) + 800),
-    // かつては住人ごとの定数で、何日経っても1ミリも動かなかった箇所。
-    sprintBest: personalBest(r, age, 'sp', 600, Math.pow(s, 2) * 30000, aptSprint),
-    sprint180: personalBest(r, age, 's3', 2000, Math.pow(s, 2) * 92000, aptSprint),
-    survivalWave: Math.max(1, Math.min(99, personalBest(r, age, 'sv', 3, s * 42, aptitude(r, 'survival')))),
+    weeklyBest: Math.floor(Math.pow(weeklyMix, 2) * 90000 * aptitude(r, 'weekly') * (0.8 + 0.4 * ((mood + 1) / 2)) + 800),
+    // タイムアタックの理論上限は 1000点/秒 × 60秒 = 60,000。住人はその内側
+    // （59,000 / 175,000）で頭打ち — 頂点そのものは人間に残す。
+    sprintBest: Math.min(59000, personalBest(r, age, 'sp', 600, Math.pow(s, 2) * 62000, aptSprint)),
+    sprint180: Math.min(175000, personalBest(r, age, 's3', 2000, Math.pow(s, 2) * 186000, aptSprint)),
+    survivalWave: Math.max(1, Math.min(99, personalBest(r, age, 'sv', 3, s * 95, aptitude(r, 'survival')))),
     badges, title,
   };
 }
@@ -346,7 +351,9 @@ export function onlineResidents(roster, now = Date.now(), popFactor = 1) {
 }
 
 // Level band a resident's rating corresponds to (for bot disguise matching).
-export const BOT_RATING_BANDS = { easy: [700, 1020], normal: [980, 1300], hard: [1240, 1600], oni: [1520, 2000] };
+// v2.14: 住人のレート上限が 1900→2600 に上がったので、鬼帯の天井も追随させる
+// （据え置くと最強格の住人が変装候補から全員こぼれ、鬼の変装が枯れる）。
+export const BOT_RATING_BANDS = { easy: [700, 1020], normal: [980, 1300], hard: [1240, 1600], oni: [1520, 2800] };
 export function residentsForLevel(roster, level, now = Date.now()) {
   const [lo, hi] = BOT_RATING_BANDS[level] || BOT_RATING_BANDS.normal;
   return roster.filter(r => {

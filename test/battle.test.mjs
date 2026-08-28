@@ -64,6 +64,20 @@ function makeClient(guestName) {
   });
 }
 
+// hello で名乗った名前がサーバーにどう受理されたか（hello_ok.name）を返す。
+function helloName(guestName) {
+  return new Promise((res, rej) => {
+    const ws = new WebSocket(`ws://localhost:${PORT}/ws`);
+    const to = setTimeout(() => { try { ws.close(); } catch {} rej(new Error('hello_ok timeout')); }, 8000);
+    ws.on('message', d => {
+      let m; try { m = JSON.parse(d); } catch { return; }
+      if (m.type === 'hello_ok') { clearTimeout(to); res(m.name); try { ws.close(); } catch {} }
+    });
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'hello', guestName })));
+    ws.on('error', e => { clearTimeout(to); rej(e); });
+  });
+}
+
 const results = [];
 const check = (name, ok, detail = '') => { results.push([ok ? '✅' : '❌', name, detail]); if (!ok) process.exitCode = 1; };
 
@@ -86,8 +100,12 @@ try {
   await sleep(3500);   // カウントダウン明け
   // 実クライアントは pushState → attack の順で送る。サーバーは申告済み累計ライン数を
   // 超える攻撃を捏造として拒否するので、テストも同じ順序で送る。
-  A.send({ type: 'state', score: 4200, lines: 8, combo: 2 });
+  // 偽スコア: 改造クライアントが 999999 を送っても、経過時間(secs×500)で
+  // 頭打ちされる。これが無いとレート戦の勝敗とEloを1フレームで捏造できた。
+  A.send({ type: 'state', score: 999999, lines: 8, combo: 2 });
   A.send({ type: 'attack', lines: 3, combo: 2 });
+  const os = await B.wait('opp_state', 8000);
+  check('偽スコア(999999)は secs×500 で頭打ちされる', os.score < 100000, `相手に見えるスコア=${os.score}`);
   const g = await B.wait('garbage', 8000);
   check('攻撃がお邪魔ブロックとして届く(3ライン=4個)', g.cells === 4, `cells=${g.cells}`);
   A.send({ type: 'attack', lines: 4, combo: 9 });
@@ -130,6 +148,14 @@ try {
   check('ボット相手は即時再戦', mfC2.mode === 'attack', '');
 
   A.ws.close(); B.ws.close(); C.ws.close();
+
+  // ---- ゲストは予約名・住人名を名乗れない（チャットなりすまし防止） ----
+  // これらの名前は登録できないので db.users に載らず、衝突チェックだけでは
+  // 常にすり抜けた。断罪イベント中に偽の「運営」告知を流せる穴だった。
+  check('ゲストは「運営」を名乗れない', (await helloName('運営')) !== '運営', 'reserved: 運営');
+  check('ゲストは「管理者ゼロ」を名乗れない', (await helloName('管理者ゼロ')) !== '管理者ゼロ', 'reserved: 管理者ゼロ');
+  check('ゲストは「ZERO」を名乗れない', (await helloName('ZERO')) !== 'ZERO', 'reserved: ZERO');
+  check('ふつうのゲスト名はそのまま通る', (await helloName('ふつうの通行人')) === 'ふつうの通行人', '');
 } catch (err) {
   check('test harness', false, err.stack || String(err));
 } finally {

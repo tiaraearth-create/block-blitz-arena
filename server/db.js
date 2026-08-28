@@ -70,6 +70,7 @@ function recoverFromSnapshot() {
 export function loadDb() {
   if (db) return db;
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  let recovered = false;
   if (fs.existsSync(DB_FILE)) {
     try {
       db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
@@ -84,16 +85,34 @@ export function loadDb() {
         console.error(`[db] 壊れたファイルは ${path.basename(kept)} として残しました（手動で救出できます）`);
       } catch { /* 残せなくても復旧は続ける */ }
       db = recoverFromSnapshot();
-      if (!db) {
+      if (db) recovered = true;
+      else {
         console.error('[db] 使えるスナップショットもありません。空のデータベースで起動します');
         db = structuredClone(DEFAULT_DB);
       }
     }
   } else {
-    db = structuredClone(DEFAULT_DB);
+    // db.json が無い。ふつうは初回起動だが、破損復旧はメモリ上で先に済み、
+    // ディスクへ書く前にプロセスが死ぬ窓がある。そこで殺されると次回は
+    // ここに来る ── 何もせず空DBで起動すると seedHash が失われ、同梱 seed が
+    // 再適用されてデータが seed 時点まで巻き戻る。まずスナップショットを試す。
+    db = recoverFromSnapshot();
+    if (db) {
+      recovered = true;
+      console.error('[db] db.json が見つかりません。スナップショットから復旧しました（意図的にリセットしたいときは snapshots/ も一緒に消してください）');
+    } else {
+      db = structuredClone(DEFAULT_DB);
+    }
   }
   for (const key of Object.keys(DEFAULT_DB)) {
     if (!(key in db)) db[key] = structuredClone(DEFAULT_DB[key]);
+  }
+  // 復旧したのにディスクへ書き戻さずに進むと、次にプロセスが死んだとき今度は
+  // 「db.json 無しの通常初回起動」と区別が付かず、空DB→seed再適用に化ける。
+  // 復旧できたときはその場で db.json を確定させ、その窓を閉じる。
+  if (recovered) {
+    try { writeAtomic(DB_FILE, JSON.stringify(db, null, 2)); }
+    catch (e) { console.error('[db] 復旧直後の書き込みに失敗:', e.message); }
   }
   return db;
 }
