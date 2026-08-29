@@ -117,4 +117,36 @@ const fields = (server.match(/const RESULT_FIELDS = \[([\s\S]*?)\]/) || [, ''])[
 check("RESULT_FIELDS に 'day' がある", /'day'/.test(fields), '');
 check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '');
 
+// --- 7. プレイヤーに見える文面で、住人の正体を明かしていないか ---
+// 住人（ロビーで喋り、ランキングに並び、対戦相手にもなる面々）を「AIプレイヤー」
+// などと名指しすると、その瞬間に世界が薄っぺらくなる。ゲーム内ニュースが5箇所で
+// 名指ししていたことがあり、しかも英語面だけの1件は改訂の仕組みの穴（下の8番）で
+// 本番に残り続けた。コメントの申し送りだけでは守れないので、テストで固定する。
+{
+  const AI_WORDS = /AIプレイヤー|AI住人|AI player|AI opponent|AI resident/;
+  const src = read('server/index.js');
+  // SEED_NEWS の中身だけを切り出す（コード中のコメントは対象外 — 読むのは開発者だけ）
+  const newsStart = src.indexOf('const SEED_NEWS = [');
+  const newsEnd = src.indexOf('\n];', newsStart);
+  const news = src.slice(newsStart, newsEnd);
+  const newsHits = (news.match(new RegExp(AI_WORDS.source, 'g')) || []);
+  check('ゲーム内ニュースが住人をAIと名指ししていない', newsHits.length === 0, newsHits.join(', '));
+
+  // 管理者イベントのモード説明もプレイヤーに出る
+  const ae = read('server/adminevent.js');
+  const aeText = [...ae.matchAll(/^\s*(?:desc|descEn|tagline|taglineEn|name|nameEn):\s*'([\s\S]*?)',$/gm)].map(m => m[1]).join('\n');
+  const aeHits = (aeText.match(new RegExp(AI_WORDS.source, 'g')) || []);
+  check('管理者イベントの説明が住人をAIと名指ししていない', aeHits.length === 0, aeHits.join(', '));
+}
+
+// --- 8. お知らせの改訂が英語面の変更も拾うか ---
+// 比較が日本語の body/title だけだったので、英語だけを直した改訂は
+// NEWS_BODY_REV を上げても永久に公開されなかった（本番で実際に取り残された）。
+{
+  const src = read('server/index.js');
+  const cmp = (src.match(/if \(refresh && \([\s\S]{0,220}?\)\) \{/) || [''])[0];
+  check('お知らせの改訂判定が bodyEn を見ている', /existing\.bodyEn !== p\.bodyEn/.test(cmp), cmp.slice(0, 80));
+  check('お知らせの改訂判定が titleEn を見ている', /existing\.titleEn !== p\.titleEn/.test(cmp), '');
+}
+
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

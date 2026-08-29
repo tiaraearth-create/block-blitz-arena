@@ -1757,7 +1757,7 @@ const SEED_NEWS = [
       '[🎁 Treasure Rush] Rewards are multiplied (up to 3×) inside your slot, and defeating the objective earns a 👑 badge for everyone who took part.\n' +
       '[💯 Battle Royale rebuilt] The 99 AI entrants were score curves that could not be beaten fairly; they now run real boards with the real AI, and weak ones genuinely top out and die. Added: garbage warfare (clear 2+ lines to bury a survivor), a 🌩️ storm that rains garbage on everyone as the clock runs down, a danger meter that tells you exactly how many points you are from safety, spectating after you are knocked out, a finale showing the last three boards, a placement reward ladder (🪙1,200 💎40 for #1 down to a consolation prize), plus knockout/best-placement stats, 7 new achievements and 2 new titles. Your first top-out revives you; the second eliminates you.\n' +
       '[🐲 Raid / 2v2 screen] Three allies\' mini boards used to stack above your own and squeeze it flat. Allies are now a single compact row and the boss HP is a slim bar — on an iPhone SE-sized screen your board goes from 210px to 347px, the same size as in solo. The landscape bug that made the board vanish entirely is fixed. Tap ▾ to bring the ally boards back.\n' +
-      '[🌐 Matchmaking] Players are now paired by rating (the search widens the longer you wait), the AI opponent\'s strength is chosen to match your rating instead of at random, two players who queue together for 2v2 always land on the same team, and the search screen honestly shows your elapsed time, how many real people are waiting in that mode, the rating range being searched, and exactly when a stand-in opponent will step in.\n' +
+      '[🌐 Matchmaking] Players are now paired by rating (the search widens the longer you wait), your stand-in opponent\'s strength is chosen to match your rating instead of at random, two players who queue together for 2v2 always land on the same team, and the search screen honestly shows your elapsed time, how many real people are waiting in that mode, the rating range being searched, and exactly when a stand-in opponent will step in.\n' +
       '[🐛 Fixes] A socket error could take the whole server down; a dropped connection while waiting for results left an undismissable modal covering the app; pieces could still be placed after a run had ended; a hand change mid-drag placed a different piece than the one you were holding; deleting an account left a guild permanently stuck at "full"; co-op scores could be forged by a client; with 10 items the leftmost four sat off-screen and were unreachable; online modes recorded 0 pieces placed so those missions never advanced — and more.' },
   { id: 'seed-zero', pinned: true,
     title: '👁️ 断罪 ── 管理者ゼロが七つの王座を人質に取りました',
@@ -1825,7 +1825,7 @@ const SEED_NEWS = [
 // これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
 // 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
 // v2.11.1 の本文を差し替えるのに必要になった。
-const NEWS_BODY_REV = 7;   // v2.15: デイリーの目標説明を訂正 & 住人の正体に触れた文面を撤去
+const NEWS_BODY_REV = 8;   // v2.15: 英語面だけの改訂が公開されていなかったので出し直し
 
 // id で引いたユーザー。`__proto__` や `constructor` を渡されると
 // Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
@@ -1848,7 +1848,12 @@ function seedNews() {
       if (!existing.bodyEn) existing.bodyEn = p.bodyEn;
       // 文面の改訂。投稿日時（at）は変えない — 「新着」に戻して
       // 全員に赤い印を出し直すのは、直しただけなのに騒がしい。
-      if (refresh && (existing.body !== p.body || existing.title !== p.title)) {
+      // 英語面も比較に入れる。日本語の body/title だけを見ていたので、
+      // 「英語の文面だけを直した」改訂が永久に公開されなかった ── 実際、
+      // 住人を "an AI player" と呼んでいた1件が、NEWS_BODY_REV を上げても
+      // 本番に残り続けた（日本語面は元から問題が無く、変更が無かったため）。
+      if (refresh && (existing.body !== p.body || existing.title !== p.title
+        || existing.bodyEn !== p.bodyEn || existing.titleEn !== p.titleEn)) {
         existing.title = p.title;
         existing.titleEn = p.titleEn;
         existing.body = p.body;
