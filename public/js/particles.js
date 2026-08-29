@@ -107,7 +107,10 @@ export class ParticleSystem {
       this.particles.push({
         x, y, vx: Math.cos(a) * sp * 0.6, vy: Math.sin(a) * sp - size * (3 + Math.random() * 3),
         g: -size * 3,   // fire rises
-        drift: size * (0.5 + Math.random()),
+        // drift を持つ粒は update() で phase を加算される。初期値が無いと
+        // undefined + dt → NaN → vx も x も NaN になり、arc() が非有限座標で
+        // 何も描かずに返るため炎が1粒も見えなくなる（bubbles/sakura と同じ初期化）。
+        drift: size * (0.5 + Math.random()), phase: Math.random() * Math.PI * 2,
         life: 1, decay: 1.4 + Math.random() * 1.0,
         size: size * (0.09 + Math.random() * 0.13),
         color: hues[(Math.random() * hues.length) | 0],
@@ -241,7 +244,9 @@ export class ParticleSystem {
       if (p.life <= 0) { ps.splice(i, 1); continue; }
       p.vy += (p.g || 0) * dt * 10;
       if (p.drift) {
-        p.phase += dt * 3;
+        // phase の初期化漏れで NaN が伝播しないよう、ここでも既定値を入れる。
+        // 一度 NaN になると座標が戻らず、その粒は寿命まで不可視のまま残る。
+        p.phase = (p.phase || 0) + dt * 3;
         p.vx += Math.sin(p.phase) * p.drift * dt * 6;
       }
       p.x += p.vx * dt;

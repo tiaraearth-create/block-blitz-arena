@@ -12,6 +12,7 @@
 // on top.
 
 import { TITLES } from './catalog.js';
+import { dailyGhostFactor } from './daily.js';
 
 // ---------------------------------------------------------------------------
 // Deterministic helpers
@@ -51,6 +52,17 @@ export function jstDay(now = Date.now()) {
 // 0 = Sunday … 6 = Saturday, in JST.
 export function jstWeekday(now = Date.now()) {
   return (jstDay(now) + 4) % 7;
+}
+
+// 週の何日目か（0=月曜 … 6=日曜）。境目は index.js の currentWeekNum と同じ
+// 「月曜 00:00 UTC」に合わせてある（Unix エポックは木曜なので4日ずらす）。
+// ここを jstDay ベース（JSTの月曜 00:00）にすると 9 時間ぶんズレて、weekId が
+// まだ変わっていないのに日数カウンタだけ先に 0 へ戻る — つまり週の途中で
+// ウィークリー記録が減る、という直したはずの不具合が週1回だけ蘇る。
+const WEEK_MS = 7 * 86400000;
+function weekDayIndex(now = Date.now()) {
+  const ms = (((now - 4 * 86400000) % WEEK_MS) + WEEK_MS) % WEEK_MS;
+  return Math.floor(ms / 86400000);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +296,15 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   const dungeonMax = Math.min(99, 1 + personalBest(r, age, 'dg', 0, Math.pow(s, 1.3) * 160, aptitude(r, 'dungeon')));
   const wk = unit(r.id, weekId);
   const weeklyMix = s * 0.6 + wk * 0.4;
+  // ウィークリーは「その週でいちばん良かった1回」なので、週の途中で下がっては
+  // いけない。以前は日ごとの調子 mood をそのまま掛けていたため、weekId が同じ
+  // ＝同じ週のあいだに記録が最大2割減っていた（住人214人中160人で減少日あり）。
+  // 実プレイヤー側は本物のベスト（index.js の weeklyBestOf）で単調なので、
+  // 同じボードで住人だけが理由もなく後退して見える。週内の各日ぶんを引いて
+  // その最大値を取れば、週の頭からは伸びる一方になり、月曜のリセットで
+  // ちゃんと引き直される — 本物のウィークリーと同じ振る舞いになる。
+  let weeklyForm = 0;
+  for (let d = weekDayIndex(now); d >= 0; d--) weeklyForm = Math.max(weeklyForm, unit(r.id, `wf${weekId}:${d}`));
   const badges = [];
   if (s > 0.8 && age > 15) badges.push('oni');
   if (s > 0.93 && age > 40) badges.push('kami');
@@ -304,7 +325,11 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
       : level >= 20 ? 'veteran'
       : age > 10 ? 'addict' : 'rookie';
     const t = TITLES.find(x => x.id === pick);
-    if (t) title = { name: t.name, color: t.color };
+    // id を落とすと、画面側（catName）が英語名に引き当てられない。英語で
+    // 遊んでいてもランキングとプロフィールの称号だけ日本語のまま並ぶ。
+    // 実プレイヤー側（index.js の titleOf）は既に id 付きなので、ここが
+    // 抜けていると同じ画面で日本語と英語が混ざる。
+    if (t) title = { id: t.id, name: t.name, color: t.color };
   }
   const aptSprint = aptitude(r, 'sprint');
   return {
@@ -312,9 +337,9 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
     tier: tierOf(rating),
     pvpWins: Math.floor(age * s * 1.8 * aptPvp),
     pvpLosses: Math.floor(age * (1 - s) * 0.8),
-    // ウィークリーは週ごとにリセットされる記録なので、そこだけは階段ではなく
-    // 「その週の調子」で決まる（本物のウィークリーと同じ性質）。
-    weeklyBest: Math.floor(Math.pow(weeklyMix, 2) * 90000 * aptitude(r, 'weekly') * (0.8 + 0.4 * ((mood + 1) / 2)) + 800),
+    // ウィークリーは週ごとにリセットされる記録なので、そこだけは（他の自己ベストの
+    // ような）長期の階段ではなく「その週の調子」= weeklyMix と weeklyForm で決まる。
+    weeklyBest: Math.floor(Math.pow(weeklyMix, 2) * 90000 * aptitude(r, 'weekly') * (0.8 + 0.4 * weeklyForm) + 800),
     // タイムアタックの理論上限は 1000点/秒 × 60秒 = 60,000。住人はその内側
     // （59,000 / 175,000）で頭打ち — 頂点そのものは人間に残す。
     sprintBest: Math.min(59000, personalBest(r, age, 'sp', 600, Math.pow(s, 2) * 62000, aptSprint)),
@@ -322,6 +347,23 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
     survivalWave: Math.max(1, Math.min(99, personalBest(r, age, 'sv', 3, s * 95, aptitude(r, 'survival')))),
     badges, title,
   };
+}
+
+// 📅 デイリーチャレンジ（30ピース1発勝負）のその日の記録。
+// (住人, JST日) に対して決定的 — 同じ日は何度読んでも同じで、日が変われば
+// 全員の出来が入れ替わる。上位は2万点級、平均は数千点。1発勝負なので
+// 自己ベストのような単調性は要らない（毎日リセットされる記録）。
+//
+// お題の係数を必ず掛ける。掛け忘れると「極小の日（人間の理論上限は約7千点）に
+// 住人が2万点」という、正直に遊んだ人間が絶対に届かない行がボードに並ぶ。
+// 係数込みでも最上位の住人が人間の理論上限をわずかに下回るよう、基礎点や
+// 運の項もまとめて掛ける — 頂は必ず人間に残す、という約束のため。
+export function residentDailyScore(r, now = Date.now()) {
+  const day = jstDay(now);
+  const luck = unit(r.id, `dc${day}`);          // その日の出来 0..1
+  const s = r.skill;
+  const raw = 400 + Math.pow(s, 1.6) * 21000 * (0.35 + 0.65 * luck) + luck * 1500;
+  return Math.floor(raw * dailyGhostFactor(now));
 }
 
 // ---------------------------------------------------------------------------

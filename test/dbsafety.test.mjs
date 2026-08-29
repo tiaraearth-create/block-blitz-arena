@@ -169,6 +169,52 @@ async function freshDbModule(dir) {
   delete db3.meta.seedHash;
   applyRestore(db3, oldBackup, 'replace');
   check('seedHash 未設定の機体に持ち込まれない', db3.meta.seedHash === undefined, String(db3.meta.seedHash));
+
+  // merge の db.meta は「持ち込まないキーの一覧（拒否リスト）」で守られている。
+  // 以前は逆の許可リスト（持ち込んでよいキーの一覧）で、そこに書き足し忘れた
+  // throneMax（世界がこれまでに割った最高段）と newsUnpinned が毎回落ちていた。
+  // throneMax が消えると 👑王座ショップは棚が max >= dan でしか開かないので、
+  // ディスクごと消える再デプロイ ── まさにこの復元機構が要る場面 ── のたびに
+  // 7品すべてが買えなくなる。newsUnpinned が消えると unpinOldReleaseNotes の
+  // 「一度きり」が毎回やり直され、📌し直したお知らせが起動のたびに剥がされる。
+  // 次に誰かが「安全のため」と許可リストへ戻したら、ここで落ちるようにしておく。
+  const db4 = live();
+  delete db4.meta.seedHash;              // seedHash をまだ持っていない機体
+  // JSON.parse を通すのは意図的。"__proto__" を素の own プロパティとして作れる
+  // のはこの経路だけで（オブジェクトリテラルではプロトタイプ指定になる）、
+  // 実際の復元もファイルを JSON.parse した結果を受け取る。
+  const worldBackup = JSON.parse(`{
+    "users": {}, "tokens": {},
+    "meta": {
+      "createdAt": 999, "throneMax": 7, "newsUnpinned": true, "popScale": 3,
+      "seedHash": "ANCIENT", "backupAt": 1700000000000, "backupVersion": 2,
+      "__proto__": { "polluted": "yes" }
+    }
+  }`);
+  applyRestore(db4, worldBackup, 'merge');
+  check('merge: throneMax が持ち越される（👑王座ショップの棚）', db4.meta.throneMax === 7, String(db4.meta.throneMax));
+  check('merge: newsUnpinned が持ち越される', db4.meta.newsUnpinned === true, String(db4.meta.newsUnpinned));
+  check('merge: 一覧に無い世界の状態（popScale）も持ち越される', db4.meta.popScale === 3, String(db4.meta.popScale));
+  check('merge: seedHash 未設定の機体にも持ち込まれない', db4.meta.seedHash === undefined, String(db4.meta.seedHash));
+  // backupAt / backupVersion はバックアップファイル自身の素性で、世界の状態では
+  // ない。持ち込むと「いつ取ったバックアップか」が現在の db の値として居座る。
+  check('merge: backupAt / backupVersion は持ち込まれない',
+    db4.meta.backupAt === undefined && db4.meta.backupVersion === undefined,
+    `${db4.meta.backupAt} / ${db4.meta.backupVersion}`);
+  // 拒否リストへの反転で「既定は持ち越す」になったが、**生きている側が既に
+  // 持っている値まで上書きする**わけではない（起動後に管理者が設定した値を
+  // 古いファイルで巻き戻さないため）。ここも一緒に固定する。
+  check('merge: 生きている側が持っている値は上書きされない', db4.meta.createdAt === 1, String(db4.meta.createdAt));
+  // ファイルの中身は外から来る。"__proto__" を代入するとプロトタイプの setter が
+  // 動き、db.meta のプロトタイプがファイル側のオブジェクトに差し替わる ──
+  // 以後 db.meta.（知らないキー）がファイルの値を返すようになる。
+  // いまは二重に塞がっている（キー名の明示スキップと、`db.meta[k] == null` の
+  // 条件 ── db.meta.__proto__ は Object.prototype なので null ではない）。
+  // どちらの理由で守られているかではなく「結果として差し替わらない」を固定する。
+  check('merge: "__proto__" でプロトタイプが差し替わらない',
+    Object.getPrototypeOf(db4.meta) === Object.prototype
+      && !Object.prototype.hasOwnProperty.call(db4.meta, '__proto__'),
+    String(db4.meta.polluted));
 }
 fs.rmSync(ROOT, { recursive: true, force: true });
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

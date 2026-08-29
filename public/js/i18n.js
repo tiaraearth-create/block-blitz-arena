@@ -232,6 +232,7 @@ export function applyStaticI18n() {
   set('#btnDungeon', '🏰 Dungeon');
   set('#btnSprint', '⏱️ Time Attack');
   set('#btnWeekly', '🎯 Weekly');
+  set('#btnDaily', '📅 Daily');
   set('#btnSurvival', '💀 Survival');
   set('#btnMeltdown', '☢️ Meltdown');
   set('#btnChimera', '🧬 Chimera Lab');
@@ -280,6 +281,7 @@ export function applyStaticI18n() {
   set('[data-lb="sprint"]', '⏱️Time Attack');
   set('[data-lb="dungeon"]', 'Dungeon');
   set('[data-lb="weekly"]', 'Weekly');
+  set('[data-lb="daily"]', '📅Daily');
   set('[data-lb="puzzle"]', '🧩Puzzle Ruins');
   set('[data-lb="dig"]', '⛏️The Mines');
   // tooltips + document title
@@ -322,8 +324,15 @@ export function applyStaticI18n() {
 
   // matchmaking
   set('#mmStatus', 'Looking for an opponent…');
-  const mmSub = document.getElementById('mmSub');
-  if (mmSub) mmSub.innerHTML = 'Online: <span id="mmOnline">-</span> players';
+  // 人数の行は #mmSub ではなく #mmOnlineLine が持っている（#mmSub は待ち時間表示で
+  // innerHTML ごと差し替わるため、id を外へ出した経緯が index.html にある）。
+  // ここで #mmSub に書いていたせいで、実際に見えている #mmOnlineLine は日本語のまま
+  // 残り、そのうえ id="mmOnline" が一時的に2個できていた。
+  const mmOnlineLine = document.getElementById('mmOnlineLine');
+  if (mmOnlineLine) {
+    const n = document.getElementById('mmOnline')?.textContent || '-';
+    mmOnlineLine.innerHTML = `Online: <span id="mmOnline">${n}</span> players`;
+  }
   set('#btnCancelQueue', 'Cancel');
 
   // custom room

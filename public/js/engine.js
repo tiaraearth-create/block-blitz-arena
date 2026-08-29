@@ -82,6 +82,7 @@ export class Engine {
     this.feverMult = 2;       // 2 for the fever item, 3 for the overdrive ultimate
     this.chaosBig = false;    // chaos-event: draw only big pieces
     this.chaosMini = false;   // chaos-event: draw only tiny pieces
+    this.comboBonusMult = 1;  // 📅 daily 'combo day': combo-bonus multiplier
     this.streakShield = false; // chaos-event: combo never breaks
     this.ult = 0;             // ultimate gauge, 0..100 (100 = ready)
     this.ultRate = 1;         // ⚡奥義祭 event: charge multiplier
@@ -185,22 +186,14 @@ export class Engine {
     return this.hand.some(p => p && this.placements(p).length > 0);
   }
 
-  // Place hand[index] at (row, col). Returns a result object for rendering/audio,
-  // or null if the move is illegal.
-  place(index, row, col) {
-    const piece = this.hand[index];
-    if (!piece || this.over || !this.canPlace(piece, row, col)) return null;
-
-    const placedCells = [];
-    for (const [dr, dc] of piece.cells) {
-      const r = row + dr, c = col + dc;
-      this.grid[r * SIZE + c] = piece.color;
-      placedCells.push([r, c]);
-    }
-    this.hand[index] = null;
-    this.piecesPlaced++;
-
-    // Detect full rows / cols.
+  // 満杯になった行・列を消して、消えたセルを返す。加点・コンボは呼び出し側の責任。
+  // place() の中にしか無かったので、お邪魔ブロックや盤面の直書きで行が埋まっても
+  // 消えずに居座り、そのあと無関係な1手を置いた人が「自分の手柄」として
+  // 加点とコンボを受け取っていた。さらに消えないまま hasAnyMove() が走るので、
+  // 本来は8マス空くはずの盤面で不当にゲームオーバー（バトルロイヤルでは脱落）になる。
+  // 加点をここに入れないのは、妨害で埋まった行を消した分まで攻撃された側の
+  // 得点にすると、攻撃が相手への贈り物になってしまうため。
+  resolveLines() {
     const fullRows = [], fullCols = [];
     for (let r = 0; r < SIZE; r++) {
       let full = true;
@@ -225,11 +218,29 @@ export class Engine {
     }
     for (const [r, c] of clearedCells) this.grid[r * SIZE + c] = 0;
 
-    const lineCount = fullRows.length + fullCols.length;
+    return { fullRows, fullCols, clearedCells, lineCount: fullRows.length + fullCols.length };
+  }
+
+  // Place hand[index] at (row, col). Returns a result object for rendering/audio,
+  // or null if the move is illegal.
+  place(index, row, col) {
+    const piece = this.hand[index];
+    if (!piece || this.over || !this.canPlace(piece, row, col)) return null;
+
+    const placedCells = [];
+    for (const [dr, dc] of piece.cells) {
+      const r = row + dr, c = col + dc;
+      this.grid[r * SIZE + c] = piece.color;
+      placedCells.push([r, c]);
+    }
+    this.hand[index] = null;
+    this.piecesPlaced++;
+
+    const { fullRows, fullCols, clearedCells, lineCount } = this.resolveLines();
     let gained = placedCells.length;               // 1 point per placed cell
     if (lineCount > 0) {
       this.streak++;
-      const comboMult = 1 + 0.5 * (this.streak - 1);
+      const comboMult = 1 + 0.5 * (this.streak - 1) * (this.comboBonusMult || 1);
       gained += Math.round(lineCount * lineCount * 100 * comboMult);
       this.linesCleared += lineCount;
       if (this.streak > this.maxCombo) this.maxCombo = this.streak;
@@ -254,6 +265,8 @@ export class Engine {
   }
 
   // Fill n random empty cells with garbage (boss attacks). Returns the cells.
+  // 戻り値は「置いたマス」。お邪魔で行が埋まった場合はこの中に
+  // すぐ消えたマスも混ざる（呼び出し側の spawnAnim は空マスを描かないので無害）。
   addGarbage(n) {
     if (this.fortressActive()) return [];   // ult_fortress: interference is void
     const empties = [];
@@ -267,6 +280,9 @@ export class Engine {
       this.grid[r * SIZE + c] = 9;
       added.push([r, c]);
     }
+    // お邪魔が行を完成させたらその場で消す。必ず hasAnyMove() より前に。
+    // 順番が逆だと、消えれば8マス空いて続けられる盤面で over になる。
+    this.resolveLines();
     if (!this.hasAnyMove()) this.over = true;
     return added;
   }

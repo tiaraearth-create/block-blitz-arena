@@ -87,14 +87,27 @@ try {
 
   // restore with the backup's admin password (no session)
   const rs = await j('/api/admin/restore', { method: 'POST', body: { data: backup, mode: 'merge', password: adminPw } });
-  check('restore via backup password', rs.status === 200 && rs.report && rs.report.after === 2 && String(rs.token).startsWith('v2.'), JSON.stringify(rs.report));
+  check('restore via backup password', rs.status === 200 && rs.report && rs.report.after === 2, JSON.stringify(rs.report));
+  // 復旧経路はトークンを発行しない。ここで発行していたころ、プレイヤー0人の
+  // サーバーに未認証の1リクエストを投げるだけで管理者を乗っ取れた
+  // （照合するパスワードは、アップロードした側がファイルの中に自分で書ける）。
+  check('復旧経路はトークンを発行しない', rs.token === null && rs.user === null, `token=${rs.token}`);
+  check('復旧経路は再ログインを促す', rs.relogin === true, `relogin=${rs.relogin}`);
   const me3 = await j('/api/me', {}, userTok);
   check('SESSION SURVIVED the wipe: old user token works after restore', me3.status === 200 && me3.user && me3.user.username === 'テスト太郎' && me3.user.stats.gamesPlayed === 1, JSON.stringify(me3.user && me3.user.stats));
   const adminAgain = await j('/api/me', {}, adminTok);
   check('revoked admin token stays revoked? (revocations are not in the backup → comes back after a wipe; acceptable)', adminAgain.status === 200 || adminAgain.status === 401, `status ${adminAgain.status}`);
 
+  // 復元後は普通にログインし直して管理作業を続ける。
+  // 使うのは「この機体の」管理者パスワード ── データが飛んだ起動で seedAdmin が
+  // 作り直し、admin-credentials.txt に書き直したもの。復元はファイル側の資格情報で
+  // 生きているアカウントを上書きしない（protectLiveCredentials）ので、これが正。
+  const livePw = fs.readFileSync(path.join(DIR, 'admin-credentials.txt'), 'utf8').match(/password: (.+)/)[1].trim();
+  const adminRelog = await j('/api/login', { method: 'POST', body: { username: 'るみまき', password: livePw } });
+  check('復元後に管理者としてログインし直せる', adminRelog.status === 200 && String(adminRelog.token).startsWith('v2.'), JSON.stringify(adminRelog.error || '').slice(0, 80));
+
   // password change kills older sessions
-  const restoredAdminTok = rs.token;
+  const restoredAdminTok = adminRelog.token;
   const pw = await j('/api/admin/users/' + me3.user.id, { method: 'POST', body: { setPassword: 'newpass99' } }, restoredAdminTok);
   const me4 = await j('/api/me', {}, userTok);
   check('admin password reset → user session revoked (SESSION_ENDED)', pw.status === 200 && me4.status === 401 && me4.code === 'SESSION_ENDED', JSON.stringify(me4));

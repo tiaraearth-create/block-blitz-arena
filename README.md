@@ -114,7 +114,7 @@ npm test   # セッション維持（初期化→復元→再ログイン不要�
 | `ADMIN_PASSWORD` | （自動生成） | 設定すると管理者「るみまき」のパスワードを固定（8文字以上）。再デプロイしても変わらなくなる |
 | `SESSION_SECRET` | （起動ごとにランダム） | **ログイン状態をデプロイ/再起動後も維持**するための署名鍵（16文字以上の長いランダム文字列）。設定すると、データが消えている間もプレイヤーはログアウトされず、復元が終わった瞬間に自動でログイン状態に戻る。未設定だと再デプロイのたびに全員ログアウト |
 | `TRANSLATE_URL` / `TRANSLATE_KEY` | なし | LibreTranslate互換APIのURL（と必要ならキー）。設定するとチャット翻訳が本格エンジンになる |
-| `DATA_DIR` | `server/data` | データ保存先ディレクトリ（永続ディスクを別パスにマウントした場合やテスト用） |
+| `DATA_DIR` | `server/data` | データ保存先ディレクトリ（永続ディスクを別パスにマウントした場合やテスト用）。**Dockerイメージでは既定が `/data`**（Dockerfileが `ENV DATA_DIR=/data` を焼いている）ので、ボリュームは `/data` に当てること |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | なし | 設定すると課金が「製作中」→本物のStripe決済に切り替わる |
 
 ## 🏗️ 構成
@@ -168,8 +168,19 @@ git push -u origin master
 **Railway / Fly.io** も同様（`PORT` は自動注入、対応済み）。**Docker** も可:
 ```bash
 docker build -t block-blitz .
-docker run -p 3000:3000 -v blockblitz-data:/app/server/data block-blitz
+docker run -p 3000:3000 -v bba-data:/data -e DATA_DIR=/data \
+           -e SESSION_SECRET=<16文字以上のランダム文字列> \
+           -e ADMIN_PASSWORD=<管理者パスワード> block-blitz
 ```
+
+> **⚠ ボリュームは必ず `/data` に当てること。** イメージには `ENV DATA_DIR=/data` が
+> 焼かれている（Dockerfile）ので、db.json が書かれるのは常に `/data` です。
+> ここを `/app/server/data` にすると、当てたボリュームは一度も書かれない空のまま残り、
+> 実データは `VOLUME ["/data"]` が作る**匿名ボリューム**に入ります。コンテナを作り直すと
+> 新しい匿名ボリュームが割り当てられるので、前のアカウント・スコア・ジェムには
+> 二度と辿り着けません（`db.meta.seedHash` も消えるため、初回起動あつかいで
+> 同梱 seed が再適用されます）。`session-secret.txt` と `snapshots/` も同じ
+> `DATA_DIR` 配下なので巻き添えになります。
 
 ### 3. 公開後の注意（⚠️まず読んでください）
 

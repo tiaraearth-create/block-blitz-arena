@@ -207,7 +207,15 @@ export function earnedTitles(user) {
   if ((s.zeroNamed || 0) >= 50) out.push('zeronamed');  // 名指しされた回数（負け側の勲章）
   if (has('zero')) out.push('zeroseven');
   if ((s.aePlays || 0) >= 10) out.push('guest');
-  if ((s.winStreak || 0) >= 5) out.push('streak5');
+  // 到達したら剥がれない称号にする。現在連勝（s.winStreak）だけを見ていたので、
+  // ランクマッチで1敗した瞬間に獲得済みの「連勝街道」が未獲得に戻り、
+  // /api/titles/equip の 403 で二度と付け直せなくなっていた（装備したままなら
+  // 表示は残るのに、インベントリではロック表示、という食い違いも起きる）。
+  // 説明文は「ランクマッチ5連勝」＝到達条件。実績側（achievements.js）と
+  // 連続ログイン称号（loginStreakBest）は既に最高値基準なので、そこに揃える。
+  // winStreakBest は後から足したフィールドなので、連勝中の既存アカウントが
+  // winStreakBest=0 / winStreak>0 になりうる。Math.max で両方を見る。
+  if (Math.max(s.winStreakBest || 0, s.winStreak || 0) >= 5) out.push('streak5');
   if (s.rating >= 1500) out.push('diamond');
   if (s.rating >= 1700) out.push('grandmaster');
   if (s.gamesPlayed >= 200) out.push('veteran');

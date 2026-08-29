@@ -3,3 +3,12 @@ server/data
 .git
 .claude
 *.log
+# 管理画面のバックアップDL（screens.js の a.download / index.js の Content-Disposition）が
+# 吐くファイル。中身は暗号化していない生のDBダンプで、管理者の salt / passHash が平文で入る。
+# Dockerfile の `COPY . .` はビルドコンテキストをそのまま入れるので、除外しないと
+# /app/block-blitz-backup-YYYY-MM-DD.json として焼き込まれ、イメージを配ると
+# pull した全員がオフラインでパスワードを総当たりできてしまう。
+# .gitignore 側は同じパターンで既に手当て済み。Docker 側だけ抜けていた。
+block-blitz-backup-*.json
+# 実行に不要。イメージを小さくする（test は起動時にポートを掴むテストも含む）。
+test

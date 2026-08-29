@@ -255,6 +255,44 @@ try {
   }
 
   // ---------------------------------------------------------------------
+  // mode にプロトタイプ上のキー名を渡しても、💎が消えない
+  //
+  // DUNGEON_REALMS[mode] は素の添字引きだったので、mode:'constructor' で
+  // Object 関数が返り truthy になった。realm.perDecade が undefined のまま
+  // 加算されて user.gems が NaN になり、migrateUser の Number.isFinite ガードが
+  // それを 0 に潰す ── 実測で 💎5,200 が db.json ごと消えた（復旧不能）。
+  // badges には null が、stats には 'undefined' / 'constructorPrev' という
+  // 永久ゴミキーが残った。
+  // ---------------------------------------------------------------------
+  {
+    const v = await j('/api/register', { method: 'POST', body: { username: '汚染太郎', password: 'pass1234' } });
+    await j('/api/admin/users/' + v.user.id, { method: 'POST', body: { setGems: 5200 } }, adminTok);
+    const before = (await j('/api/me', {}, v.token)).user.gems;
+    for (const evil of ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty']) {
+      const r = await j('/api/game/result', { method: 'POST', body: { mode: evil, floor: 100, score: 5000, duration: 300 } }, v.token);
+      check(`mode:'${evil}' でも 200 で返る`, r.status === 200, `status=${r.status}`);
+    }
+    const me = (await j('/api/me', {}, v.token)).user;
+    check('プロトタイプ名の mode で💎が消えない', me.gems >= before, `${before} -> ${me.gems}`);
+    check('badges に文字列以外が混ざらない', me.badges.every(b => typeof b === 'string'), JSON.stringify(me.badges));
+    const junkKeys = Object.keys(me.stats).filter(k => k === 'undefined' || (k.endsWith('Prev') && !k.startsWith('dungeon')));
+    check('stats にプロトタイプ由来のゴミキーが増えない', junkKeys.length === 0, junkKeys.join(','));
+  }
+
+  // ---------------------------------------------------------------------
+  // mode に原始値へ変換できないオブジェクトを渡しても 500 にならない
+  //
+  // String(mode) は JSON で作れる値でも投げる: {"toString":1,"valueOf":1}。
+  // 素通しだと既定のエラーハンドラが HTML とスタックトレース（サーバー上の
+  // 絶対パス入り）を返していた。
+  // ---------------------------------------------------------------------
+  {
+    const v = await j('/api/register', { method: 'POST', body: { username: '変換不能さん', password: 'pass1234' } });
+    const r = await j('/api/game/result', { method: 'POST', body: { mode: { toString: 1, valueOf: 1 }, score: 100, duration: 30 } }, v.token);
+    check('原始値にできない mode でも 500 にならない', r.status === 200, `status=${r.status}`);
+  }
+
+  // ---------------------------------------------------------------------
   // __proto__ を id に渡しても、全ユーザーに波及しない
   // ---------------------------------------------------------------------
   // db.users['__proto__'] は Object.prototype を返す。そこに muted:true を
@@ -290,6 +328,48 @@ try {
     check('Referrer-Policy が付いている', !!res.headers.get('referrer-policy'), '');
     check('X-Content-Type-Options が付いている', res.headers.get('x-content-type-options') === 'nosniff', '');
   }
+
+  // ---------------------------------------------------------------------
+  // 巨大な本文は「読み込む前に」断る
+  //
+  // /api/admin/restore は認証より前にパーサが走る（＝誰でも到達できる）。
+  // ハンドラ内の rateLimit はパース後にしか効かないので歯止めにならず、
+  // 12MB×20並列で RSS が 510MB まで伸びた（Render starter は 512MB＝OOM）。
+  // Content-Length を見て、本文を読む前に落とすこと。
+  // ---------------------------------------------------------------------
+  {
+    const big = '{"users":{},"pad":"' + 'a'.repeat(6 * 1024 * 1024) + '"}';
+    const codes = await Promise.all(Array.from({ length: 6 }, () =>
+      fetch(BASE + '/api/admin/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: big })
+        .then(r => r.status).catch(() => 0)));
+    check('上限超えの本文は全部 413 で断られる', codes.every(c => c === 413), codes.join(','));
+    const alive = await fetch(BASE + '/api/status');
+    check('連投してもサーバーは生きている', alive.ok, `status=${alive.status}`);
+  }
+
+  // ---------------------------------------------------------------------
+  // 💎ジェムラッシュ: 遊ばずに💎を無限に湧かせられない
+  //
+  // gemDrop はスコアもプレイ実体も見ず、送信1回ごとに固定額を払っていた。
+  // 空ボディの連投だけで 750💎/時（課金換算 約¥890/時）が湧いた。
+  // ---------------------------------------------------------------------
+  {
+    const ev = await j('/api/admin/event', { method: 'POST', body: { on: true, type: 'gemrush', minutes: 60 } }, adminTok);
+    check('ジェムラッシュを開始できる', ev.status === 200 && ev.event && ev.event.id === 'gemrush', ev.error || '');
+    const v = await j('/api/register', { method: 'POST', body: { username: '空撃ちさん', password: 'pass1234' } });
+    const before = (await j('/api/me', {}, v.token)).user.gems;
+    for (let i = 0; i < 20; i++) await j('/api/game/result', { method: 'POST', body: {} }, v.token);
+    const afterEmpty = (await j('/api/me', {}, v.token)).user.gems;
+    check('空ボディの連投では💎が1個も湧かない', afterEmpty === before, `${before} -> ${afterEmpty}`);
+
+    const honest = await j('/api/game/result', { method: 'POST', body: { mode: 'solo', score: 9000, lines: 12, maxCombo: 4, duration: 75 } }, v.token);
+    check('正直に遊べば💎ドロップは今までどおり出る', honest.rewards && honest.rewards.eventGems === 3, JSON.stringify(honest.rewards && honest.rewards.eventGems));
+
+    const me = (await j('/api/me', {}, v.token)).user;
+    check('1日の受取総額が記録される', !!(me.stats.eventGemDay && me.stats.eventGemDay.got === 3), JSON.stringify(me.stats.eventGemDay));
+    await j('/api/admin/event', { method: 'POST', body: { on: false } }, adminTok);
+  }
+
 } catch (err) {
   check('test harness', false, err.stack || String(err));
 } finally {

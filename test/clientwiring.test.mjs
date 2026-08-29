@@ -99,4 +99,22 @@ const listed = (dom.match(/const SCREENS = \[([^\]]*)\]/) || [, ''])[1];
 const notListed = ids.filter(id => !listed.includes(`'${id}'`));
 check('すべての画面が SCREENS に載っている', notListed.length === 0, notListed.join(', '));
 
+// --- 6. サーバーが用意した経路を、画面がちゃんと通っているか ---
+// 実際にあった事故: /api/daily/start（開始時に今日の1回を消費して attemptId を
+// 発行する仕組み）をクライアントがどこからも呼んでおらず、提出にも day /
+// attemptId を載せていなかった。サーバー側の不正防止は丸ごと死んだまま、
+// テストは全部緑だった（旧クライアント向けの緩い経路だけを叩いていたため）。
+// 「呼ばれない防御」は無いのと同じなので、配線そのものを見張る。
+const modes = read('public/js/modes.js');
+check('デイリー開始が /api/daily/start を呼んでいる', /\/api\/daily\/start/.test(modes), '');
+check('デイリーの提出が day を添えている', /day:\s*this\.info\.day/.test(modes), '');
+check('デイリーの提出が attemptId を添えている', /attemptId:\s*this\.attemptId/.test(modes), '');
+
+// サーバーの申告ホワイトリストに無い欄は黙って捨てられる。載せ忘れると
+// 上の配線が全部そろっていても値が届かない（実際そうなっていた）。
+const server = read('server/index.js');
+const fields = (server.match(/const RESULT_FIELDS = \[([\s\S]*?)\]/) || [, ''])[1];
+check("RESULT_FIELDS に 'day' がある", /'day'/.test(fields), '');
+check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '');
+
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

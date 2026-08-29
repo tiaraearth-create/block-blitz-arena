@@ -236,6 +236,25 @@ for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${
   r = await api('/api/adminevent/claim', { method: 'POST', token: t2 });
   check('参加していない人は受け取れない', r.status === 403, r.d.error || '');
 
+  // 取り消し → 予約し直しで、その日の実績が初期化されないこと。
+  //
+  // cancelReservation() が user.adminEvent を丸ごと捨て、reserve() が引き継ぐ欄を
+  // 1つずつ列挙していたので、取り消して予約し直すだけで claimedTiers が空に戻り、
+  // 到達済みの段報酬を何度でも受け取れた（実測 1周 +1,700🪙 +17💎 が無限）。
+  // 同じ列挙漏れで shardJoin も毎回リセットされ、参加ぶんの👑欠片(+10)も無限だった。
+  {
+    const meBefore = (await api('/api/me', { token: t1 })).d.user;
+    await api('/api/adminevent/cancel', { method: 'POST', token: t1 });
+    r = await api('/api/adminevent/reserve', { method: 'POST', token: t1, body: { slotId: 0 } });
+    check('取り消したあとも予約し直せる', r.status === 200, r.d.error || '');
+    r = await api('/api/adminevent/claim', { method: 'POST', token: t1 });
+    check('取り消し→再予約でも段報酬は二重取りできない', r.status === 409 && /済み/.test(r.d.error || ''), `HTTP ${r.status} ${r.d.error || JSON.stringify(r.d.reward)}`);
+    const meAfter = (await api('/api/me', { token: t1 })).d.user;
+    check('取り消し→再予約でコイン/ジェムが増えない', meAfter.coins === meBefore.coins && meAfter.gems === meBefore.gems,
+      `🪙${meBefore.coins}->${meAfter.coins} 💎${meBefore.gems}->${meAfter.gems}`);
+    check('取り消し→再予約で👑欠片も増えない', meAfter.shards === meBefore.shards, `${meBefore.shards} -> ${meAfter.shards}`);
+  }
+
   // Backup / restore: the schedule lives in db.meta and the reservation on the
   // user record — both used to be dropped by a merge restore.
   const backup = (await api('/api/admin/backup', { token: atk })).d;

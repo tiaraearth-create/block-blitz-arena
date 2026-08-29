@@ -40,6 +40,28 @@ export function showScreen(name, { push = true } = {}) {
   try { history.pushState({ bbaScreen: name }, ''); } catch { /* file:// など */ }
 }
 
+// マッチング画面とカスタムルームは、画面を離れるときに後始末が要る画面。
+// 画面を差し替えるだけだとサーバー側ではキュー／ルームに並んだままで、
+// メニューを見ているのに match_found が飛んできて突然対戦画面へ引きずり込まれる
+// （放置すれば敗北扱い）。カスタムルームなら他の参加者にゴーストが残り、
+// ホストが開始すると勝手に試合が始まる。しかも画面の「キャンセル」「←」は
+// メニューの裏に隠れて押せない。
+//
+// 後始末の中身をここに書き写すとボタン側と食い違っていくので、その画面が
+// 持っている離脱ボタンをそのまま押す。押した先は endToMenu() まで走って
+// メニューを出すので、戻り先の差し替えはこちらでやらない。
+// 戻り値は「後始末つきで画面を移せた」かどうか。
+function leaveViaScreenButton() {
+  const screen = document.body.dataset.screen;
+  const btn = screen === 'matchmaking' ? $('#btnCancelQueue')
+    : screen === 'room' ? $('#btnRoomBack')
+    : null;
+  if (!btn) return false;
+  btn.click();
+  // ハンドラが未接続などで画面が動かなかったときは、通常の戻りに任せる。
+  return document.body.dataset.screen !== screen;
+}
+
 // 画面の「←」。端末の戻るとまったく同じ道を通す ──
 // ここで画面だけ動かすと履歴が1つ余り、次に端末の戻るを押したときに
 // 何も起きない（ズレたぶんを消費するだけ）という挙動になる。
@@ -49,6 +71,7 @@ export function goBack(onGameBack) {
     return false;
   }
   if (historyReady && screenStack.length) { history.back(); return true; }
+  if (leaveViaScreenButton()) return true;
   const to = screenStack.pop() || 'menu';
   poppingBack = true;
   showScreen(to, { push: false });
@@ -78,6 +101,9 @@ export function initHistory(onGameBack) {
       if (onGameBack) onGameBack();
       return;
     }
+    // キュー／ルームからは必ず抜けてから出る。抜けた先はメニューなので、
+    // 履歴も積み直さない（次の戻るでアプリを閉じてよい）。
+    if (leaveViaScreenButton()) return;
     const to = screenStack.pop() || 'menu';
     poppingBack = true;
     showScreen(to, { push: false });

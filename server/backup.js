@@ -88,8 +88,22 @@ function progressOf(u) {
 // own (pre-purchase) currency while the purchase is unioned in — a one-time
 // windfall for that player. Acceptable: losing purchases outright is worse,
 // and the boot-time seed merge only ever applies a given seed once.
+// 名前は「稼いだもの」だが、BAN／ミュートの和集合もここに置いてある。
+// 勝ち負けのどちらの枝からも必ず通る唯一の場所だから（下の理由を参照）。
 function mergeEarned(winner, loser) {
   if (!winner || !loser) return;
+  // 🚫 BAN／ミュートは勝ち負けと無関係に和集合を採る。ここに置いてあるのは、
+  // 呼び出しの向きが枝によって逆になるから ── 以前は「バックアップ側が勝った」
+  // 枝にしか union が無く、生きている側が勝つと（＝ディスクが飛んでから復元
+  // されるまでの窓で、同じ名前を取り直して BAN 前より多く遊んだ場合）
+  // ファイルに残っていた BAN が黙って解けていた。しかも同じ枝の合流は実績も
+  // 所持品も引き継ぐので、「報酬の面では同一人物、処分の面だけ別人」という
+  // 都合のよいマージになっていた。
+  // 解除の向きには倒さない（union なので BAN が外れることはない）。
+  // 一度余分に BAN がかかるほうが、処分が静かに消えるよりましだからで、
+  // これはこのファイルの他の合流と同じ「迷ったら閉じる」判断。
+  if (loser.banned) winner.banned = true;
+  if (loser.muted) winner.muted = true;
   // 🤝 フレンドとブロックも合流させる。とくに blocked は本人が身を守るために
   // 付けたもので、進行度で負けたほうのコピーに入っていても落としてはいけない
   // （BAN/ミュートを union しているのと同じ理由）。
@@ -279,8 +293,8 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
       // Moderation and credentials are OPERATOR state, not player progress —
       // they must not roll back just because the backup copy had more score.
       // A newer sessionsSince marks newer credentials (password changes bump
-      // it); bans/mutes are unioned (an unbanned-then-restored account may be
-      // re-banned once — far safer than a ban silently reverting).
+      // it). BAN／ミュートの union は上の mergeEarned に移した（勝敗の
+      // どちらの枝からも必ず通る場所なので、片方向だけ、が起きない）。
       // sessionsSince はファイル側が自由に決められる値なので、これだけを
       // 根拠にすると「巨大な sessionsSince を書いた偽レコード」に負ける。
       // アップロード者がファイルの中身を握っている経路（未ログインでの復元）
@@ -292,8 +306,6 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
       }
       // 権限も同じ。生きているアカウントの role をファイル側に書き換えさせない。
       if (protectLiveCredentials) inc.role = live.role;
-      if (live.banned) inc.banned = true;
-      if (live.muted) inc.muted = true;
       // 名前で照合して勝ったレコードは **id ごと** 入れ替わる。
       // 他の人の friends / blocked / 申請には古い id が残ったままなので、
       // ここで対応表に控えて、あとでまとめて付け替える。
@@ -397,14 +409,32 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
 
   // db.meta: a fresh post-deploy instance holds only trivial meta — adopt the
   // backup's world state (event, poll+votes, crowd scale/config, maintenance,
-  // season override) for every key the live side hasn't set since boot.
+  // season override, throne progress) for every key the live side hasn't set
+  // since boot.
   if (data.meta && typeof data.meta === 'object') {
     db.meta = db.meta || {};
-    // NOTE: every new db.meta key MUST be listed here or a restore silently
-    // drops it — that is how the admin-event schedule would vanish on the
-    // first redeploy after it was set.
-    for (const k of ['event', 'poll', 'popScale', 'ambient', 'maintenance', 'seasonOverride', 'createdAt',
-      'adminEvent', 'adminEventRun', 'thrones', 'adminLog', 'chatLog']) {
+    // ここは以前「持ち込んでよいキーの一覧」だった。「新しい db.meta のキーを
+    // 足したらこの一覧にも足すこと」と但し書きを付けていたが、実際には守られず
+    // throneMax（世界がこれまでに割った最高段）が漏れていた。これが落ちると
+    // 👑王座ショップは棚が max >= dan でしか開かないので、ディスクが飛ぶ
+    // 再デプロイ ── まさにこの復元機構が存在する理由 ── のたびに7品すべてが
+    // 買えなくなる。欠片は各ユーザーのレコードに残るので消えはしないが、
+    // 管理者が /api/admin/throne で段を手で戻すまで使い道が無い。
+    // newsUnpinned も同じ理由で漏れており、unpinOldReleaseNotes の「一度きり」
+    // が毎回リセットされて、📌し直したお知らせが起動のたびに剥がされていた。
+    //
+    // そこで一覧を「落とすキー」に反転させる。書き足し忘れたときの既定が
+    // 「持ち越す」側になるので、同じ事故がもう一度起きない。
+    //   seedHash              … この機体が同梱 seed を適用済みかの記録。ファイル側の
+    //                           値で巻き戻すと次の起動で古い seed が再適用される
+    //   lastRankRewardWeek    … 復元後に消すのが目的（すぐ下でそうしている）
+    //   backupAt/backupVersion … バックアップファイル自身の情報で、世界の状態ではない
+    const META_NOT_RESTORED = new Set(['seedHash', 'lastRankRewardWeek', 'backupAt', 'backupVersion']);
+    for (const k of Object.keys(data.meta)) {
+      if (META_NOT_RESTORED.has(k)) continue;
+      // ファイルの中身は外から来る。JSON.parse は "__proto__" を素の own プロパティ
+      // として作るが、代入するとプロトタイプの setter が動いてしまうので通さない。
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
       if (db.meta[k] == null && data.meta[k] != null) db.meta[k] = data.meta[k];
     }
     // Weekly payouts: an empty post-deploy boot may have stamped the current

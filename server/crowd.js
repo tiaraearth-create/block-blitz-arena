@@ -707,7 +707,11 @@ export function composeFeed(ctx) {
     if (f.id === 'raid') extra.boss = pick(RAID_NAMES);
     const ctxOthers = { ...ctx, active: active.filter(x => x.id !== r.id) };
     const cache = {};   // same numbers in both languages
-    const text = fill(f.ja, r, ctxOthers, extra, cache);
+    // 各面はその面の言語で描く。r をそのまま渡すと fill が住人の lang を使うので、
+    // 英語圏の住人（archetype 'global'、ロスターの約12%）が主語のときだけ日本語の
+    // フィード文に英語の名詞が混ざっていた（「Milo が WarriorAI に勝利」「Aria が
+    // Master に昇格！」）。英語面は最初から lang を固定してあるので、その対称。
+    const text = fill(f.ja, { ...r, lang: 'ja' }, ctxOthers, extra, cache);
     if (!gen.surfaceFresh(text, ctx.now)) continue;
     gen.noteSurface(text, ctx.now);
     return {
@@ -811,13 +815,18 @@ const REACTIONS = {
   },
 };
 
+// index.js の BADGE_ICONS / BADGE_NAMES_EN と必ず同じキーを持たせること。
+// 片方に足し忘れると `BADGE_NAMES[badge] || badge` が生のIDへフォールバックして、
+// 全体速報と住人のリアクションが日本語面だけ「〇〇 が「abyss」を獲得！」になる
+// （実際 abyss＝深淵ダンジョンA100制覇だけが抜けていて、ゲーム最難関の速報が
+// そうなっていた。英語面は BADGE_NAMES_EN があるので正しく出ていた）。
 export const BADGE_NAMES = {
   oni: '鬼討伐バッジ', kami: '神殺しバッジ', souzou: '創造神討伐バッジ', maou: '魔王討伐バッジ',
-  rush: 'ボスラッシュ制覇', dungeon: '百塔踏破', under: '地底踏破', heaven: '天界踏破', zero: '断罪', tourney: '大会優勝', royale: 'バトロワ1位',
+  rush: 'ボスラッシュ制覇', dungeon: '百塔踏破', under: '地底踏破', heaven: '天界踏破', abyss: '深淵踏破', zero: '断罪', tourney: '大会優勝', royale: 'バトロワ1位',
   weekly1: '週間チャンピオン', puzzle: '遺跡マスター', dig: 'マスター採掘士',
   adminevent: '管理者イベント制覇',
   crown2: '二冠バッジ', crown3: '三冠バッジ', crown5: '五冠バッジ', crown7: '全冠制覇バッジ',
-  ghost: '幽霊屋敷の生還者',
+  ghost: '幽霊屋敷の生還者', daily7: '日課の鬼',
 };
 
 // Pick one or more residents to react. Returns [{ resident, text, delay }].

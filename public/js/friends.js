@@ -11,7 +11,7 @@ import { $, showScreen, showModal, closeModal, toast } from './dom.js';
 import { t } from './i18n.js';
 import { audio } from './audio.js';
 import { session, api } from './net.js';
-import { sendWs } from './chat.js';
+import { sendWs, onWsReady } from './chat.js';
 import { createParty, joinParty, currentParty, lastPartyMembers } from './party.js';
 
 let data = null;
@@ -51,9 +51,68 @@ export async function openFriends(which = 'list') {
   renderFriends();
 }
 
-export function friendPending() {
-  return data ? (data.incoming || []).length : 0;
+// ---------------------------------------------------------------------------
+// 🤝 ナビの通知ドット（#friendDot）
+//
+// index.html にはずっとドットの器があったのに、hidden を外す側がどこにも
+// 無かった ── 申請に気づく手段は party.js の toast だけで、あれは「申請が
+// 飛んだ瞬間にオンラインだった人」にしか出ない。サーバーはオフライン宛ての
+// 通知をキューにも積まず黙って捨てるので、オフライン中に来た申請は自分から
+// フレンド画面を開くまで一生見えないままだった。
+// ミッションの refreshMissionDot と同じで、ここで数えて自分で点ける。
+// （画面内タブの #frReqDot は前から動いている。壊れていたのはナビの方だけ）
+// ---------------------------------------------------------------------------
+
+let pendingCount = 0;
+
+export function friendPending() { return pendingCount; }
+
+function setFriendPending(n) {
+  pendingCount = Math.max(0, Number(n) || 0);
+  const dot = $('#friendDot');
+  // i18n の言語切り替えでナビを組み直すときは .nav-dot をそのまま持ち回すので、
+  // ここで付けた状態はちゃんと残る（outerHTML ごと差し込み直すため中身の数字も残る）。
+  if (!dot) return;
+  dot.classList.toggle('hidden', !pendingCount);
+  // 件数まで出す（#missionDot と同じ形・同じ 9+ 打ち切り）。器は .nav-dot 共通で、
+  // min-width と padding があるので数字がそのまま入る。
+  // 数を出さないと「何か来ている」しか分からず、3件たまっていても1件だと思って
+  // 捌き残す ── 申請は溜まると相手側の送信上限を食い潰すので、数が見える方がいい。
+  dot.textContent = pendingCount > 9 ? '9+' : String(pendingCount || '');
 }
+
+// WS で申請が届いた瞬間に点ける（party.js の friend_request ハンドラから）。
+// 数え直しを待たせない。
+export function noteFriendRequest() { setFriendPending(pendingCount + 1); }
+
+export async function refreshFriendDot() {
+  if (!session.user) { setFriendPending(0); return; }
+  try {
+    const d = await api('/api/friends');
+    setFriendPending((d.incoming || []).length);
+  } catch { /* 取れなければ今の表示のまま。ドット1つのために画面は荒らさない */ }
+}
+
+// 数え直しの起点。起動直後は session.user がまだ入っていない ──
+// main.js の refreshMe は非同期で、しかもコールドスタート対策で最大6回
+// リトライする。一方 WS は localStorage のトークンをそのまま載せて先に
+// つながるので、hello_ok（onWsReady）の方が早いことがある。入るまで少し待つ。
+let bootTimer = null;
+function refreshFriendDotSoon() {
+  if (session.user) { refreshFriendDot(); return; }
+  if (bootTimer) return;
+  let waited = 0;
+  bootTimer = setInterval(() => {
+    if (session.user) { clearInterval(bootTimer); bootTimer = null; refreshFriendDot(); return; }
+    if ((waited += 1000) >= 30000) { clearInterval(bootTimer); bootTimer = null; }   // 未ログインなら諦める
+  }, 1000);
+}
+
+// ログイン直後は必ず chat がつなぎ直る（screens.js の reconnectChat）ので、
+// そこで1回。以後はミッションのドットと同じ2分間隔で数え直す ──
+// 自分が別の端末で捌いた申請も、これで消える。
+onWsReady(refreshFriendDotSoon);
+setInterval(() => { if (session.user) refreshFriendDot(); }, 120000);
 
 function setTab(x) {
   tab = x;
@@ -70,8 +129,12 @@ function renderFriends() {
     b.classList.toggle('active', b.dataset.fr === tab);
     b.onclick = () => { audio.click(); setTab(b.dataset.fr); };
   });
+  const inc = (data.incoming || []).length;
   const dot = $('#frReqDot');
-  if (dot) dot.classList.toggle('hidden', !(data.incoming || []).length);
+  if (dot) dot.classList.toggle('hidden', !inc);
+  // 画面を開いた／申請を捌いた時点の実数で、ナビのドットも合わせる。
+  // （act() は毎回サーバーの最新を返すので、承認・拒否した瞬間に消える）
+  setFriendPending(inc);
 
   if (tab === 'list') body.innerHTML = viewList();
   else if (tab === 'requests') body.innerHTML = viewRequests();

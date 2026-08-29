@@ -15,6 +15,20 @@ export function setToken(token) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
+// レスポンスの user を「自分のアカウント」として採用してよいかどうか。
+// 見分けは2つとも要る:
+//  ・social を持つのは publicUser（＝自分用の形）だけ。他人を返す friendRow
+//    にも、管理画面用の adminUserView にも social は無い。adminUserView は
+//    「管理者は全アイテム所持・通貨無限」という表示上の作り話を敢えて外した
+//    生の値なので、たとえ自分自身を編集していても session.user には入れない
+//    （入れると持ち物や通貨が本来と食い違って見える）。
+//  ・そのうえで id が今の自分と一致すること。ログイン／登録の直後だけは
+//    session.user がまだ無いので、そのときは id の照合を省く。
+function isMyUser(u) {
+  if (!u || typeof u !== 'object' || !u.social) return false;
+  return !session.user || u.id === session.user.id;
+}
+
 export async function api(path, { method = 'GET', body } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (session.token) headers.Authorization = `Bearer ${session.token}`;
@@ -36,7 +50,15 @@ export async function api(path, { method = 'GET', body } = {}) {
     e.settled = !!data.settled;   // NO_USER + settled: the restore ran and the account isn't in it
     throw e;
   }
-  if (data.user !== undefined) session.user = data.user;
+  // 自分の user だけを書き戻す。以前は `data.user !== undefined` で無条件に
+  // 代入していたので、user キーに「自分以外」を載せて返すルート
+  // （POST /api/friends/search、/api/admin/users/:id の GET と POST）を叩いた
+  // 瞬間に session.user が別人や null に差し替わっていた ── 上部バーが他人の
+  // 名前とコインになり、プロフィールやショップは stats/owned が無くて
+  // TypeError で開けなくなり、管理者の「💰自分にコイン付与」は直前に編集画面を
+  // 開いた相手のほうへ飛ぶ。検索が空振り（user:null）だとゲスト扱いに落ちて、
+  // リロードするまで戻らなかった。
+  if (isMyUser(data.user)) session.user = data.user;
   if (data.season) session.season = data.season;
   return data;
 }

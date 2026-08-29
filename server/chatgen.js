@@ -40,6 +40,28 @@ function pruneMap(map, max) {
   for (const [k] of cut) map.delete(k);
 }
 
+// 住人ごとの記憶の上限。住人の実数は ambient.js の MAX_ROSTER=600 に管理者追加の
+// 100 人を足して最大700人なので、通常運用ではここに触れない値にしてある。
+// （以前は 400 だった。MAX_ROSTER が 240→600 に上がったとき追随し忘れていて、
+//  にぎわい倍率 ×50 あたりから 401 人目が喋った瞬間に全員ぶんの記憶が消え、
+//  「同じ住人は同じテンプレを丸1日言わない」という約束が、いちばん賑やかな
+//  ときにだけ数時間ごとに崩れていた。）
+// 残す意味はロスター再シード時の後始末 — 消えた住人IDが延々と積もらないように。
+const MAX_RESIDENT_MEMORY = 1200;
+const KEEP_RESIDENT_MEMORY = 800;
+
+// 全消しではなく、最後に喋ったのがいちばん古い住人から落とす。clear() だと
+// いま会話中の住人の記憶まで巻き添えになる（＝上の不具合そのもの）。
+function pruneResidentMemory(max) {
+  if (perResident.size <= max) return;
+  const lastOf = m => { let t = 0; for (const v of m.values()) if (v > t) t = v; return t; };
+  const cut = [...perResident.entries()]
+    .map(([id, m]) => [id, lastOf(m)])
+    .sort((a, b) => a[1] - b[1])
+    .slice(0, perResident.size - max);
+  for (const [id] of cut) perResident.delete(id);
+}
+
 export function noteSurface(text, now = Date.now()) {
   surfaceAt.set(String(text).trim(), now);
   if (surfaceAt.size > 600) {
@@ -96,7 +118,7 @@ export function smartPick(pool, items, { now = Date.now(), rid = null, weightFn 
   usedAt.set(k, now);
   pruneMap(usedAt, 6000);
   if (rmap) { rmap.set(k, now); pruneMap(rmap, 300); }
-  if (perResident.size > 400) perResident.clear();   // roster reseed safety valve
+  if (perResident.size > MAX_RESIDENT_MEMORY) pruneResidentMemory(KEEP_RESIDENT_MEMORY);   // roster reseed safety valve
   return items[idx];
 }
 

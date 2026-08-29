@@ -1,9 +1,14 @@
 node_modules/
-server/data/*.json
-server/data/*.txt
+# 実データ置き場はディレクトリごと落とす。以前は `server/data/*.json` と `*.txt` の
+# 拡張子指定だったが、それだと db.js が破損時に残す `db.json.corrupt-<日時>` や
+# writeAtomic の `db.json.tmp` が素通りしていた。中身は db.json そのもの＝全ユーザーの
+# salt / passHash 入りの完全ダンプで、このリポジトリは公開されているため、破損が一度
+# 起きたあとの `git add -A` で認証情報が履歴に永久に載ってしまう。
+# （ディレクトリを除外すると中のファイルは `!` で復活できないので、ここへ何か
+#   コミットしたくなったら除外の書き方から変えること。snapshots/ もこれで覆われる）
+server/data/
 .DS_Store
 *.log
-server/data/snapshots/
 block-blitz-backup-*.json
 # 監査/検証で作った使い捨てスクリプト
 _repro_tmp.mjs

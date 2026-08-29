@@ -306,7 +306,9 @@ export function reserve(user, occ, slotId, now = Date.now()) {
   const slot = occ.slots.find(s => s.id === slotId);
   if (!slot) return { error: 'その時間枠は存在しません' };
   if (slot.endsAt <= now) return { error: 'その枠はもう終わっています' };
-  const prev = reservationOf(user, occ.dayKey);
+  // 取り消し中でも、その日の実績（受取済みの段・欠片の支払い印）は控えに残る。
+  const prev = reservationOf(user, occ.dayKey)
+    || (user && user.adminEventDay && user.adminEventDay.dayKey === occ.dayKey ? user.adminEventDay : null);
   // Changing your mind mid-session would hand you a second window.
   if (prev && prev.slotId !== slotId && prev.playedAt) {
     const prevSlot = occ.slots.find(s => s.id === prev.slotId);
@@ -315,6 +317,11 @@ export function reserve(user, occ, slotId, now = Date.now()) {
     }
   }
   user.adminEvent = {
+    // その日の実績は「まるごと」引き継ぐ。残す欄を1つずつ書き出していたころ、
+    // あとから足した shardJoin（参加ぶんの王座の欠片を1日1回だけ払う印）が
+    // 引き継ぎ表から漏れ、同じ枠を予約し直すだけで +10 欠片を無限に稼げた。
+    // 列挙をやめれば、次に欄が増えても同じ漏れ方はしない。
+    ...(prev || {}),
     dayKey: occ.dayKey,
     slotId,
     modeId: occ.modeId,
@@ -328,11 +335,18 @@ export function reserve(user, occ, slotId, now = Date.now()) {
     claimedTiers: prev ? prev.claimedTiers || [] : [],
     reminded: false,
   };
+  // 予約に取り込んだので、取り消し中の控えは役目を終える。
+  if (user.adminEventDay && user.adminEventDay.dayKey === occ.dayKey) user.adminEventDay = null;
   return { reservation: user.adminEvent, slot };
 }
 
 export function cancelReservation(user, dayKey) {
   if (user && user.adminEvent && user.adminEvent.dayKey === dayKey) {
+    // 「枠を手放す」ことと「その日に得たものを無かったことにする」ことは別。
+    // ここで丸ごと捨てていたので、取り消して予約し直すと claimedTiers が空に
+    // 戻り、共闘イベントの段報酬を何度でも受け取れた（実測で1周あたり
+    // +1,700🪙 +17💎 が無制限に増え続ける）。枠だけ返して実績は控えておく。
+    user.adminEventDay = { ...user.adminEvent };
     user.adminEvent = null;
     return true;
   }

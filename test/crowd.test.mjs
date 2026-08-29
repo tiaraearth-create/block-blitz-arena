@@ -5,7 +5,7 @@
 import { buildRoster, ARCHETYPES } from '../server/residents.js';
 import { composeLine, composeDialogue, composeFeed, composeReaction, chooseReplies, buildCtx, fill } from '../server/crowd.js';
 import { _resetForTest } from '../server/chatgen.js';
-import { setWorldProvider, activeResidents, setCustom, chatPaceFactor, chatFloorMs } from '../server/ambient.js';
+import { setWorldProvider, activeResidents, setCustom, chatPaceFactor, chatFloorMs, residentByName, clashingResidentIds, getCustom } from '../server/ambient.js';
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push([ok ? '✅' : '❌', name, detail]); if (!ok) process.exitCode = 1; };
@@ -295,6 +295,28 @@ _resetForTest();
   check('日本語面はこれまで通り日本語のまま', [...jaOut].every(x => CJK.test(x)), `${jaOut.size}通り`);
   check('どちらの言語でも [object Object] が出ない',
     ![...enOut, ...jaOut].some(x => x.includes('[object')));
+}
+
+// ---------------------------------------------------------------------------
+// 住人の名前は、にぎわい倍率に関係なく予約済みであること
+//
+// 名前の一意性を getRoster()（倍率で伸び縮みする）で見ていたころ、倍率が低い
+// あいだは r64〜r599 の名前が「空いている」ように見え、そのままアカウントを
+// 作れた。あとで倍率を上げると同名の住人が湧き、本人が言っていない発言が
+// その名前で流れる＝なりすましが成立していた。
+// ---------------------------------------------------------------------------
+{
+  const full = buildRoster('v1', 600);
+  const late = full[500];   // 低倍率の名簿には載らない側の住人
+  check('倍率に関係なく後半の住人名も予約されている', !!residentByName(late.name), late.name);
+  check('大文字小文字を無視して引ける', !!residentByName(late.name.toUpperCase()), late.name.toUpperCase());
+  check('存在しない名前は空いている', residentByName('ぜったいにいない名前XYZ') === null);
+
+  // 実プレイヤーとぶつかる住人を洗い出す口（名簿の引き直し前の点検に使う）
+  const ids = clashingResidentIds('v1', [late.name.toLowerCase(), 'ぜったいにいない名前XYZ']);
+  check('実プレイヤーと同名の住人を id で拾える', ids.includes(late.id), JSON.stringify(ids));
+  check('ぶつからない名前は拾わない', ids.length === 1, `${ids.length}件`);
+  check('誰とも衝突しなければ空', clashingResidentIds('v1', []).length === 0);
 }
 
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

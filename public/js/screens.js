@@ -75,7 +75,7 @@ export function showAuthModal() {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
@@ -121,7 +121,7 @@ function showProfileModal() {
 
 const MODE_LABEL = {
   solo: ['ソロ', 'Solo'], survival: ['サバイバル', 'Survival'], boss: ['ボス', 'Boss'],
-  boss_rush: ['ボスラッシュ', 'Boss Rush'], weekly: ['ウィークリー', 'Weekly'],
+  boss_rush: ['ボスラッシュ', 'Boss Rush'], weekly: ['ウィークリー', 'Weekly'], daily: ['デイリー', 'Daily'],
   chaos: ['カオス', 'Chaos'], pvp: ['オンライン', 'Online'], tournament: ['トーナメント', 'Tournament'],
   meltdown: ['メルトダウン', 'Meltdown'], chimera: ['キメラ工房', 'Chimera Lab'],
   puzzle: ['パズル遺跡', 'Puzzle Ruins'], dig: ['採掘場', 'The Mines'], ghost: ['幽霊屋敷', 'Haunted House'],
@@ -723,7 +723,7 @@ export async function openLeaderboard(board = 'score') {
       }).join('');
       rewardHead = `<div class="lb-rewards">🎁 <b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
     }
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅' };
     list.innerHTML = rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
@@ -734,6 +734,7 @@ export async function openLeaderboard(board = 'score') {
         </div>
         <div class="lb-score">${board === 'dungeon' ? `F${fmt(r.dungeonMax || 0)}`
           : board === 'weekly' ? fmt(r.weeklyBest || 0)
+          : board === 'daily' ? fmt(r.dailyScore || 0)
           // 順位を決めているのは1分のほう。ラベルが無いせいで、下の行にある
           // 「3分 …」だけが説明つきに見え、順位と無関係な数字を読んでしまう。
           : board === 'sprint' ? tr(`1分 ${fmt(r.sprintBest || 0)}`, `1min ${fmt(r.sprintBest || 0)}`)
@@ -873,11 +874,22 @@ const BADGE_INFO = {
   crown3:     { icon: '👑', ja: '三冠',          en: 'Triple Crown',    cja: '王座を同時に3つ保持',               cen: 'Hold 3 thrones at once' },
   crown5:     { icon: '👑', ja: '五冠',          en: 'Five Crowns',     cja: '王座を同時に5つ保持',               cen: 'Hold 5 thrones at once' },
   crown7:     { icon: '🌈', ja: '全冠制覇',      en: 'Total Domination', cja: '7つの王座をすべて同時に保持',       cen: 'Hold all 7 thrones at once' },
+  daily7:     { icon: '📅', ja: '日課の鬼',      en: 'Daily Devotee',   cja: 'デイリーチャレンジを7日連続クリア', cen: 'Clear the Daily Challenge 7 days in a row' },
 };
-const BADGE_ORDER = ['oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'under', 'heaven', 'abyss', 'zero', 'tourney', 'royale', 'adminevent', 'weekly1', 'puzzle', 'dig', 'ghost', 'bronze', 'silver', 'gold', 'crown2', 'crown3', 'crown5', 'crown7'];
+const BADGE_ORDER = ['oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'under', 'heaven', 'abyss', 'zero', 'tourney', 'royale', 'adminevent', 'weekly1', 'daily7', 'puzzle', 'dig', 'ghost', 'bronze', 'silver', 'gold', 'crown2', 'crown3', 'crown5', 'crown7'];
+// 👑 王座のボード名は [日本語, English] のペアで持つ。
+// 以前は日本語だけの表で、引くときに tr(THRONE_LABEL[b], THRONE_LABEL[b]) と
+// 第2引数にも同じ日本語を渡していたため、英語表示でもここだけ日本語のまま出ていた。
+// （chat.js のプロフィールカードは対訳表を持っていて英語化されるので、
+//   同じ王座がインベントリとチャットで違う言語に見えていた）
 const THRONE_LABEL = {
-  score: '🏆 ハイスコア', rating: '📈 レート', dungeon: '🏰 ダンジョン', weekly: '🎯 ウィークリー',
-  sprint: '⏱️ タイムアタック', puzzle: '🧩 パズル遺跡', dig: '⛏️ 採掘場',
+  score:  ['🏆 ハイスコア',   '🏆 High Score'],
+  rating: ['📈 レート',       '📈 Rating'],
+  dungeon:['🏰 ダンジョン',   '🏰 Dungeon'],
+  weekly: ['🎯 ウィークリー', '🎯 Weekly'],
+  sprint: ['⏱️ タイムアタック', '⏱️ Time Attack'],
+  puzzle: ['🧩 パズル遺跡',   '🧩 Puzzle Ruins'],
+  dig:    ['⛏️ 採掘場',       '⛏️ The Mines'],
 };
 
 let invTab = 'gear';
@@ -993,8 +1005,11 @@ function renderInvItems() {
   const rows = shopBoosters.filter(i => !i.adminOnly || staffExtras());
   body.innerHTML = `
     <p class="muted center inv-note">${tr(
+      // 英語側だけ古い手書き文字列が残っていて、ボスラッシュが抜けたうえに
+      // 「無効なのは AI / Online / Weekly だけ」と読める嘘になっていた。
+      // 奥義タブ・ブースターショップと同じく JA / EN 定数を参照する。
       'ゲーム中のHUDから使えます。<br><small>'+JA+'</small>',
-      'Use them from the in-game HUD.<br><small>Available in Solo, Boss, Dungeon, Survival and Chaos (disabled in AI / Online / Weekly for fairness)</small>')}</p>
+      'Use them from the in-game HUD.<br><small>'+EN+'</small>')}</p>
     <div class="inv-items">
       ${rows.map(i => {
         const n = invIsStaff() ? '∞' : (counts[i.id] || 0);
@@ -1060,7 +1075,10 @@ async function renderInvTitles() {
     b.onclick = async () => {
       audio.click();
       try {
-        await api('/api/titles/equip', { method: 'POST', body: { titleId: b.dataset.title } });
+        // キーは `id`。サーバー（/api/titles/equip）は req.body.id しか読まないので、
+        // titleId で送っていた頃はインベントリの称号タブからの装備が必ず 404 になっていた。
+        // プロフィール側（このファイルの showTitlesModal）と同じ形に揃える。
+        await api('/api/titles/equip', { method: 'POST', body: { id: b.dataset.title } });
         updateTopbar();
         toast(tr('👑 称号を変更しました', '👑 Title equipped'), 'ok');
         renderInvTitles();
@@ -1078,7 +1096,12 @@ function renderInvBadges() {
     ${thrones.length ? `
       <div class="inv-thrones">
         <div class="inv-sec-head"><span>👑 ${tr('保持中の王座', 'Thrones you hold')}</span><span class="muted">${thrones.length} / 7</span></div>
-        <div class="inv-throne-row">${thrones.map(b => `<span class="inv-throne">${tr(THRONE_LABEL[b] || b, THRONE_LABEL[b] || b)}</span>`).join('')}</div>
+        <div class="inv-throne-row">${thrones.map(b => {
+          // Array.isArray で引く。素の `THRONE_LABEL[b] ||` だと constructor 等の
+          // プロトタイプ由来の値まで拾ってしまうため。未知のボードは id をそのまま出す。
+          const L = THRONE_LABEL[b];
+          return `<span class="inv-throne">${Array.isArray(L) ? tr(L[0], L[1]) : escapeHtml(b)}</span>`;
+        }).join('')}</div>
       </div>` : ''}
     <div class="inv-sec-head">
       <span>🎖️ ${tr('バッジ', 'Badges')}</span>
@@ -1186,10 +1209,18 @@ function renderBoosterShop() {
 
 const RARITY_LABEL = { N: tr('ノーマル', 'Normal'), R: tr('レア', 'Rare'), SR: tr('スーパーレア', 'Super Rare'), SSR: tr('激レア', 'Ultra Rare'), UR: tr('超激レア', 'Legendary') };
 
+// 割引なしの定価（サーバーの GACHA_COST_1 / GACHA_COST_10 と同じ）。
+// モーダルは即座に出したいので、まずこの値で描いてから /api/gacha/info の
+// 実価格でラベルを差し替える。取得に失敗しても定価が残るだけで済む。
+const GACHA_BASE_1 = 500;
+const GACHA_BASE_10 = 4500;
+
 export function openGacha() {
   if (!session.user) { showAuthModal(); return; }
   audio.click();
   const pityMax = 40;
+  // 管理者は無課金で回せる（server 側で coins を引かない）ので、値段を出すと嘘になる。
+  const freePull = session.user.role === 'admin';
   const m = showModal(`
     <h2>${tr('🎰 カプセルマシン', '🎰 Capsule Machine')}</h2>
     <p class="muted center" style="margin-bottom:4px">${tr('コインで回して お宝ゲット！', 'Spin with coins and win treasure!')}</p>
@@ -1200,11 +1231,12 @@ export function openGacha() {
       <div class="gc-pity-head" style="margin-top:4px"><span>📚 ${tr('コレクション', 'Collection')}</span><b id="gcColText">…</b></div>
       <div class="gc-pity-bar"><div id="gcColFill" class="gc-pity-fill col" style="width:0%"></div></div>
     </div>
+    <p id="gcEvent" class="center hidden" style="font-size:11px;margin-bottom:6px"></p>
     <div id="gcResults" class="gacha-results"></div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="gcClose">${tr('閉じる', 'Close')}</button>
-      <button class="btn btn-primary" id="gcPull1">${tr('1回 🪙500', '1 pull 🪙500')}</button>
-      <button class="btn btn-gold" id="gcPull10">${tr('10連 🪙4,500', '10 pulls 🪙4,500')}<small style="display:block;font-size:9px">${tr('SR以上1枠確定', '1 SR+ guaranteed')}</small></button>
+      <button class="btn btn-primary" id="gcPull1">${tr('1回', '1 pull')} <span id="gcCost1">🪙${fmt(GACHA_BASE_1)}</span></button>
+      <button class="btn btn-gold" id="gcPull10">${tr('10連', '10 pulls')} <span id="gcCost10">🪙${fmt(GACHA_BASE_10)}</span><small style="display:block;font-size:9px">${tr('SR以上1枠確定', '1 SR+ guaranteed')}</small></button>
     </div>
     <p class="muted center" style="font-size:10px;margin-top:8px">${tr('N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム150 3%', 'N Coins 50% ・ R Items 22% ・ SR Gems 15% ・ SSR Cosmetics 10% ・ UR 150 Gems 3%')}<br>${tr(`✨ ${pityMax}連以内にSSR以上が必ず出ます（天井） ・ 🌈 ガチャ限定装備はSSRからのみ入手`, `✨ SSR+ guaranteed within ${pityMax} pulls (pity) ・ 🌈 Gacha-exclusive gear drops only from SSR`)}<br>${tr('スキン等をコンプ済みの場合はジェムに変換されます', 'Duplicate cosmetics are converted to gems')}</p>`);
   m.querySelector('#gcClose').onclick = closeModal;
@@ -1219,7 +1251,31 @@ export function openGacha() {
       m.querySelector('#gcColFill').style.width = `${Math.min(100, Math.round((collection.owned / collection.total) * 100))}%`;
     }
   };
-  api('/api/gacha/info').then(d => setBars(d.pity, d.collection)).catch(() => {});
+  // 値段はイベント（🍀 ラッキーデー = 20%オフ）で変わる。以前はボタンに
+  // 「1回 🪙500」と決め打ちしていたので、割引中は表示 500・実請求 400 と食い違い、
+  // せっかくの割引もレア確率アップも画面上ではまったく分からなかった。
+  // /api/gacha/info はそのために cost1 / cost10 / discounted / lucky を返している。
+  const setPrices = d => {
+    const num = (v, fb) => (Number.isFinite(Number(v)) ? Number(v) : fb);
+    const c1 = num(d.cost1, GACHA_BASE_1), c10 = num(d.cost10, GACHA_BASE_10);
+    const b1 = num(d.base1, GACHA_BASE_1), b10 = num(d.base10, GACHA_BASE_10);
+    const price = (cost, base) => freePull
+      ? tr('無料', 'Free')
+      : cost < base ? `<s style="opacity:.55">🪙${fmt(base)}</s> 🪙${fmt(cost)}` : `🪙${fmt(cost)}`;
+    m.querySelector('#gcCost1').innerHTML = price(c1, b1);
+    m.querySelector('#gcCost10').innerHTML = price(c10, b10);
+    const notes = [];
+    if (!freePull && c1 < b1) {
+      const off = Math.round((1 - c1 / b1) * 100);
+      notes.push(tr(`🍀 イベント割引 ${off}%オフ`, `🍀 Event discount: ${off}% off`));
+    }
+    if (d.lucky) notes.push(tr('✨ レア排出率アップ中', '✨ Rare rates boosted'));
+    const ev = m.querySelector('#gcEvent');
+    ev.textContent = notes.join(' ・ ');
+    ev.classList.toggle('hidden', notes.length === 0);
+  };
+  if (freePull) setPrices({});
+  api('/api/gacha/info').then(d => { setPrices(d); setBars(d.pity, d.collection); }).catch(() => {});
   const pull = async count => {
     const b1 = m.querySelector('#gcPull1'), b10 = m.querySelector('#gcPull10');
     b1.disabled = b10.disabled = true;
@@ -1229,6 +1285,9 @@ export function openGacha() {
       updateTopbar();
       m.querySelector('#gcCoins').textContent = `🪙 ${fmt(data.user.coins)}`;
       setBars(data.pity, data.collection);
+      // モーダルを開いたままイベントが始まる／終わることがあるので、値段も引き直す。
+      // （表示だけ古いままだと、また「表示と請求額が違う」に戻ってしまう）
+      api('/api/gacha/info').then(setPrices).catch(() => {});
       const box = m.querySelector('#gcResults');
       box.innerHTML = '';
       audio.coin();
@@ -1548,6 +1607,8 @@ export function showRankRewardsModal(force = false) {
 }
 
 // Red dot on the menu button whenever something is waiting to be claimed.
+// （🤝 フレンド申請のドット #friendDot は friends.js が持っている。
+//   同じ器を2か所から書くと、片方の古い数でもう片方が上書きされる）
 export async function refreshMissionDot() {
   const dot = $('#missionDot');
   if (!dot) return;
@@ -1952,7 +2013,7 @@ const BADGE_LABEL = {
   souzou: '🌌創造神', maou: '😈魔王', rush: '⚔️ラッシュ', dungeon: '🏰百塔', tourney: '🏆大会',
   royale: '💯ロイヤル', adminevent: '👑管理者イベント', abyss: '🌑深淵', weekly1: '🏅週間',
   puzzle: '🧩遺跡', dig: '⛏️採掘', crown2: '👑二冠', crown3: '👑三冠', crown5: '👑五冠',
-  crown7: '🌈全冠', ghost: '👻幽霊屋敷',
+  crown7: '🌈全冠', ghost: '👻幽霊屋敷', daily7: '📅日課の鬼',
 };
 
 export async function showUserEditor(uid) {
@@ -2346,9 +2407,22 @@ export async function showRestoreModal() {
         reconnectChat();
       }
       closeModal();
-      audio.coin();
-      confettiBurst(40);
-      toast(`♻️ 復元完了！ 追加${r.added}人 / 更新${r.updated}人 / 維持${r.kept}人 → 合計${fmt(r.after)}人`, 'ok', 6000);
+      const counts = `追加${r.added}人 / 更新${r.updated}人 / 維持${r.kept}人 → 合計${fmt(r.after)}人`;
+      // res.snapshot は「復元の直前に退避したスナップショットのファイル名」。
+      // サーバーが null を返すのは退避を1バイトも書けなかった印（ディスクが
+      // 読み取り専用／満杯など）で、つまり **この復元は元に戻せない**。
+      // ここで祝ってしまうと、管理者は「間違えても巻き戻せる」と思ったまま
+      // 先へ進み、上書き前のデータがもうどこにも無いことに後で気づく。
+      // サーバーは失敗の合図を既に送ってきているので、捨てずに警告として出す。
+      // （undefined＝この項目を返さないサーバーでは誤警報を出さないよう、
+      //   厳密に null のときだけ警告する）
+      if (res.snapshot === null) {
+        toast(`⚠️ 復元しました（${counts}）が、巻き戻し用のスナップショットを保存できませんでした。この復元は元に戻せません`, 'err', 9000);
+      } else {
+        audio.coin();
+        confettiBurst(40);
+        toast(`♻️ 復元完了！ ${counts}`, 'ok', 6000);
+      }
       await refreshMe().catch(() => {});
       updateTopbar();
       if (session.user && session.user.role === 'admin') openAdmin();
@@ -2390,7 +2464,14 @@ export async function showRestoreModal() {
           try {
             const res = await api('/api/admin/snapshots/restore', { method: 'POST', body: { name: b.dataset.snap } });
             closeModal();
-            toast(`♻️ 巻き戻しました（${fmt(res.report.after)}人）`, 'ok', 5000);
+            // 復元と同じ理由で、退避が撮れていないときは祝わない。
+            // 巻き戻しは「戻しすぎた」ときにもう一度戻す必要が出やすいので、
+            // 退避が無いことはこちらのほうが痛い。
+            if (res.snapshot === null) {
+              toast(`⚠️ 巻き戻しました（${fmt(res.report.after)}人）が、退避スナップショットを保存できませんでした。この操作は取り消せません`, 'err', 9000);
+            } else {
+              toast(`♻️ 巻き戻しました（${fmt(res.report.after)}人）`, 'ok', 5000);
+            }
             await refreshMe().catch(() => {});
             updateTopbar();
             openAdmin();

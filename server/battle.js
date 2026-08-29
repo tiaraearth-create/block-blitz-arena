@@ -49,6 +49,11 @@ export function initBattle(server, deps) {
   const { db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, MATCH_DURATION } = deps;
   // 予約名判定（無ければ何も予約しない安全側デフォルト）。index.js が渡す。
   const reservedName = deps.reservedName || (() => false);
+  // アカウント（未ログインはIP）単位の流量制限。sockRate は ws のプロパティに
+  // カウンタを置くので、接続を増やすと持ち分もそのまま増える。
+  // index.js から渡らない環境（テストの部分起動など）では素通しにする。
+  const userRate = (key, limit, windowMs) =>
+    (deps.rateLimit ? deps.rateLimit(key, limit, windowMs) : true);
 
   // maxPayload: the default is 100 MiB per frame, which on a single free-tier
   // instance is a cheap way to exhaust memory. The largest legitimate message
@@ -257,11 +262,30 @@ export function initBattle(server, deps) {
       // 👑 王座の欠片。管理者イベントの中でしか増えないので、
       // 配るのもここ（HTTP 側ではなく、実際に斬った瞬間）でやる。
       shard: (name, n) => {
-        const sock = [...clients].find(c => !c.isBot && c.user && sockName(c) === name);
+        if (!n) return;
+        // 送り先は「断罪の席に座っているソケット」でなければならない。
+        // 以前は clients から そのユーザーの**最初の**ソケットを拾っていたが、
+        // clients は接続順の Set で、chat.js の常時接続はページ読み込み時に
+        // 張られる＝断罪の BattleClient(role:'battle') より必ず先にいる。
+        // その結果 'shards' は断罪の画面を持たないソケットへ飛び、
+        // chat 側の dispatch が知らない type として黙って捨てていた
+        //（ZeroMode の .on('shards') が一度も呼ばれず、走行中のトーストも
+        //  獲得数の積算も出ないまま結果画面が「初回10」を表示していた）。
+        const seat = sess && sess.entrants
+          ? sess.entrants.find(x => x.human && x.ws && x.ws.user && x.name === name)
+          : null;
+        const sock = (seat && seat.ws)
+          || [...clients].find(c => !c.isBot && c.user && sockName(c) === name);
         const u = sock && sock.user ? db.users[sock.user.id] : null;
-        if (!u || !n) return;
+        if (!u) return;
         u.shards = (u.shards || 0) + n;
-        if (sock.readyState === sock.OPEN) send(sock, { type: 'shards', gained: n, total: u.shards });
+        const msg = { type: 'shards', gained: n, total: u.shards };
+        // 席が生きていればそこへ1通だけ。席が無い／もう閉じている場合
+        //（再接続直後など）だけ、そのアカウントの生存ソケット全部へ回して
+        // 通知が行方不明になるのを防ぐ。両方へ送るとクライアント側の
+        // 積算が二重になるので、必ずどちらか一方。
+        if (seat && seat.ws.readyState === seat.ws.OPEN) send(seat.ws, msg);
+        else sendToUser(u.id, msg);
         saveDb();
       },
       // 出来事をプレイヤーの記録に残す。これが無いと称号もバッジも解除されない。
@@ -426,12 +450,18 @@ export function initBattle(server, deps) {
 
   // 盤面は長さ64だけを見て中身は素通しだった。巨大な文字列を64個詰めれば
   // 1回約250KB を他人へ中継させられる。数値以外は落とす。
+  // 上限は 9 まで。8 で切っていたので、お邪魔ブロック（engine.js が 9 を
+  // 書き込む・PALETTE の 9 番が灰色のお邪魔）が中継の途中で 0＝空きマスに
+  // 化けていた。ボットの盤面は snapshot() を素通しで 9 が残るため、
+  // 同じ画面で「人間の盤面だけお邪魔が見えない」という食い違いになり、
+  // 相手を埋めるのが全ての💥アタック戦で攻撃が刺さったか読めなくなる。
+  // PALETTE は 9 番までしか無いので、これ以上は広げないこと。
   function sanitizeGrid(g) {
     if (!Array.isArray(g)) return null;
     const out = new Array(64);
     for (let i = 0; i < 64; i++) {
       const v = Math.floor(Number(g[i]));
-      out[i] = Number.isFinite(v) && v >= 0 && v <= 8 ? v : 0;
+      out[i] = Number.isFinite(v) && v >= 0 && v <= 9 ? v : 0;
     }
     return out;
   }
@@ -889,7 +919,11 @@ export function initBattle(server, deps) {
     for (const p of match.players) {
       if (p.sock.isBot) continue;
       p.sock.matchId = id;
-      p.sock.roomCode = null;
+      // roomCode を代入で消すと room.players からは外れないので、その部屋は
+      // 人数が 0 にならず rooms から永久に消えない（合言葉も再利用できない）。
+      // 席から本当に外す。room 経由の開始は startRoom が先に部屋を畳んで
+      // roomCode も null にしているので、ここは何もしない。
+      leaveRoom(p.sock);
       send(p.sock, {
         type: 'match_found',
         matchId: id, mode, seed, duration: match.duration, countdown: COUNTDOWN,
@@ -1055,6 +1089,54 @@ export function initBattle(server, deps) {
     return Math.floor(Math.max(1, (Date.now() - match.startedAt) / 1000) * 500);
   }
 
+  // 申告ライン数の上限。score だけ matchScoreCap で抑えて lines は素通しだった
+  // ので、`state` を一度 { lines: 999999 } で送るだけで 'attack' 側の捏造対策
+  //（atkLinesUsed が申告済み lines を超えられない）が丸ごと無意味になり、
+  // 1ラインも消さずに 10秒で 108セルのお邪魔を相手の 8×8 盤へ流し込めた。
+  // レート戦なので、そのまま Elo と pvpWins が正規に加算される。
+  //
+  // 毎秒5ラインという値はスコア上限から導いている: エンジンは1回の消去で
+  // 必ず lineCount²×100（コンボ倍率は1以上）を加算するので、消したライン数の
+  // 合計は常に score/100 以下。score が 500/秒 で頭打ちなら、ライン数は
+  // どう積んでも 5/秒 を超えられない。開始直後の3秒はカウントダウンで
+  // 誰も置けないぶんが丸ごと余裕になるので、正規プレイが引っかかることはない。
+  const MAX_LINES_PER_SEC = 5;
+  function linesCap(startedAt) {
+    return Math.floor(Math.max(1, (Date.now() - startedAt) / 1000) * MAX_LINES_PER_SEC);
+  }
+
+  // ⚔️ 攻撃「威力」のバジェット。
+  //
+  // 上の linesCap（毎秒5ライン）だけでは 'attack' の突き合わせが一度も効かない。
+  // attackCells は lines>=4 なら威力が頭打ち（base 6 ＋ コンボ最大3 ＝ 9セル）
+  // なので、捏造する側は lines:8 ではなく lines:4 と申告するだけで、同じ9セルを
+  // 半分の消費で撃てる。'attack' のレート制限は 12発/10秒＝1.2発/秒 だから
+  // 消費は 1.2×4＝4.8ライン/秒 で上限 5ライン/秒 に届かず、バジェットは
+  // 永久に尽きない ── 1ピースも置かないクライアントが毎秒 10.8セル
+  //（＝1.2発×9セル）を相手の 8×8 盤へ流し込め、レート戦なので Elo も
+  // pvpWins もそのまま成立していた。ライン申告の頭打ちは報酬側
+  //（applyGameResult のライン系ミッション）の防御としては効いているので残し、
+  // ここでは「実際に降らせたセル数」そのものを時間比例で縛る。
+  //
+  // 毎秒2セルの根拠（正直に遊んでいる人が絶対に届かない水準）:
+  //   public/js/engine.js を実際に回して「攻撃セルの合計だけを最大化する」
+  //   ビーム探索でプレイさせると 0.17セル/手。連続10手の最大でも 0.6セル/手、
+  //   80手平均では 0.33セル/手。お邪魔が降ってくる実戦条件（毎手1〜3セル）
+  //   ではさらに下がって 0.12〜0.07セル/手。人の設置速度は速い人でも毎秒1〜2手
+  //   なので、正直な上限はおよそ 0.3〜1.2セル/秒。2セル/秒 はその2〜10倍の余裕。
+  //   しかも linesCap と同じく「試合開始からの累積」なので、序盤に貯まった分で
+  //   短いバーストはそのまま通る（毎秒の瞬間値では縛らない）。
+  //   捏造側は 10.8 → 2セル/秒 と 8割減る。
+  const MAX_ATK_CELLS_PER_SEC = 2;
+  // 立ち上がりの余裕。攻撃はカウントダウン(3秒)明けまで弾かれるので実際は
+  // 3×2＝6セルが最初から積まれているが、それに加えて最大威力(9セル)の初弾が
+  // 必ず通るようにしておく。正直な人の攻撃が黙って消える（画面には「攻撃！」と
+  // 出るのに相手に何も降らない）のが一番たちが悪いため。
+  const ATK_CELLS_GRACE = 9;
+  function atkCellsCap(startedAt) {
+    return ATK_CELLS_GRACE + Math.floor(Math.max(0, (Date.now() - startedAt) / 1000) * MAX_ATK_CELLS_PER_SEC);
+  }
+
   function finishPlayer(match, slot, score, lines = 0, maxCombo = 0) {
     const p = match.players[slot];
     if (!p || p.finished || match.ended) return;
@@ -1062,7 +1144,14 @@ export function initBattle(server, deps) {
     let s = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
     if (!p.sock.isBot) s = Math.min(s, matchScoreCap(match));
     p.score = Math.max(p.score, s);   // monotonic — never below the last live frame
-    if (lines) p.lines = Math.max(p.lines, Math.floor(lines));
+    // lines も score と同じ扱い。ここは報酬（applyGameResult のライン系ミッション）
+    // に直結するので、締めの1フレームだけ捏造されると素通しになっていた。
+    // ボットは自分の Engine の実測値を渡すので、頭打ちは人間の申告だけに効かせる。
+    if (lines) {
+      let l = Math.max(0, Math.floor(Number(lines) || 0));
+      if (!p.sock.isBot) l = Math.min(l, linesCap(match.startedAt));
+      p.lines = Math.max(p.lines, l);
+    }
     if (maxCombo) p.maxCombo = Math.max(p.maxCombo, Math.floor(maxCombo));
     if (match.players.every(q => q.finished)) endMatch(match, 'finished');
   }
@@ -1171,6 +1260,18 @@ export function initBattle(server, deps) {
     if (match.mode === 'raid') winTeam = match.bossDead ? 0 : -2;
     // Co-op has no opponent — it is a shared run, never a win or a loss.
     if (match.mode === 'coop') winTeam = -1;
+    // 🏆 大会のブラケットは同点でも必ず片方を勝ち上がらせる（tourneyMatchEnd）。
+    // その判定を result 送信より後に走らせていたので、同点で終わると
+    // 勝ち上がった本人にも outcome:'draw' が届いていた。クライアントは
+    // 大会継続の分岐に 'win' しか入れていないので this.ended = true になり、
+    //「準々決勝で敗退しました」を出したまま次ラウンドの match_found を
+    // 無視して、勝っているはずの人が0点で不戦敗になっていた。
+    // 勝者を先に決めて、その結果を result に載せる。
+    let tourneyWinIdx = null;
+    if (match.tourney && match.players.length === 2) {
+      tourneyWinIdx = tourneyWinnerIdx(match);
+      winTeam = match.players[tourneyWinIdx].team;
+    }
     // 更新のためにサーバーを落とすとき。誰のせいでもないので必ず引き分け
     // （スコアで勝っていた人が敗北になる、の逆もない）。記録と報酬は残る。
     if (reason === 'shutdown') winTeam = match.mode === 'raid' ? -2 : -1;
@@ -1305,12 +1406,39 @@ export function initBattle(server, deps) {
       if (!p.sock.isBot && p.sock.matchId === match.id) p.sock.matchId = null;
     }
     saveDb();
-    if (match.tourney) tourneyMatchEnd(match);
+    // 勝者は上で決めてある（result と食い違わせない）。
+    if (match.tourney) tourneyMatchEnd(match, tourneyWinIdx);
   }
 
   // -------------------------------------------------------------------------
   // Matchmaking queues
   // -------------------------------------------------------------------------
+
+  // メンテナンスに切り替わった瞬間に居合わせた人を、黙って「棄権」にしない。
+  // 対戦中のクライアントは 700〜900ms ごとに state を送るので、管理者が
+  // メンテを ON にした次の1秒で全員が gateSocket に踏まれて ws.close() され、
+  // close ハンドラが p.forfeited = true → endMatch(match,'forfeit') を走らせて
+  // いた。本人の落ち度はゼロなのに Elo マイナスと pvpLosses が確定し、相手には
+  // 不戦勝が付く。サーバー停止（reason:'shutdown'）はわざわざ引き分けにして
+  // 記録を守っているのに、メンテ切替だけこの配慮が抜けていた。
+  // 切る前に shutdown と同じ経路を通し、記録と報酬を正しく締める。
+  function endForMaintenance(ws) {
+    const m = ws.matchId ? matches.get(ws.matchId) : null;
+    // 'shutdown' は winTeam を必ず引き分けにする（1件の失敗で切断処理を止めない）
+    if (m && !m.ended) { try { endMatch(m, 'shutdown'); } catch { /* ignore */ } }
+    if (ws.royaleId) {
+      const r = royales.get(ws.royaleId);
+      if (r && !r.ended) {
+        const e = r.entrants.find(x => x.ws === ws);
+        // ロイヤルは「その時点で立っていた順位」で確定（endAllForShutdown と同じ）
+        if (e && e.alive) {
+          const ranked = royaleRanked(r);
+          try { endRoyaleFor(e, r, ranked.length, ranked); } catch { /* ignore */ }
+        }
+      }
+      ws.royaleId = null;
+    }
+  }
 
   // Re-checked on every inbound message, not just 'hello': a client that never
   // says hello used to slip past the ban and maintenance checks entirely, and
@@ -1325,6 +1453,7 @@ export function initBattle(server, deps) {
       return false;
     }
     if (deps.isMaintenance && deps.isMaintenance() && (!u || u.role !== 'admin')) {
+      endForMaintenance(ws);
       send(ws, { type: 'error', error: '🛠 メンテナンス中です。しばらくお待ちください' });
       ws.close();
       return false;
@@ -1665,9 +1794,10 @@ export function initBattle(server, deps) {
     if (t.pending === 0) finishTourneyRound(t);
   }
 
-  function tourneyMatchEnd(match) {
-    const t = tourneys.get(match.tourney.id);
-    if (!t || t.ended) return;
+  // ブラケットの勝者を決める。同点でも必ず片方を返す（勝ち上がりが止まると
+  // 大会が進まないため）。endMatch が result を作る「前」にこれを呼ぶので、
+  // 判定は endMatch と共有できるよう関数に切り出してある。
+  function tourneyWinnerIdx(match) {
     const ts = teamScores(match);
     let winIdx = ts[0] > ts[1] ? 0 : ts[1] > ts[0] ? 1 : null;
     if (match.players[0].forfeited && !match.players[1].forfeited) winIdx = 1;
@@ -1677,6 +1807,15 @@ export function initBattle(server, deps) {
       const aHuman = !match.players[0].sock.isBot, bHuman = !match.players[1].sock.isBot;
       winIdx = aHuman && !bHuman ? 0 : bHuman && !aHuman ? 1 : (Math.random() < 0.5 ? 0 : 1);
     }
+    return winIdx;
+  }
+
+  // winIdx は endMatch が先に決めたもの。コイン投げをここでもう一度やると
+  // 本人に送った result と逆の側が勝ち上がりかねないので、必ず受け取る。
+  function tourneyMatchEnd(match, winIdx) {
+    const t = tourneys.get(match.tourney.id);
+    if (!t || t.ended) return;
+    if (winIdx == null) winIdx = tourneyWinnerIdx(match);
     const loser = match.players[1 - winIdx].sock;
     if (!loser.isBot) loser.tourneyId = null;
     t.results[match.tourney.pair] = match.players[winIdx].sock;
@@ -2300,7 +2439,10 @@ export function initBattle(server, deps) {
                 const cap = Math.floor(secs * 500);
                 const claimed = Math.min(1_000_000, Math.floor(Number(msg.score) || 0));
                 e.score = Math.max(e.score, Math.min(claimed, cap));
-                e.lines = Math.max(e.lines, Math.floor(Number(msg.lines) || 0));
+                // lines も時間比例で頭打ちにする（下の royale_attack の
+                // 攻撃バジェットがこの値を元にするので、素通しだと
+                // 「1ラインも消さずに最大威力のお邪魔を撃ち続ける」が通る）
+                e.lines = Math.max(e.lines, Math.min(Math.floor(Number(msg.lines) || 0), linesCap(r.startedAt)));
                 e.combo = Math.max(e.combo, Math.floor(Number(msg.combo) || 0));
                 e.pieces = Math.max(e.pieces || 0, Math.min(20000, Math.floor(Number(msg.pieces) || 0)));
                 if (Array.isArray(msg.grid)) e.grid = sanitizeGrid(msg.grid);
@@ -2322,7 +2464,11 @@ export function initBattle(server, deps) {
           // time the match has actually run, so a single forged frame can't
           // dictate the winner. Monotonic — scores only ever climb.
           me.score = Math.max(me.score, Math.min(matchScoreCap(match), Math.min(1_000_000, Math.floor(Number(msg.score) || 0))));
-          me.lines = Math.max(me.lines, Math.floor(Number(msg.lines) || 0));
+          // ライン数にも同じ時間比例の頭打ちを入れる。ここが素通しだったせいで、
+          // 下の 'attack' の「申告済み累計ラインを超えた攻撃は捏造」という
+          // ガードが、同じクライアントの自己申告と比べているだけの循環になり
+          // 実効を失っていた（lines:999999 を1回送れば撃ち放題だった）。
+          me.lines = Math.max(me.lines, Math.min(Math.floor(Number(msg.lines) || 0), linesCap(match.startedAt)));
           me.maxCombo = Math.max(me.maxCombo, Math.floor(Number(msg.combo) || 0));
           // Online modes reported 0 pieces placed, which froze three missions
           // and the matching achievements for anyone who mostly plays online.
@@ -2439,11 +2585,32 @@ export function initBattle(server, deps) {
           if (!r || r.ended) return;
           const e = r.entrants.find(x => x.ws === ws);
           if (!e || !e.alive) return;
+          // カウントダウン中は誰もピースを置けない＝攻撃も出ないはず。
+          // 1v1 の 'attack' には同じ判定があるのに、ここだけ抜けていた。
+          if (Date.now() - r.startedAt < COUNTDOWN * 1000) return;
           if (!sockRate(ws, 'royaleAtkTimes', 12, 5000)) return;
           const lines = Math.max(0, Math.min(4, Math.floor(Number(msg.lines) || 0)));
           const combo = Math.max(0, Math.min(30, Math.floor(Number(msg.combo) || 0)));
           if (lines < 2) return;
-          royaleAttack(r, e, attackCells(lines, combo));
+          // 1v1 の 'attack' と同じ突き合わせ。ここには何も無かったので、
+          // ピースを1つも置かずに { lines:4, combo:30 }（＝常に上限の9セル）を
+          // 5秒に12回送り続けるだけで、生存者を最大威力で埋め続けられた。
+          // 突き合わせ先の e.lines は 'state' 側で時間比例に頭打ちしてあるので、
+          // これは自己申告との循環ではなく実効のあるバジェットになる。
+          // 正規クライアントは onRoyalePlace で pushState → royale_attack の
+          // 順に送るので、ライン数は常に先着している。
+          e.atkLinesUsed = e.atkLinesUsed || 0;
+          if (e.atkLinesUsed + lines > e.lines) return;
+          const rCells = attackCells(lines, combo);
+          if (!rCells) return;
+          // 1v1 と同じ威力バジェット。ロイヤルのレート制限は 12発/5秒＝2.4発/秒 と
+          // さらに緩く、lines:2（消費2・威力5セル）を選べば消費 4.8ライン/秒 で
+          // 上限5に届かないまま毎秒12セルを撃てた。ライン申告だけでは塞がらない。
+          e.atkCells = e.atkCells || 0;
+          if (e.atkCells + rCells > atkCellsCap(r.startedAt)) return;
+          e.atkLinesUsed += lines;
+          e.atkCells += rCells;
+          royaleAttack(r, e, rCells);
           return;
         }
         case 'attack': {
@@ -2457,9 +2624,18 @@ export function initBattle(server, deps) {
           // クライアントは pushState → attack の順で送るので lines は常に先着している）
           me.atkLinesUsed = me.atkLinesUsed || 0;
           if (me.atkLinesUsed + aLines > me.lines) return;
-          me.atkLinesUsed += aLines;
           const cells = attackCells(aLines, aCombo);
           if (!cells) return;
+          // 威力そのもののバジェット（atkCellsCap の長いコメント参照）。
+          // ライン申告の突き合わせは lines:4 経路だと消費 4.8ライン/秒 <上限5 で
+          // 一度も効かないため、ここが実効のある唯一の歯止めになる。
+          me.atkCells = me.atkCells || 0;
+          if (me.atkCells + cells > atkCellsCap(match.startedAt)) return;
+          // 消費は「実際に撃てると決まってから」まとめて引く。以前は
+          // atkLinesUsed だけ先に引いていたので、威力0（lines<2）で弾かれた
+          // 分まで正直なプレイヤーのライン残高が減っていた。
+          me.atkLinesUsed += aLines;
+          me.atkCells += cells;
           for (const p of match.players) {
             if (p.slot === me.slot || p.team === me.team) continue;
             deliverAttack(match, me.slot, p, cells);
@@ -2524,7 +2700,14 @@ export function initBattle(server, deps) {
           break;
         }
         case 'create_room': {
-          if (ws.matchId) return;
+          // matchId しか見ていなかった。大会のラウンド間（matchId は null に
+          // 戻るが tourneyId は残る 7秒間）やロイヤル在籍中でも部屋を作れて、
+          // そのあと次ラウンドの createMatch が走ると席に居たまま部屋から
+          // 引きはがされ、誰も居ないのに消えないゴースト部屋が残っていた。
+          // rematch には同じガードが後付けしてある（同じ障害）。
+          // roomCode は入れない — 部屋を作り直す／別の部屋へ移るのは正規の
+          // 導線で、直下の leaveRoom がその面倒を見ている。
+          if (ws.matchId || ws.tourneyId || ws.royaleId || ws.zeroId) return;
           leaveQueues(ws);
           leaveRoom(ws);
           const code = makeCode();
@@ -2534,7 +2717,9 @@ export function initBattle(server, deps) {
           break;
         }
         case 'join_room': {
-          if (ws.matchId) return;
+          // create_room と同じ理由（大会/ロイヤル/断罪の在籍中に入ると
+          // 次の createMatch でゴースト部屋になる）。roomCode は同上で除く。
+          if (ws.matchId || ws.tourneyId || ws.royaleId || ws.zeroId) return;
           const code = String(msg.code || '').trim().toUpperCase();
           const room = rooms.get(code);
           if (!room) { send(ws, { type: 'room_error', error: 'ルームが見つかりません' }); return; }
@@ -2570,7 +2755,16 @@ export function initBattle(server, deps) {
             send(ws, { type: 'error', error: '🔇 管理者によりチャットが制限されています' });
             return;
           }
-          if (!sockRate(ws, 'chatTimes', 5, 10000)) {
+          // 連投制限をアカウント（未ログインはIP）単位でも数える。sockRate は
+          // カウンタを ws のプロパティに持つので、1アカウント6本・1IP12本 の
+          // 接続上限ぶんだけ持ち分が増え、実効 30通/10秒（ゲストは同一IPから
+          // 60通/10秒）が素通しだった。対戦画面に入るともう1本つながるので、
+          // 普通に遊んでいる人でも枠が2倍になっていた。ミュートはユーザー単位で
+          // 効いているのに、流量だけ抜けていたということ。
+          // ソケット単位の判定も残す — deps.rateLimit が無い組み方をされたときに
+          // 無制限になるより、従来どおりの下限が残るほうが安全。
+          if (!sockRate(ws, 'chatTimes', 5, 10_000)
+              || !userRate(`chat:${ws.user ? ws.user.id : sockIp(ws)}`, 5, 10_000)) {
             send(ws, { type: 'error', error: '連投しすぎです。少し待ってください' });
             return;
           }
@@ -2674,7 +2868,10 @@ export function initBattle(server, deps) {
             case 'party_chat':
               // 全体チャットと同じ持ち分を使う。別枠にすると、
               // パーティーに入るだけで発言できる量が倍になる。
-              if (!sockRate(ws, 'chatTimes', 5, 10_000)) { r = { error: 'すこし早すぎます' }; break; }
+              // アカウント単位の持ち分も全体チャットと共有する（ソケット単位
+              // だけだと、接続を増やすだけで「同じ持ち分」が守られない）。
+              if (!sockRate(ws, 'chatTimes', 5, 10_000)
+                  || !userRate(`chat:${uid}`, 5, 10_000)) { r = { error: 'すこし早すぎます' }; break; }
               r = party.chat(uid, msg.text);
               break;
             case 'party_play': r = party.play(uid, String(msg.mode || ''), Number(msg.seats) || 0); break;
@@ -2690,6 +2887,16 @@ export function initBattle(server, deps) {
     ws.on('close', () => {
       clients.delete(ws);
       untrackSocket(ws);
+      // フレンド一覧の「最終ログイン」。これまで user.lastSeen を書いていたのは
+      // hello の1箇所（しかも5分スロットル）だけだったので、表示していたのは
+      // 「最後に見かけた時刻」ではなく「最後に接続した時刻」だった。
+      // 3時間つなぎっぱなしで遊んだ人がたった今抜けても「⚫ オフライン 3時間前」
+      // と出る（長く遊んだ人ほど大きくずれる）。最後の1本が閉じた時点で刻む。
+      // socketsOf は readyState で絞るので、閉じたこの socket は数えない。
+      if (ws.user) {
+        const live = db.users[ws.user.id];
+        if (live && socketsOf(ws.user.id).length === 0) { live.lastSeen = Date.now(); saveDb(); }
+      }
       // パーティーの所属はここでは落とさない。1人が最大6本つなぐし、
       // 対戦用の socket は試合から抜けるたびに閉じる。落とすと点滅する。
       if (ws.user) party.socketGone(ws.user.id);
@@ -2780,7 +2987,18 @@ export function initBattle(server, deps) {
     for (const t of [...tourneys.values()]) {
       try { endTourney(t); ended++; } catch { /* 同上 */ }
     }
-    for (const q of Object.values(queues)) q.length = 0;
+    // 待ち行列だけ通知なしで捨てていた。SIGTERM 経由なら5秒後に落ちるので
+    // 目立たないが、この関数は /api/admin/prepare-update からも呼ばれ、
+    // そちらはサーバーが動き続ける。待っていた人は1秒ごとの queued が
+    // 止まるだけで「🎯 レート … あと N 秒で AIプレイヤーが参戦します」を
+    // 表示したまま凍り、何分待ってもマッチもAI補充も起きなかった。
+    for (const q of Object.values(queues)) {
+      for (const e of q) {
+        send(e.ws, { type: 'queue_cancelled' });
+        send(e.ws, { type: 'error', error: '🛠 サーバー更新のためマッチングを中止しました。少し待ってからもう一度お試しください' });
+      }
+      q.length = 0;
+    }
     return ended;
   }
 
@@ -2803,6 +3021,17 @@ export function initBattle(server, deps) {
     chatOps: {
       clear: () => {
         chatHistory.length = 0;
+        reactOwners.clear();   // 消えた発言に紐づくリアクションの所有者表も一緒に畳む
+        // ディスク側（db.meta.chatLog）も同時に空にする。以前はメモリの配列を
+        // 空にするだけで、db.meta.chatLog を書き換えるのは persistChat＝
+        // 「新しい発言があったとき」だけだった。つまり消したあと誰も発言しない
+        // うちに再起動（デプロイ、スピンダウン復帰、SIGTERM）が挟まると、
+        // hello_ok の chat: に実プレイヤーの発言が最大40件そのまま復活する。
+        // 消さなければならなかった発言ほど黙って戻ってくるので実害がある。
+        // 予約済みの persistChat は空の履歴を書くだけだが、打ち消しておく。
+        if (chatSaveTimer) { clearTimeout(chatSaveTimer); chatSaveTimer = null; }
+        db.meta.chatLog = [];
+        saveDb();
         broadcastAll({ type: 'chat_clear' });
       },
       say: (text) => postAmbient(text),

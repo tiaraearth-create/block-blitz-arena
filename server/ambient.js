@@ -10,9 +10,10 @@
 // runtime (db.meta.popScale via /api/admin/pop).
 
 import {
-  buildRoster, customResident, residentStats, onlineResidents, residentsForLevel,
-  archetype, ARCHETYPES, jstHour, jstWeekday, unit, mulberry32, strHash, JA_NAMES, EN_NAMES,
+  buildRoster, customResident, residentStats, residentDailyScore, onlineResidents, residentsForLevel,
+  archetype, ARCHETYPES, jstHour, jstWeekday, jstDay, unit, mulberry32, strHash, JA_NAMES, EN_NAMES,
 } from './residents.js';
+import { dailyGhostFactor } from './daily.js';
 import { composeLine, chooseReplies as crowdReplies, buildCtx } from './crowd.js';
 import { speakerDamp } from './chatgen.js';
 
@@ -78,6 +79,7 @@ export function setCustom(c = {}) {
   }
   if (typeof c.rosterSeed === 'string' && c.rosterSeed) custom.rosterSeed = c.rosterSeed.slice(0, 32);
   rosterCache = null;
+  nameIndex = null;     // seed / removed / extra はどれも名前の並びを変える
 }
 
 export function getCustom() {
@@ -168,7 +170,50 @@ export function activeResidents(now = Date.now()) {
 }
 
 export function residentById(id) { return getRoster().find(r => r.id === id) || null; }
-export function residentByName(name) { return getRoster().find(r => r.name === name) || null; }
+
+// 名前の予約表。getRoster() ではなく MAX_ROSTER の全600人で引く。
+//
+// getRoster() はにぎわい倍率で伸び縮みするので（×1 なら64人）、倍率が低い
+// あいだは r64..r599 の名前が「空いている」ように見え、そのままアカウントを
+// 作れてしまっていた。あとで管理者が倍率を上げると同名の住人が湧き、
+//   ・ロビーに from:「その名前」の発言が流れる（本人は何も言っていない）
+//   ・タップすると /api/profile が本物のプレイヤーを返す＝なりすまし成立
+//   ・battle.js が username 一致で王冠まで付ける（「名前は一意」の前提が崩れる）
+//   ・pickResidentBot が同名の偽レート付き対戦相手を出す
+// という状態になる。ランキングと王座は realNames 除外で自衛しているのに、
+// チャットと対戦だけ素通しだった。retiredResidents() が「倍率を下げても
+// 有効であること」を理由に MAX_ROSTER で組み直しているのと同じ理由で、
+// 名前の一意性も倍率に依存させない。
+//
+// 比較は小文字化して行う。近くの重複チェック（db.users の username や
+// index.js の addResident）はどれも toLowerCase なので、ここだけ完全一致だと
+// 「milo」で登録して住人「Milo」と並ぶ、という同じ穴が残る。
+let nameIndex = null;
+function residentNameIndex() {
+  if (nameIndex) return nameIndex;
+  const removed = new Set(custom.removed);
+  const all = buildRoster(custom.rosterSeed, MAX_ROSTER)
+    .concat(custom.extra.map((spec, i) => customResident(spec, i)));
+  nameIndex = new Map();
+  for (const r of all) if (!removed.has(r.id)) nameIndex.set(r.name.toLowerCase(), r);
+  return nameIndex;
+}
+// 指定したシードで名簿を組んだとき、渡した名前（＝実プレイヤーの username）と
+// ぶつかる住人の id。名簿を引き直す前に「その名前は人間が使っている」を調べる
+// ための口で、MAX_ROSTER 全員で引くので、にぎわい倍率に左右されない。
+// 呼び出し側が新しいシードを渡せるように、現在の custom.rosterSeed ではなく
+// 引数のシードで組む（引き直しは setCustom より前に判定する必要があるため）。
+export function clashingResidentIds(seed, takenNames) {
+  const taken = new Set([...takenNames].map(n => String(n == null ? '' : n).toLowerCase()));
+  if (!taken.size) return [];
+  return buildRoster(seed || custom.rosterSeed, MAX_ROSTER)
+    .filter(r => taken.has(r.name.toLowerCase()))
+    .map(r => r.id);
+}
+
+export function residentByName(name) {
+  return residentNameIndex().get(String(name == null ? '' : name).toLowerCase()) || null;
+}
 
 // ---------------------------------------------------------------------------
 // World context (event / poll) — injected by index.js to avoid a cycle
@@ -356,20 +401,22 @@ export function chooseReplies(text, now = Date.now(), forcedName = null) {
 // topped up with weekly-reseeded randoms when the board wants more.
 // ---------------------------------------------------------------------------
 
-const GHOST_COUNT = { score: 40, rating: 30, dungeon: 24, weekly: 18, sprint: 22 };
+const GHOST_COUNT = { score: 40, rating: 30, dungeon: 24, weekly: 18, sprint: 22, daily: 20 };
 
 // `taken`: Set of real usernames — ghosts never shadow a real player.
 // The stable weekly subset of registered residents shown on a given board.
 // Exported because the 👑 throne computation must pick its AI champions from
 // the SAME subset — a crowned resident who isn't on the visible board would
 // look like the crown vanished.
-export function boardResidents(board, weekId) {
+export function boardResidents(board, weekId, now = Date.now()) {
   const scale = effectiveScale();
   if (!scale || !custom.toggles.ghosts) return [];
   const count = Math.min(100, Math.round((GHOST_COUNT[board] || 24) * Math.min(scale, 2.5)));
+  // 📅 デイリーは「今日挑戦した住人」の顔ぶれ — 週ではなくJST日で入れ替わる。
+  const bucket = board === 'daily' ? `D${jstDay(now)}` : weekId;
   return getRoster()
     .filter(r => r.registered)
-    .map(r => ({ r, k: unit(`${r.id}-${board}`, weekId) }))
+    .map(r => ({ r, k: unit(`${r.id}-${board}`, bucket) }))
     .sort((a, b) => a.k - b.k)
     .slice(0, count)
     .map(x => x.r);
@@ -401,17 +448,26 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
     badges: st.badges,
     title: st.title,
   });
+  // 📅 デイリーの記録はその日限りなので residentStats（自己ベスト系）ではなく
+  // 日替わりの別式で出す。デイリーボードの行にだけ載せる。
+  const stampDaily = (row, r) => {
+    if (board === 'daily') row.dailyScore = residentDailyScore(r, now);
+    return row;
+  };
 
   // Residents: only the registered ones appear on rankings. Which subset
   // shows on a given board is stable per week so the boards don't churn.
-  const keyed = boardResidents(board, weekId).filter(r => !used.has(r.name));
+  const keyed = boardResidents(board, weekId, now).filter(r => !used.has(r.name));
   for (const r of keyed) {
     used.add(r.name);
-    rows.push(rowOf(r.name, residentStats(r, now, weekId)));
+    rows.push(stampDaily(rowOf(r.name, residentStats(r, now, weekId)), r));
   }
 
   // Top up with anonymous ghosts when the board wants more than the cast.
-  const rng = mulberry32(strHash(`bba-ghost-${weekId}-${board}`));
+  // 📅 デイリーはその日限りのボードなので、名無しの埋め草も週ではなくJST日で
+  // 引き直す。週シードのままだと、同じ名前が同じ点数で7日間居座ってしまう。
+  const ghostBucket = board === 'daily' ? `D${jstDay(now)}` : weekId;
+  const rng = mulberry32(strHash(`bba-ghost-${ghostBucket}-${board}`));
   for (let i = rows.length; i < count; i++) {
     const { name } = pickPersona({ used, guestChance: 0, rnd: rng });
     const skill = rng();
@@ -429,6 +485,8 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
       sprint180: Math.floor(Math.pow(mix(0.6), 2) * 46000 + 2000),
       puzzleStage: 1 + Math.floor(Math.pow(mix(0.6), 1.5) * 44),
       digDepth: 3 + Math.floor(Math.pow(mix(0.6), 1.5) * 60),
+      // 住人と同じく、名無しの埋め草にもその日のお題の係数を掛ける。
+      ...(board === 'daily' ? { dailyScore: Math.floor((Math.pow(mix(0.6), 1.5) * 9000 + 400) * dailyGhostFactor(now)) } : {}),
       badges: [],
       title: null,
     });

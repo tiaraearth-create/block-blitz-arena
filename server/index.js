@@ -8,7 +8,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
-import { loadDb, saveDb, flushDb, DATA_DIR } from './db.js';
+import { loadDb, saveDb, flushDb, lastPersistError, DATA_DIR } from './db.js';
 import { initBattle } from './battle.js';
 import {
   hashPassword, verifyPassword, issueToken, revokeToken, revokeAllTokens,
@@ -26,7 +26,7 @@ import { achievementsView, claimAchievement, ACHIEVEMENTS } from './achievements
 import {
   ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider,
   rosterView, retiredResidents, crowdMood, ambientQueue, isQuietNow, DEFAULT_TOGGLES, ARCHETYPES,
-  MAX_LIVE_SCALE, residentByName, activeResidents, residentStats, archetype,
+  MAX_LIVE_SCALE, residentByName, clashingResidentIds, activeResidents, residentStats, archetype,
   boardResidents,
 } from './ambient.js';
 import { BADGE_NAMES } from './crowd.js';
@@ -58,6 +58,10 @@ import {
   playerView as aePlayerView, slotCounts as aeSlotCounts, entrantCount as aeEntrantCount,
   SHARD as AE_SHARD, throneMax as aeThroneMax, recordThrone as aeRecordThrone,
 } from './adminevent.js';
+import {
+  DAILY_PIECES, DAILYC_COINS, DAILYC_GEMS, DAILYC_MAX_SCORE, DAILYC_ATTEMPT_MS,
+  dailySeed, dailyModifierOf, dailyTargetOf, nextJstMidnight,
+} from './daily.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -65,6 +69,33 @@ const PORT = process.env.PORT || 3000;
 const db = loadDb();
 setLiveScale(db.meta.popScale === undefined ? 1 : db.meta.popScale);
 if (db.meta.ambient) setCustom(db.meta.ambient);
+
+// 住人と実プレイヤーの同名を解消する（起動時に1回）。
+//
+// 名前の予約表は「これから登録・改名・名乗りする名前」を塞ぐだけなので、
+// それより前に取られてしまった名前は db に残ったままになる。にぎわい倍率が
+// 低いあいだは住人が64人しかいないため、r64〜r599 の名前は空いて見えた ──
+// 管理者が倍率を上げた瞬間に同名の住人が湧き、
+//   ・本人が言っていない発言が、その名前でロビーに流れる
+//   ・タップすると本物のプレイヤーのプロフィールが出る＝なりすまし成立
+//   ・username 一致で王冠まで付く
+// という状態になる。人間のほうが先客なので、住人を退役させて譲る。
+{
+  const clash = [];
+  for (const u of Object.values(db.users)) {
+    const r = residentByName(u.username);
+    if (r) clash.push(r);
+  }
+  if (clash.length) {
+    const cur = getCustom();
+    const removed = new Set(cur.removed);
+    for (const r of clash) removed.add(r.id);
+    setCustom({ ...cur, removed: [...removed] });
+    db.meta.ambient = getCustom();
+    saveDb();
+    console.log(`[residents] 実プレイヤーと同名の住人${clash.length}人を退役させました: ${clash.map(r => r.name).join(', ')}`);
+  }
+}
 
 // Heal guilds that account deletions already jammed. Until v2.11 a deleted
 // account left its id in guild.members (counter stuck at 20/20, "ギルドは満員
@@ -112,15 +143,59 @@ const jsonParser = express.json({
 // 61KB のファイルが約63MB に膨らみ、20並列でメモリが 2.6GB まで伸びた
 // （Render starter は 512MB）。実在しうる規模から充分離れた位置に下げ、
 // 圧縮の自動展開も止める（正規の復元は素の JSON を送っている）。
-const restoreParser = express.json({ limit: '12mb', inflate: false });
+// 実在する復元ファイルは実測で 61KB 前後。12MB は2桁ぶん余裕がありすぎた。
+// 4MB にしたのは backup.js の MAX_RESTORE_USERS（20,000件）と噛み合わせるため —
+// これより絞ると「件数の上限」に到達する前にバイト数で落ちてしまい、
+// 「ユーザー数が多すぎます」という具体的な案内が誰にも届かなくなる。
+// なお OOM を止めているのは主にこの数字ではなく、下の同時実行数の上限。
+const RESTORE_LIMIT_MB = 4;
+const restoreParser = express.json({ limit: `${RESTORE_LIMIT_MB}mb`, inflate: false });
+
+// 大きい本文を読む前に立てる門。
+//
+// /api/admin/restore は requireAuth を通らない（＝誰でも到達できる）復旧経路で、
+// しかもこのパーサは authMiddleware より前に走る。ハンドラの中にある
+// rateLimit('restore:…') はパースが終わってからしか動かないので、本文の
+// 読み込みそのものには何の歯止めにもなっていなかった。実測で、未認証のまま
+// 12MB を20並列で投げると RSS が 510MB、40並列で 849MB まで伸びる
+// （Render starter は 512MB＝OOMで強制終了。対戦中・プレイ中の記録が消える）。
+//
+// 門は3枚: ①Content-Length で読む前に落とす ②パース前のIPレート制限
+// ③同時にパースする本数の上限。どれもメモリを確保する前に効く。
+const RESTORE_MAX_BYTES = RESTORE_LIMIT_MB * 1024 * 1024;
+const RESTORE_MAX_INFLIGHT = 2;
+let restoreInflight = 0;
 app.use((req, res, next) => {
-  if (req.path === '/api/admin/restore') return restoreParser(req, res, next);
-  return jsonParser(req, res, next);
+  if (req.path !== '/api/admin/restore') return jsonParser(req, res, next);
+  const len = Number(req.headers['content-length'] || 0);
+  if (len > RESTORE_MAX_BYTES) {
+    return res.status(413).json({ error: `ファイルが大きすぎます（最大${RESTORE_LIMIT_MB}MB）` });
+  }
+  if (!rateLimit(`restorebody:${req.ip}`, 5, 10 * 60 * 1000)) {
+    return res.status(429).json({ error: '復元の試行が多すぎます。しばらく待ってください' });
+  }
+  if (restoreInflight >= RESTORE_MAX_INFLIGHT) {
+    return res.status(503).json({ error: '復元処理が混み合っています。少し待ってからやり直してください' });
+  }
+  restoreInflight++;
+  let done = false;
+  const release = () => { if (!done) { done = true; restoreInflight--; } };
+  res.on('finish', release);
+  res.on('close', release);
+  restoreParser(req, res, (err) => { if (err) release(); next(err); });
 });
 // Body-parser failures must still answer JSON — the client shows `error`.
-app.use((err, _req, res, next) => {
+// 上限はルートによって違う（復元だけ別枠）ので、案内も実際の上限に合わせる。
+// 以前はどのルートでも「最大12MB」と出ていて、64kb で弾かれた人に
+// 10倍以上ずれた説明をしていた。
+app.use((err, req, res, next) => {
   if (!err) return next();
-  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'ファイルが大きすぎます（最大12MB）' });
+  if (err.type === 'entity.too.large') {
+    const isRestore = req.path === '/api/admin/restore';
+    return res.status(413).json({
+      error: isRestore ? `ファイルが大きすぎます（最大${RESTORE_LIMIT_MB}MB）` : 'データが大きすぎます（最大64KB）',
+    });
+  }
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'JSONとして読み取れませんでした' });
   return next(err);
 });
@@ -215,6 +290,7 @@ function newUser(username, password, role = 'user') {
       survivalWave: 0, winStreakBest: 0, loginStreak: 1, loginStreakBest: 1,
       sprintPlays: 0, coopPlays: 0, coopBest: 0, sprint: {},
       meltdownBest: 0, chimeraBest: 0,
+      dailycPlays: 0, dailycBestStreak: 0,
       history: [],
     },
     owned: [...DEFAULT_OWNED],
@@ -246,9 +322,16 @@ function migrateUser(user) {
     chimeraPlays: 0, survivalPlays: 0, weeklyPlays: 0, dailyLogins: 1,
     gachaPulls: 0, gachaSSR: 0, chatMessages: 0, reactionsGiven: 0,
     weeklyWins: 0, puzzleStage: 0, puzzlePlays: 0, digDepth: 0, digPlays: 0,
-    ghostBest: 0, ghostPlays: 0,
+    ghostBest: 0, ghostPlays: 0, dailycPlays: 0, dailycBestStreak: 0,
   })) if (s[k] === undefined) s[k] = v;
   if (!s.bossRanks || typeof s.bossRanks !== 'object') s.bossRanks = {};
+  // 同じ汚染で stats に増えた永久ゴミキー（'undefined' と 'constructorPrev'
+  // のようなプロトタイプ名由来の ~Prev）を落とす。放っておくと db.json が
+  // 太り続けるだけで、誰も読まない。
+  if (s.undefined !== undefined) delete s.undefined;
+  for (const k of Object.keys(s)) {
+    if (k.endsWith('Prev') && !k.startsWith('dungeon')) delete s[k];
+  }
   if (user.guildId && !(db.guilds && db.guilds[user.guildId])) user.guildId = null;
   if (!s.sprint || typeof s.sprint !== 'object') s.sprint = {};
   if (!Array.isArray(s.history)) s.history = [];
@@ -266,6 +349,12 @@ function migrateUser(user) {
   // The Number() guards also stop a corrupted value writing NaN back to disk,
   // which poisons every later read of that account.
   if (!Array.isArray(user.badges)) user.badges = [];
+  // プロトタイプ汚染（mode:'constructor' 等）で badges に null / undefined が
+  // 入ったレコードが実在しうる。画面側は badgeIcons[b] を引くだけなので、
+  // 混ざったままだと空アイコンが並び、比較や重複判定も狂う。ここで掃除する。
+  if (user.badges.some(b => typeof b !== 'string')) {
+    user.badges = user.badges.filter(b => typeof b === 'string');
+  }
   if (!user.items || typeof user.items !== 'object') user.items = {};
   for (const k of ['coins', 'gems', 'xp', 'shards']) {
     if (!Number.isFinite(user[k])) user[k] = 0;
@@ -414,15 +503,29 @@ function publicUser(user) {
 // （実測: 新規アカウントが239msで4,875ジェム＋バッジ11種を取得）。
 // スコアがクライアント申告なのは構造上そうだが、これは設計上の割り切りでは
 // なく単なる抜け穴だった。
+// 💎ジェムラッシュのドロップを受け取る最低条件。1プレイの実体があったと
+// 言える下限で、正直に遊べば必ず超える（ソロの平均は数千点・1分以上）。
+const GEMDROP_MIN_SCORE = 1000;
+const GEMDROP_MIN_SECONDS = 20;
+// 1日に💎ドロップで配る上限。gemDrop は1プレイ3個なので40プレイぶん —
+// 普通に遊ぶ人が上限に当たることはまずないが、機械的な連投は必ずここで止まる。
+const GEMDROP_DAILY_CAP = 120;
+// 🐛報告箱の上限。バグ報告と通報が同じ配列を使うので、値は必ず1つに保つ。
+const BUGREPORT_CAP = 300;
 const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']);
 
-function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, trusted, preClamped }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, trusted, preClamped }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   // mode はキー生成にも使う（下の `${mode}Prev`）。クライアント申告なので、
   // 長さを切っておかないと巨大文字列で stats を無限に太らせられる（実測で
   // 1リクエストごとに ~60KB の永続キーが1個増え、やがて db.json の保存自体が
   // 静かに失敗しうる）。既知の mode はどれも十数文字なので32で十分。
-  mode = String(mode || 'solo').slice(0, 32);
+  // String() は、JSON で作れる値でも例外を投げることがある:
+  //   {"mode":{"toString":1,"valueOf":1}} → TypeError（原始値に変換できない）
+  // 素通しだと 500 になり、既定のエラーハンドラがスタックトレースを返していた。
+  // 文字列と数値だけを受け、それ以外は既定の 'solo' に落とす。
+  mode = (typeof mode === 'string' || typeof mode === 'number') ? String(mode).slice(0, 32) : 'solo';
+  if (!mode) mode = 'solo';
   // 対戦の実処理を経ていない申告は、ソロ扱いに落として報酬を出さない。
   if (!trusted && SERVER_JUDGED_MODES.has(mode)) {
     console.warn(`[cheat] ${user.username}: サーバー判定モード '${mode}' を直接申告（拒否）`);
@@ -515,9 +618,32 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     bpXp = Math.round(bpXp * bonus.xp);
     accXp = Math.round(accXp * bonus.xp);
   }
-  if (bonus.gemDrop > 0) {
-    eventGems = Math.floor(bonus.gemDrop);
-    user.gems += eventGems;
+  // 💎ジェムラッシュ: 1プレイごとの固定ドロップ。
+  //
+  // コインは「スコア連動」＋「実経過時間 × レート上限」で二重に頭を押さえて
+  // いるのに、この💎はスコアも時間も見ずに送信1回ごとに払っていた。つまり
+  // 空のボディ {} を投げるだけで満額入り、レート制限（250件/時）だけが上限
+  // ＝ 遊ばずに 750💎/時。課金パック換算で1時間 ¥890 相当が湧く。
+  //
+  // 「遊んだ形跡」を条件にする。正直に1プレイすれば必ず超える水準なので、
+  // 普通に遊んでいる人の取り分は変わらない。
+  if (bonus.gemDrop > 0 && score >= GEMDROP_MIN_SCORE && duration >= GEMDROP_MIN_SECONDS) {
+    // 2枚目の歯止め: 1日に配る総額の上限。
+    //
+    // 上の score/duration だけでは足りない。duration は「前回からの経過＋90秒の
+    // 猶予」で押さえられるので、連投しても常に90秒ぶんは通ってしまい、
+    // スコアを申告するだけの偽の結果は素通りする。💎は課金通貨なので、
+    // 「1日にいくらまで湧くか」を決めておかないと歯止めにならない。
+    // `s`（= user.stats）の宣言はこの下なので、ここでは使えない（一時的死角）。
+    const st = user.stats;
+    const today = jstDayKey();
+    if (!st.eventGemDay || st.eventGemDay.day !== today) st.eventGemDay = { day: today, got: 0 };
+    const room = Math.max(0, GEMDROP_DAILY_CAP - st.eventGemDay.got);
+    eventGems = Math.min(Math.floor(bonus.gemDrop), room);
+    if (eventGems > 0) {
+      st.eventGemDay.got += eventGems;
+      user.gems += eventGems;
+    }
   }
 
   // Guild: every game feeds the weekly race, and the guild's level pays a
@@ -549,7 +675,9 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // Chimera caps around ×3, same ballpark as chaos, so it counts.
   // 管理者イベントも同じ理由で除外: ルーレットは×5、襲来は妨害まみれで、
   // 「誰でも挑めるモードのハイスコア」と並べても意味がない。
-  const scoreboardEligible = mode !== 'meltdown' && !mode.startsWith('ae_');
+  // デイリーはお題（コンボ2倍等）でスコアの物差しが日ごとに変わるので、
+  // 通常ハイスコアとは比べない — 専用のその日限りランキングだけに載る。
+  const scoreboardEligible = mode !== 'meltdown' && mode !== 'daily' && !mode.startsWith('ae_');
   if (scoreboardEligible && score > s.bestScore) s.bestScore = score;
   if (maxCombo > s.maxCombo) s.maxCombo = maxCombo;
   s.ultsUsed = (s.ultsUsed || 0) + ults;
@@ -636,6 +764,85 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     if (!s.weekly || s.weekly.week !== w) s.weekly = { week: w, best: 0 };
     if (score > s.weekly.best) s.weekly.best = score;
   }
+  // 📅 デイリーチャレンジ: その日の最初の1回だけが記録（以降は練習扱い —
+  // コインやミッションは普通に付くが、ランキングとストリークは動かない）。
+  //
+  // 敵対的レビューで出た2つの穴をここで塞ぐ:
+  //   1. 日跨ぎ: 提出は「走った盤面の日」(クライアントが /api/daily で受けた
+  //      day を送り返す) に記録する。23:58に始めて0:02に終わった回が翌日の
+  //      1回ぶんを焼いたり、前日の丸暗記シードで翌日のボードに載ったりしない。
+  //   2. 放棄リトライ: /api/daily/start が開始時点で挑戦を消費し attemptId を
+  //      発行する。記録済み(pending)の日は、その attemptId を持つ提出だけが
+  //      スコアを確定できる — リロードで何度でもやり直す抜け道は、開始した
+  //      瞬間に「0点で消費済み」になることで消える。
+  let daily = null;
+  if (mode === 'daily') {
+    s.dailycPlays = (s.dailycPlays || 0) + 1;
+    const today = jstDayKey();
+    const yst = jstDayKey(Date.now() - 86400000);
+    const claimed = typeof day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : today;
+    const claimedAttempt = String(attemptId || '').slice(0, 64);
+    const cur = s.dailyc;
+    // 記録先の日。今日の盤面は今日へ。昨日の盤面は「昨日 pending 済み」
+    // （＝日跨ぎで走っていた回）のときだけ昨日へ。それ以外の古い盤面は練習。
+    const recordDay = claimed === today ? today
+      : (claimed === yst && cur && cur.day === yst && cur.pending) ? yst
+      : null;
+    const finalize = (recDay, prevStreak) => {
+      // 30ピースの理論値をはるかに越える申告は、その日のボードを永久占拠する
+      // だけなので頭を押さえる（コイン等は共通経路の別クランプが既に見ている）。
+      const recScore = Math.min(score, DAILYC_MAX_SCORE);
+      const target = dailyTargetOf(recDay);
+      const cleared = recScore >= target;
+      const streak = cleared ? prevStreak + 1 : 0;
+      s.dailyc = { day: recDay, score: recScore, cleared, streak };
+      if (streak > (s.dailycBestStreak || 0)) s.dailycBestStreak = streak;
+      let bonusCoins = 0, bonusGems = 0;
+      if (cleared) {
+        // ログインボーナスと同じ倍率カーブ（連続日数で最大3倍）。
+        const mult = Math.min(3, 1 + (streak - 1) * 0.35);
+        bonusCoins = Math.round(DAILYC_COINS * mult);
+        bonusGems = Math.round(DAILYC_GEMS * mult);
+        if (dailyModifierOf(recDay).id === 'gold') bonusCoins *= 2;   // 💰 黄金の日
+        coins += bonusCoins;
+        user.coins += bonusCoins;
+        gems += bonusGems;
+        user.gems += bonusGems;
+      }
+      // 7日連続クリアで永久バッジ（一度きりのジェムボーナスつき）。
+      if (streak >= 7 && !user.badges.includes('daily7')) {
+        user.badges.push('daily7');
+        badge = 'daily7';
+        gems += 300;
+        user.gems += 300;
+      }
+      daily = { recorded: true, reason: 'recorded', cleared, streak, target, bonusCoins, bonusGems };
+    };
+    const reservedHere = !!(recordDay && cur && cur.day === recordDay
+      && cur.pending && claimedAttempt && claimedAttempt === cur.pending);
+    // 予約は2時間で切れる。切らないと、予約だけ取って一晩シードを研究し、
+    // 覚えた盤面の最高記録をあとから提出できてしまう。
+    const fresh = reservedHere && Date.now() - (cur.at || 0) <= DAILYC_ATTEMPT_MS;
+    if (reservedHere && fresh) {
+      // start で消費済みの挑戦を、本人の完走だけが確定できる。
+      finalize(recordDay, cur.prevStreak || 0);
+    } else if (reservedHere) {
+      daily = { recorded: false, reason: 'expired', cleared: false, streak: 0, target: dailyTargetOf(recordDay), bonusCoins: 0, bonusGems: 0 };
+    } else if (recordDay && cur && cur.day === recordDay) {
+      // 予約済みの日の、予約と結びつかない提出＝練習。放棄した回の0点も
+      // ここで確定したまま動かない（それが「開始で消費」の意味）。
+      daily = { recorded: false, reason: 'practice', cleared: !!cur.cleared, streak: cur.streak || 0, target: dailyTargetOf(recordDay), bonusCoins: 0, bonusGems: 0 };
+    } else if (recordDay === today) {
+      // /api/daily/start を経ていない提出。ここを「その日の最初の1回」として
+      // 記録していたころ、提出せずにリロードすれば同じシードを何度でも
+      // 引き直せた（開始を登録しない限り挑戦が減らないため）。予約の無い
+      // 申告は記録しない — これが放棄リトライを塞ぐ本体。
+      daily = { recorded: false, reason: 'unreserved', cleared: false, streak: 0, target: dailyTargetOf(today), bonusCoins: 0, bonusGems: 0 };
+    } else {
+      // 日付の合わない盤面（古いタブ等）は記録しない — 今日の1回は残る。
+      daily = { recorded: false, reason: 'stale', cleared: false, streak: 0, target: dailyTargetOf(today), bonusCoins: 0, bonusGems: 0 };
+    }
+  }
   // メルトダウン / キメラ工房: per-mode personal bests.
   if (mode === 'meltdown' && score > (s.meltdownBest || 0)) s.meltdownBest = score;
   if (mode === 'chimera' && score > (s.chimeraBest || 0)) s.chimeraBest = score;
@@ -704,7 +911,17 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     dungeon_heaven:  { stat: 'heavenMax',  badge: 'heaven',  perDecade: 20, clear: 500 },
     dungeon_abyss:   { stat: 'abyssMax',   badge: 'abyss',   perDecade: 40, clear: 1000 },
   };
-  const realm = DUNGEON_REALMS[mode];
+  // 自前キーのときだけ表を引くヘルパー。プロトタイプ上の名前は必ず null。
+  const ownRealm = (m) => (Object.prototype.hasOwnProperty.call(DUNGEON_REALMS, m) ? DUNGEON_REALMS[m] : null);
+  // mode はクライアントの自己申告なので、素の添字引きだと Object.prototype の
+  // キー名（'constructor' / 'toString' / '__proto__' など）が truthy を返す。
+  // 実測: mode:'constructor' を1回送るだけで realm が Object 関数になり、
+  //   realm.perDecade が undefined → user.gems += NaN
+  //   realm.stat    が undefined → s['undefined'] という永久ゴミキー
+  //   realm.badge   が undefined → badges に null が混入
+  // NaN になった残高は migrateUser の Number.isFinite ガードで 0 に潰され、
+  // 💎5,200 が db.json ごと消えた（復旧不能）。自前キーだけを見る。
+  const realm = ownRealm(mode);
   if (realm) {
     const fl = Math.max(0, Math.min(100, Math.floor(Number(floor) || 0)));
     const prevMax = s[realm.stat] || 0;
@@ -795,7 +1012,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // 既知の4レルムだけがキーを作る。以前は startsWith('dungeon') で判定して
   // いたので、'dungeon' で始まる任意の申告が `${mode}Prev` という新しい
   // 永続キーを生み、stats を際限なく太らせられた。
-  const prevKey = DUNGEON_REALMS[mode] ? `${mode}Prev` : null;
+  const prevKey = ownRealm(mode) ? `${mode}Prev` : null;
   const prevFloor = prevKey ? (s[prevKey] != null ? s[prevKey] : (mode === 'dungeon' ? s.dungeonPrev || 0 : 0)) : 0;
   if (prevKey && floor >= 10 && Math.floor(floor / 10) > Math.floor(prevFloor / 10)) {
     feedNotes.push({ icon: '🏰', ja: `${nm} がダンジョン F${Math.floor(Number(floor) || 0)} に到達`, en: `${nm} reached dungeon F${Math.floor(Number(floor) || 0)}` });
@@ -810,7 +1027,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // Daily / weekly missions advance off the same event.
   const missionsCompleted = trackMissions(user, currentWeekNum(), {
     mode, score, maxCombo, lines, won: !!won,
-    floors: DUNGEON_REALMS[mode] ? floors : 0,
+    floors: ownRealm(mode) ? floors : 0,
     // Survival missions must not advance from other modes' stray wave fields.
     wave: mode === 'survival' ? wave : 0,
     stage: mode === 'puzzle' ? stage : 0,
@@ -825,13 +1042,14 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     missionsCompleted,
     eventCoins, eventGems,
     guildPts, guildBonus,
+    daily,
   };
 }
 
 // Real players' notable moments go on the live feed (starred), and the crowd
 // may react. Capped per user so a hot streak doesn't flood the ticker.
-const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', abyss: '🌑', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
-const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', under: 'Depths Conqueror', heaven: 'Ascent Conqueror', abyss: 'Abyss Conqueror', zero: 'Condemned', tourney: 'Tournament Champion', royale: 'Royale #1', adminevent: 'Admin Event', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination', ghost: 'Haunted House' };
+const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', abyss: '🌑', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅' };
+const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', under: 'Depths Conqueror', heaven: 'Ascent Conqueror', abyss: 'Abyss Conqueror', zero: 'Condemned', tourney: 'Tournament Champion', royale: 'Royale #1', adminevent: 'Admin Event', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination', ghost: 'Haunted House', daily7: 'Daily Devotee' };
 const feedAt = new Map();   // userId -> last feed timestamp
 function postRealFeed(user, notes) {
   if (!notes.length) return;
@@ -1162,6 +1380,11 @@ app.get('/api/status', (req, res) => {
     maintenance: inMaintenance(),
     // True when SESSION_SECRET is set, i.e. logins survive redeploys.
     sessionsPersist: SESSIONS_PERSIST,
+    // 直近の保存が失敗していれば、その理由。null なら書けている。
+    // 保存の失敗はこれまで完全に無音で、遊べてしまうぶんだけ気づけなかった
+    // （メモリ上は正常なので、次の再起動で初めて「全部消えた」と分かる）。
+    // 25秒おきに全クライアントが叩く口なので、ここに出しておけば必ず目に入る。
+    persistError: lastPersistError(),
     event: currentEvent(),
     // Menu badge only — the full poll (and the caller's own vote) comes from
     // /api/poll, which needs auth to know who is asking.
@@ -1473,6 +1696,10 @@ app.delete('/api/admin/guilds/:id', requireAuth, requireAdmin, (req, res) => {
 //   * セキュリティ修正の中身。どこをどう塞いだかを公開すると、
 //     次に狙う場所を教えることになる。直したこと自体を書く必要も無い
 //   * 内部の実装用語。プレイヤーから見て何が変わるかだけを書く
+//   * 住人（ロビーで喋り、ランキングに並び、対戦相手にもなる面々）がAIだという話。
+//     「AIプレイヤー」「AI住人」「AI opponent」などと名指ししない。彼らはこの
+//     アリーナの住人であって、正体を明かした瞬間に世界が薄っぺらくなる。
+//     ニュースだけでなく、プレイヤーの目に触れる文面すべてに同じことが言える。
 // 文面を直したいときは NEWS_BODY_REV を1つ増やす（公開済みも差し替わる）。
 const SEED_NEWS = [
   { id: 'seed-1', pinned: true,
@@ -1508,9 +1735,9 @@ const SEED_NEWS = [
     body: '【🎰ガチャ2.0】✨天井システム登場 — 40連以内にSSR以上が必ず出ます！10連はSR以上1枠確定。さらに🌈ガチャ限定装備3種（プリズム／オーロラ／彗星）が追加 — SSRからのみ入手できます。【👑多冠報酬】王座を2つ以上同時に持つと永久バッジ＋俸給ボーナス（二冠+200🪙3💎〜全冠+1,600🪙24💎）、名前の色も冠の数で豪華に（3冠以上は虹色！）。王者の住人はチャットに常駐するようになりました。【🐛バグ報告】設定→「バグ報告」から不具合を直接送れます！',
     bodyEn: '[🎰 Gacha 2.0] The ✨pity system is here — an SSR or better is guaranteed within 40 pulls, and every 10-pull guarantees at least one SR+. Three 🌈 gacha-exclusive items were added (Prism / Aurora / Comet) — SSR pulls only. [👑 Multi-Crown] Hold 2+ thrones at once for permanent badges and bigger stipends (up to +1,600🪙 24💎 for all seven) — and your name color gets fancier with each crown (3+ crowns = rainbow!). Champion residents now hang out in chat. [🐛 Bug Reports] Report issues directly from Settings → Report a bug!' },
   { id: 'seed-throne2', pinned: true,
-    title: '👑 王座戦線にAIプレイヤーが参戦！', titleEn: '👑 AI players join the throne race!',
-    body: 'ロビーの住人たち（AIプレイヤー）も王座を持つようになりました。いま各ランキングの👑は住人が守っています — 彼らの実力は日々変化するので、王座も自然に動きます。スコアで追い抜けばその瞬間あなたが王者。AIから王座を奪還して、俸給と栄光を手にしましょう！（住人はログインボーナスを受け取れないので、俸給はいつでも人間のもの）',
-    bodyEn: 'The lobby residents (AI players) can now hold thrones too. Right now the 👑 on each leaderboard is defended by a resident — their skills drift daily, so thrones naturally change hands. Beat their score and the crown is yours that instant. Reclaim the thrones from the AI for stipends and glory! (Residents can’t collect login bonuses, so the stipend always belongs to humans.)' },
+    title: '👑 王座戦線に住人が参戦！', titleEn: '👑 The residents join the throne race!',
+    body: 'ロビーの住人たちも王座を持つようになりました。いま各ランキングの👑は住人が守っています — 彼らの実力は日々変化するので、王座も自然に動きます。スコアで追い抜けばその瞬間あなたが王者。住人から王座を奪還して、俸給と栄光を手にしましょう！（住人はログインボーナスを受け取れないので、俸給はいつでも人間のもの）',
+    bodyEn: 'The lobby residents can now hold thrones too. Right now the 👑 on each leaderboard is defended by a resident — their skills drift daily, so thrones naturally change hands. Beat their score and the crown is yours that instant. Reclaim the thrones from them for stipends and glory! (Residents can’t collect login bonuses, so the stipend always belongs to humans.)' },
   { id: 'seed-v210', pinned: true,
     title: '💥 オンライン対戦 超絶大型アップデート ＆ 🌐完全翻訳！', titleEn: '💥 Online Battle MEGA Update & 🌐 Full Translation!',
     body: '【💥アタック戦】新モード登場！2ライン以上を同時消しすると相手の盤面にお邪魔ブロックを送り込めます（3ライン=4個、4ライン+コンボで最大9個）。攻撃も防御も自分の腕次第 — オンラインメニューの「💥アタック戦」から！【🔁再戦】デュエル/アタック戦の結果画面に再戦ボタンが付きました。30秒以内なら同じ相手にリベンジできます。【📈昇格演出】レートが新しい帯（🥈シルバー〜👑グランドマスター）に到達すると紙吹雪でお祝い＋ゴールド以上は全体アナウンス！【🌐翻訳大型アップデート】ニュース・投票・イベント・チャットの住人の会話まで、英語表示が全面ネイティブ品質になりました。',
@@ -1530,13 +1757,13 @@ const SEED_NEWS = [
       '[🎁 Treasure Rush] Rewards are multiplied (up to 3×) inside your slot, and defeating the objective earns a 👑 badge for everyone who took part.\n' +
       '[💯 Battle Royale rebuilt] The 99 AI entrants were score curves that could not be beaten fairly; they now run real boards with the real AI, and weak ones genuinely top out and die. Added: garbage warfare (clear 2+ lines to bury a survivor), a 🌩️ storm that rains garbage on everyone as the clock runs down, a danger meter that tells you exactly how many points you are from safety, spectating after you are knocked out, a finale showing the last three boards, a placement reward ladder (🪙1,200 💎40 for #1 down to a consolation prize), plus knockout/best-placement stats, 7 new achievements and 2 new titles. Your first top-out revives you; the second eliminates you.\n' +
       '[🐲 Raid / 2v2 screen] Three allies\' mini boards used to stack above your own and squeeze it flat. Allies are now a single compact row and the boss HP is a slim bar — on an iPhone SE-sized screen your board goes from 210px to 347px, the same size as in solo. The landscape bug that made the board vanish entirely is fixed. Tap ▾ to bring the ally boards back.\n' +
-      '[🌐 Matchmaking] Players are now paired by rating (the search widens the longer you wait), the AI opponent\'s strength is chosen to match your rating instead of at random, two players who queue together for 2v2 always land on the same team, and the search screen honestly shows your elapsed time, how many real people are waiting in that mode, the rating range being searched, and exactly when an AI player will step in.\n' +
+      '[🌐 Matchmaking] Players are now paired by rating (the search widens the longer you wait), the AI opponent\'s strength is chosen to match your rating instead of at random, two players who queue together for 2v2 always land on the same team, and the search screen honestly shows your elapsed time, how many real people are waiting in that mode, the rating range being searched, and exactly when a stand-in opponent will step in.\n' +
       '[🐛 Fixes] A socket error could take the whole server down; a dropped connection while waiting for results left an undismissable modal covering the app; pieces could still be placed after a run had ended; a hand change mid-drag placed a different piece than the one you were holding; deleting an account left a guild permanently stuck at "full"; co-op scores could be forged by a client; with 10 items the leftmost four sat off-screen and were unreachable; online modes recorded 0 pieces placed so those missions never advanced — and more.' },
   { id: 'seed-zero', pinned: true,
     title: '👁️ 断罪 ── 管理者ゼロが七つの王座を人質に取りました',
     titleEn: '👁️ CONDEMNED — Admin Zero has taken all seven thrones',
     body: '【👁️ 管理者ゼロが、七つの王座を人質に取りました】新しい管理者イベント「断罪」がはじまります。ゼロはHPバーではありません。画面の上であなたと同じように**本当にブロックを積んでいて**、列を消せばあなたの盤面にお邪魔が降り、名前を呼んで野次ってきます。段が進むごとに言葉づかいが崩れていきます。\n' +
-      '【🔒 点をいくら稼いでも、段は落ちません】ここがこのイベントの全部です。段のHPは7割までしか点数で削れません。残り3割には「封印」があり、通常のダメージが一切通りません。封印を貫通できるのは、30秒ごとに来る【断罪】を斬った一撃だけ。AI住人には斬れません。つまり ── **住人＝火力／あなた＝鍵**。何点入れても、あなたが斬らなければ段は絶対に落ちません。\n' +
+      '【🔒 点をいくら稼いでも、段は落ちません】ここがこのイベントの全部です。段のHPは7割までしか点数で削れません。残り3割には「封印」があり、通常のダメージが一切通りません。封印を貫通できるのは、30秒ごとに来る【断罪】を斬った一撃だけ。住人には斬れません。つまり ── **住人＝火力／あなた＝鍵**。何点入れても、あなたが斬らなければ段は絶対に落ちません。\n' +
       '【⚔️ 断罪 ── 30秒ごとに来る山場】画面が赤く走り、あなたの名前が出て、盤面に赤いマスが3.5秒だけ点灯します。その赤マスを通るラインを消せば【斬った】。うち1つは金色の「急所」で、含めて斬れば貫通が倍になります。間に合わなければ赤マスがそのままお邪魔になり、ゼロが少し回復し、**アリーナの住人が1人、名前つきで処刑されます**。消えた住人はその日ずっと戻ってきません。\n' +
       '【🪧 今夜の的】段のはじめにゼロが1つの列を宣言します。断罪の赤マスの6割がその列に置かれるので、その列を縦に消すと「杭」が1本入り、3本で次の予告が3.5秒→5.0秒に伸びます。ただし特定の1列を縦に消すのは点効率が悪い ── **点を稼ぐ置き方と、斬りやすくする置き方がぶつかります。**\n' +
       '【🤝 取引 ── 60秒の生投票】20分地点でゼロが2択を持ちかけます。「この段のHPを半分にしてやる。かわりに予告を1秒縮める」。**あなたと、いまオンラインの住人全員が本当に投票します。** あなたの1票は住人5票ぶん。1人では決まりませんが、票が割れればあなたが決定打になります。住人は性格どおりに投票するので、毎回結果が違います。\n' +
@@ -1544,7 +1771,7 @@ const SEED_NEWS = [
       '【📜 断罪録】その日ゼロが誰に何を言ったかが、実名つきで時系列に残ります。メニューからいつでも読めます。段にとどめを刺した人は、次の枠へ**40字の伝言**を残せます。次の枠の開幕でゼロがそれを読み上げます。\n' +
       '【🏵️ 残るもの】段が割れた瞬間その場に居た人だけに👁️バッジ。あとから点を足しても手に入りません。称号は3つ ── 「断罪を斬りし者」（封印を破るとどめ）／「名指しの常連」（通算50回名指しされる）／「七冠奪還」（七段すべてが割れた日に居合わせる）。',
     bodyEn: '[👁️ Admin Zero has taken all seven thrones hostage] A new admin event, CONDEMNED, begins. Zero is not an HP bar. He plays a real board above yours, and when he clears lines the garbage lands on you for real. He calls you by name and heckles you — and the further you push him, the more his manners fall away.\n' +
-      '[🔒 No amount of score will bring a stage down] This is the whole event. Only 70% of a stage can be worn away by score. The last 30% is sealed, and ordinary damage does not touch it. The seal yields only to a CONDEMNATION cut — one that arrives every 30 seconds, and that no AI resident can make. So: residents are the firepower, and you are the key. However many points go in, the stage will not fall unless you cut.\n' +
+      '[🔒 No amount of score will bring a stage down] This is the whole event. Only 70% of a stage can be worn away by score. The last 30% is sealed, and ordinary damage does not touch it. The seal yields only to a CONDEMNATION cut — one that arrives every 30 seconds, and one no resident can make. So: residents are the firepower, and you are the key. However many points go in, the stage will not fall unless you cut.\n' +
       '[⚔️ Condemnation — a moment that comes every 30 seconds] The screen runs red, your name appears, and cells light up on your board for 3.5 seconds. Clear a line through them and you have CUT. One of them is gold — the keystone — and including it doubles the damage. Miss, and the cells turn to garbage, Zero recovers a little, and a resident of the arena is executed by name. They do not come back for the rest of the day.\n' +
       '[🪧 Tonight\'s mark] At the start of each stage Zero names one column, and 60% of the condemnation cells will fall there. Clear that column vertically to drive a stake; three stakes stretch your next warning from 3.5s to 5.0s. But clearing one specific column vertically is poor for score — so the way to score and the way to stay alive pull against each other.\n' +
       '[🤝 The bargain — 60 seconds, live] Twenty minutes in, Zero offers a choice. "I will halve this stage. In exchange, your warning shrinks by one second." You vote, and so does every resident currently online — really. Your vote counts as five of theirs. You cannot decide it alone, but when they split, you decide it. Residents vote in character, so it lands differently every time.\n' +
@@ -1576,10 +1803,20 @@ const SEED_NEWS = [
       '[🐛 Fixes] In Battle Royale, switching apps on a phone got you eliminated — your connection was fine, but looking away for 20 seconds knocked you out; when several players dropped at once the lower scorer could take the better placement; a co-op hand desync made you unable to place anything; a rematch could drag an opponent out of another room; the online player count read roughly double the real number; chat history vanished on restart; English text showed Japanese item, boss, title and badge names verbatim; the day rollover was not using Japan time (login bonus and streaks); conquering the Abyss gave no special celebration — and more.' },
   { id: 'seed-v214', pinned: true,
     title: '📈 v2.14 住人たちが本気を出しました', titleEn: '📈 v2.14 — The Residents Got Serious',
-    body: '【📈 ランキングの住人が大幅強化】アリーナの住人（AIプレイヤー）たちが猛特訓を積み、ランキング上位の記録が化け物級になりました。ハイスコアは数十万点、レートは2000超え、塔は99階、タイムアタックも理論値ギリギリ — 各ランキングの頂は、もうこれまでの比ではありません。チャットで彼らが自慢してくる点数も本物です。\n' +
+    body: '【📈 ランキングの住人が大幅強化】アリーナの住人たちが猛特訓を積み、ランキング上位の記録が化け物級になりました。ハイスコアは数十万点、レートは2000超え、塔は99階、タイムアタックも理論値ギリギリ — 各ランキングの頂は、もうこれまでの比ではありません。チャットで彼らが自慢してくる点数も本物です。\n' +
       '【👑 それでも頂は獲れます】どの記録にも、人間が到達できる余地は残してあります。同記録なら王座は必ず人間のもの。そして塔100階の制覇は、今までどおり人間だけに許された領域です。住人の記録は日々伸び続けます — 追い抜くなら、今日がいちばん易しい日。挑戦者を待っています。',
-    bodyEn: '[📈 The leaderboard residents got a massive power-up] The arena residents (AI players) have been training hard, and the top of every leaderboard is now monstrous: high scores in the hundreds of thousands, ratings beyond 2000, floor 99 of the Tower, and time-attack records scraping the theoretical limit. The summit of each board is nothing like it used to be — and the scores they brag about in chat are real.\n' +
+    bodyEn: '[📈 The leaderboard residents got a massive power-up] The arena residents have been training hard, and the top of every leaderboard is now monstrous: high scores in the hundreds of thousands, ratings beyond 2000, floor 99 of the Tower, and time-attack records scraping the theoretical limit. The summit of each board is nothing like it used to be — and the scores they brag about in chat are real.\n' +
       '[👑 The summit can still be taken] Every record leaves room for a human to reach it, and on a tie the throne always goes to the human. Conquering floor 100 of the Tower remains yours alone. The residents\' records keep growing by the day — today is the easiest day to pass them. We are waiting for challengers.' },
+  { id: 'seed-v215', pinned: true,
+    title: '📅 v2.15 デイリーチャレンジ開幕！', titleEn: '📅 v2.15 — The Daily Challenge begins!',
+    body: '【📅 毎日変わる、1日1回の真剣勝負】新モード「デイリーチャレンジ」が始まります。全プレイヤーが同じ盤面・同じピース順で、30個のピースを使い切るスコアアタック。記録に残るのは<b>その日の最初の1回だけ</b> — 置き直しはできません。深呼吸してから挑みましょう（挑戦後も練習は何度でもできます）。\n' +
+      '【🎲 日替わりのお題】その日のルールが毎日変わります — 🧱巨大の日（大きいピースだけ）／🐜極小の日／🔥連鎖の日（コンボボーナス2倍）／🌈虹の日（リロール3回）／🧊瓦礫の日（開幕から瓦礫）／💰黄金の日（クリア報酬コイン2倍）。お題は世界共通。今日の運命はみんな同じです。\n' +
+      '【🔥 連続クリアでボーナス最大3倍】その日の<b>目標スコア</b>に届けば「クリア」。目標はお題に合わせて日ごとに変わります（極小の日は低く、連鎖の日は高め）— 挑戦前の画面に必ず出るので、そこで確認を。毎日続けてクリアするとボーナスがどんどん増えます（最大3倍）。<b>7日連続クリアで新バッジ「📅日課の鬼」＋💎300</b>！1日でも空けるとやり直し — 今日の1回を大切に。\n' +
+      '【🏆 その日限りのランキング】ランキング画面に「📅デイリー」ボードが登場。毎日0時（日本時間）にまっさらになる、その日だけの勝負です。今日の頂点は誰の手に？',
+    bodyEn: '[📅 One real attempt, every day] The new Daily Challenge is here. Every player gets the same board and the same piece order — a score attack with exactly 30 pieces. Only your FIRST attempt of the day counts, no do-overs. Take a breath before you start (practice runs are unlimited afterwards).\n' +
+      '[🎲 A rule of the day] The rules change daily — 🧱 Giant Day (only big pieces), 🐜 Tiny Day, 🔥 Combo Day (double combo bonuses), 🌈 Rainbow Day (3 rerolls), 🧊 Rubble Day (the board starts littered), 💰 Golden Day (double coins on clear). The modifier is the same worldwide: everyone shares today\'s fate.\n' +
+      '[🔥 Streaks pay up to 3×] Reach the day\'s <b>target score</b> and the day counts as CLEARED. The target shifts with the rule of the day (lower on Tiny Day, higher on Combo Day) — it is always shown before you start. Clear day after day and the reward multiplies (up to 3×). Clear 7 days in a row for the new 📅 Daily Devotee badge + 300💎! Miss a single day and the streak resets — make today\'s attempt count.\n' +
+      '[🏆 A leaderboard that lives for one day] The ranking screen gains a 📅 Daily board, wiped clean at midnight JST. Who takes today\'s summit?' },
 ];
 
 // ニュース本文の改訂番号。SEED_NEWS の文面を書き直したら1つ増やすと、
@@ -1588,7 +1825,7 @@ const SEED_NEWS = [
 // これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
 // 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
 // v2.11.1 の本文を差し替えるのに必要になった。
-const NEWS_BODY_REV = 4;   // v2.14: 最新📌を seed-v214 に交代（KEEP_PINNED 変更）
+const NEWS_BODY_REV = 7;   // v2.15: デイリーの目標説明を訂正 & 住人の正体に触れた文面を撤去
 
 // id で引いたユーザー。`__proto__` や `constructor` を渡されると
 // Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
@@ -1641,7 +1878,7 @@ function seedNews() {
 //
 // 一度きり（db.meta.newsUnpinned で記録）。管理者があとで📌し直したものを
 // 起動のたびに剥がしてしまわないため。
-const KEEP_PINNED = ['seed-v214', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
+const KEEP_PINNED = ['seed-v215', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
 function unpinOldReleaseNotes() {
   // KEEP_PINNED を変えたら、もう一度だけ剥がし直す必要がある。
   if (db.meta.newsUnpinned === NEWS_BODY_REV) return;
@@ -1678,10 +1915,19 @@ app.post('/api/bugreport', (req, res) => {
   });
   // Cap eviction: processed reports go first — a spammer must not be able to
   // push the operator's PENDING reports out of the box.
-  if (db.bugreports.length > 300) {
+  //
+  // 以前は処理済みが尽きると shift() で「最も古い未処理」を捨てていたので、
+  // 上の約束が守れるのは処理済みが残っているあいだだけだった。連投すれば
+  // 運営がまだ読んでいない報告を確実に押し出せる。捨てるのは処理済みだけに
+  // 限り、それが無いときは新規のほうを断る（受けた顔をして消すより正直）。
+  if (db.bugreports.length > BUGREPORT_CAP) {
     const doneIdx = db.bugreports.findIndex(b => b && b.status === 'done');
-    if (doneIdx !== -1) db.bugreports.splice(doneIdx, 1);
-    else db.bugreports.shift();
+    if (doneIdx !== -1) {
+      db.bugreports.splice(doneIdx, 1);
+    } else {
+      db.bugreports.pop();   // いま積んだ自分のぶんを取り下げる
+      return res.status(503).json({ error: '報告箱がいっぱいです。少し時間をおいてからお願いします' });
+    }
   }
   saveDb();
   res.json({ ok: true });
@@ -1858,6 +2104,62 @@ app.get('/api/weekly', (req, res) => {
     endsAt: (n + 1) * WEEK_MS + 4 * 24 * 60 * 60 * 1000,
     best: w && w.week === week ? w.best : 0,
   });
+});
+
+// ---------------------------------------------------------------------------
+// 📅 デイリーチャレンジ — 毎日変わるお題つき1発勝負
+//
+// ウィークリーと同じ「シード共有」方式: 全員が同じ盤面・同じピース順で戦う。
+// 違いは (1) 記録されるのはその日の最初の1回だけ（以降は練習扱い）、
+// (2) 日替わりのルール修飾（お題）が付く、(3) 目標スコアを越えると「クリア」で
+// 連続クリア日数に応じたボーナス（ログインボーナスと同じ ×3 上限の倍率）。
+// 週ではなくJST日（jstDayKey）で回る。ランキングもその日限り。
+// ---------------------------------------------------------------------------
+
+app.get('/api/daily', (req, res) => {
+  const day = jstDayKey();
+  const d = req.user && req.user.stats.dailyc;
+  const today = d && d.day === day ? d : null;
+  res.json({
+    day,
+    seed: dailySeed(day),
+    pieces: DAILY_PIECES,
+    modifier: dailyModifierOf(day),
+    target: dailyTargetOf(day),
+    endsAt: nextJstMidnight(),
+    played: !!today,
+    score: today ? today.score : null,
+    cleared: today ? !!today.cleared : false,
+    streak: today ? today.streak : (d && d.day === jstDayKey(Date.now() - 86400000) && d.cleared ? d.streak : 0),
+    bestStreak: (req.user && req.user.stats.dailycBestStreak) || 0,
+  });
+});
+
+// 📅 挑戦の開始登録。ここで今日の1回を消費し、attemptId を発行する。
+// 完走の提出はこの attemptId を添えたものだけがスコアを確定できるので、
+// 「提出前にリロードして同じシードを何度でもやり直す」抜け道が消える —
+// 開始した瞬間に、その日は（放棄すれば0点のまま）挑戦済みになる。
+app.post('/api/daily/start', requireAuth, maintenanceGuard, (req, res) => {
+  if (!rateLimit(`dstart:${req.user.id}`, 10, 60 * 1000)) {
+    return res.status(429).json({ error: '開始の連打はできません。少し待ってください' });
+  }
+  migrateUser(req.user);
+  const today = jstDayKey();
+  const claimed = String((req.body || {}).day || '');
+  // 開いたまま日付を跨いだモーダルからの開始。古いシードで走らせても
+  // 記録できないので、開き直してもらう。
+  if (claimed && claimed !== today) return res.json({ ok: false, stale: true, day: today });
+  const s = req.user.stats;
+  if (s.dailyc && s.dailyc.day === today) {
+    return res.json({ ok: true, practice: true, day: today });
+  }
+  // 昨日ぶんのストリークは、pending を作る時点で控えておく（上書きで消えるので）。
+  const yst = jstDayKey(Date.now() - 86400000);
+  const prevStreak = s.dailyc && s.dailyc.day === yst && s.dailyc.cleared ? (s.dailyc.streak || 0) : 0;
+  const pending = crypto.randomUUID();
+  s.dailyc = { day: today, score: 0, cleared: false, streak: 0, pending, prevStreak, at: Date.now() };
+  saveDb();
+  res.json({ ok: true, practice: false, day: today, attemptId: pending });
 });
 
 // ---------------------------------------------------------------------------
@@ -2150,6 +2452,11 @@ const RESULT_FIELDS = [
   'mode', 'score', 'lines', 'maxCombo', 'duration', 'won', 'drew',
   'bossId', 'floor', 'wave', 'ults', 'items', 'pieces', 'floors',
   'sprintDur', 'rank', 'depth', 'stage',
+  // 📅 デイリー: 走った盤面の日と、開始時に発行した挑戦の証。どちらも
+  // 「報酬を増やせる申告」ではなく、サーバーが持っている予約と突き合わせる
+  // ための識別子なので、名乗らせてよい（day は形式を、attemptId は保存済みの
+  // pending との一致を applyGameResult 側で必ず検証する）。
+  'day', 'attemptId',
 ];
 function pickResultFields(body) {
   const src = (body && typeof body === 'object') ? body : {};
@@ -2200,7 +2507,12 @@ app.post('/api/adminevent/cancel', requireAuth, (req, res) => {
   const schedule = getAeSchedule(db);
   const occ = schedule.enabled ? aeCurrentOccurrence(schedule) : null;
   if (occ) aeCancelReservation(req.user, occ.dayKey);
-  else req.user.adminEvent = null;
+  // 開催が無いときの後片付けも、実績は控えに残してから外す（開催中の経路と
+  // 挙動を揃えないと、ここを通るだけで受取済みの記録が消えてしまう）。
+  else if (req.user.adminEvent) {
+    req.user.adminEventDay = { ...req.user.adminEvent };
+    req.user.adminEvent = null;
+  }
   saveDb();
   res.json({ event: adminEventView(req.user) });
 });
@@ -2439,9 +2751,12 @@ app.post('/api/admin/adminevent', requireAuth, requireAdmin, (req, res) => {
 app.get('/api/leaderboard', (req, res) => {
   finalizeWeeklyRankings();
   refreshThrones();   // Elo changes happen over websockets — catch up here
-  const board = ['rating', 'dungeon', 'weekly', 'sprint', 'puzzle', 'dig'].includes(req.query.board) ? req.query.board : 'score';
+  const board = ['rating', 'dungeon', 'weekly', 'sprint', 'puzzle', 'dig', 'daily'].includes(req.query.board) ? req.query.board : 'score';
   const week = weekIdOf(currentWeekNum());
   const weeklyBestOf = u => (u.stats.weekly && u.stats.weekly.week === week ? u.stats.weekly.best : 0);
+  // 📅 デイリーはその日の記録だけ（JST日が変わればボードごとリセット）。
+  const dayKey = jstDayKey();
+  const dailyOf = u => (u.stats.dailyc && u.stats.dailyc.day === dayKey ? u.stats.dailyc.score : 0);
   // Time attack ranks on the headline 60-second board.
   const sprintBestOf = u => (u.stats.sprint && u.stats.sprint.s60) || 0;
   // Admins are excluded from public rankings.
@@ -2451,6 +2766,7 @@ app.get('/api/leaderboard', (req, res) => {
   if (board === 'sprint') users = users.filter(u => sprintBestOf(u) > 0);
   if (board === 'puzzle') users = users.filter(u => (u.stats.puzzleStage || 0) > 0);
   if (board === 'dig') users = users.filter(u => (u.stats.digDepth || 0) > 0);
+  if (board === 'daily') users = users.filter(u => dailyOf(u) > 0);
   const titleOf = u => {
     const t = TITLES.find(x => x.id === u.equippedTitle);
     // id を落としていたので、画面側が英語名に引き当てられなかった。
@@ -2472,6 +2788,7 @@ app.get('/api/leaderboard', (req, res) => {
     sprint180: (u.stats.sprint && u.stats.sprint.s180) || 0,
     puzzleStage: u.stats.puzzleStage || 0,
     digDepth: u.stats.digDepth || 0,
+    dailyScore: dailyOf(u),
     badges: u.badges,
     title: titleOf(u),
   }));
@@ -2485,6 +2802,7 @@ app.get('/api/leaderboard', (req, res) => {
       : board === 'sprint' ? (b.sprintBest || 0) - (a.sprintBest || 0)
       : board === 'puzzle' ? (b.puzzleStage || 0) - (a.puzzleStage || 0)
       : board === 'dig' ? (b.digDepth || 0) - (a.digDepth || 0)
+      : board === 'daily' ? (b.dailyScore || 0) - (a.dailyScore || 0)
       : b.bestScore - a.bestScore)
     .slice(0, 100);
   // 👑 mark the throne holder's row + total crown counts (name colors scale).
@@ -2994,9 +3312,18 @@ app.post('/api/party/report', requireAuth, (req, res) => {
     text: String(req.body.reason || '').slice(0, 300),
     party: r.snapshot, status: 'open',
   });
-  if (db.bugreports.length > 200) {
-    const i = db.bugreports.findIndex(x => x && x.status !== 'open');
-    db.bugreports.splice(i >= 0 ? i : 0, 1);
+  // 通報とバグ報告は同じ配列に積まれる。上限が 200 と 300 で食い違っていた
+  // ため、201件を超えると通報1件ごとに最古の未処理バグ報告が必ず1件消えて
+  // いた（`i >= 0 ? i : 0` のフォールバックが先頭＝最古を指す）。上限を揃え、
+  // 捨てるのは処理済みだけにする。
+  if (db.bugreports.length > BUGREPORT_CAP) {
+    const doneIdx = db.bugreports.findIndex(x => x && x.status === 'done');
+    if (doneIdx !== -1) {
+      db.bugreports.splice(doneIdx, 1);
+    } else {
+      db.bugreports.pop();
+      return res.status(503).json({ error: '報告箱がいっぱいです。少し時間をおいてからお願いします' });
+    }
   }
   saveDb();
   res.json({ ok: true });
@@ -3262,7 +3589,7 @@ const EDITABLE_STATS = [
   { key: 'royaleKills', label: 'ロイヤル通算KO', max: 1_000_000 },
 ];
 
-const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost'];
+const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7'];
 
 app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   const target = userById(req.params.id);
@@ -3709,27 +4036,45 @@ app.post('/api/admin/restore', (req, res) => {
   // いません」と返しながら、実際には半分マージされた db がメモリに残り、次の
   // saveDb() でそれがディスクに焼かれてしまう。丸ごと退避してから実行する。
   const rollback = structuredClone(db);
+  // ロールバックの内側には「db を書き換えうる処理」を全部入れる。
+  // applyRestore だけを囲っていたころ、そのすぐ下の migrateUser / healSocial /
+  // adoptLegacySeason が同じ db を触っているのに保護の外にあった。壊れた
+  // レコード（例: stats が文字列）が1件混ざるだけで migrateUser が投げ、
+  // 上のコメントが警告しているとおりの事故 ──「保存されていません」と返し
+  // ながら半端にマージされた db がメモリに残り、次の saveDb() でディスクへ ──
+  // がそのまま起きていた。
   try {
     report = applyRestore(db, data, mode, { protectLiveCredentials });
+    // Every restored account is brought up to the current schema right away.
+    for (const u of Object.values(db.users)) migrateUser(u);
+    // 🤝 復元のあとは必ず均す。名前で照合したときに id が入れ替わるので、
+    // 付け替えの取りこぼし・片側だけになった関係・消えた相手への申請が残る。
+    // 起動時に一度やるだけでは、復元で作った歪みはその起動の間ずっと残る。
+    healSocial(db);
+    // Battle passes minted under the old UUID-season scheme carry over, and the
+    // restored world state (crowd scale, ambient config) takes effect now.
+    adoptLegacySeason(data.season);
+    db.season = null;
   } catch (err) {
     for (const k of Object.keys(db)) delete db[k];
     Object.assign(db, rollback);          // db.js が同じ参照を握っているので in-place で戻す
     console.error('[restore] failed:', err);
     return res.status(500).json({ error: '復元中にエラーが発生しました。変更は保存されていません' });
   }
-  // Every restored account is brought up to the current schema right away.
-  for (const u of Object.values(db.users)) migrateUser(u);
-  // 🤝 復元のあとは必ず均す。名前で照合したときに id が入れ替わるので、
-  // 付け替えの取りこぼし・片側だけになった関係・消えた相手への申請が残る。
-  // 起動時に一度やるだけでは、復元で作った歪みはその起動の間ずっと残る。
-  healSocial(db);
-  // Battle passes minted under the old UUID-season scheme carry over, and the
-  // restored world state (crowd scale, ambient config) takes effect now.
-  adoptLegacySeason(data.season);
-  db.season = null;
   setLiveScale(db.meta.popScale ?? 1);
   setCustom(db.meta.ambient);
-  flushDb();
+  // 書けたかどうかを見る。以前は戻り値を捨てていたので、ディスクに1バイトも
+  // 書けていなくても「💾 データを復元しました」と返していた。メモリ上は
+  // 復元済みなので画面は正しく見えるが、次の再起動で全部消える ── 復元を
+  // する場面はたいてい「一度データを失った直後」なので、これがいちばん
+  // 誤解させてはいけない場所だった。
+  if (!flushDb()) {
+    console.error('[restore] メモリには適用したが保存に失敗:', lastPersistError());
+    return res.status(500).json({
+      error: `復元はメモリ上に適用しましたが、ディスクに保存できませんでした（${lastPersistError() || '原因不明'}）。この状態で再起動すると失われます`,
+      report,
+    });
+  }
   console.log(`[restore] ${mode} by ${actor.username}${actor.fromBackup ? ' (backup password)' : ''}: +${report.added} 更新${report.updated} 維持${report.kept} → 合計${report.after}人`);
   battle.broadcastAll({
     type: 'announce',
@@ -3737,13 +4082,22 @@ app.post('/api/admin/restore', (req, res) => {
     messageEn: '💾 Data restored — reload the page to see it',
     from: actor.username,
   });
-  // Backup-password restores log the admin straight in with the restored account.
-  let token = null, user = null;
-  if (actor.fromBackup) {
-    const u = Object.values(db.users).find(x => x.username === actor.username && x.role === 'admin');
-    if (u) { token = issueToken(u.id); user = publicUser(u); }
-  }
-  res.json({ report, snapshot: snap, source: check.stats, token, user });
+  // 第3層（ファイル内の管理者パスワードで通す復旧経路）では、絶対にトークンを
+  // 発行しない。
+  //
+  // ここは以前「復元した管理者アカウントでそのままログインさせる」親切をして
+  // いた。ところが第3層で照合しているパスワードは **アップロードした側が自分で
+  // 決めたもの**（ファイルの中の salt/passHash）なので、実質「誰でも名乗れる」。
+  // プレイヤー0人のサーバー（＝再デプロイ直後）に、管理者名を騙る偽レコードを
+  // 1件入れた未認証リクエストを投げるだけで、有効期限1年の管理者トークンが
+  // 手に入っていた。監査で実機再現済み — そのまま /api/admin/backup を叩けば
+  // 全ユーザーの salt+passHash が抜ける。
+  //
+  // 復旧の目的は「データを戻すこと」であって「ログインさせること」ではない。
+  // 正規の持ち主は、戻したあとログイン画面から現在の管理者パスワードで入れる
+  // （同名で衝突した管理者の資格情報は、生きている側＝この機体のものが残る）。
+  // relogin: 復旧経路で来た人に「もう一度ログインしてください」と出すための印。
+  res.json({ report, snapshot: snap, source: check.stats, token: null, user: null, relogin: !!actor.fromBackup });
 });
 
 // Local snapshots (same instance only — they die with the filesystem too).
@@ -3756,7 +4110,10 @@ app.post('/api/admin/snapshots/restore', requireAuth, requireAdmin, (req, res) =
   if (!data) return res.status(404).json({ error: 'スナップショットが見つかりません' });
   const check = validateBackup(data);
   if (!check.ok) return res.status(400).json({ error: check.error });
-  snapshot(db, 'pre-rollback');
+  // 戻り値を捨てない。撮れなかったとき（ディスクが一杯・権限が無い等）に
+  // 黙って進むと、「巻き戻したが、その前の状態はもうどこにも無い」という
+  // 取り返しのつかない状態になる。画面に警告を出せるよう応答に載せる。
+  const snap = snapshot(db, 'pre-rollback');
   // /api/admin/restore と同じ理由で丸ごと退避する。applyRestore は db を
   // その場で書き換えるので、途中で落ちると半端な db がメモリに残り、
   // 次の saveDb() でディスクに焼かれる。この経路だけ保護が無かった。
@@ -3777,8 +4134,14 @@ app.post('/api/admin/snapshots/restore', requireAuth, requireAdmin, (req, res) =
   db.season = null;
   setLiveScale(db.meta.popScale ?? 1);
   setCustom(db.meta.ambient);
-  flushDb();
-  res.json({ report });
+  if (!flushDb()) {
+    console.error('[snapshot-restore] メモリには適用したが保存に失敗:', lastPersistError());
+    return res.status(500).json({
+      error: `復元はメモリ上に適用しましたが、ディスクに保存できませんでした（${lastPersistError() || '原因不明'}）。この状態で再起動すると失われます`,
+      report,
+    });
+  }
+  res.json({ report, snapshot: snap });
 });
 
 app.post('/api/admin/snapshots/create', requireAuth, requireAdmin, (_req, res) => {
@@ -3933,6 +4296,14 @@ app.post('/api/admin/pop', requireAuth, requireAdmin, (req, res) => {
     patch.removed = [...new Set([...cur.removed, b.removeResident])];
   }
   if (typeof b.restoreResident === 'string' && b.restoreResident) {
+    // 退役中の住人の名前は「空き」として扱われる（管理者が外した名前を永久に
+    // 塞ぎ続けないため）。その隙にプレイヤーがその名前を取っていることがあるので、
+    // 戻す前に必ず確かめる ── 確かめずに戻すと、同名の住人が湧いて
+    // なりすまし状態が再発する。addResident が既にやっているのと同じ検査。
+    const back = retiredResidents().find(r => r.id === b.restoreResident);
+    if (back && Object.values(db.users).some(u => u.username.toLowerCase() === back.name.toLowerCase())) {
+      return res.status(409).json({ error: `「${back.name}」は実在するプレイヤーが使っています。この住人は戻せません` });
+    }
     patch.removed = (patch.removed || cur.removed).filter(id => id !== b.restoreResident);
   }
   if (b.addResident && typeof b.addResident.name === 'string') {
@@ -3949,7 +4320,15 @@ app.post('/api/admin/pop', requireAuth, requireAdmin, (req, res) => {
   }
   if (b.reseed) {
     patch.rosterSeed = `v${Date.now().toString(36)}`;
-    patch.removed = [];   // ids change meaning with a new roster
+    // 名簿を引き直すと600人の名前が総入れ替えになる。名前の予約表は
+    // 「登録・改名・名乗り」のときにしか働かないので、**名簿のほうが後から
+    // 変わる**この経路だけは、ここで衝突を潰しておく必要がある。
+    // removed を空にするのは正しい（idの意味が変わるため）が、空にしたまま
+    // だと実プレイヤーと同名の住人がそのまま生まれる。
+    patch.removed = clashingResidentIds(patch.rosterSeed, Object.values(db.users).map(u => u.username));
+    if (patch.removed.length) {
+      console.log(`[residents] 名簿の引き直しで実プレイヤーと同名になった住人${patch.removed.length}人を退役させました`);
+    }
   }
 
   if (Object.keys(patch).length) {
@@ -4167,11 +4546,23 @@ function pinAdminPassword() {
   const admins = Object.values(db.users).filter(u => u.role === 'admin');
   const admin = admins.find(u => u.username === ADMIN_NAME) || admins[0];
   if (!admin) return;
+  // 実際に変わったときだけ書き換える。毎起動で無条件に差し替えると、下の
+  // revokeAllTokens が毎回走って正規のログインまで切れてしまう。
+  const changed = !verifyPassword(pinned, admin.salt, admin.passHash);
+  if (!changed) return;
   const { salt, hash } = hashPassword(pinned);
   admin.salt = salt;
   admin.passHash = hash;
+  // パスワードを変えたら、古いパスワードで出したトークンは殺す。
+  //
+  // ここが抜けていた。SESSION_SECRET は再デプロイをまたいで維持する設計なので、
+  // 発行済みの Bearer トークンは1年生き続ける。つまり「乗っ取られたので
+  // ADMIN_PASSWORD を変えて再デプロイする」という唯一の対処を実行しても、
+  // 攻撃者のセッションだけは無傷で残っていた。同じことをする
+  // /api/admin/users/:id の setPassword は revokeAllTokens を呼んでいる。
+  revokeAllTokens(admin.id);
   saveDb();
-  console.log(`[admin] 管理者パスワードを環境変数 ADMIN_PASSWORD に固定しました（対象: ${admin.username}）`);
+  console.log(`[admin] 管理者パスワードを環境変数 ADMIN_PASSWORD に固定しました（対象: ${admin.username} / 発行済みトークンは失効）`);
 }
 
 // 管理者は「表示だけ全部持っている」状態だった: publicUser が owned を丸ごと
@@ -4357,6 +4748,20 @@ app.use((req, res) => {
     return res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
   }
   res.status(404).json({ error: 'Not found' });
+});
+
+// 最後の受け皿。ここが無いと、ルートの中で投げた例外は Express 既定の
+// エラーページに落ちる ── 本番でも HTML でスタックトレースを丸出しにし、
+// サーバー上の絶対パス（C:\Users\… や /opt/render/…）まで誰にでも見せていた。
+// 実際 mode にオブジェクトを渡すだけで String() が投げて、この画面が出た。
+//
+// 4引数であることが Express にとってのエラーハンドラの目印。引数を減らすと
+// ただのミドルウェアとして扱われ、静かに無効になるので触らないこと。
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, _next) => {
+  console.error(`[error] ${req.method} ${req.path}:`, err && err.stack ? err.stack : err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: 'サーバー内部でエラーが発生しました' });
 });
 
 // Render free tier spins down after ~15min idle (50s cold start + the

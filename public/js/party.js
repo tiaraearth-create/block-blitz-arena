@@ -194,7 +194,14 @@ async function openInvitePicker() {
   m.querySelector('#ivClose').onclick = closeModal;
   m.querySelectorAll('[data-inv]').forEach(b => {
     b.onclick = () => {
-      sendWs({ type: 'party_invite', userId: b.dataset.inv });
+      // 送れていないのに「送りました」と出さない（friends.js:219 と同じ）。
+      // /api/friends は HTTP なので、ws だけ落ちている窓（サーバー再起動直後や
+      // chat.js の再接続待ち）では一覧は普通に出る。そこで押すと1通も飛ばないまま
+      // ボタンだけ無効になり、相手が来ない理由が誰にも分からなくなる。
+      if (!sendWs({ type: 'party_invite', userId: b.dataset.inv })) {
+        toast(t('接続中です。少し待ってからもう一度どうぞ', 'Reconnecting — try again in a moment'), 'err', 2400);
+        return;
+      }
       b.disabled = true;
       b.textContent = t('送りました', 'Sent');
     };
@@ -252,6 +259,55 @@ function openReport() {
 }
 
 // ---------------------------------------------------------------------------
+// 割り込みモーダルの順番待ち
+//
+// showModal は必ず closeModal() から始まる（dom.js）。つまり招待が1通届いた
+// だけで、いま出ているモーダルが中身ごと消える。結果画面は軒並み
+// { dismissable: false } で出していて、閉じる口はモーダルの中のボタンだけ ──
+// しかも VS AI・ボス・ボスラッシュ・メルトダウン・パズル遺跡の quit() は
+// `if (this.ended) return;` に吸われて何もしないので、消されると
+// 「動かない盤面＋出口なし」でリロードするまで戻れなくなる。
+// （試合中はトップバーもパーティー棚の本体も CSS で消えている）
+//
+// なので、閉じられない印（data-locked）が出ているあいだは割り込まない。
+// 空いたら出す。それまでは toast で「来ていること」だけ伝える。
+// ---------------------------------------------------------------------------
+
+let waiting = [];            // { show, until } — until が 0 なら期限なし
+let waitObserver = null;
+
+function modalOpen() {
+  const root = $('#modal-root');
+  return !!(root && root.firstChild);
+}
+
+function modalLocked() {
+  const root = $('#modal-root');
+  return !!(root && root.querySelector('.modal-backdrop[data-locked]'));
+}
+
+function showLater(show, until = 0) {
+  waiting.push({ show, until });
+  if (waiting.length > 4) waiting.shift();   // 溜め込んで後から一斉に出さない
+  const root = $('#modal-root');
+  if (!root || waitObserver) return;
+  // 閉じられた瞬間に出したいので、#modal-root の出入りを見張る。
+  waitObserver = new MutationObserver(flushWaiting);
+  waitObserver.observe(root, { childList: true });
+}
+
+function flushWaiting() {
+  const now = Date.now();
+  waiting = waiting.filter(x => !x.until || x.until > now);
+  // ロック中でなくても、出ているものは潰さない ── ショップの購入確認を
+  // 勝手に消すのも結局は同じ事故なので、完全に空くまで待つ。
+  if (!waiting.length || modalOpen()) return;
+  // ここは MutationObserver のコールバックなので、投げると残りの待ち行列が
+  // まるごと出せなくなる。1件の失敗で道を塞がない。
+  try { waiting.shift().show(); } catch (err) { console.error('[party] queued modal', err); }
+}
+
+// ---------------------------------------------------------------------------
 // 外から呼ぶ口
 // ---------------------------------------------------------------------------
 
@@ -284,6 +340,9 @@ export function resetParty() {
   state = null;
   chatLog = [];
   pendingInvite = null;
+  waiting = [];
+  // 前の人あての通知ドットも消す（未ログインなら refreshFriendDot が 0 にする）。
+  import('./friends.js').then(f => f.refreshFriendDot()).catch(() => {});
   renderParty();
 }
 
@@ -299,8 +358,15 @@ export function initParty() {
     state = msg.party;
     if (state) {
       const meId = session.user ? session.user.id : null;
-      localStorage.setItem(LAST_PARTY_KEY, JSON.stringify(
-        state.members.filter(m => m.id !== meId).map(m => ({ id: m.id, username: m.username }))));
+      const others = state.members.filter(m => m.id !== meId).map(m => ({ id: m.id, username: m.username }));
+      // 自分ひとりのときは書かない。パーティーを作った直後は必ず「自分1人」の
+      // party_state が届くので、無条件に上書きすると「さっきの◯人で組み直す」の
+      // 記憶が作るたびに空で潰れる。招待が誰にも通らなければ（相手がオフライン等）
+      // その記憶は二度と戻らず、手作業で誘い直すしかなくなる。
+      // 保存が失敗しても棚の描画までは必ず進める（プライベートモードでは投げる）。
+      if (others.length) {
+        try { localStorage.setItem(LAST_PARTY_KEY, JSON.stringify(others)); } catch { /* ignore */ }
+      }
     } else {
       chatLog = [];
     }
@@ -331,35 +397,59 @@ export function initParty() {
   registerHandler('party_invite', msg => {
     pendingInvite = msg.inviteId;
     audio.combo(3);
-    const m = showModal([
-      `<h2>👥 ${t('パーティーに誘われました', 'Party invite')}</h2>`,
-      `<p class="center"><b>${esc(msg.from)}</b> ${t('からのお誘いです', 'invited you')}</p>`,
-      `<p class="muted center" style="font-size:12px">${msg.members}/${msg.max}</p>`,
-      '<div class="modal-buttons">',
-      `  <button class="btn btn-ghost" id="piNo">${t('ことわる', 'Decline')}</button>`,
-      `  <button class="btn btn-primary" id="piYes">${t('参加する', 'Join')}</button>`,
-      '</div>',
-    ].join(''));
+    // 期限は「届いた時刻」から数える。順番待ちで遅れて出したときに 60秒が
+    // まるごと延びると、サーバー側ではもう切れている招待に「参加する」を
+    // 押せてしまう。
+    const life = msg.expiresIn || 60000;
+    const until = Date.now() + life;
+    let modal = null;
     // 期限切れで自動的に閉じるが、先に答えたらタイマーを解除する。
     // 解除していなかったので、60秒後に「そのとき開いていた別のモーダル」を
     // 勝手に閉じていた（結果画面やショップの購入確認が消える）。
     const timer = setTimeout(() => {
       if (pendingInvite !== msg.inviteId) return;
       pendingInvite = null;
-      closeModal();
-    }, msg.expiresIn || 60000);
+      // 自分の招待モーダルがまだ出ているときだけ閉じる。別のモーダルに
+      // 差し替わったあとに closeModal() すると、それを巻き添えにする
+      // （順番待ちに回してまだ出していない場合も同じ）。
+      if (modal && modal.isConnected) closeModal();
+    }, life);
     const answer = (type) => {
       clearTimeout(timer);
       pendingInvite = null;
       closeModal();
       sendWs({ type, inviteId: msg.inviteId });
     };
-    m.querySelector('#piYes').onclick = () => answer('party_invite_accept');
-    m.querySelector('#piNo').onclick = () => answer('party_invite_decline');
+    const open = () => {
+      if (pendingInvite !== msg.inviteId) return;   // もう答えた／期限切れ
+      modal = showModal([
+        `<h2>👥 ${t('パーティーに誘われました', 'Party invite')}</h2>`,
+        `<p class="center"><b>${esc(msg.from)}</b> ${t('からのお誘いです', 'invited you')}</p>`,
+        `<p class="muted center" style="font-size:12px">${msg.members}/${msg.max}</p>`,
+        '<div class="modal-buttons">',
+        `  <button class="btn btn-ghost" id="piNo">${t('ことわる', 'Decline')}</button>`,
+        `  <button class="btn btn-primary" id="piYes">${t('参加する', 'Join')}</button>`,
+        '</div>',
+      ].join(''));
+      modal.querySelector('#piYes').onclick = () => answer('party_invite_accept');
+      modal.querySelector('#piNo').onclick = () => answer('party_invite_decline');
+    };
+    // 結果画面などが出ているあいだは割り込まない。サーバーの invite() は
+    // 相手が対戦中かどうかを見ていないので、試合中でも結果表示中でも普通に届く。
+    if (modalLocked()) {
+      toast(t(`👥 ${msg.from} からパーティーのお誘いが届いています`,
+        `👥 ${msg.from} invited you to a party`), 'announce', 4500);
+      showLater(open, until);
+      return;
+    }
+    open();
   });
 
   registerHandler('friend_request', msg => {
     toast(t(`🤝 ${msg.from} からフレンド申請が届きました`, `🤝 Friend request from ${msg.from}`), 'announce', 5000);
+    // toast は数秒で消える。見逃してもナビの🤝に気づけるよう、ドットも点ける。
+    // （静的 import にすると friends.js ⇄ party.js が循環するので動的に）
+    import('./friends.js').then(f => f.noteFriendRequest()).catch(() => {});
   });
   registerHandler('friend_accepted', msg => {
     toast(t(`🤝 ${msg.by} とフレンドになりました！`, `🤝 You and ${msg.by} are now friends!`), 'ok', 4000);
@@ -379,20 +469,31 @@ export function initParty() {
 
   registerHandler('party_launch', msg => {
     audio.combo(5);
-    const m = showModal([
-      `<h2>👥 ${t('部屋ができました', 'The room is open')}</h2>`,
-      `<p class="center">${t('合言葉', 'Code')}: <b>${esc(msg.code)}</b></p>`,
-      '<div class="modal-buttons">',
-      `  <button class="btn btn-ghost" id="plNo">${t('あとで', 'Not now')}</button>`,
-      `  <button class="btn btn-primary" id="plYes">${t('入る', 'Join')}</button>`,
-      '</div>',
-    ].join(''));
-    m.querySelector('#plNo').onclick = closeModal;
-    m.querySelector('#plYes').onclick = async () => {
-      closeModal();
-      const { joinPartyRoom } = await import('./modes.js');
-      joinPartyRoom(msg.code);
+    const open = () => {
+      const m = showModal([
+        `<h2>👥 ${t('部屋ができました', 'The room is open')}</h2>`,
+        `<p class="center">${t('合言葉', 'Code')}: <b>${esc(msg.code)}</b></p>`,
+        '<div class="modal-buttons">',
+        `  <button class="btn btn-ghost" id="plNo">${t('あとで', 'Not now')}</button>`,
+        `  <button class="btn btn-primary" id="plYes">${t('入る', 'Join')}</button>`,
+        '</div>',
+      ].join(''));
+      m.querySelector('#plNo').onclick = closeModal;
+      m.querySelector('#plYes').onclick = async () => {
+        closeModal();
+        const { joinPartyRoom } = await import('./modes.js');
+        joinPartyRoom(msg.code);
+      };
     };
+    // こちらも招待と同じ。結果画面を潰すと盤面から出られなくなる。
+    // 合言葉は toast にも載せておく ── 順番待ちのまま見られなくても、
+    // 「合言葉で入る」から自力で入れる。
+    if (modalLocked()) {
+      toast(t(`👥 部屋ができました（合言葉 ${msg.code}）`, `👥 The room is open — code ${msg.code}`), 'announce', 6000);
+      showLater(open);
+      return;
+    }
+    open();
   });
 
   registerHandler('party_error', msg => { if (msg.error) toast(trServer(msg.error), 'err', 3000); });

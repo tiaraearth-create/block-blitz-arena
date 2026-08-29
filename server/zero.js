@@ -325,7 +325,7 @@ export const DEALS = [
   },
   {
     id: 'revive',
-    q: '処刑した住人を全員returnさせてやる。かわりに、この段の封印を4割に上げる',
+    q: '処刑した住人を全員、席に戻してやる。かわりに、この段の封印を4割に上げる',
     qEn: 'I will return everyone I executed. In exchange, this stage’s seal rises to 40%.',
     yes: { text: '飲む', textEn: 'Take it' },
     no: { text: '断る', textEn: 'Refuse' },

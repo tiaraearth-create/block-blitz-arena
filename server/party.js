@@ -194,7 +194,18 @@ export function createParties(deps) {
     const pref = (to.social && to.social.invites) || 'friends';
     if (pref === 'none') return { error: '招待できませんでした' };
     if (pref === 'friends' && !(to.friends || []).includes(fromId)) return { error: '招待できませんでした' };
-    if (!isOnline(toId)) return { error: 'その人はいまオフラインです' };
+    // 在席は statusOf で1回だけ見る（中では isOnline と同じ socket を数えている）。
+    // オンラインでも「対戦中」には投げない ── 招待は画面側で showModal を開く形で
+    // 割り込むので、試合の最中に届くと盤面が隠れ、閉じる口がボタンしか無い結果
+    // モーダルと重なると、そこから出られなくなる。画面側でも順番待ちに落とすように
+    // したが、それは新しい画面にしか効かない（古いタブ・別実装のクライアントは
+    // そのまま割り込む）ので、そもそも送らないのが正しい。
+    // 判定は play() の「対戦中のメンバーがいる間は始めない」と同じ statusOf を使う。
+    const st = statusOf ? statusOf(toId) : (isOnline(toId) ? 'menu' : 'offline');
+    if (st === 'offline') return { error: 'その人はいまオフラインです' };
+    // 文言は play() と同じものを使い回す。i18n.js の対訳表に無い日本語を増やすと、
+    // 英語で遊んでいる人のトーストにだけ日本語が出る（trServer は素通しする）。
+    if (st === 'playing') return { error: '対戦中のメンバーがいます。終わるまで待ってください' };
 
     const id = uuid();
     invites.set(id, { partyId: p.id, toId, fromId, at: now() });

@@ -9,6 +9,7 @@ let ws = null;
 let open = false;
 let unread = 0;
 let retryMs = 3000;
+let retryTimer = null;   // 再接続待ちのタイマー。張り直すときは必ず取り消す。
 
 // ---------------------------------------------------------------------------
 // Live feed: a ticker on the menu showing what is happening around the arena
@@ -142,7 +143,20 @@ function cancelReply() {
   $('#chatReplyBar').classList.add('hidden');
 }
 
-const PROFILE_BADGES = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', tourney: '🏆', royale: '💯', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻' };
+// バッジの絵文字。screens.js の badgeIcons（プロフィール／ランキング）と
+// 同じ25種を必ず全部持たせる ── under・heaven・zero・adminevent・
+// bronze・silver・gold の7つが抜けていたせいで、👁️断罪や👑管理者イベント制覇と
+// いったいちばん希少なバッジが、チャットのプロフィールカードでだけ
+// 見分けのつかない 🎖️ に潰れていた（同じバッジが画面ごとに違って見える）。
+// バッジを増やすときは screens.js:78 / screens.js:726 の表もいっしょに直すこと。
+const PROFILE_BADGES = {
+  bronze: '🥉', silver: '🥈', gold: '🥇',
+  oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️',
+  dungeon: '🏰', under: '🕳️', heaven: '☁️', abyss: '🌑', zero: '👁️',
+  tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', daily7: '📅',
+  puzzle: '🧩', dig: '⛏️', ghost: '👻',
+  crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈',
+};
 // 👑 王座のボード名（プロフィールカード表示用）
 const THRONE_LABELS = {
   score: ['スコア', 'Score'], rating: ['レート', 'Rating'], sprint: ['タイムアタック', 'Time Attack'],
@@ -264,21 +278,45 @@ function setUnread(n) {
   b.textContent = n > 9 ? '9+' : String(n);
 }
 
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  try {
-    ws = new WebSocket(`${proto}://${location.host}/ws`);
-  } catch { scheduleReconnect(); return; }
+// 古いソケットを完全に畳む。ハンドラを外してから閉じるのが要点 ──
+// 外さずに閉じると、その拍子に onclose が走って再接続タイマーがもう1本増える。
+function dropSocket(sock) {
+  if (!sock) return;
+  sock.onopen = sock.onmessage = sock.onclose = sock.onerror = null;
+  try { sock.close(); } catch { /* ignore */ }
+}
 
-  ws.onopen = () => {
+function connect() {
+  // 張り直す前に、前のソケットと再接続待ちのタイマーを必ず畳む。
+  // これをしないと「切断→再接続待ちの3秒間にログイン／ログアウト」で
+  // ws が上書きされ、前のソケットが誰にも閉じられないまま OPEN で生き残る。
+  // 生き残ったソケットの onmessage も動いたままなので、同じ発言が2回ずつ
+  // チャット欄に出るし、サーバーからは別人として数えられてオンライン人数も
+  // 水増しされる。繰り返すと同一アカウントの接続本数の上限に達して弾かれる。
+  clearTimeout(retryTimer);
+  retryTimer = null;
+  dropSocket(ws);
+  ws = null;
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  // ハンドラはモジュール変数 ws ではなくこのローカルだけを触る。ws を見ていた
+  // 頃は、取り残された古いソケットの onerror が「今つながっている方」を
+  // 閉じてしまっていた。
+  let sock;
+  try {
+    sock = new WebSocket(`${proto}://${location.host}/ws`);
+  } catch { scheduleReconnect(); return; }
+  ws = sock;
+
+  sock.onopen = () => {
     retryMs = 3000;
-    ws.send(JSON.stringify({
+    sock.send(JSON.stringify({
       type: 'hello',
       token: session.token,
       guestName: localStorage.getItem('bba_guest_name') || undefined,
     }));
   };
-  ws.onmessage = ev => {
+  sock.onmessage = ev => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === 'hello_ok') {
@@ -334,8 +372,9 @@ function connect() {
       toast(trServer(msg.error), 'err', 1800);
     }
   };
-  ws.onclose = () => scheduleReconnect();
-  ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
+  // 今つながっている1本が落ちたときだけ再接続する。
+  sock.onclose = () => { if (ws === sock) scheduleReconnect(); };
+  sock.onerror = () => { try { sock.close(); } catch { /* ignore */ } };
 }
 
 function setOnlineCount(n) {
@@ -354,7 +393,11 @@ export function setMood(mood) {
 }
 
 function scheduleReconnect() {
-  setTimeout(connect, retryMs);
+  // ハンドルを持っておく。持っていなかった頃は、待っている間に connect() が
+  // 別経路から呼ばれてもこのタイマーを止められず、あとから発火して2本目を
+  // 張ってしまっていた。
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(connect, retryMs);
   retryMs = Math.min(30000, retryMs * 1.5);
 }
 
@@ -415,7 +458,8 @@ export function initChat() {
 }
 
 // Reconnect with the fresh identity after login/logout.
+// 古いソケットと再接続待ちのタイマーの後始末は connect() の冒頭がまとめて
+// やる ── ここで別に畳んでいた頃は、保留中のタイマーだけ取り消し忘れていた。
 export function reconnectChat() {
-  if (ws) { try { ws.onclose = null; ws.close(); } catch { /* ignore */ } }
   connect();
 }

@@ -263,18 +263,25 @@ export class GameView {
     return slot;
   }
 
+  // Piece floats above the pointer for finger visibility.
+  // ただし盤面の下に余白が無いと、持ち上げたぶん最下行に指が届かなくなる。
+  // 横持ちは盤面が画面いっぱいなので、実測で最下行(7段目)が
+  // 1行ピースでは絶対に置けない状態だった。余白に合わせて縮める。
+  // 判定側(dragAnchor)と描画側(drawDrag)で必ず同じ値を使わないと、
+  // 指の上に浮くピースとゴースト／実際の落下位置が縦にずれる
+  // （横長キャンバスで実測 0.6〜0.7マス）。だから1か所にまとめる。
+  liftAmount() {
+    const room = this.H - this.boardY - this.boardSize + this.cell * 0.45;
+    return Math.min(this.cell * 1.2, Math.max(this.cell * 0.35, room));
+  }
+
   // Current drag → board anchor cell (top-left of the piece), or null.
   dragAnchor() {
     if (!this.drag) return null;
     const { piece } = this.drag;
     const { rows, cols } = shapeSize(piece.cells);
     const pw = cols * this.cell, ph = rows * this.cell;
-    // Piece floats above the pointer for finger visibility.
-    // ただし盤面の下に余白が無いと、持ち上げたぶん最下行に指が届かなくなる。
-    // 横持ちは盤面が画面いっぱいなので、実測で最下行(7段目)が
-    // 1行ピースでは絶対に置けない状態だった。余白に合わせて縮める。
-    const room = this.H - this.boardY - this.boardSize + this.cell * 0.45;
-    const lift = Math.min(this.cell * 1.2, Math.max(this.cell * 0.35, room));
+    const lift = this.liftAmount();
     const left = this.drag.px - pw / 2;
     const top = this.drag.py - ph - lift + ph / 2;
     const c = Math.round((left - this.boardX) / this.cell);
@@ -669,6 +676,12 @@ export class GameView {
     const anchor = this.dragAnchor();
     if (!anchor) return null;
     const piece = this.engine.hand[this.drag.index];
+    // 掴んだままの枠を自分以外が消化する（協力プレイのサーバー代打ち、
+    // オートパイロット）と hand[index] が null になる。canPlace(null) は
+    // piece.cells で TypeError を投げ、それが render() の中なので
+    // requestAnimationFrame の再登録に届かず描画が永久に止まる。
+    // drawDrag は同じ読み出しに既にガードを持っているので、そちらに揃える。
+    if (!piece) return null;
     const valid = this.engine.canPlace(piece, anchor.r, anchor.c);
     const willRows = new Set(), willCols = new Set();
     if (valid) {
@@ -752,7 +765,7 @@ export class GameView {
     // floating piece above finger
     const { rows, cols } = shapeSize(piece.cells);
     const pw = cols * cell, ph = rows * cell;
-    const lift = cell * 1.2;
+    const lift = this.liftAmount();   // dragAnchor と同じ値でないと絵と落下位置がずれる
     const left = this.drag.px - pw / 2;
     const top = this.drag.py - ph - lift + ph / 2;
     ctx.save();

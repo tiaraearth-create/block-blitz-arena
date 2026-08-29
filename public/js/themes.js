@@ -424,8 +424,14 @@ function drawAdminRainbow(ctx, x, y, s, ci, alpha = 1) {
 }
 
 // 👑 断罪の刻印: 赤い判決線が斜めに1本、どのブロックにも入っている。
-function drawVerdict(ctx, x, y, s, colorIndex, r) {
+// スキンの呼び出し規約は (ctx, x, y, s, colorIndex, alpha)。ここだけ6番目を
+// 角丸半径として受け取っていたため、ゴースト(0.35)・ライン消しのフェード・
+// 置けない手札の減光(0.3)がすべて無効化され、ついでに角丸半径が
+// alpha の値(1px未満)になって直角の四角に見えていた。他スキンに揃える。
+function drawVerdict(ctx, x, y, s, colorIndex, alpha = 1) {
   const [light, dark] = PALETTE[colorIndex] || PALETTE[6];
+  const r = s * 0.18;
+  ctx.globalAlpha = alpha;
   const g = ctx.createLinearGradient(x, y, x, y + s);
   g.addColorStop(0, dark); g.addColorStop(1, '#14060a');
   ctx.fillStyle = g;
@@ -437,14 +443,18 @@ function drawVerdict(ctx, x, y, s, colorIndex, r) {
   ctx.save();
   ctx.beginPath(); roundRect(ctx, x + 1, y + 1, s - 2, s - 2, r); ctx.clip();
   ctx.strokeStyle = '#e03546'; ctx.lineWidth = Math.max(1.4, s * 0.09);
-  ctx.globalAlpha = 0.9;
+  ctx.globalAlpha = alpha * 0.9;   // 判決線だけ少し薄い。alpha を掛けないと半透明時に線だけ濃く残る
   ctx.beginPath(); ctx.moveTo(x + s * 0.12, y + s * 0.82); ctx.lineTo(x + s * 0.88, y + s * 0.18); ctx.stroke();
   ctx.restore();
+  ctx.globalAlpha = 1;
 }
 
 // 👁️ ゼロの眼: 見返してくる。虹彩の色だけピースの色に染まる。
-function drawZeroEye(ctx, x, y, s, colorIndex, r) {
+// drawVerdict と同じく6番目が alpha（角丸半径ではない）。
+function drawZeroEye(ctx, x, y, s, colorIndex, alpha = 1) {
   const [light, dark] = PALETTE[colorIndex] || PALETTE[6];
+  const r = s * 0.18;
+  ctx.globalAlpha = alpha;
   ctx.fillStyle = '#120d16';
   roundRect(ctx, x + 1, y + 1, s - 2, s - 2, r);
   ctx.fill();
@@ -458,6 +468,7 @@ function drawZeroEye(ctx, x, y, s, colorIndex, r) {
   ctx.beginPath(); ctx.arc(cx, cy, s * 0.155, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#0a0610';
   ctx.beginPath(); ctx.ellipse(cx, cy, s * 0.055, s * 0.135, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
 }
 
 export const SKINS = {

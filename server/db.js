@@ -23,6 +23,16 @@ const DEFAULT_DB = {
 
 let db = null;
 let saveTimer = null;
+// 直近の書き込みが失敗していたら、その理由。成功したら null に戻す。
+// これまで saveDb / flushDb は例外を console に出して飲み込むだけで、
+// 呼び出し元には成否を伝えていなかった。そのため /api/admin/restore は
+// ディスクが満杯・読み取り専用・未マウントで1バイトも書けていなくても
+// 200 と「💾 データを復元しました」の全体アナウンスを返し、管理画面には
+// メモリ上の（正しく見える）データが出る。管理者が異常に気づけるのは
+// 再起動して全部消えたあと、という最悪の順序だった。
+// このホスティングは「ディスクが無くてデータが飛んだ」を実際に踏んでいる。
+// 書けなかったことは必ず外から見えるようにする。
+let lastWriteError = null;
 
 // db.json を安全に書く。同じディレクトリに一時ファイルを作り、ディスクまで
 // 確実に書き出してから rename で差し替える。rename(2) は不可分なので、
@@ -111,31 +121,46 @@ export function loadDb() {
   // 「db.json 無しの通常初回起動」と区別が付かず、空DB→seed再適用に化ける。
   // 復旧できたときはその場で db.json を確定させ、その窓を閉じる。
   if (recovered) {
-    try { writeAtomic(DB_FILE, JSON.stringify(db, null, 2)); }
-    catch (e) { console.error('[db] 復旧直後の書き込みに失敗:', e.message); }
+    try { writeAtomic(DB_FILE, JSON.stringify(db, null, 2)); lastWriteError = null; }
+    catch (e) { lastWriteError = e.message; console.error('[db] 復旧直後の書き込みに失敗:', e.message); }
   }
   return db;
 }
 
+// 遅延書き込み。呼び出し元は結果を受け取れない（250ms後に走るので）ため、
+// 失敗は lastPersistError() で拾う。
 export function saveDb() {
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
     saveTimer = null;
     try {
       writeAtomic(DB_FILE, JSON.stringify(db, null, 2));
+      lastWriteError = null;
     } catch (err) {
+      lastWriteError = err.message;
       console.error('[db] save failed:', err.message);
     }
   }, 250);
 }
 
+// ディスクまで書けたら true、書けなかったら false。
+// 「保存しました」「復元しました」と名乗る前に、必ずこの戻り値を見ること。
+// 返り値を無視しても以前と同じ挙動なので、既存の呼び出しは壊れない。
 export function flushDb() {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   try {
     writeAtomic(DB_FILE, JSON.stringify(db, null, 2));
+    lastWriteError = null;
+    return true;
   } catch (err) {
+    lastWriteError = err.message;
     console.error('[db] flush failed:', err.message);
+    return false;
   }
 }
+
+// 直近の永続化が失敗していればその理由、成功していれば null。
+// 管理画面や /api/status から「今ディスクに書けていない」と分かるようにするための口。
+export function lastPersistError() { return lastWriteError; }
 
 export { DATA_DIR };

@@ -856,6 +856,11 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
   box-shadow: 0 6px 0 #143a6e, 0 8px 24px rgba(37,99,235,0.4);
   text-shadow: 0 2px 4px rgba(0,0,0,0.4);
 }
+.btn-daily {
+  background: linear-gradient(135deg, #f59e0b, #dc2626);
+  box-shadow: 0 6px 0 #7c2d12, 0 8px 24px rgba(220,38,38,0.4);
+  text-shadow: 0 2px 4px rgba(0,0,0,0.4);
+}
 
 /* In-game booster item bar */
 /* Ten chips (6 staff items + 4 boosters) are wider than a phone. `justify-

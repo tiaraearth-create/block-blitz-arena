@@ -2,7 +2,7 @@
 import { session, api, refreshMe, setToken } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, staffExtras , goBack, initHistory } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openInventory, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
 import { confettiBurst } from './dom.js';
@@ -553,7 +553,12 @@ function showDungeonSelect(realmId = 'tower') {
   const best = isAdminUser() ? realm.floors : dungeonBest(realm);
   const P = realm.prefix;
   const cps = [];
-  for (let f = 1; f <= realm.floors - 9; f += 10) if (f === 1 || best >= f - 1) cps.push(f);
+  // 再開できる階は「ボス階の次」＝チェックポイント。刻み幅はレルクごとに違う
+  // （深淵は bossEvery: 5）。ここだけ10刻みを決め打ちしていたので、深淵で A5 を
+  // 撃破しても選択肢に A6 が出てこず、結果画面の「A6から再挑戦」を押した人しか
+  // 恩恵を受けられなかった ── 一度メニューへ戻ると進行が巻き戻って見える。
+  const step = realm.bossEvery || 10;
+  for (let f = 1; f <= realm.floors - (step - 1); f += step) if (f === 1 || best >= f - 1) cps.push(f);
   let startF = cps[cps.length - 1];
   const m = showModal(`
     <h2>${realm.icon} ${t(realm.name, realm.nameEn)}</h2>
@@ -758,6 +763,59 @@ $('#btnWeekly').onclick = async () => {
   m.querySelector('#wkCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#wkRank').onclick = () => { audio.click(); closeModal(); openLeaderboard('weekly'); };
   m.querySelector('#wkStart').onclick = () => { audio.click(); closeModal(); startWeekly({ ...info, best }); };
+};
+
+// 📅 デイリーチャレンジ — 1日1回の真剣勝負（挑戦後は練習し放題）
+$('#btnDaily').onclick = async () => {
+  audio.click();
+  let info;
+  try {
+    info = await api('/api/daily');
+  } catch {
+    toast(t('サーバーに接続できません', 'Cannot reach the server'), 'err');
+    return;
+  }
+  // ゲストの「今日の記録」はローカルに控えてある（サーバーには残らない）。
+  const localRec = (() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('bba_daily_record'));
+      if (v && v.day === info.day) return v;
+    } catch { /* ignore */ }
+    return null;
+  })();
+  const played = info.played || (!session.user && !!localRec);
+  const todayScore = info.played ? info.score : (localRec ? localRec.score : null);
+  const mod = info.modifier || {};
+  const m = showModal(`
+    <h2>${t('📅 デイリーチャレンジ', '📅 Daily Challenge')}</h2>
+    <p class="center" style="margin:2px 0 6px;font-size:15px"><b>${mod.icon || ''} ${t(mod.ja || '', mod.en || '')}</b><br><small class="muted">${t(mod.descJa || '', mod.descEn || '')}</small></p>
+    <p class="muted center" style="margin-bottom:10px">
+      ${t(`全プレイヤー共通のピース順で<b>${info.pieces}個</b>の一発勝負！目標 <b>${fmt(info.target)}</b>点でクリア`, `One shot with <b>${info.pieces}</b> pieces — same order for everyone! Score <b>${fmt(info.target)}</b> to clear`)}<br>
+      ${played
+        ? `${t('今日は挑戦済み', 'Today\'s attempt is done')}${todayScore != null ? ` — <b style="color:var(--yellow)">${fmt(todayScore)}</b>` : ''}${t('（ここからは練習）', ' (practice from here)')}`
+        : `<b style="color:var(--yellow)">${t('記録に残るのは最初の1回だけ！', 'Only your FIRST run counts!')}</b>${session.user ? `<br><small>${t('※ 始めた時点で今日の1回を使います（途中でやめても記録は確定）', '* Starting uses today\'s attempt — quitting midway still locks it in')}</small>` : ''}`}
+      <br>${t('次のお題まで', 'Next challenge in')} <b>${fmtWeeklyRemain(info.endsAt - Date.now())}</b>
+      ${info.streak ? `<br>🔥 ${t(`連続クリア${info.streak}日`, `${info.streak}-day clear streak`)}` : ''}
+      ${session.user ? '' : `<br><small>${t('💡 記録とランキングにはログイン', '💡 Log in for records & the ranking')}</small>`}
+    </p>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="dcCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-ghost" id="dcRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
+      <button class="btn btn-daily" id="dcStart">${played ? t('🔁 練習する', '🔁 Practice') : t('📅 挑戦する！', '📅 Play!')}</button>
+    </div>`);
+  m.querySelector('#dcCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#dcRank').onclick = () => { audio.click(); closeModal(); openLeaderboard('daily'); };
+  // 記録回は開始時にサーバーへ挑戦を予約する（通信が1往復入る）。押した直後に
+  // モーダルを閉じると、遅い回線では「押したのに何も起きない」時間ができる。
+  m.querySelector('#dcStart').onclick = async (ev) => {
+    audio.click();
+    const b = ev.currentTarget;
+    if (b.disabled) return;
+    b.disabled = true;
+    const label = b.textContent;
+    b.textContent = t('準備中…', 'Starting…');
+    try { await startDaily(info); } finally { b.textContent = label; closeModal(); }
+  };
 };
 
 // ---- gacha (in-game item buttons are built by modes.js) ----

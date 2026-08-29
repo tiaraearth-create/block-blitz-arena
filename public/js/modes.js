@@ -8,6 +8,11 @@ import { session, api, refreshMe, BattleClient } from './net.js';
 import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf, staffExtras , applyScoreFit } from './dom.js';
 import { t, trServer, catName } from './i18n.js';
 import { fireUlt, ultIcon, ultColor, ultExists, DEFAULT_ULT } from './skills.js';
+// 常時つながっているチャットの socket に相乗りするための口。
+// サーバーの shard() は「そのユーザーの最初のソケット」に送るので、
+// ページ読み込み時に張るこちらへ届くことがある（下の ZeroMode を参照）。
+// chat.js は modes.js を import していないので循環しない（party.js と同じ）。
+import { registerHandler } from './chat.js';
 
 const MATCH_SECONDS = 120;
 
@@ -56,6 +61,16 @@ function afterCountdown(mode, fn) {
   return () => { if (mode.ended || currentMode !== mode) return; fn(); };
 }
 
+// 3-2-1 と入場演出（鬼／神／創造神）は自前の setTimeout で動いていて、外から
+// 止める口が無い。演出中に中断すると、結果モーダルやメニューの下に全画面の
+// カウントダウンが残って数字が動き続けていた（暗幕越しに透ける／メニューに
+// 戻ると素で見える）。せめて中断した時点で画面からは消す。
+// ※ dom.js の countdownOverlay 自体が中断ハンドルを返さないので、カウント音
+//    だけは鳴り切ってしまう。音まで止めるには dom.js 側に口が要る。
+function clearIntroOverlays() {
+  for (const el of document.querySelectorAll('.countdown-overlay, .oni-intro, .kami-intro')) el.remove();
+}
+
 function guestBest() { return Number(localStorage.getItem('bba_best') || 0); }
 function setGuestBest(v) { localStorage.setItem('bba_best', String(v)); }
 
@@ -87,7 +102,16 @@ async function submitResult(payload) {
     return data.rewards;
   } catch (err) {
     console.warn('result submit failed:', err.message);
-    return null;
+    // 「未ログイン」と同じ null にしてはいけない。通信断・レート制限(429)・
+    // メンテナンス(503) でも報酬は付かないのに、ログイン中の人にまで
+    // 「報酬を受け取るにはログイン」と出て、その回のコイン／XP／ミッション
+    // 進捗が消えたことが console 以外どこにも出ていなかった。
+    // ここで区別して返し、結果画面には本当のことを出す。
+    // ※ 自動再送はしない。/api/game/result は同じ回を2回受けると2回ぶん
+    //   加算するので、応答だけ落ちたときに二重取りになる。
+    toast(t('⚠️ 結果を送信できませんでした。この回の報酬は付いていません',
+      '⚠️ Could not submit your result — no rewards were granted for this run'), 'err', 4500);
+    return { failed: true };
   }
 }
 
@@ -101,13 +125,23 @@ function announceMissions(n) {
 }
 
 function rewardsRows(rewards) {
+  // 送信に失敗した回。ログインしているのに「ログインしてください」と出すと、
+  // 直せる問題（通信・メンテ）を直しようのない問題に見せてしまう。
+  if (rewards && rewards.failed) {
+    return `<div class="rs-row"><span>${t('⚠️ 送信に失敗しました — この回の報酬は付いていません', '⚠️ Submission failed — no rewards for this run')}</span></div>`;
+  }
   if (!rewards) {
     return `<div class="rs-row"><span>${t('💡 報酬を受け取るにはログイン', '💡 Log in to earn rewards')}</span></div>`;
   }
   return `
     <div class="rs-row"><span>${t('🪙 コイン', '🪙 Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
     ${rewards.streakBonus ? `<div class="rs-row"><span>${t(`🔥 ${rewards.streak}連勝ボーナス`, `🔥 ${rewards.streak}-win streak bonus`)}</span><b>+${fmt(rewards.streakBonus)}🪙</b></div>` : ''}
-    ${rewards.gems ? `<div class="rs-row"><span>${t('💎 初回討伐ボーナス', '💎 First-clear bonus')}</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
+    ${/* サーバーの gems は「初回討伐」だけではない ── イベントの💎ドロップも
+          バッジ報酬（デイリー7日・ダンジョン制覇・ロイヤル初1位…）も同じ欄に
+          合算されて来る。討伐が存在しないソロやデイリーでも「初回討伐ボーナス」
+          と出ていたので、中立の表記にする。内訳を出すにはサーバーが
+          eventGems / badge の内訳を返す必要がある。 */''}
+    ${rewards.gems ? `<div class="rs-row"><span>${t('💎 ジェム', '💎 Gems')}</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
     <div class="rs-row"><span>${t('🎫 パスXP', '🎫 Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
     <div class="rs-row"><span>${t('⭐ アカウントXP', '⭐ Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>`;
 }
@@ -467,6 +501,13 @@ export function useGameItem(id) {
   e.itemUses = (e.itemUses || 0) + 1;
   spendItem(id);
   updateItemBar();
+  // 逆向きも見る。ここは片方向（over を下ろすだけ）で、詰みを立て直す側が
+  // 無かった。🧩ミニブロックは engine を通さず e.hand を直接差し替えるため、
+  // 差し替わった3枚がどこにも入らないと over が立たないまま止まる ──
+  // place() は呼ばれず onGameOver も走らないので、置けない・終われない・
+  // スコアも送られない状態で取り残される（脱出用アイテムが詰みを作る）。
+  // 手札を書き換えたら判定し直すのは、キメラ・穴掘り・奥義と同じ作法。
+  if (!e.over && !e.hasAnyMove()) { e.over = true; handleEngineOver(); }
 }
 
 // ---------------------------------------------------------------------------
@@ -801,7 +842,7 @@ class SoloMode {
   quit() {
     // すでに結果まで進んでいるなら finish() は何もしない。
     // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
-    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    if (this.ended) { closeModal(); endToMenu(); return; }
     this.finish();
   }
   destroy() {}
@@ -978,7 +1019,12 @@ class MeltdownMode {
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
 
-  quit() { this.finish(false); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は先頭で即 return するので、
+    // ここで戻さないと ✕ →「終了する」を押しても何も起きない画面に残る。
+    if (this.ended) { closeModal(); endToMenu(); return; }
+    this.finish(false);
+  }
 
   destroy() {
     this.ended = true;
@@ -1172,7 +1218,7 @@ class ChimeraMode {
   quit() {
     // すでに結果まで進んでいるなら finish() は何もしない。
     // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
-    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    if (this.ended) { closeModal(); endToMenu(); return; }
     this.finish();
   }
 
@@ -1368,7 +1414,12 @@ class PuzzleMode {
     };
   }
 
-  quit() { this.finish(false); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は先頭で即 return するので、
+    // ここで戻さないと ✕ →「終了する」を押しても何も起きない画面に残る。
+    if (this.ended) { closeModal(); endToMenu(); return; }
+    this.finish(false);
+  }
 
   destroy() {
     this.ended = true;
@@ -1492,26 +1543,24 @@ class DigMode {
       toast(t(`⛏️ 深度${this.depth}m 到達！鉱石が濃くなってきた…`, `⛏️ Depth ${this.depth}m! The veins are getting richer…`), 'announce', 2200);
       confettiBurst(20);
     }
+    // 新しい地層は grid の直書き（copyWithin + fillLayerRow）なので、engine が
+    // ラインを見てくれない。行が満杯になることは無い（density は最大7）が、
+    // 列は埋まりきる ── 上7段が埋まっている列の一番下に岩が入った瞬間が
+    // それで、消えないまま残ると (1) 次に置いた1手がその列消しの加点と
+    // コンボを横取りし、(2) 消えれば続けられる盤面で hasAnyMove() が false に
+    // なって不当に潰される。鉱石は onPlace と同じ collectOre() で回収するので
+    // this.ores との整合も崩れない（消すだけだと鉱石が黙って消滅する）。
+    this.collectOre(e.resolveLines().clearedCells);
     if (!e.hasAnyMove()) { e.over = true; handleEngineOver(); }
   }
 
-  crushed() {
-    if (this.ended) return;
-    const v = getView();
-    v.shake = 20;
-    v.screenFlash = 0.5;
-    audio.bossAttack();
-    toast(t('⛏️ 天井に押しつぶされた…', '⛏️ Crushed against the ceiling…'), 'err', 2400);
-    this.finish();
-  }
-
-  onPlace(result) {
-    if (this.ended) return;
+  // 消えたマスに埋まっていた鉱石を回収して加点する。ラインを消したのが
+  // プレイヤーの1手でも、せり上がりでたまたま揃った列でも扱いは同じ。
+  collectOre(clearedCells) {
     const e = this.engine;
     const v = getView();
-    // Collect ore that was inside the cleared lines.
     let bonus = 0;
-    for (const [r, c] of result.clearedCells) {
+    for (const [r, c] of clearedCells) {
       const k = r * 8 + c;
       const type = this.ores.get(k);
       if (!type) continue;
@@ -1528,6 +1577,23 @@ class DigMode {
     }
     // Items/ults may wipe cells without a "clear" — drop orphaned ore markers.
     for (const k of [...this.ores.keys()]) if (e.grid[k] === 0) this.ores.delete(k);
+    return bonus;
+  }
+
+  crushed() {
+    if (this.ended) return;
+    const v = getView();
+    v.shake = 20;
+    v.screenFlash = 0.5;
+    audio.bossAttack();
+    toast(t('⛏️ 天井に押しつぶされた…', '⛏️ Crushed against the ceiling…'), 'err', 2400);
+    this.finish();
+  }
+
+  onPlace(result) {
+    if (this.ended) return;
+    // Collect ore that was inside the cleared lines.
+    this.collectOre(result.clearedCells);
     // Cadence: each placement pushes toward the next rise; clears buy time.
     this.placedSince += 1 - Math.min(1, result.lineCount);
     if (this.placedSince >= DIG_STEP) {
@@ -1590,7 +1656,7 @@ class DigMode {
   quit() {
     // すでに結果まで進んでいるなら finish() は何もしない。
     // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
-    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    if (this.ended) { closeModal(); endToMenu(); return; }
     this.finish();
   }
 
@@ -1717,7 +1783,7 @@ class GhostMode {
   quit() {
     // すでに結果まで進んでいるなら finish() は何もしない。
     // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
-    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    if (this.ended) { closeModal(); endToMenu(); return; }
     this.finish();
   }
 
@@ -1949,7 +2015,10 @@ class AiMode extends VersusBase {
     audio.kamiDescend();
     audio.bossAttack();
     if (view) view.shake = 16;
-    setTimeout(() => { el.remove(); next(); }, 2600);
+    // タイマーを持っておく。保持していなかったころは、演出中に中断しても
+    // 1.9〜2.6秒後に begin() が走って新しいカウントダウンを作り直し、
+    // 終わったはずの画面の上に 3-2-1 が音付きで出ていた。
+    this.introTimer = setTimeout(() => { el.remove(); next(); }, 2600);
   }
 
   // Dramatic entrance for the hidden difficulty.
@@ -1960,7 +2029,7 @@ class AiMode extends VersusBase {
     document.body.appendChild(el);
     audio.gameOver();
     if (view) view.shake = 14;
-    setTimeout(() => { el.remove(); next(); }, 1900);
+    this.introTimer = setTimeout(() => { el.remove(); next(); }, 1900);
   }
 
   // Divine entrance for the ultimate hidden difficulty.
@@ -1974,7 +2043,7 @@ class AiMode extends VersusBase {
     document.body.appendChild(el);
     audio.kamiDescend();
     if (view) view.shake = 8;
-    setTimeout(() => { el.remove(); next(); }, 2300);
+    this.introTimer = setTimeout(() => { el.remove(); next(); }, 2300);
   }
 
   aiLoop() {
@@ -2014,6 +2083,10 @@ class AiMode extends VersusBase {
     this.ended = true;
     this.stopTimer();
     clearTimeout(this.aiTimer);
+    // 入場演出／3-2-1 の途中で中断されたときの後始末。ここで消さないと、
+    // 結果モーダルの裏で全画面のカウントダウンが動き続ける。
+    clearTimeout(this.introTimer);
+    clearIntroOverlays();
     getView().inputLocked = true;
     const me = this.engine.score, opp = this.aiEngine.score;
     // Quitting early is ALWAYS a draw — never counted as a defeat.
@@ -2055,6 +2128,9 @@ class AiMode extends VersusBase {
   }
 
   quit() {
+    // すでに結果まで進んでいるなら finish() は先頭で即 return するので、
+    // ここで戻さないと ✕ →「終了する」を押しても何も起きない画面に残る。
+    if (this.ended) { closeModal(); endToMenu(); return; }
     this.aborted = true;
     this.finish();
   }
@@ -2063,6 +2139,8 @@ class AiMode extends VersusBase {
     this.ended = true;
     this.stopTimer();
     clearTimeout(this.aiTimer);
+    clearTimeout(this.introTimer);
+    clearIntroOverlays();
   }
 }
 
@@ -2220,6 +2298,14 @@ function bossImpact(m) {
   view.shake = 12;
   const def = BOSS_MOVES[pa.moveId] || BOSS_MOVES.garbage;
   toast(t(`${m.boss.emoji} ${def.name}が直撃！`, `${m.boss.emoji} ${def.nameEn} hits!`), 'err', 1300);
+  // 直書きで埋まった行・列はここで消す。addGarbage() と違って engine を
+  // 通らないので、これが無いと満杯の行が居座ったままになる ──
+  // ブレスは「ある行の空きマス全部」、レーザーは「ある列の空きマス全部」を
+  // 撃つので、着弾＝必ずその行/列が満杯になる経路がいちばん太い。
+  // 必ず hasAnyMove() より前に。順番が逆だと、消えれば8マス空いて続けられる
+  // 盤面で不当にゲームオーバーになる。加点しないのは、ボスの妨害で埋まった
+  // ぶんを被害者の得点にしないため（engine.resolveLines と同じ方針）。
+  e.resolveLines();
   // Direct grid writes bypass engine.place's game-over check.
   if (!e.hasAnyMove()) e.over = true;
   m.afterAttack();
@@ -2431,13 +2517,25 @@ class BossMode {
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => {
       closeModal();
-      this.destroy();
-      if (hasNext && window.__bbaOpenBossSelect) window.__bbaOpenBossSelect(this.bossIndex + 1);
-      else startBoss(this.boss, this.bossIndex, this.bossCount);
+      if (hasNext && window.__bbaOpenBossSelect) {
+        // 先にメニューへ戻してから選ばせる。ゲーム画面のままボス選択を開くと、
+        // それを閉じた人（背景タップ／端末の戻る／通信が切れてモーダルすら
+        // 出ないとき）が、固まった盤面だけの画面に取り残されていた ──
+        // destroy() 済みなので ✕→「終了する」も finish() の即 return で効かず、
+        // リロード以外に抜ける手が無かった。
+        endToMenu();
+        window.__bbaOpenBossSelect(this.bossIndex + 1);
+      } else {
+        this.destroy();
+        startBoss(this.boss, this.bossIndex, this.bossCount);
+      }
     };
   }
 
   quit() {
+    // 他モードと同じ退避。結果まで進んでいると finish() は先頭で即 return
+    // するので、ここで戻さないと ✕ を押しても何も起きない画面に残る。
+    if (this.ended) { closeModal(); endToMenu(); return; }
     this.aborted = true;
     this.finish(false);
   }
@@ -2750,7 +2848,13 @@ class BossRushMode {
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startBossRush(this.bosses); };
   }
 
-  quit() { this.aborted = true; this.finish(false); }
+  quit() {
+    // ボス戦（BossMode）と同じ退避。結果まで進んでいると finish() は先頭で
+    // 即 return するので、ここで戻さないと出口の無い画面に取り残される。
+    if (this.ended) { closeModal(); endToMenu(); return; }
+    this.aborted = true;
+    this.finish(false);
+  }
 
   destroy() {
     this.ended = true;
@@ -2878,7 +2982,7 @@ class WeeklyMode {
   quit() {
     // すでに結果まで進んでいるなら finish() は何もしない。
     // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
-    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    if (this.ended) { closeModal(); endToMenu(); return; }
     this.finish();
   }
   destroy() { this.ended = true; }
@@ -2889,6 +2993,235 @@ export function startWeekly(info) {
   currentMode = new WeeklyMode(info);
   window.__bbaMode = currentMode;
   currentMode.start();
+}
+
+// ---------------------------------------------------------------------------
+// 📅 Daily challenge: same seed + 30 pieces for everyone, a rule-of-the-day
+// modifier, and ONE recorded attempt per JST day (later runs are practice).
+// ---------------------------------------------------------------------------
+
+// お題の効果はすべて決定的に適用する。Engine(seed) を作った直後に全員が
+// 同じ順番で同じ操作（手札引き直し・瓦礫）をするので、乱数列は世界共通のまま。
+function applyDailyModifier(engine, mod) {
+  const id = mod && mod.id;
+  if (id === 'giant') engine.chaosBig = true;
+  if (id === 'mini') engine.chaosMini = true;
+  if (id === 'combo') engine.comboBonusMult = 2;
+  if (id === 'rainbow') engine.rerolls = 3;
+  // 初期手札はコンストラクタで通常プールから引かれている — お題のプールで
+  // 引き直す（3回ぶん乱数を消費するが、全員同じなので公平）。
+  if (id === 'giant' || id === 'mini') {
+    for (let i = 0; i < 3; i++) engine.hand[i] = engine.drawPiece();
+  }
+  if (id === 'rubble') engine.addGarbage(10);
+}
+
+function dailyLocalRecord(day) {
+  try {
+    const v = JSON.parse(localStorage.getItem('bba_daily_record'));
+    if (v && v.day === day) return v;
+  } catch { /* ignore */ }
+  return null;
+}
+
+class DailyMode {
+  constructor(info, attempt) {
+    this.mode = 'daily';
+    this.info = info;   // { day, seed, pieces, modifier, target, endsAt, played, score, streak }
+    // 「記録になる回」かどうかは開始時点で確定させる。ログイン中の記録回は
+    // startDaily() が /api/daily/start で予約済みで、その attemptId を添えた
+    // 提出だけがサーバーに記録される。
+    this.attemptId = (attempt && attempt.attemptId) || null;
+    this.practice = attempt
+      ? !!attempt.practice
+      : (!!info.played || (!session.user && !!dailyLocalRecord(info.day)));
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    showItemBar(false);   // fair play: no boosters / ultimates
+    this.startedAt = Date.now();
+    const v = getView();
+    setModeTheme({ ...equippedTheme(), boardId: 'board_sunset' });
+    this.engine = new Engine(this.info.seed);
+    applyDailyModifier(this.engine, this.info.modifier);
+    v.setEngine(this.engine);
+    v.inputLocked = false;
+    v.onPlace = () => this.onPlace();
+    v.onGameOver = () => this.finish();
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('battle');
+    const mod = this.info.modifier || {};
+    toast(t(
+      `📅 ${mod.icon || ''}${mod.ja || ''}！${this.info.pieces}個で${fmt(this.info.target)}点を狙え！${this.practice ? '（練習）' : ''}`,
+      `📅 ${mod.icon || ''}${mod.en || ''}! Chase ${fmt(this.info.target)} with ${this.info.pieces} pieces!${this.practice ? ' (practice)' : ''}`,
+    ), 'announce', 3200);
+  }
+
+  piecesLeft() { return Math.max(0, this.info.pieces - this.engine.piecesPlaced); }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    const mod = this.info.modifier || {};
+    $('#hudSub').textContent = t(
+      `📅 ${mod.icon || ''}${mod.ja || ''} ・ 目標 ${fmt(this.info.target)}${this.practice ? ' ・ 練習' : ''}`,
+      `📅 ${mod.icon || ''}${mod.en || ''} ・ Target ${fmt(this.info.target)}${this.practice ? ' ・ practice' : ''}`,
+    );
+    const tm = $('#hudTimer');
+    tm.textContent = t(`残り${this.piecesLeft()}個`, `${this.piecesLeft()} left`);
+    tm.classList.toggle('urgent', this.piecesLeft() <= 5);
+  }
+
+  onPlace() {
+    this.updateHud();
+    if (this.piecesLeft() <= 0 && !this.ended) this.finish();
+  }
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    getView().inputLocked = true;
+    const e = this.engine;
+    const cleared = e.score >= this.info.target;
+    if (cleared && e.score > 0) { audio.victory(); confettiBurst(50); } else { audio.gameOver(); }
+    // ゲストは記録がサーバーに残らないので、その日の初回だけローカルに控える。
+    if (!session.user && !this.practice) {
+      try { localStorage.setItem('bba_daily_record', JSON.stringify({ day: this.info.day, score: e.score })); } catch { /* ignore */ }
+    }
+    const rewards = await submitResult({
+      mode: 'daily', score: e.score, lines: e.linesCleared,
+      maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
+      // 走った盤面の日を必ず添える。これが無いとサーバーは「提出時点の日」に
+      // 記録してしまい、23:58に始めて0:02に終わった回が翌日の1回を焼く。
+      day: this.info.day,
+      // 開始時に予約した挑戦の証。記録回はこれが一致したときだけ確定する。
+      ...(this.attemptId ? { attemptId: this.attemptId } : {}),
+    });
+    // 送信そのものが失敗した回。サーバーには開始時の予約（0点）が残ったまま
+    // なので、記録もされないし今日はもう挑戦し直せない ── ここを「練習」と
+    // 言ってしまうと、いちばん説明が要る場面で嘘をつくことになる。
+    const sendFailed = !!(rewards && rewards.failed);
+    const d = rewards && rewards.daily;
+    const recorded = d ? d.recorded : (session.user ? false : !this.practice);
+    const streak = d ? d.streak : 0;
+    const usedAll = e.piecesPlaced >= this.info.pieces;
+    // 記録されなかった理由はサーバーが返す。まとめて「練習」と言ってしまうと、
+    // 日付を跨いだ回や予約の取れていない回に嘘の説明をすることになる。
+    const notRecordedNote = sendFailed
+      ? t('⚠️ 結果を送信できませんでした。この回は記録もランキングにも残りません',
+          '⚠️ Your result could not be submitted — this run is not recorded or ranked')
+      : {
+        stale: t('日付が変わったため、この回は記録されません', 'The day rolled over — this run was not recorded'),
+        unreserved: t('挑戦の登録ができていないため記録されません。メニューから開き直してください',
+          'This run was not registered, so it is not recorded — please reopen it from the menu'),
+        expired: t('開始から時間が経ちすぎたため記録されません', 'Too long since you started — this run was not recorded'),
+      }[d && d.reason] || t('この回は練習 — 今日の記録はすでに確定しています', 'Practice run — today\'s record is already locked in');
+    const m = showModal(`
+      <div class="result-banner ${cleared ? 'win' : 'draw'}">${cleared ? t('📅 デイリークリア！', '📅 Daily cleared!') : t('📅 挑戦終了', '📅 Challenge over')}</div>
+      ${usedAll ? '' : `<p class="muted center">${t('ピースを置く場所がなくなりました', 'No room left to place a piece')}</p>`}
+      ${recorded ? '' : `<p class="muted center">${notRecordedNote}</p>`}
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)} / ${fmt(this.info.target)}</b></div>
+        ${recorded && d ? `<div class="rs-row"><span>${t('🔥 連続クリア', '🔥 Clear streak')}</span><b>${d.cleared ? t(`${streak}日目`, `Day ${streak}`) : t('リセット…', 'Reset…')}</b></div>` : ''}
+        ${d && d.bonusCoins ? `<div class="rs-row"><span>${t('📅 デイリーボーナス', '📅 Daily bonus')}</span><b>+${fmt(d.bonusCoins)}🪙${d.bonusGems ? ` +${fmt(d.bonusGems)}💎` : ''}</b></div>` : ''}
+        <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
+        ${sendFailed
+          ? `<div class="rs-row"><span>${t('⚠️ 送信に失敗しました — この回の報酬は付いていません', '⚠️ Submission failed — no rewards for this run')}</span></div>`
+          : rewards ? `
+        <div class="rs-row"><span>${t('🪙 コイン', '🪙 Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
+        <div class="rs-row"><span>${t('🎫 パスXP', '🎫 Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
+        <div class="rs-row"><span>${t('⭐ アカウントXP', '⭐ Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>`
+        : `<div class="rs-row"><span>${t('💡 記録とランキングにはログイン', '💡 Log in for records & the ranking')}</span></div>`}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-ghost" id="rRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
+        <button class="btn btn-daily" id="rAgain">${t('もう一度（練習）', 'Again (practice)')}</button>
+      </div>`, { dismissable: false });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rRank').onclick = () => {
+      closeModal(); endToMenu();
+      if (window.__bbaOpenLeaderboard) window.__bbaOpenLeaderboard('daily');
+    };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startDaily({ ...this.info, played: true }); };
+  }
+
+  quit() {
+    // すでに結果まで進んでいるなら finish() は何もしない。
+    // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
+    if (this.ended) { closeModal(); endToMenu(); return; }
+    this.finish();
+  }
+  destroy() { this.ended = true; }
+}
+
+// 挑戦の予約。ログイン中で、まだ今日の記録が無い回だけサーバーに登録する。
+//
+// ここを通さずに始めていたころ、「引きが悪かったら提出せずリロード」で同じ
+// シードを何度でも引き直せた（サーバーは提出を見るまで挑戦を消費しない）。
+// 開始時に消費することでその抜け道が閉じる代わりに、放棄＝0点で確定する。
+//
+// 戻り値: { practice, attemptId } / 日付が変わっていれば null（呼び直す）。
+let dailyStarting = false;
+async function reserveDailyAttempt(info) {
+  // ゲストの記録はサーバーに残らない（localStorage に控えるだけ）ので、
+  // 「今日の初回かどうか」もローカルの控えで決める。
+  if (!session.user) return { practice: !!dailyLocalRecord(info.day), attemptId: null };
+  // 練習だと分かっている回はサーバーに聞かない — 連打で開始のレート制限に
+  // 当たると、練習すらできなくなる。
+  if (info.played) return { practice: true, attemptId: null };
+  const res = await api('/api/daily/start', { method: 'POST', body: { day: info.day } });
+  // モーダルを開いたままJST 0:00 を跨いだ。古いシードで走らせても記録できない。
+  if (res && res.stale) return null;
+  return { practice: !!(res && res.practice), attemptId: (res && res.attemptId) || null };
+}
+
+export async function startDaily(info) {
+  if (dailyStarting) return;   // 「挑戦する」の二度押しで1日を2回消費させない
+  dailyStarting = true;
+  try {
+    let cur = info;
+    let attempt = null;
+    // 日跨ぎで仕切り直すのは一度だけ。二度目も跨ぐことは無く、
+    // 万一サーバーが stale を返し続けても無限ループにしない。
+    for (let tries = 0; tries < 2; tries++) {
+      try {
+        attempt = await reserveDailyAttempt(cur);
+      } catch (err) {
+        // 予約できなかった回を走らせると、遊んだのに記録されない（あるいは
+        // 記録されたか分からない）。走らせる前に止めて理由を見せる。
+        toast(err.message || t('デイリーを開始できませんでした', 'Could not start the Daily'), 'err');
+        return;
+      }
+      if (attempt) break;
+      // 日付が変わった — 今日のお題を取り直して仕切り直す。
+      toast(t('日付が変わりました。今日のお題を読み込みます', 'The day rolled over — loading today\'s challenge'), 'info');
+      try {
+        cur = await api('/api/daily');
+      } catch {
+        toast(t('サーバーに接続できません', 'Cannot reach the server'), 'err');
+        return;
+      }
+    }
+    if (!attempt) { toast(t('デイリーを開始できませんでした', 'Could not start the Daily'), 'err'); return; }
+    if (currentMode) currentMode.destroy();
+    currentMode = new DailyMode(cur, attempt);
+    window.__bbaMode = currentMode;
+    currentMode.start();
+  } finally {
+    dailyStarting = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3050,7 +3383,11 @@ class DungeonMode {
   constructor(startFloor = 1, realmId = 'tower') {
     this.mode = 'dungeon';
     this.realm = DUNGEON_REALMS[realmId] || DUNGEON_REALMS.tower;
-    this.startFloor = Math.max(1, Math.min(this.realm.floors - 9, startFloor));
+    // 開始階の上限は「最後のチェックポイント」＝ボス1区間ぶんは必ず登らせる。
+    // 10刻みを決め打ちしていたので、深淵（bossEvery: 5）で最後の A96 を選ぶと
+    // 黙って A91 に落とされ、選んだ階と違う階から始まっていた。
+    const step = this.realm.bossEvery || 10;
+    this.startFloor = Math.max(1, Math.min(this.realm.floors - step + 1, startFloor));
     this.floor = this.startFloor;
     this.lives = 1;
     this.atkSlow = 1;   // >1 = slower enemy attacks (perk)
@@ -3208,7 +3545,19 @@ class DungeonMode {
   applyCurse(f) {
     clearInterval(this.rainInt);
     const e = this.engine;
-    if (this.curse === 'noreroll') e.rerolls = Math.max(e.rerolls, this.savedRerolls || 0);
+    // 封印（noreroll）明けは「戻す」だけでは足りなかった。
+    //  ・Math.max で戻していたので、封印フロアの報酬に「🔄リロール補充(+3)」を
+    //    選ぶと ── 適用時点はまだ封印中で e.rerolls は 0、0+3=3 ── 次フロアで
+    //    max(3, 控え) になり、控えが3以下なら丸ごと消えていた。加算に変え、
+    //    控えは使い切りにする。
+    //  ・掛ける側にしか updateRerollHud が無く、明けても HUD は 🔄0 の灰色
+    //    （#btnReroll.off）のまま。実際には押せるのに押せないように見え、
+    //    ランが終わるまで直らなかった。
+    if (this.curse === 'noreroll') {
+      e.rerolls += this.savedRerolls || 0;
+      this.savedRerolls = 0;
+      updateRerollHud(e);
+    }
     this.curse = null; this.curseHaste = 1; this.curseGreed = false;
     e.chaosMini = false; e.chaosBig = false;
     if (!this.realm.curses) return;
@@ -3395,7 +3744,13 @@ class DungeonMode {
         confettiBurst(80);
       }, 1200);
     }
-    const cp = Math.floor(cleared / 10) * 10 + 1;
+    // 再開点＝チェックポイント＝ボス階。10 固定にしていたので、深淵
+    // （bossEvery: 5）で A5 / A15 / A25 … を撃破したときの
+    // 「次回から A6 で再開可能」という宣言が全部嘘になっていた（実際は A1 に
+    // 戻される＝ボス＋数フロアぶんの進行が消えたように見える）。
+    // 宣言している側（floorCleared のトースト）に計算を合わせる。
+    const step = R.bossEvery || 10;
+    const cp = Math.floor(cleared / step) * step + 1;
     const P = R.prefix;
     const banner = won ? t(`🏆 ${R.name} 完全制覇！！`, `🏆 ${R.nameEn} conquered!!`) : this.aborted ? t(`🚪 リタイア（${P}${this.floor}）`, `🚪 Retired (${P}${this.floor})`) : t(`${P}${this.floor} で力尽きた…`, `Fell on ${P}${this.floor}…`);
     const m = showModal(`
@@ -3417,7 +3772,10 @@ class DungeonMode {
   }
 
   quit() {
-    if (this.ended) return;
+    // 結果まで進んでいたら撤退の確認を出す相手がもういない。何もせず戻ると
+    // ✕ →「終了する」を押しても動かない画面に取り残されるので、他モードと
+    // 同じ退避（結果モーダルを閉じてメニューへ）にする。
+    if (this.ended) { closeModal(); endToMenu(); return; }
     const m = showModal(`
       <h2>${t('🏰 ダンジョンから撤退しますか？', '🏰 Retreat from the dungeon?')}</h2>
       <p class="muted center" style="margin-bottom:10px">${t('ここまでにクリアした階は記録されます', 'Floors cleared so far will be saved')}</p>
@@ -3587,6 +3945,10 @@ class ChaosMode extends VersusBase {
           view.spawnAnim.set(k, view.time);
         }
         view.shake = 14;
+        // シャッフルは埋まっているマスを別の場所へ配り直すので、たまたま行が
+        // 揃うことがある。重力と同じ理由でここで消す（居座ると次の1手が
+        // その行消しの加点とコンボを受け取ってしまう）。
+        e.resolveLines();
         if (!e.hasAnyMove()) { e.grid.fill(0); }   // shuffle never kills you
         break;
       }
@@ -3629,6 +3991,10 @@ class ChaosMode extends VersusBase {
           }
         }
         view.shake = 12;
+        // 崩落で埋まった行・列を消す。engine を通らない直書きなので、これが
+        // 無いと満杯の行が残り、次に置いた1手が（無関係なのに）その行消しの
+        // 加点とコンボを横取りする。hasAnyMove() より前に呼ぶこと。
+        e.resolveLines();
         if (!e.hasAnyMove()) { e.grid.fill(0); }   // gravity never kills you
         break;
       }
@@ -3702,7 +4068,9 @@ class ChaosMode extends VersusBase {
   }
 
   quit() {
-    if (this.ended) return;
+    // 同上。結果まで進んでいたら中断の選択肢を出す意味がないので、
+    // 結果モーダルを閉じてメニューへ戻す（出口を残す）。
+    if (this.ended) { closeModal(); endToMenu(); return; }
     // Mid-run cancel: let the player abort (no record), cash out early, or resume.
     const m = showModal(`
       <h2>${t('🌪️ カオスモードを中断しますか？', '🌪️ Stop the chaos run?')}</h2>
@@ -3819,7 +4187,22 @@ class OnlineMode extends VersusBase {
       .on('royale_over', msg => this.onRoyaleOver(msg))
       // The server has always sent these; nothing on the client listened.
       .on('queued', msg => this.onQueued(msg))
-      .on('queue_cancelled', () => { this.queueInfo = null; })
+      .on('queue_cancelled', () => {
+        this.queueInfo = null;
+        // 自分でキャンセルしたぶんは quit() が後始末済み（leftOnPurpose）。
+        // 拾いたいのはサーバー都合で待ち行列が解散されたとき
+        //（endAllForShutdown / prepare-update）── 検索画面の
+        //「🎯 レート … あと N 秒で AIプレイヤーが参戦します」は server push でしか
+        // 更新されないので、放っておくと二度と進まない画面の前で待ち続けることになる。
+        // このあとサーバーは error も送ってくるが、こちらが socket を閉じると
+        // 届かないことがあるので、理由はここでも出す。
+        if (this.ended || this.leftOnPurpose || this.inMatch) return;
+        closeModal();
+        toast(t('マッチングは中止されました', 'Matchmaking was cancelled'), 'err', 3000);
+        this.ended = true;
+        this.destroy();
+        endToMenu();
+      })
       .on('online', msg => {
         this.onlineCount = msg.online;
         const el = $('#mmOnline');
@@ -3833,13 +4216,18 @@ class OnlineMode extends VersusBase {
         // with the 20s fallback already disarmed by this.ended. The app was
         // unusable until a reload.
         if (this.leftOnPurpose) { closeModal(); return; }
-        if (this.inMatch || this.kind === 'custom' || this.kind === 'tourney') {
-          closeModal();
-          toast(t('サーバーとの接続が切れました', 'Lost connection to the server'), 'err');
-          this.ended = true;
-          this.destroy();
-          endToMenu();
-        }
+        // 以前は inMatch / custom / tourney のときしか後始末をしていなかった。
+        // duel・attack・team・raid・coop・royale はマッチング画面で
+        // inMatch=false のまま待つので、そこで切れると何も起きず ── 毎秒の
+        // queued も止まり「あと N 秒で AIプレイヤーが参戦します」を表示した
+        // まま凍った検索画面に置き去りになっていた。BattleClient に再接続は
+        // 無く、サーバー側のキューも切断で消えるので待っても永久にマッチしない。
+        // 切れたら kind に関係なくメニューへ戻す。
+        closeModal();
+        toast(t('サーバーとの接続が切れました', 'Lost connection to the server'), 'err');
+        this.ended = true;
+        this.destroy();
+        endToMenu();
       });
 
     if (this.kind !== 'custom') {
@@ -4440,13 +4828,26 @@ class OnlineMode extends VersusBase {
   // ズレたまま置こうとすると永久に弾かれる。番号から作り直す。
   applyCoopHand(hand) {
     if (!Array.isArray(hand) || !this.engine) return;
+    // getView() ではなくモジュール変数を見る。getView() はテーマの再適用と
+    // resize を伴う mutating accessor で、手が変わるたびに呼ぶものではない。
+    const v = view;
+    // 掴んだままの枠がサーバー側で入れ替わっていたら、そのドラッグは捨てる。
+    // 指の下の絵は「掴んだときのピース」のまま、engine.hand[i] は別物になるので、
+    // 離しても game.js の `hand[index] !== piece` ガードで必ず弾かれる ──
+    // 置けない物を掴ませ続けても、嘘のゴーストを見せるだけで意味がない。
+    // （自分の手番が時間切れでサーバーに代打ちされた回がこれ。putback の音は
+    //  呼び出し元の onCoopState / onCoopReject が既に鳴らしているので鳴らさない）
+    const dropDrag = i => { if (v && v.drag && v.drag.index === i) v.drag = null; };
     for (let i = 0; i < 3; i++) {
       const idx = hand[i];
       const cur = this.engine.hand[i];
-      if (idx == null) { this.engine.hand[i] = null; continue; }
+      if (idx == null) { dropDrag(i); this.engine.hand[i] = null; continue; }
       const def = SHAPES[idx];
       if (!def) continue;
+      // 同じ形が同じ枠にあるならオブジェクトを作り直さない ── 作り直すと
+      // 掴んでいるピースと実体が別物になり、置けなくなる。
       if (cur && cur.shape === idx) continue;
+      dropDrag(i);
       this.engine.hand[i] = { shape: idx, cells: def.cells, color: def.color };
     }
   }
@@ -4498,7 +4899,28 @@ class OnlineMode extends VersusBase {
   }
 
   onMatchFound(msg) {
-    if (this.inMatch || this.ended) return;   // guard against duplicates
+    // 「敗退表示のまま次のラウンドが来た」回だけ、下の2つのガードを飛び越える。
+    //
+    // ended だけを緩めても効かない。onResult の敗退分岐は inMatch を true の
+    // まま残し、次に来る tourney_state も onTourneyState 冒頭の
+    // `if (this.ended) return;` で捨てられるので、inMatch は下がる機会が無い。
+    // つまり手前の重複ガードで必ず弾かれて、緩めた意味が消えていた。
+    // revive は ended が立っている＝result を受けた後にしか真にならないので、
+    // 試合中の重複 match_found（inMatch=true / ended=false）は今までどおり弾ける。
+    const revive = this.ended && !!msg.tourney;
+    if (this.inMatch && !revive) return;      // guard against duplicates
+    // 大会の次ラウンドだけは this.ended でも受ける。onResult は
+    // 「outcome が 'win' 以外＝敗退」で ended を立てるが、サーバーが引き分けを
+    // 送ってくる経路（同点処理の順番、更新前の畳み込みなど）はこの先も
+    // あり得る。そこで ended のまま次の match_found を捨てると、勝ち上がって
+    // いる人が0点で不戦敗になる ── 一番高い代償を払う取りこぼしなので、
+    // クライアント側にも受け皿を残しておく。
+    // なお「引き分けも勝ち上がり扱いにする」直し方は採らない。更新のための
+    // 停止（server/battle.js の endAllForShutdown）は意図的に引き分けで畳んで
+    // 大会自体も終わらせるため、勝ち上がり扱いにすると閉じられない
+    //「次のラウンドを待っています…」の前で固まるほうに倒れる。
+    if (this.ended && !revive) return;
+    this.ended = false;
     closeModal();                             // clear the bracket between rounds
     this.inMatch = true;
     this.matchInfo = msg;
@@ -5032,7 +5454,7 @@ class SurvivalMode {
   quit() {
     // すでに結果まで進んでいるなら finish() は何もしない。
     // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
-    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    if (this.ended) { closeModal(); endToMenu(); return; }
     this.finish();
   }
   destroy() { this.ended = true; clearInterval(this.int); }
@@ -5160,7 +5582,12 @@ class SprintMode {
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startSprint(this.duration); };
   }
 
-  quit() { this.finish('quit'); }
+  quit() {
+    // すでに結果まで進んでいるなら finish() は先頭で即 return するので、
+    // ここで戻さないと ✕ →「終了する」を押しても何も起きない画面に残る。
+    if (this.ended) { closeModal(); endToMenu(); return; }
+    this.finish('quit');
+  }
   destroy() { this.ended = true; clearInterval(this.tickInt); $('#hudTimer').classList.add('hidden'); }
 }
 
@@ -5198,6 +5625,9 @@ function aeGravity(engine) {
     for (let r = 0; r < n; r++) if (g[r * n + c]) col.push(g[r * n + c]);
     for (let r = n - 1, i = col.length - 1; r >= 0; r--, i--) g[r * n + c] = i >= 0 ? col[i] : 0;
   }
+  // 崩落で埋まった行はここで消す。直書きなので engine が面倒を見てくれない。
+  // hasAnyMove() より前でないと、消えれば続けられる盤面で不当に終わる。
+  engine.resolveLines();
   if (!engine.hasAnyMove()) engine.over = true;
 }
 
@@ -5208,6 +5638,9 @@ function aeRiseRow(engine, holes = 2) {
   const gap = new Set();
   while (gap.size < holes) gap.add(Math.floor(engine.rng.next() * n));
   for (let c = 0; c < n; c++) g[(n - 1) * n + c] = gap.has(c) ? 0 : 9;
+  // せり上がりで列が埋まりきることがある（下1マスが塞がって上7段が埋まっている列）。
+  // 直書きなので engine は消してくれない。同じ理由で hasAnyMove() より前に。
+  engine.resolveLines();
   if (!engine.hasAnyMove()) engine.over = true;
 }
 
@@ -5418,7 +5851,15 @@ class AdminEventMode extends VersusBase {
     switch (pick.id) {
       case 'jackpot':
         e.scoreMult = 5;
-        this.rainInt = setInterval(() => { if (!this.ended && !e.over) e.addGarbage(2); }, 4000);
+        // 詰みを拾って終わらせる。over が立つと place() は必ず null を返し、
+        // applyResult も onGameOver も走らない ── AE ではリロールもアイテムも
+        // 奥義も無効なので、残り時間ずっと動かない盤面を見せられていた。
+        // 次のスピンでも復帰しない（clearWheelEffects は over を戻さない）。
+        this.rainInt = setInterval(() => {
+          if (this.ended || e.over) return;
+          e.addGarbage(2);
+          if (e.over) this.finish();
+        }, 4000);
         this.timers.push(this.rainInt);
         break;
       case 'mini': e.chaosMini = true; break;
@@ -5428,6 +5869,9 @@ class AdminEventMode extends VersusBase {
           if (this.ended || e.over || (view && (view.inputLocked || view.drag))) return;
           aeRotateGrid(e);
           if (view) view.shake = 8;
+          // aeRotateGrid は末尾で詰みを判定して over を立てる。'rise' と同じく
+          // ここで終わらせないと、置けない・終われない盤面のまま放置される。
+          if (e.over) this.finish();
         }, 10000);
         this.timers.push(this.spinInt);
         break;
@@ -5494,7 +5938,12 @@ class AdminEventMode extends VersusBase {
     const k = empties[(Math.random() * empties.length) | 0];
     this.materials.add(k);
     if (view) {
-      view.glowCells = [...this.materials];
+      // Set のまま渡す。配列を渡していたころ、drawBlocks() の
+      // `glowCells.has(key)` が TypeError で落ち、render() が投げた時点で
+      // 次フレームの requestAnimationFrame が予約されず描画ループごと死んだ
+      // （running は true のままなので start() でも復帰できない）＝1手置いた
+      // 次のフレームで盤面が凍り、共同作業の枠が毎回プレイ不能になっていた。
+      view.glowCells = new Set(this.materials);
       view.screenFlash = 0.12;
     }
   }
@@ -5518,7 +5967,7 @@ class AdminEventMode extends VersusBase {
       this.updateMyHud(this.engine);
       this.updateWorldPanel();
     }
-    if (view) view.glowCells = [...this.materials];
+    if (view) view.glowCells = new Set(this.materials);   // 同上: 描画側は Set 前提
   }
 
   // ---- finish ----
@@ -5603,7 +6052,7 @@ class AdminEventMode extends VersusBase {
   quit() {
     // すでに結果まで進んでいるなら finish() は何もしない。
     // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
-    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    if (this.ended) { closeModal(); endToMenu(); return; }
     this.finish();
   }
 
@@ -5645,6 +6094,9 @@ class ZeroMode extends VersusBase {
     this.myMissed = 0;
     this.state = null;
     this.mini = null;
+    this.shardsGained = 0;      // 走行中に WebSocket で届いた 👑（HTTP の res.shards とは別勘定）
+    this.canWill = false;       // 段にとどめを刺した＝次の枠へ伝言を残せる
+    this._willResolve = null;
   }
 
   every(ms, fn) { const id = setInterval(fn, ms); this.timers.push(id); return id; }
@@ -5688,9 +6140,31 @@ class ZeroMode extends VersusBase {
       .on('zero_deal_done', m => this.onDealDone(m))
       .on('zero_stake', m => this.onStake(m))
       .on('zero_revive', () => this.onRevived())
+      // 👑 王座の欠片は「斬った瞬間」に battle.js から流れてくる。受け口が
+      // 無かったので走行中も結果画面も数字が動かず、宝物庫の残高だけが
+      // 増えていた（＝斬っても意味がないように見えていた）。
+      // ただし送り先は下の registerHandler のコメントのとおり、この
+      // ソケットとは限らない。両方に受け口を置く（サーバーは1本にしか
+      // 送らないので二重計上にはならない）。
+      .on('shards', m => this.onShards(m))
+      // 📝 伝言が保存された合図。これも受け口が無かった。
+      .on('zero_will_ok', () => this.onWillOk())
+      // 👁️ 七段すべて陥落。ゲーム世界で一度きりしか送られない通知で、
+      // 受け口が無いまま二度と再送されない（run.allBroken が立つ）ので、
+      // この演出はこれまで一度も出ていなかった。
+      .on('zero_complete', m => this.onAllBroken(m))
       // 生の文字列を出さない。英語で遊んでいる人に日本語のトーストが出る。
       .on('error', m => toast(trServer(m.error) || t('エラー', 'Error'), 'err', 3000))
       .on('close', () => { if (!this.ended) toast(t('接続が切れました', 'Disconnected'), 'err'); });
+
+    // 👑 の実際の宛先。server/battle.js の shard() は
+    // `[...clients].find(c => sockName(c) === name)` ＝そのユーザーの
+    // **最初の** ソケットに送る。clients は接続順の Set で、チャットの常時接続は
+    // ページ読み込み時、この BattleClient はモード開始時なので、ふつうは
+    // チャット側が先に並ぶ ── つまり上の .on('shards') は一度も呼ばれず、
+    // chat.js は知らない type を黙って捨てていた（走行中のトーストも出ず、
+    // 結果画面も「初回10」のままだった）。チャット側にも受け口を置いて拾う。
+    this._offShards = registerHandler('shards', m => this.onShards(m));
 
     try {
       await this.client.connect();
@@ -5964,6 +6438,90 @@ class ZeroMode extends VersusBase {
     confettiBurst(90);
     toast(t(`👁️ 第${m.dan}段 陥落！ 王座がひとつ返ってきた${m.by ? `（とどめ：${m.by}）` : ''}`,
       `👁️ Stage ${m.dan} has fallen — one throne returns${m.by ? ` (by ${m.by})` : ''}`), 'announce', 5000);
+    // とどめを刺した本人だけが、次の枠へ40字残せる（サーバーの submitWill と
+    // 同じ条件）。ここで覚えておかないと、席を外す前に聞く機会が無くなる。
+    if (m.by && session.user && m.by === session.user.username) this.canWill = true;
+  }
+
+  // 👁️ 七段すべて陥落 ── 一度きりの完全勝利。
+  onAllBroken(m) {
+    const n = (m && m.dan) || 7;
+    audio.victory();
+    confettiBurst(150);
+    toast(t(`👁️ ${n}段すべて陥落 ── 王座はすべて還った`,
+      `👁️ All ${n} stages have fallen — every throne is reclaimed`), 'announce', 8000);
+  }
+
+  // 👑 王座の欠片が増えた（斬った／急所／段に居合わせた／とどめ）。
+  // 結果画面の res.shards は「その日はじめて席に着いた」ぶんしか含まないので、
+  // ここで積んでおいて最後に足す。
+  onShards(m) {
+    const n = m ? Math.max(0, m.gained | 0) : 0;
+    if (!n) return;
+    this.shardsGained += n;
+    if (session.user && typeof m.total === 'number') session.user.shards = m.total;
+    audio.coin();
+    toast(t(`👑 王座の欠片 +${fmt(n)}`, `👑 Throne Shards +${fmt(n)}`), 'ok', 1400);
+  }
+
+  // 📝 伝言が保存された。
+  onWillOk() {
+    toast(t('📝 伝言を残しました ── 次の枠の開幕でゼロが読み上げます',
+      '📝 Message saved — Zero will read it out when the next slot opens'), 'ok', 3200);
+    if (this._willResolve) this._willResolve();
+  }
+
+  // 📝 伝言を書いてもらう。サーバー側（battle.js の zero_will / zero-session の
+  // submitWill）は揃っているのに、クライアントに送る口がひとつも無く、この機能は
+  // 一度も発火していなかった（告知には「40字の伝言を残せます」と出ている）。
+  // zero_leave を送ると ws.zeroId が消えてサーバーが席を見失い、zero_will は
+  // 黙って捨てられる ── だから必ずソケットを閉じる前に聞く。
+  askWill() {
+    return new Promise(resolve => {
+      if (!this.canWill || !this.client || !this.client.connected) { resolve(); return; }
+      let done = false;
+      let waitId = null;
+      const end = () => {
+        if (done) return;
+        done = true;
+        this._willResolve = null;
+        clearTimeout(waitId);
+        closeModal();
+        resolve();
+      };
+      this._willResolve = end;
+      const m = showModal(`
+        <h2>📝 ${t('次の枠へ伝言を残す', 'Leave a message for the next slot')}</h2>
+        <p class="muted center" style="margin-bottom:10px">${t(
+          'とどめを刺したあなただけが書けます。40字まで ── 次の枠の開幕でゼロが読み上げます。',
+          'Only the one who landed the final blow may write. Up to 40 characters — Zero reads it out when the next slot opens.')}</p>
+        <input id="zeroWillText" type="text" maxlength="40" autocomplete="off"
+          placeholder="${t('例：七段目、右の列に気をつけて', 'e.g. Watch the right column on stage seven')}">
+        <div class="modal-buttons">
+          <button class="btn btn-ghost" id="zeroWillSkip">${t('残さない', 'Skip')}</button>
+          <button class="btn btn-gold" id="zeroWillSend">${t('残す', 'Leave it')}</button>
+        </div>`, { dismissable: false });
+      // 返事が来なくても先へ進める。ここで詰まると結果画面すら出せない。
+      waitId = setTimeout(end, 12000);
+      const input = m.querySelector('#zeroWillText');
+      let sent = false;
+      const send = () => {
+        // 二度押しで送らない。サーバー側は 3回/分で弾くので、連打すると
+        // 本命の1通が捨てられる。
+        if (sent) return;
+        const text = (input && input.value || '').trim();
+        if (!text) { audio.error(); return; }
+        sent = true;
+        audio.click();
+        this.client.send({ type: 'zero_will', text });
+      };
+      if (input) {
+        setTimeout(() => { try { input.focus(); } catch { /* 端末による */ } }, 60);
+        input.onkeydown = ev => { if (ev.key === 'Enter') send(); };
+      }
+      m.querySelector('#zeroWillSkip').onclick = () => { audio.click(); end(); };
+      m.querySelector('#zeroWillSend').onclick = send;
+    });
   }
 
   onGarbage(m) {
@@ -6001,6 +6559,9 @@ class ZeroMode extends VersusBase {
     const v = getView();
     if (v) { v.dangerCells = null; v.keystoneCell = -1; v.inputLocked = true; }
     const dl0 = $('#zeroDeal'); if (dl0) dl0.remove();
+    // 📝 伝言は席を外す前にしか送れない（zero_leave の後はサーバーが席を
+    // 見失って zero_will を捨てる）。権利のある人にだけ、閉じる直前に聞く。
+    await this.askWill();
     if (this.client) {
       try { this.client.send({ type: 'zero_leave' }); this.client.ws.close(); } catch { /* もう閉じている */ }
     }
@@ -6022,6 +6583,11 @@ class ZeroMode extends VersusBase {
     }
     if (res && res.event) this.ae = res.event;
 
+    // 👑 HTTP が返す res.shards は「その日はじめて席に着いた」ぶん（初回10・
+    // 以降0）しかない。斬って稼いだぶんは WebSocket で届いていて、それを
+    // 積んだのが shardsGained。足さないと、数百稼いだ回でも「+10」か
+    // 行ごと消えて、宝物庫の残高だけが増える ── 実際の獲得と食い違う。
+    const shards = (res && res.shards ? res.shards : 0) + (this.shardsGained || 0);
     const st = this.state;
     showModal([
       `<h2>👁️ ${t('断罪 ── 記録', 'Condemned — record')}</h2>`,
@@ -6034,7 +6600,7 @@ class ZeroMode extends VersusBase {
       // 画面の見た目が変わらず「やっても意味がない」ように見える。
       '<div class="result-stats">',
       rewardsRows(res ? res.rewards : null),
-      res && res.shards ? `<div class="rs-row"><span>👑 ${t('王座の欠片', 'Throne Shards')}</span><b>+${fmt(res.shards)}</b></div>` : '',
+      shards ? `<div class="rs-row"><span>👑 ${t('王座の欠片', 'Throne Shards')}</span><b>+${fmt(shards)}</b></div>` : '',
       res && res.chest && (res.chest.coins || res.chest.gems)
         ? `<div class="rs-row"><span>🎁 ${t(`お宝ラッシュ（${res.chest.mult}倍）`, `Treasure Rush (${res.chest.mult}×)`)}</span><b>+${fmt(res.chest.coins)}🪙 +${fmt(res.chest.gems)}💎</b></div>`
         : '',
@@ -6055,7 +6621,10 @@ class ZeroMode extends VersusBase {
     // 結果画面からメニューに戻った直後にボス戦を始めると壊れたままになる。
     this.restoreBossPanel();
     const btn = $('#zeroClose');
-    if (btn) btn.onclick = () => { closeModal(); showScreen('menu'); };
+    // 他モードの結果画面と同じく endToMenu() を通す。showScreen だけだと
+    // 断罪が占有した board_shadow と 'oni' の BGM がメニューにも次のモードにも
+    // 残り、隠れたキャンバスの描画ループも回りっぱなしになる。
+    if (btn) btn.onclick = () => { closeModal(); this.destroy(); endToMenu(); };
     // 枠が生きている間はその場から再入場できるようにする。
     // 無いと再挑戦のたびにメニュー最下部までスクロールし直しになる。
     const again = $('#zeroAgain');
@@ -6065,7 +6634,7 @@ class ZeroMode extends VersusBase {
       this.destroy();
       if (!ae || !ae.live || ae.live.endsAt <= Date.now()) {
         toast(t('あなたの枠は終了しました。またの参加をお待ちしています！', 'Your slot has ended — see you next time!'), 'announce', 4000);
-        showScreen('menu');
+        endToMenu();   // 同上: テーマ・BGM・描画ループを解放して戻る
         return;
       }
       startAdminEventMode(ae);
@@ -6082,7 +6651,7 @@ class ZeroMode extends VersusBase {
   quit() {
     // すでに結果まで進んでいるなら finish() は何もしない。
     // ここで戻さないと、結果モーダルを閉じた人が画面に取り残される。
-    if (this.ended) { closeModal(); showScreen('menu'); return; }
+    if (this.ended) { closeModal(); endToMenu(); return; }
     this.finish();
   }
 
@@ -6100,6 +6669,13 @@ class ZeroMode extends VersusBase {
     this.ended = true;
     this.stopTimer();
     this.clearTimers();
+    // 伝言の入力を待っている最中に畳まれたら、待たせずに解く。
+    // 放っておくと finish() が最大12秒後に、もう関係のない画面へ結果モーダルを
+    // 出してくる。
+    if (this._willResolve) this._willResolve();
+    // チャット socket に置いた 👑 の受け口を必ず外す。残すと次の枠・次の
+    // モードでも古い ZeroMode が生き続け、トーストと shardsGained が二重になる。
+    if (this._offShards) { this._offShards(); this._offShards = null; }
     if (this.client && this.client.ws) { try { this.client.ws.close(); } catch { /* 既に閉じている */ } }
     const v = getView();
     if (v) { v.dangerCells = null; v.keystoneCell = -1; }
@@ -6148,6 +6724,12 @@ window.__bbaSaveNow = () => {
   }
 };
 
+// メニューへ戻る唯一の正規ルート。showScreen('menu') だけで戻ると画面は
+// 切り替わるが、モードが占有したもの（盤面テーマ・BGM・描画ループ・
+// view のフック）は何ひとつ解放されない ── getView() が毎回
+// `view.modeTheme || equippedTheme()` を再適用するので、次に始めたソロが
+// 前のモードの盤面で始まり、BGM も鳴りっぱなし、隠れたキャンバスの rAF も
+// 回り続ける。各モードの quit() / 結果画面の「メニュー」は必ずここを通す。
 function endToMenu() {
   if (currentMode) { currentMode.destroy(); currentMode = null; }
   // Mode-installed view hooks/overlays must never leak into the next mode.
@@ -6163,6 +6745,9 @@ function endToMenu() {
   }
   if (view) view.stop();
   stopAutopilot();
+  // どのモードでも、3-2-1 の途中で抜けるとオーバーレイだけがメニューの上に
+  // 残っていた（countdownOverlay は中断できないため）。ここで必ず片付ける。
+  clearIntroOverlays();
   const picker = document.querySelector('.emote-picker');
   if (picker) picker.remove();
   $('#btnEmote').classList.add('hidden');
