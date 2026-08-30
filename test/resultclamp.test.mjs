@@ -17,7 +17,16 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+// index.js だけを読んでいたが、ルート定義が server/routes/ に分割されたので
+// 「結果送信まわりのサーバー実装」はもう1ファイルには収まっていない。
+// 読む範囲は広げるだけ ── どの検査も「ある／無い」を見ているので、
+// 対象が増えても甘くならない（`: 300;` の不在確認はむしろ厳しくなる）。
+const routesDir = path.join(__dirname, '..', 'server', 'routes');
+const src = [
+  fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8'),
+  ...(fs.existsSync(routesDir) ? fs.readdirSync(routesDir).filter(f => f.endsWith('.js'))
+    .map(f => fs.readFileSync(path.join(routesDir, f), 'utf8')) : []),
+].join('\n');
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push([ok ? '✅' : '❌', name, detail]); if (!ok) process.exitCode = 1; };

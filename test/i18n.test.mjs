@@ -27,7 +27,13 @@ const hasJa = s => /[ぁ-んァ-ヶ一-龠]/.test(s);
 // 管理者専用の窓口（requireAdmin / requireMod の中）は対象外にする ──
 // あそこを読むのは運営だけで、運営は日本語で読んでいる。
 const PLAYER_FILES = ['server/party.js', 'server/friends.js'];
-const MIXED_FILES = ['server/index.js', 'server/battle.js'];
+// ルート定義は server/routes/ に分割されたので、プレイヤー向けの文言も
+// index.js だけには残っていない。「表に載っている英訳が本当にサーバーから
+// 出ているか」を見る検査なので、探す範囲は広げるだけでよい（狭いままだと、
+// 生きている対訳を死んだ対訳と誤判定する）。
+const MIXED_FILES = ['server/index.js', 'server/battle.js',
+  ...fs.readdirSync(path.join(root, 'server', 'routes'))
+    .filter(f => f.endsWith('.js')).map(f => `server/routes/${f}`)];
 
 let missing = [];
 for (const f of PLAYER_FILES) {

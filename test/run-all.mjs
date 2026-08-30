@@ -43,6 +43,7 @@ const ROOT = path.join(__dirname, '..');
 // 上の10本はサーバーを立てない純ロジック（合計でも数秒）。
 const TESTS = [
   'engine.test.mjs',
+  'modes-structure.test.mjs',
   'viewresize.test.mjs',
   'i18n.test.mjs',
   'clientwiring.test.mjs',
