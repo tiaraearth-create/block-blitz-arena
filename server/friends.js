@@ -109,6 +109,10 @@ export function sendRequest(db, from, toId) {
   if (from.friends.length >= MAX_FRIENDS) return { error: `フレンドは${MAX_FRIENDS}人までです` };
   if (from.friendReqOut.length >= MAX_REQ_OUT) return { error: `申請は同時に${MAX_REQ_OUT}件までです` };
   if (to.friends.length >= MAX_FRIENDS) return { error: REFUSED };
+  // 期限切れ(REQ_EXPIRE_MS超)の申請は受信枠に数えない。定期実行が無く healSocial は
+  // 起動/復元時しか走らないので、送信のたびにここで自然に掃除する（さもないと古い申請
+  // MAX_REQ_IN件で受信箱が塞がり、本物の新規申請が REFUSED され続ける）。
+  to.friendReqIn = to.friendReqIn.filter(r => r && Date.now() - (r.at || 0) < REQ_EXPIRE_MS);
   // 受け取り側があふれている場合は、送り主を断る。
   // 古いものを押し出す作りにすると、大量申請で本物の申請を消せてしまう。
   if (to.friendReqIn.length >= MAX_REQ_IN) return { error: REFUSED };
@@ -124,7 +128,16 @@ export function acceptRequest(db, me, fromId) {
   const other = userOf(db, fromId);
   if (!other) { me.friendReqIn = me.friendReqIn.filter(r => r.from !== fromId); return { error: '相手が見つかりません' }; }
   ensureSocial(other);
-  if (!me.friendReqIn.some(r => r.from === fromId)) return { error: 'その申請はありません' };
+  const req = me.friendReqIn.find(r => r.from === fromId);
+  // 期限切れ(REQ_EXPIRE_MS超)の申請は「無い」ものとして扱い、両側から掃除する。
+  // healSocial が起動/復元時にしか走らないため、ここで見ないと期限切れを承認できてしまう。
+  if (!req || Date.now() - (req.at || 0) >= REQ_EXPIRE_MS) {
+    if (req) {
+      me.friendReqIn = me.friendReqIn.filter(r => r.from !== fromId);
+      other.friendReqOut = other.friendReqOut.filter(id => id !== me.id);
+    }
+    return { error: 'その申請はありません' };
+  }
   if (eitherBlocks(me, other)) {
     me.friendReqIn = me.friendReqIn.filter(r => r.from !== fromId);
     other.friendReqOut = other.friendReqOut.filter(id => id !== me.id);

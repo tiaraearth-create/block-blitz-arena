@@ -24,7 +24,7 @@ import {
 } from './missions.js';
 import { achievementsView, claimAchievement, ACHIEVEMENTS } from './achievements.js';
 import {
-  ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider,
+  ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider, setTakenNamesProvider,
   rosterView, retiredResidents, crowdMood, ambientQueue, isQuietNow, DEFAULT_TOGGLES, ARCHETYPES,
   MAX_LIVE_SCALE, residentByName, clashingResidentIds, activeResidents, residentStats, archetype,
   boardResidents,
@@ -129,7 +129,20 @@ process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err && err.message ? err.message : err);
 });
 const app = express();
-app.set('trust proxy', 1);
+// trust proxy: 前段にLB/リバースプロキシがある構成(Render/Fly/Railway)では
+// X-Forwarded-For 末尾を req.ip として採用するのが正しい。しかし前段プロキシの
+// 無い直結公開(docker run -p 3000:3000 等)でこれを有効にすると、クライアントが
+// XFF を自由に詐称して req.ip を偽装でき、IP依存のレート制限(認証総当たり防止・
+// restore・bugreport)を丸ごと回避できる。既定は従来どおり1ホップ信頼(既存の
+// 本番はLB前提)。プロキシ無しで直結公開する場合は TRUST_PROXY=0 を設定して
+// XFF を無視させる。数値=ホップ数、'false'/'0'/'off'=無効、その他文字列は
+// Express にそのまま渡す(サブネット指定 'loopback','10.0.0.0/8' 等)。
+const _trustProxy = process.env.TRUST_PROXY;
+app.set('trust proxy',
+  _trustProxy == null || _trustProxy === '' ? 1
+  : /^(0|false|off|no)$/i.test(_trustProxy.trim()) ? false
+  : /^\d+$/.test(_trustProxy.trim()) ? Number(_trustProxy.trim())
+  : _trustProxy.trim());
 app.use(compression());   // gzip — big win for overseas players on slow links
 // Restore uploads a whole database dump, so it gets its own generous parser;
 // every other route stays on the tight limit.
@@ -542,6 +555,11 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   items = clamp(items, 200);
   pieces = clamp(pieces, 20000);
   floors = clamp(floors, 100);
+  // 単数 floor（ダンジョン到達階）もクランプ。realm ブロックは別変数 fl で
+  // クランプするが、到達フィード生成と `${mode}Prev` 書き込みは生 floor を
+  // 使うため、ここで押さえないと F999999 の虚偽速報や dungeonPrev=Infinity
+  // (保存で null 化) を通してしまう。fl(926)と二重になるが無害。
+  floor = clamp(floor, 100);
   depth = clamp(depth, 9999);
   stage = clamp(stage, 9999);
   rank = ['S', 'A', 'B', 'C'].includes(rank) ? rank : null;
@@ -679,11 +697,20 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // 通常ハイスコアとは比べない — 専用のその日限りランキングだけに載る。
   const scoreboardEligible = mode !== 'meltdown' && mode !== 'daily' && !mode.startsWith('ae_');
   if (scoreboardEligible && score > s.bestScore) s.bestScore = score;
-  if (maxCombo > s.maxCombo) s.maxCombo = maxCombo;
-  s.ultsUsed = (s.ultsUsed || 0) + ults;
-  s.itemsUsed = (s.itemsUsed || 0) + items;
-  s.piecesPlaced = (s.piecesPlaced || 0) + pieces;
-  const newWaveBest = mode === 'survival' && wave > (s.survivalWave || 0);
+  // これらの累積カウンタは実績→💎(課金通貨)の原資になるが、値はすべて
+  // クライアント申告なのでスコア/コインと同様に信頼しない。💎ドロップと同じ
+  // 「実プレイの痕跡」(score/duration が実プレイ下限を超える) を通った回だけ
+  // 反映する。正直に1プレイすれば必ず超える水準なので通常プレイの取り分は
+  // 変わらないが、{maxCombo:200} 等のテレメトリだけを連投しても最上位実績に
+  // 到達できない。maxCombo は monotonic set ではなく実プレイ判定を通した回のみ更新。
+  const realPlay = score >= GEMDROP_MIN_SCORE && duration >= GEMDROP_MIN_SECONDS;
+  if (realPlay && maxCombo > s.maxCombo) s.maxCombo = maxCombo;
+  if (realPlay) {
+    s.ultsUsed = (s.ultsUsed || 0) + ults;
+    s.itemsUsed = (s.itemsUsed || 0) + items;
+    s.piecesPlaced = (s.piecesPlaced || 0) + pieces;
+  }
+  const newWaveBest = mode === 'survival' && realPlay && wave > (s.survivalWave || 0);
   if (newWaveBest) s.survivalWave = wave;
   if (mode === 'sprint') s.sprintPlays = (s.sprintPlays || 0) + 1;
   if (mode === 'coop') s.coopPlays = (s.coopPlays || 0) + 1;
@@ -1380,11 +1407,19 @@ app.get('/api/status', (req, res) => {
     maintenance: inMaintenance(),
     // True when SESSION_SECRET is set, i.e. logins survive redeploys.
     sessionsPersist: SESSIONS_PERSIST,
-    // 直近の保存が失敗していれば、その理由。null なら書けている。
+    // 直近の保存が失敗していれば、その事実。null なら書けている。
     // 保存の失敗はこれまで完全に無音で、遊べてしまうぶんだけ気づけなかった
     // （メモリ上は正常なので、次の再起動で初めて「全部消えた」と分かる）。
     // 25秒おきに全クライアントが叩く口なので、ここに出しておけば必ず目に入る。
-    persistError: lastPersistError(),
+    // ただし生の fs 例外メッセージは絶対パスや環境情報(ENOSPC ... '/data/db.json'
+    // 等)を含みうる。この口は無認証で誰にでも見えるので、一般には保存が失敗して
+    // いる事実だけを返し(クライアントの警告表示は truthy で維持)、診断に必要な
+    // 生メッセージは管理者にだけ返す。
+    persistError: (() => {
+      const e = lastPersistError();
+      if (!e) return null;
+      return (req.user && req.user.role === 'admin') ? e : 'サーバーの保存に問題が発生しています';
+    })(),
     event: currentEvent(),
     // Menu badge only — the full poll (and the caller's own vote) comes from
     // /api/poll, which needs auth to know who is asking.
@@ -1594,6 +1629,9 @@ app.get('/api/admin/poll/suggest', requireAuth, requireAdmin, (_req, res) => {
 const curWeek = () => weekIdOf(currentWeekNum());
 
 app.get('/api/guilds', (req, res) => {
+  // /api/leaderboard と同じく無認証で全ギルド走査＋ゴースト合成する重い経路。
+  // 同じIPレート制限で連打を抑える。
+  if (!rateLimit(`guilds:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください' });
   const week = curWeek();
   const real = Object.values(db.guilds).map(g => guildView(db, g, week));
   const ghosts = getCustom().toggles.guilds ? ghostGuildViews(week).filter(g => !real.some(r => r.name === g.name || r.tag === g.tag)) : [];
@@ -2533,7 +2571,10 @@ app.post('/api/adminevent/result', requireAuth, maintenanceGuard, (req, res) => 
     return res.status(429).json({ error: '送信が多すぎます。しばらく待ってください' });
   }
   const schedule = getAeSchedule(db);
-  const live = schedule.enabled ? aeLiveSlotFor(schedule, req.user) : null;
+  // graceMs=125000: 固定120秒ランの結果が、枠終了ちょうどで走り切った直後でも
+  // 受理されるよう猶予を与える(1ラン=120秒 + 送信/クロックの余白5秒)。
+  // 枠の「開始前」は猶予対象外なので、早撃ちには使えない。
+  const live = schedule.enabled ? aeLiveSlotFor(schedule, req.user, Date.now(), 125000) : null;
   if (!live) return res.status(403).json({ error: 'いまはあなたの枠の時間ではありません' });
 
   const { occ } = live;
@@ -2581,7 +2622,18 @@ app.post('/api/adminevent/result', requireAuth, maintenanceGuard, (req, res) => 
   let chestCoins = 0, chestGems = 0;
   if (mult > 1 && rewards) {
     chestCoins = Math.round(rewards.coins * (mult - 1));
-    chestGems = Math.floor(score / 25_000) + (delta.killed ? 25 : 0);
+    // 💎は課金通貨。通常経路(applyGameResult の eventGems, GEMDROP_DAILY_CAP)
+    // と同じ日次上限をここにも課す。ここだけ上限が無く、枠内で /result を連投
+    // するとジェムを日次上限を超えて積み増せる穴だった。予算は st.eventGemDay
+    // で通常ドロップと共有し、「1日に湧く💎総額」を一本化する。
+    const st = req.user.stats;
+    const today = jstDayKey();
+    if (!st.eventGemDay || st.eventGemDay.day !== today) st.eventGemDay = { day: today, got: 0 };
+    const room = Math.max(0, GEMDROP_DAILY_CAP - st.eventGemDay.got);
+    const scoreGems = Math.min(Math.floor(score / 25_000), room);
+    st.eventGemDay.got += scoreGems;
+    // とどめ(+25)は1枠で最大1回、討伐という実イベントに紐づくので上限とは別枠。
+    chestGems = scoreGems + (delta.killed ? 25 : 0);
     req.user.coins += chestCoins;
     req.user.gems += chestGems;
   }
@@ -2658,7 +2710,7 @@ app.post('/api/adminevent/result', requireAuth, maintenanceGuard, (req, res) => 
 
 // Community-goal payouts are claimed, not pushed — a player who was in the
 // 18:00 slot can collect a tier the 21:00 crowd unlocked later.
-app.post('/api/adminevent/claim', requireAuth, (req, res) => {
+app.post('/api/adminevent/claim', requireAuth, maintenanceGuard, (req, res) => {
   const schedule = getAeSchedule(db);
   const occ = schedule.enabled ? aeCurrentOccurrence(schedule) : null;
   const run = db.meta.adminEventRun;
@@ -2754,6 +2806,9 @@ app.post('/api/admin/adminevent', requireAuth, requireAdmin, (req, res) => {
 });
 
 app.get('/api/leaderboard', (req, res) => {
+  // 無認証だが、全 db.users を走査＋ゴースト合成＋ソートする O(ユーザー数) の
+  // 重い経路。他の公開読み取り(/api/profile 等)と同じIPレート制限で連打を抑える。
+  if (!rateLimit(`lb:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください' });
   finalizeWeeklyRankings();
   refreshThrones();   // Elo changes happen over websockets — catch up here
   const board = ['rating', 'dungeon', 'weekly', 'sprint', 'puzzle', 'dig', 'daily'].includes(req.query.board) ? req.query.board : 'score';
@@ -3611,15 +3666,30 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     if (typeof v !== 'number' || !Number.isFinite(v)) return null;
     return Math.max(-max, Math.min(max, Math.trunc(v)));
   };
+  // これらの「即時適用」系(grant*/権限/パスワード/称号など)は、以前は検証の
+  // 直後にその場で target を書き換えていた。ところが後段の set*(絶対値設定)は
+  // 「全部検証してから適用」する設計で、後段が1つでも400を投げると、既に
+  // 書き換わった grant* の変更がメモリ上の db.users[id] に残り、当該リクエストは
+  // 保存されないものの次の saveDb()(他リクエスト)がその半端な変更を焼き付けて
+  // しまった(管理者は『エラー＝何も起きていない』と誤認)。そこで即時適用系も
+  // 検証だけ先に済ませ、実際の書き換えは applies に積み、set* の検証まで全て
+  // 通ってから一括適用する。これで経路全体が set* と同じ「全検証→適用」の
+  // 不変条件を満たし、後段の400が grant* を残さない。
+  const applies = [];
+  // set* の管理者専用チェックは、同じリクエストで role を変えるならその新しい
+  // role を見る必要がある(従来は role を即時適用してから set* を検証していた)。
+  // 適用を後回しにするので、検証時に見るべき「実効 role」をここで確定しておく。
+  const roleValid = ['admin', 'mod', 'user'].includes(b.role);
+  const effectiveRole = roleValid ? b.role : target.role;
   if (b.grantCoins !== undefined) {
     const n = delta(b.grantCoins, 1_000_000_000);
     if (n === null) return res.status(400).json({ error: 'コイン付与額が不正です' });
-    target.coins = Math.max(0, Math.min(1_000_000_000, target.coins + n));
+    applies.push(() => { target.coins = Math.max(0, Math.min(1_000_000_000, target.coins + n)); });
   }
   if (b.grantGems !== undefined) {
     const n = delta(b.grantGems, 100_000_000);
     if (n === null) return res.status(400).json({ error: 'ジェム付与額が不正です' });
-    target.gems = Math.max(0, Math.min(100_000_000, target.gems + n));
+    applies.push(() => { target.gems = Math.max(0, Math.min(100_000_000, target.gems + n)); });
   }
   // 👑 王座の欠片。イベントの外では増えないので、配れるのは運営だけ。
   // 上限を低めに置いてあるのは、この通貨は「量」ではなく「どこで得たか」に
@@ -3627,55 +3697,59 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   if (b.grantShards !== undefined) {
     const n = delta(b.grantShards, 1_000_000);
     if (n === null) return res.status(400).json({ error: '欠片付与数が不正です' });
-    target.shards = Math.max(0, Math.min(1_000_000, (target.shards || 0) + n));
+    applies.push(() => { target.shards = Math.max(0, Math.min(1_000_000, (target.shards || 0) + n)); });
   }
   if (b.grantItems !== undefined) {
     // grant N of every booster (negative to confiscate)
     const n = delta(b.grantItems, 999);
     if (n === null) return res.status(400).json({ error: 'アイテム付与数が不正です' });
-    target.items = target.items || {};
-    for (const it of BOOST_ITEMS) target.items[it.id] = Math.max(0, Math.min(999, (target.items[it.id] || 0) + n));
+    applies.push(() => {
+      target.items = target.items || {};
+      for (const it of BOOST_ITEMS) target.items[it.id] = Math.max(0, Math.min(999, (target.items[it.id] || 0) + n));
+    });
   }
   if (typeof b.banned === 'boolean') {
     if (target.role === 'admin' && b.banned) return res.status(400).json({ error: '管理者は凍結できません' });
-    target.banned = b.banned;
+    applies.push(() => { target.banned = b.banned; });
   }
   if (typeof b.muted === 'boolean') {
     if ((target.role === 'admin' || target.role === 'mod') && b.muted) {
       return res.status(400).json({ error: '運営メンバーはミュートできません' });
     }
-    target.muted = b.muted;
+    applies.push(() => { target.muted = b.muted; });
   }
   if (typeof b.setPassword === 'string') {
     if (b.setPassword.length < 6) return res.status(400).json({ error: 'パスワードは6文字以上にしてください' });
     const { salt, hash } = hashPassword(b.setPassword);
-    target.salt = salt;
-    target.passHash = hash;
-    // force re-login everywhere with the new password
-    revokeAllTokens(target.id);
+    applies.push(() => {
+      target.salt = salt;
+      target.passHash = hash;
+      // force re-login everywhere with the new password
+      revokeAllTokens(target.id);
+    });
   }
   const KNOWN_BADGES = ADMIN_KNOWN_BADGES;   // 一箇所で管理（編集画面と同じ一覧）
   if (typeof b.grantBadge === 'string') {
     if (!KNOWN_BADGES.includes(b.grantBadge)) return res.status(400).json({ error: `バッジIDが不正です（${KNOWN_BADGES.join(' / ')}）` });
-    if (!target.badges.includes(b.grantBadge)) target.badges.push(b.grantBadge);
+    applies.push(() => { if (!target.badges.includes(b.grantBadge)) target.badges.push(b.grantBadge); });
   }
   if (typeof b.revokeBadge === 'string') {
-    target.badges = target.badges.filter(x => x !== b.revokeBadge);
+    applies.push(() => { target.badges = target.badges.filter(x => x !== b.revokeBadge); });
   }
-  if (typeof b.setRating === 'number') target.stats.rating = Math.max(0, Math.min(5000, Math.floor(b.setRating)));
+  if (typeof b.setRating === 'number') applies.push(() => { target.stats.rating = Math.max(0, Math.min(5000, Math.floor(b.setRating))); });
   if (typeof b.setLevel === 'number') {
     // levelOf(xp) = 1 + floor(xp/1000)  →  xp for level L is (L-1)*1000
     const lv = Math.max(1, Math.min(999, Math.floor(b.setLevel)));
-    target.xp = (lv - 1) * 1000;
+    applies.push(() => { target.xp = (lv - 1) * 1000; });
   }
-  if (['admin', 'mod', 'user'].includes(b.role)) {
+  if (roleValid) {
     if (target.id === req.user.id && b.role !== 'admin') {
       return res.status(400).json({ error: '自分の権限は下げられません（別の管理者に依頼してください）' });
     }
-    target.role = b.role;
+    applies.push(() => { target.role = b.role; });
   }
   if (b.resetStats === true) {
-    target.stats = { gamesPlayed: 0, bestScore: 0, totalScore: 0, totalLines: 0, maxCombo: 0, aiWins: 0, pvpWins: 0, pvpLosses: 0, rating: 1000 };
+    applies.push(() => { target.stats = { gamesPlayed: 0, bestScore: 0, totalScore: 0, totalLines: 0, maxCombo: 0, aiWins: 0, pvpWins: 0, pvpLosses: 0, rating: 1000 }; });
   }
 
   // ---- 🎒 インベントリ編集（絶対値で設定する系） ----
@@ -3723,7 +3797,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
       for (const [id, v] of Object.entries(b.setItems)) {
         const def = known.get(id);
         if (!def) bad(`不明なアイテムです: ${String(id).slice(0, 32)}`);
-        if (def.adminOnly && target.role !== 'admin') bad('管理者専用アイテムは付与できません');
+        if (def.adminOnly && effectiveRole !== 'admin') bad('管理者専用アイテムは付与できません');
         const n = intIn(v, 999);
         if (n === null) bad(`アイテム個数が不正です: ${id}`);
         if (n > 0) next[id] = n;
@@ -3739,7 +3813,7 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
       for (const id of b.setOwned) {
         const it = known.get(id);
         if (!it) bad(`不明なアイテムです: ${String(id).slice(0, 32)}`);
-        if (it.adminOnly && target.role !== 'admin') bad('管理者専用の装備は付与できません');
+        if (it.adminOnly && effectiveRole !== 'admin') bad('管理者専用の装備は付与できません');
       }
       patch.owned = [...new Set([...DEFAULT_OWNED, ...b.setOwned])];
     }
@@ -3811,6 +3885,9 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   }
 
   // ---- everything validated: apply ----
+  // 即時適用系(grant*/権限/パスワード等)を先に流す。set* の絶対値はこの後に
+  // 上書き適用されるので、両方が来たときは従来どおり set* が勝つ。
+  for (const fn of applies) fn();
   for (const k of ['coins', 'gems', 'xp', 'items', 'owned', 'equippedTitle', 'badges', 'battlePass']) {
     if (patch[k] !== undefined) target[k] = patch[k];
   }
@@ -4517,6 +4594,11 @@ setWorldProvider(() => ({
   // 渡さない」と一人称で自慢し、実在プレイヤーになりすます形になっていた。
   thrones: Object.values(db.meta.thrones || {}).filter(t => t && t.resident).map(t => t.username),
 }));
+
+// 住人ボット/ロビー発言のなりすまし対策: pickPersona のフォールバックが実在
+// プレイヤー名(db.users)を避けられるよう、現在の登録名の集合を供給する。
+// スナップショットではなく関数を渡し、毎回評価させる(新規登録・改名を追従)。
+setTakenNamesProvider(() => new Set(Object.values(db.users).map(u => (u.username || '').toLowerCase())));
 
 // ---------------------------------------------------------------------------
 // Bootstrap: seed admin account, start server

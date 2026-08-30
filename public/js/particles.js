@@ -16,7 +16,7 @@ export class ParticleSystem {
 
   n(base) { return Math.max(1, Math.round(base * this.intensity)); }
 
-  clear() { this.particles.length = 0; this.bolts.length = 0; }
+  clear() { this.particles.length = 0; this.bolts.length = 0; this.rings.length = 0; }
 
   // Emit a burst for one cleared cell.
   burstCell(x, y, size, colorIndex, fxId) {

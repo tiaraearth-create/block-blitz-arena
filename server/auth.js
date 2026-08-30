@@ -42,8 +42,17 @@ function loadSecret() {
 const { secret: SECRET, source: SECRET_SOURCE } = loadSecret();
 export const SESSIONS_PERSIST = SECRET_SOURCE === 'env';
 if (SECRET_SOURCE === 'file') {
-  console.warn('[auth] SESSION_SECRET 未設定のため server/data/session-secret.txt の鍵を使用中（再起動では維持、永続ディスクのないホストでは再デプロイで消えます）。'
-    + ' 環境変数 SESSION_SECRET を設定すると再デプロイ後もログイン状態が維持されます');
+  // 環境変数が「設定されているが16文字未満で無視された」場合と「未設定」を取り違えない。
+  // pinAdminPassword が長さ不足を明示するのと同じ扱い（さもないと運営が env を確認しても
+  // 設定済みに見え、なぜ再デプロイでセッションが飛ぶのか切り分けられない）。
+  const envRaw = String(process.env.SESSION_SECRET || '');
+  if (envRaw.length > 0 && envRaw.length < 16) {
+    console.warn(`[auth] SESSION_SECRET が短すぎます（${envRaw.length}文字／16文字以上が必要）。無視して server/data/session-secret.txt の鍵を使用中（再起動では維持、永続ディスクのないホストでは再デプロイで消えます）。`
+      + ' 16文字以上に直して再デプロイすると再デプロイ後もログイン状態が維持されます');
+  } else {
+    console.warn('[auth] SESSION_SECRET 未設定のため server/data/session-secret.txt の鍵を使用中（再起動では維持、永続ディスクのないホストでは再デプロイで消えます）。'
+      + ' 環境変数 SESSION_SECRET を設定すると再デプロイ後もログイン状態が維持されます');
+  }
 } else if (SECRET_SOURCE === 'boot') {
   console.warn('[auth] セッション鍵を保存できません: ログイン状態は再起動で失われます。環境変数 SESSION_SECRET を設定してください');
 }

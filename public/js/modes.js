@@ -424,9 +424,15 @@ export function useGameItem(id) {
     // すでに強い倍率がかかっているなら下げない。以前は上書きしていたので、
     // 🔥オーバードライブ(×3)の最中に⭐フィーバー(400🪙)を使うと ×2 に
     // 下がっていた ── お金を払って弱くなる、という状態だった。
+    // さらに、より強い倍率が生きている間は窓も延長しない ── 以前はアイテムの
+    // ×2でも必ず +15秒していたため、⭐を連打すれば×3を事実上無期限に維持
+    // できた。アイテムの倍率(2)が現在有効な倍率以上のときだけ延長する。
     const feverOn = e.feverUntil > Date.now();
-    e.feverMult = Math.max(feverOn ? (e.feverMult || 1) : 1, 2);
-    e.feverUntil = Math.max(e.feverUntil || 0, Date.now() + 15000);
+    const cur = feverOn ? (e.feverMult || 1) : 1;
+    if (2 >= cur) {
+      e.feverMult = Math.max(cur, 2);
+      e.feverUntil = Math.max(e.feverUntil || 0, Date.now() + 15000);
+    }
     view.screenFlash = 0.35;
     $('#hudScore').classList.add('fever');
     audio.combo(6);
@@ -821,6 +827,9 @@ class SoloMode {
       mode: 'solo', score: e.score, lines: e.linesCleared,
       maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
     });
+    // await 中に✕→終了でメニューへ戻っていたら、結果モーダルをメニューの上に
+    // 出さない（currentMode 無しで start() する壊れた run を防ぐ）。
+    if (currentMode !== this) return;
     const isBest = e.score >= this.best();
     if (isBest && e.score > 0) confettiBurst();
     const m = showModal(`
@@ -1001,6 +1010,8 @@ class MeltdownMode {
       mode: 'meltdown', score: e.score, lines: e.linesCleared,
       maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
     });
+    // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
+    if (currentMode !== this) return;
     if (isBest) confettiBurst();
     const m = showModal(`
       <div class="result-banner ${isBest ? 'win' : exploded ? 'lose' : 'draw'}">${isBest ? 'NEW RECORD!' : exploded ? t('☢️ 炉心爆発…', '☢️ MELTDOWN…') : 'GAME OVER'}</div>
@@ -1197,6 +1208,8 @@ class ChimeraMode {
       mode: 'chimera', score: e.score, lines: e.linesCleared,
       maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
     });
+    // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
+    if (currentMode !== this) return;
     if (isBest) confettiBurst();
     const m = showModal(`
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : 'GAME OVER'}</div>
@@ -1634,6 +1647,8 @@ class DigMode {
       mode: 'dig', score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
       duration: (Date.now() - this.startedAt) / 1000, won: false, depth: this.depth,
     });
+    // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
+    if (currentMode !== this) return;
     if (isBest) confettiBurst();
     const m = showModal(`
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : 'GAME OVER'}</div>
@@ -1849,7 +1864,15 @@ class VersusBase {
     // 1対1 も設定どおりに扱う。以前は相手が1人だと強制的に cards になり、
     // しかも ⤢ ボタンも隠れていたので、いちばん人が遊ぶ 1対1 だけが
     // 全モード中いちばん盤面の小さいモードで、直す手段も無かった。
-    this.applyOppDensity(oppDensity());
+    // ただし README は「1v1で相手の盤面をライブ表示」を謳うので、明示的な
+    // 設定が無い 1対1 の初期値は cards（相手盤を表示）にする。⤢ボタンで strip に
+    // 切り替えられる点は従来どおり。crowd（味方入り/複数）は従来どおり strip 既定。
+    const storedDensity = localStorage.getItem(OPP_DENSITY_KEY);
+    const is1v1 = this.oppList.length === 1 && !this.oppList[0].isAlly;
+    const initialDensity = storedDensity === 'cards' ? 'cards'
+      : storedDensity === 'strip' ? 'strip'
+      : (is1v1 ? 'cards' : 'strip');
+    this.applyOppDensity(initialDensity);
     const btn = $('#btnOppDensity');
     btn.classList.remove('hidden');
     btn.onclick = () => {
@@ -2098,7 +2121,10 @@ class AiMode extends VersusBase {
     const modeName = { oni: 'ai_oni', kami: 'ai_kami', souzou: 'ai_souzou' }[this.level] || 'ai';
     const rewards = await submitResult({
       mode: modeName, score: me, lines: this.engine.linesCleared,
-      maxCombo: this.engine.maxCombo, duration: MATCH_SECONDS, won: outcome === 'win',
+      // 途中終了でも実経過時間を送る（120秒固定だとプレイ時間統計が水増しされる）。
+      // フルマッチでも上限は MATCH_SECONDS なのでそこで頭打ちにする。
+      maxCombo: this.engine.maxCombo,
+      duration: Math.min(MATCH_SECONDS, (Date.now() - this.startedAt) / 1000), won: outcome === 'win',
     });
     if (rewards && rewards.badge === 'oni') {
       setTimeout(() => toast(t('👹 バッジ「おに退治」を獲得！', '👹 Badge earned: Oni Slayer!'), 'announce', 4000), 1200);
@@ -2724,6 +2750,12 @@ class BossRushMode {
       toast(lapUp
         ? t(`🔥 ${this.lap() + 1}周目突入！ボスが強化された！`, `🔥 Lap ${this.lap() + 1}! The bosses grow stronger!`)
         : t(`つぎは ${this.boss.emoji} ${this.boss.name}！`, `Next up: ${this.boss.emoji} ${catName(this.boss)}!`), 'announce', 2400);
+      // とどめの一手が同時に手詰まりだった場合、bossDown 中は relicOpen ガードで
+      // 保留していたトップアウト判定をここで再評価する。heal 遺物は盤面を開けても
+      // e.over を下ろさないため、useGameItem 末尾と同じ over 解除を先に行う。
+      const e = this.engine;
+      if (e.over && e.hasAnyMove()) e.over = false;
+      if (e.over) this.onTopOut();
     });
   }
 
@@ -2792,7 +2824,7 @@ class BossRushMode {
   }
 
   onTopOut() {
-    if (this.ended) return;
+    if (this.ended || this.relicOpen) return;
     if (autoRescue()) return;   // autopilot 5.0 guard — before burning the phoenix
     if (this.phoenix) {
       this.phoenix = false;
@@ -2819,7 +2851,10 @@ class BossRushMode {
     const conquered = this.kills >= this.bosses.length;
     if (!this.aborted) audio.gameOver();
     const localDepth = Number(localStorage.getItem('bba_rush_depth') || 0);
-    const isBest = this.kills > 0 && this.kills > localDepth;
+    // 別端末ではサーバー統計にしか最深記録が無いので、両者の最大と比べる
+    // （localStorage だけだと新端末で虚偽の「最深記録更新！」が出る）。
+    const bestDepth = session.user ? Math.max(localDepth, session.user.stats.rushDepth || 0) : localDepth;
+    const isBest = this.kills > 0 && this.kills > bestDepth;
     if (this.kills > localDepth) localStorage.setItem('bba_rush_depth', String(this.kills));
     const rewards = await submitResult({
       mode: 'boss_rush', score: this.engine.score,
@@ -3589,17 +3624,23 @@ class DungeonMode {
     if (!this.realm.phases || !this.info.isFinal || this.hp <= 0) return;
     const pct = this.hp / this.info.hp;
     const phase = pct < 0.33 ? 3 : pct < 0.66 ? 2 : 1;
-    if (phase > (this.phase || 1)) {
+    const prev = this.phase || 1;
+    if (phase > prev) {
       this.phase = phase;
-      this.atkSlow *= 0.72;
-      const cells = this.engine.addGarbage(phase === 3 ? 6 : 4);
       const v = getView();
-      for (const [r, c] of cells) v.spawnAnim.set(r * 8 + c, v.time);
+      // 一撃で複数段階を跨いでも、各形態の加速・お邪魔・演出を段階ごとに適用する。
+      // （HP66%超から一撃で33%未満へ削ると 1→3 に飛び、以前は0.72が1回・お邪魔6個で
+      //   済み第二形態演出も出なかった。段階ごとに 0.72² と 4+6 個を掛ける。）
+      for (let p = prev + 1; p <= phase; p++) {
+        this.atkSlow *= 0.72;
+        const cells = this.engine.addGarbage(p === 3 ? 6 : 4);
+        for (const [r, c] of cells) v.spawnAnim.set(r * 8 + c, v.time);
+        toast(p === 3
+          ? t(`${this.info.emoji} ${this.info.name}が真の姿に…！！攻撃がさらに加速！`, `${this.info.emoji} ${this.info.nameEn} reveals its true form!! Even faster attacks!`)
+          : t(`${this.info.emoji} ${this.info.name}が第二形態に！攻撃が加速する！`, `${this.info.emoji} ${this.info.nameEn} enters phase 2! Attacks speed up!`), 'announce', 2800);
+      }
       v.shake = 18; v.screenFlash = 0.5; audio.bossAttack();
       $('#bossEmoji').classList.add('boss-atk');
-      toast(phase === 3
-        ? t(`${this.info.emoji} ${this.info.name}が真の姿に…！！攻撃がさらに加速！`, `${this.info.emoji} ${this.info.nameEn} reveals its true form!! Even faster attacks!`)
-        : t(`${this.info.emoji} ${this.info.name}が第二形態に！攻撃が加速する！`, `${this.info.emoji} ${this.info.nameEn} enters phase 2! Attacks speed up!`), 'announce', 2800);
       this.armAttack();
       if (this.engine.over) this.onTopOut();
     }
@@ -4766,7 +4807,11 @@ class OnlineMode extends VersusBase {
       v.inputLocked = true;          // lock until the server confirms
       return true;
     };
-    updateRerollHud(this.engine);
+    // 協力プレイの手札はサーバーが持ち主。ローカルのミラー engine だけを引き直すと
+    // 盤面/手札が desync するため、パズル遺跡と同じくリロールを二重に封じる。
+    $('#btnReroll').classList.add('hidden');
+    this.engine.rerolls = 0;
+    this.engine.reroll = () => false;
     updateAutoBtn();
     v.start();
     audio.playTrack('solo');
@@ -5056,13 +5101,19 @@ class OnlineMode extends VersusBase {
 
   pushState() {
     if (!this.engine || this.ended) return;
+    // 復活ペナルティの巻き戻し防止 ── topout でロック中（復活待ち）や engine.over の
+    // 間は「没収前スコア」を送らない。royale_topout 送信〜復活受信の窓で再申告されると
+    // サーバーの1割ペナルティが巻き戻ってしまう。
+    if (this.engine.over || (view && view.inputLocked)) return;
     this.client.sendState(this.engine.score, this.engine.streak, this.engine.linesCleared,
       this.engine.snapshot(), this.engine.piecesPlaced);
   }
 
   onPlace(result) {
     this.updateMyHud(this.engine);
-    this.refreshTeamHud();
+    // レイドは全員が同じボスを殴る協力戦。onOppState が isRaid で vs-bar 更新を
+    // 避けているのと同様、onPlace 側もスキップする（味方を敵側に描く綱引きを防ぐ）。
+    if (!this.isRaid) this.refreshTeamHud();
     this.pushState();
     // 💥 アタック戦: 2ライン以上の消去は相手への攻撃になる
     if (this.matchMode === 'attack' && result && result.lineCount >= 2 && this.inMatch && !this.ended) {
@@ -5130,6 +5181,9 @@ class OnlineMode extends VersusBase {
 
   onTopOut() {
     if (this.ended) return;
+    // ロイヤルはリロール由来のトップアウトでもサーバー裁定（復活-10%/脱落）を
+    // 経由させる。ここで無償の盤面ワイプにすると royale_topout が送られず抜け穴になる。
+    if (this.isRoyale) return this.onRoyaleTopOut();
     toast(t('ボードリセット！スコアは維持されます', 'Board reset! Your score is kept'), '', 1800);
     this.engine.reviveBoard();
     getView().reviveFlash();
@@ -5183,10 +5237,12 @@ class OnlineMode extends VersusBase {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        <button class="btn btn-online" id="rAgain">${t('🤝 もう一度組む', '🤝 Team up again')}</button>
+        <button class="btn btn-online" id="rAgain">${this.kind === 'custom' ? t('🤝 ルームでもう一度', '🤝 Team up in room') : t('🤝 もう一度組む', '🤝 Team up again')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
-    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline('coop'); };
+    // カスタムルーム（4文字コード）で組んだ場合はルームへ戻す。公開キューに
+    // 入れると同じ相棒と組める保証がないため this.kind をそのまま使う。
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline(this.kind === 'custom' ? 'custom' : 'coop'); };
   }
 
   onResult(msg) {
@@ -5310,9 +5366,13 @@ class OnlineMode extends VersusBase {
         ? t('🤝 協力プレイから離脱しました（敗北にはなりません）', '🤝 You left the co-op run (no loss recorded)')
         : this.isRoyale
         // ロイヤルには「相手」がいないので、敗北でも不戦勝でもない。
-        // 実際の扱い（生存者の中で最下位）をそのまま伝える。
-        ? t('🏳️ バトルロイヤルから離脱しました（そのときの生存者の中で最下位扱い）',
-            '🏳️ You left the royale (recorded as last among the survivors at that moment)')
+        // すでに脱落・順位確定して観戦中（royaleDead）なら順位は動かないので、
+        // 「最下位扱い」ではなく観戦終了として伝える。生存中の離脱だけが最下位扱い。
+        ? (this.royaleDead
+            ? t('👀 観戦を終了しました（順位は確定済みです）',
+                '👀 Stopped spectating (your placement is already final)')
+            : t('🏳️ バトルロイヤルから離脱しました（そのときの生存者の中で最下位扱い）',
+                '🏳️ You left the royale (recorded as last among the survivors at that moment)'))
         : t('🏳️ 対戦から離脱しました（敗北扱い・相手の不戦勝）', '🏳️ You left the match (counts as a loss)'), 'err', 2600);
       endToMenu();
     } else {
@@ -5557,13 +5617,15 @@ class SprintMode {
       duration: Math.max(1, (Date.now() - this.startedAt) / 1000), won: false,
       sprintDur: this.duration,
     });
-    const banner = isBest ? 'NEW RECORD!' : reason === 'topout' ? t('盤面が埋まった…', 'Board filled up…') : 'TIME UP!';
+    const banner = isBest ? 'NEW RECORD!' : reason === 'topout' ? t('盤面が埋まった…', 'Board filled up…') : reason === 'quit' ? t('中断', 'Aborted') : 'TIME UP!';
+    // 毎秒スコアは HUD の実レートと同じく実プレイ時間で割る（途中終了で制限時間固定だと過小になる）。
+    const elapsed = Math.max(1, (Date.now() - this.startedAt) / 1000);
     const m = showModal(`
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${banner}</div>
       <div class="result-stats">
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
         <div class="rs-row"><span>${t('自己ベスト', 'Personal best')}</span><b>${fmt(Math.max(prevBest, e.score))}</b></div>
-        <div class="rs-row"><span>${t('毎秒スコア', 'Score per second')}</span><b>${fmt(Math.round(e.score / this.duration))}</b></div>
+        <div class="rs-row"><span>${t('毎秒スコア', 'Score per second')}</span><b>${fmt(Math.round(e.score / elapsed))}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
         ${rewardsRows(rewards)}
@@ -5691,7 +5753,17 @@ class AdminEventMode extends VersusBase {
   after(ms, fn) { const id = setTimeout(fn, ms); this.timers.push(id); return id; }
 
   start() {
-    this.setupHud(AE_RUN_SECONDS);
+    // 枠の残り時間に run を切り詰める。残りが極端に短いときは開始せず戻す
+    //（枠終了間際に始めて結果が没収されるのを避ける。サーバー側にも猶予がある）。
+    const ae = this.ae;
+    const slotLeft = (ae && ae.live) ? Math.floor((ae.live.endsAt - Date.now()) / 1000) - 4 : AE_RUN_SECONDS;
+    if (slotLeft < 15) {
+      toast(t('枠の残り時間が足りません', 'Not enough time left in this slot'), 'err', 3000);
+      endToMenu();
+      return;
+    }
+    const runSecs = Math.min(AE_RUN_SECONDS, slotLeft);
+    this.setupHud(runSecs);
     $('#oppPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     showItemBar(false);            // 公平のため: この枠ではアイテムは使えない
@@ -6104,7 +6176,17 @@ class ZeroMode extends VersusBase {
   clearTimers() { for (const id of this.timers) { clearInterval(id); clearTimeout(id); } this.timers = []; }
 
   async start() {
-    this.setupHud(AE_RUN_SECONDS);
+    // 枠の残り時間に run を切り詰める。残りが極端に短いときは開始せず戻す
+    //（枠終了間際に始めて結果が没収されるのを避ける。サーバー側にも猶予がある）。
+    const ae = this.ae;
+    const slotLeft = (ae && ae.live) ? Math.floor((ae.live.endsAt - Date.now()) / 1000) - 4 : AE_RUN_SECONDS;
+    if (slotLeft < 15) {
+      toast(t('枠の残り時間が足りません', 'Not enough time left in this slot'), 'err', 3000);
+      endToMenu();
+      return;
+    }
+    const runSecs = Math.min(AE_RUN_SECONDS, slotLeft);
+    this.setupHud(runSecs);
     $('#oppPanel').classList.add('hidden');
     $('#btnEmote').classList.add('hidden');
     showItemBar(false);
@@ -6224,6 +6306,9 @@ class ZeroMode extends VersusBase {
 
   onFound(m) {
     this.state = m;
+    // 再接続時も伝言権を復元する ── サーバーが視聴者ごとに載せる canWill が真なら
+    // 立てておく（zero_dan を取りこぼしても伝言を書けるように）。真のときだけ立てる。
+    if (m.canWill || (m.you && m.you.canWill)) this.canWill = true;
     this.renderState(m);
     toast(t(`👁️ 席につきました（${m.seats.length}席）── 段${m.dan}`,
       `👁️ Seated (${m.seats.length}) — Stage ${m.dan}`), 'announce', 3000);
@@ -6232,6 +6317,8 @@ class ZeroMode extends VersusBase {
   onState(m) {
     this.state = m;
     if (m.you) { this.myCuts = m.you.cuts; this.myMissed = m.you.missed; }
+    // 次の走行・再接続でも伝言権を失わないよう、state の canWill から復元する。
+    if (m.canWill || (m.you && m.you.canWill)) this.canWill = true;
     this.renderState(m);
   }
 
@@ -6431,6 +6518,15 @@ class ZeroMode extends VersusBase {
     audio.bossAttack();
     toast(t(`💀 ${m.victim} が処刑された（${m.target} が落とした）`,
       `💀 ${m.victim} was executed (${m.target} let it slip)`), 'err', 2600);
+    // 👁️ 自分が時間内に斬れなかった赤マスは、自分の盤面へお邪魔として返ってくる。
+    // engine には座標指定でお邪魔を置く口が無いので、onGarbage と同じ経路
+    // （addGarbage は resolveLines と over 判定も内部で行う）で個数だけ再現する。
+    // 他人のミス（mine が真でない）や、自分が断罪プレイ中でない場合は誤爆させない。
+    if (m.mine === true && Array.isArray(m.cells) && m.cells.length && !this.ended && this.engine) {
+      this.engine.addGarbage(m.cells.length);
+      getView().screenFlash = 0.25;
+      if (this.engine.over) this.onTopOut();
+    }
   }
 
   onDanBroken(m) {
@@ -6687,7 +6783,8 @@ class ZeroMode extends VersusBase {
 
 
 export function startAdminEventMode(ae) {
-  if (!ae || !ae.live) {
+  // 枠終了直後の取りこぼしを塞ぐ ──「もう一度挑む」ボタンと同じ判定に揃える。
+  if (!ae || !ae.live || ae.live.endsAt <= Date.now()) {
     toast(t('いまはあなたの枠の時間ではありません', 'This is not your slot right now'), 'err');
     return;
   }
@@ -6715,7 +6812,7 @@ export function startSurvival() {
 window.__bbaSaveNow = () => {
   const m = currentMode;
   if (!m || m.ended) return;
-  if (m.mode === 'pvp' || m.mode === 'ae') return;   // 対戦系はサーバーが処理する
+  if (m.mode === 'pvp') return;   // 対戦(pvp)はサーバーが引き分けで畳む。AE等のクライアント完結モードは下で finish() 送信する
   try {
     if (view) view.inputLocked = true;
     if (typeof m.finish === 'function') m.finish();

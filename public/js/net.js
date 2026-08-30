@@ -89,7 +89,13 @@ export class BattleClient {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${location.host}/ws`);
       this.ws = ws;
-      const timeout = setTimeout(() => { try { ws.close(); } catch {} ; reject(new Error(trServer('接続タイムアウト'))); }, 8000);
+      // connect() の Promise は一度だけ解決する。hello_ok 前にサーバーが
+      // error 送信→close（メンテ中・凍結・接続上限など）で切ってきた場合、
+      // open 後のクリーンクローズはブラウザで error を発火しないため、
+      // onclose で reject しないと呼び出し元が永遠に await で固まる。
+      let settled = false;
+      let lastError = '';
+      const timeout = setTimeout(() => { try { ws.close(); } catch {} ; if (!settled) { settled = true; reject(new Error(trServer('接続タイムアウト'))); } }, 8000);
 
       ws.onopen = () => {
         // 対戦用のこのソケットは、chat.js が常時つないでいるソケットと
@@ -102,18 +108,29 @@ export class BattleClient {
         if (msg.type === 'hello_ok' && !this.connected) {
           this.connected = true;
           clearTimeout(timeout);
+          settled = true;
           resolve(msg);
         }
+        // hello 処理中の切断理由（メンテ中・凍結など）を握っておき、
+        // 続く onclose の reject に添える。
+        if (msg.type === 'error' && msg.error) lastError = msg.error;
         this.emit(msg.type, msg);
       };
       ws.onclose = () => {
         this.connected = false;
         clearTimeout(timeout);
+        if (!settled) {
+          settled = true;
+          reject(new Error(lastError || trServer('接続が切断されました')));
+        }
         this.emit('close', {});
       };
       ws.onerror = () => {
         clearTimeout(timeout);
-        if (!this.connected) reject(new Error(trServer('サーバーに接続できません')));
+        if (!this.connected && !settled) {
+          settled = true;
+          reject(new Error(trServer('サーバーに接続できません')));
+        }
       };
     });
   }

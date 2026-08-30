@@ -165,6 +165,17 @@ function mergeEarned(winner, loser) {
     else if (lw.week === ww.week) {
       ww.rewarded = !!(ww.rewarded || lw.rewarded);
       ww.best = Math.max(ww.best || 0, lw.best || 0);
+    } else {
+      //   ・違う週どうしのときは stats.weekly が1週ぶんしか持てないので、まだ
+      //     支払っていない順位報酬（rewarded:false かつ best>0）を抱えたほうを残す。
+      //     落とせば finalizeWeeklyRankings も値が無く払えず、順位報酬が永久に消える。
+      //     両方が保留中なら「古い週」を優先する（そちらが今すぐ支払われる対象で、
+      //     新しい＝今週ぶんは生きている本人が遊べば作り直される）。
+      const pending = r => r && !r.rewarded && (r.best || 0) > 0;
+      const wkNum = w => { const n = parseInt(String(w).replace(/^\D+/, ''), 10); return Number.isFinite(n) ? n : Infinity; };
+      if (pending(lw) && (!pending(ww) || wkNum(lw.week) < wkNum(ww.week))) {
+        winner.stats.weekly = { ...lw };
+      }
     }
   }
   const wrr = Array.isArray(winner.rankRewards) ? winner.rankRewards : (winner.rankRewards = []);

@@ -27,7 +27,10 @@ export function createPoll({ question, questionEn, options, minutes, kind, creat
         text: clean(o.text, MAX_OPTION_TEXT),
         // イベント選択肢はEVENT_TYPESのネイティブ英語名を使う
         textEn: clean(o.textEn, MAX_OPTION_TEXT) || (evType ? `${evType.icon} ${evType.nameEn}` : null),
-        eventType: o.eventType ? String(o.eventType) : null,
+        // EVENT_TYPES に無い eventType は null に落として plain 選択肢扱いにする。
+        // 生の文字列を残すと applyWinner の makeEvent が黙って先頭イベント
+        // （カオスタイム）にすり替えるため、投票結果と実開催が食い違う。
+        eventType: evType ? evType.id : null,
       };
     })
     .filter(o => o.text)
@@ -91,6 +94,15 @@ export function vote(poll, userId, optionId) {
   if (!opt) return { error: '選択肢が見つかりません' };
   const prev = poll.voters[userId];
   if (prev === optionId) return { error: 'すでにその選択肢に投票済みです' };
+  // 人間は投票した瞬間に開票状況が見える（pollView の reveal）。捨て票→形勢を
+  // 見てから本命に乗り換え、で「投票するまで結果は見えない」の趣旨を骨抜きに
+  // できてしまうので、人間の乗り換えは1回までに制限する。AI住人（r: 接頭辞）は
+  // スウィング投票が前提なので対象外。
+  if (prev && !String(userId).startsWith('r:')) {
+    poll.changes = poll.changes || {};
+    if ((poll.changes[userId] || 0) >= 1) return { error: '投票の変更は1回までです' };
+    poll.changes[userId] = (poll.changes[userId] || 0) + 1;
+  }
   if (prev) {
     const old = poll.options.find(o => o.id === prev);
     if (old) old.votes = Math.max(0, old.votes - 1);

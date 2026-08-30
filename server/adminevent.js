@@ -309,12 +309,11 @@ export function reserve(user, occ, slotId, now = Date.now()) {
   // 取り消し中でも、その日の実績（受取済みの段・欠片の支払い印）は控えに残る。
   const prev = reservationOf(user, occ.dayKey)
     || (user && user.adminEventDay && user.adminEventDay.dayKey === occ.dayKey ? user.adminEventDay : null);
-  // Changing your mind mid-session would hand you a second window.
+  // いちど遊んだあとに別の枠へ移ると、お宝ラッシュの倍率つき枠を二重に消化できる。
+  // 移り先が開催中でも、前の枠が終わったあとでも同じ抜け道になるので、
+  // 「まだ遊んでいない同日内の乗り換え」だけを許し、プレイ済みなら一律に断る。
   if (prev && prev.slotId !== slotId && prev.playedAt) {
-    const prevSlot = occ.slots.find(s => s.id === prev.slotId);
-    if (prevSlot && now >= prevSlot.startsAt && now < prevSlot.endsAt) {
-      return { error: '開催中の枠からは変更できません' };
-    }
+    return { error: 'すでに参加した日は枠を変更できません' };
   }
   user.adminEvent = {
     // その日の実績は「まるごと」引き継ぐ。残す欄を1つずつ書き出していたころ、
@@ -355,21 +354,25 @@ export function cancelReservation(user, dayKey) {
 
 // The slot a user may PLAY in right now, or null. Admins are always let in —
 // they have to be able to test the thing they are hosting.
-export function liveSlotFor(schedule, user, now = Date.now()) {
+export function liveSlotFor(schedule, user, now = Date.now(), graceMs = 0) {
   // 試運転中は運営以外、枠が来ていても「あなたの時間ではない」と同じ扱い。
   if (schedule && schedule.staffOnly && !isStaff(user)) return null;
-  const occ = currentOccurrence(schedule, now);
+  // graceMs は「結果受付だけ」の猶予。枠終了の間際に始めた 120 秒ランの結果が
+  // 枠を数十秒はみ出しても没収しないために使う。終了判定だけ緩め、参加開始・
+  // 予約の判定は現行どおり厳格（graceMs 既定 0 なので他の呼び出しは無影響）。
+  // その日の最終枠のはみ出しも拾えるよう、日の同定も同じ猶予ぶんずらす。
+  const occ = currentOccurrence(schedule, now - graceMs);
   if (!occ) return null;
   const isAdmin = !!user && user.role === 'admin';
   if (isAdmin) {
-    const any = occ.slots.find(s => now >= s.startsAt && now < s.endsAt);
+    const any = occ.slots.find(s => now >= s.startsAt && now < s.endsAt + graceMs);
     if (any) return { occ, slot: any, viaAdmin: true };
   }
   const r = reservationOf(user, occ.dayKey);
   if (!r) return null;
   const slot = occ.slots.find(s => s.id === r.slotId);
   if (!slot) return null;
-  if (now < slot.startsAt || now >= slot.endsAt) return null;
+  if (now < slot.startsAt || now >= slot.endsAt + graceMs) return null;
   return { occ, slot, reservation: r };
 }
 
@@ -456,16 +459,30 @@ export function ensureRun(db, occ, entrants) {
         const maxHp = bossHpFor(entrants);
         if (maxHp > run.maxHp) { run.hp += maxHp - run.maxHp; run.maxHp = maxHp; }
       }
-      if (run.modeId === 'communal') run.tiers = communalTiers(entrants);
+      if (run.modeId === 'communal') {
+        // 侵攻ボスの「一度与えたダメージは巻き戻さない」と同じ方針を共闘にも。
+        // 閾値だけ上げて tiersReached を据え置くと、達成済みの段のラインが総計を
+        // 追い越し「目標 1/4 達成」の表示とゲージが食い違う。達成済みの段は元の
+        // ラインを保ち、未達の段だけ引き上げて整合させる。
+        const grown = communalTiers(entrants);
+        const reached = run.tiersReached || 0;
+        run.tiers = grown.map((t, i) =>
+          (i < reached && run.tiers[i]) ? run.tiers[i] : t);
+      }
     }
     return run;
   }
   const modeId = occ.modeId;
+  // この回が「どの枠で」始まったか（開始時刻ms）。battle-zero が取引の発火基準に読む。
+  // 作成時に生きている枠を採用し、なければその日の開場時刻にフォールバックする。
+  const nowMs = Date.now();
+  const curSlot = occ.slots.find(s => nowMs >= s.startsAt && nowMs < s.endsAt);
   run = {
     dayKey: occ.dayKey,
     modeId,
     entrants,
     startedAt: occ.opensAt,
+    slotStartsAt: curSlot ? curSlot.startsAt : occ.opensAt,
     total: 0,
     byUser: {},          // userId -> { name, score, runs }
     board: [],           // [{ name, score }] top of the day

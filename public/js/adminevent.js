@@ -11,7 +11,7 @@
 
 import { api, session } from './net.js';
 import { $, showModal, closeModal, toast, fmt, updateTopbar } from './dom.js';
-import { t } from './i18n.js';
+import { t, catName, catDesc } from './i18n.js';
 import { audio } from './audio.js';
 import { startAdminEventMode } from './modes.js';
 
@@ -24,7 +24,7 @@ export function getAdminEvent() { return ae; }
 
 // True while the signed-in player may actually play the exclusive mode.
 export function aeIsLive() {
-  return !!(ae && ae.live && ae.closesAt > Date.now());
+  return !!(ae && ae.live && ae.live.endsAt > Date.now());
 }
 
 export function setAdminEvent(data) {
@@ -230,7 +230,7 @@ export async function openAeSheet() {
       <div class="ae-mode-name">${modeName()}</div>
       <div class="ae-mode-tag">${localized(ae.mode, 'tagline')}</div>
       <p class="ae-mode-desc">${localized(ae.mode, 'desc')}</p>
-      ${ae.note ? `<p class="ae-note">📣 ${ae.note}</p>` : ''}
+      ${ae.note ? `<p class="ae-note">📣 ${esc(ae.note)}</p>` : ''}
       <p class="muted center" style="font-size:12px">
         ${t(`${dateLabel()} 開催 ・ 1枠 ${ae.durationMin}分 ・ 🎁 報酬 ${ae.rewardMult}倍`,
           `${dateLabel()} ・ ${ae.durationMin} min per slot ・ 🎁 ${ae.rewardMult}× rewards`)}
@@ -242,7 +242,7 @@ export async function openAeSheet() {
     <div class="ae-slots">${ae.slots.map(slotRow).join('')}</div>
     <p class="muted center" style="font-size:11.5px">${t('※ どの枠を選んでも、上の進捗はみんなで共有されます', '※ Whichever slot you pick, the progress above is shared by everyone')}</p>
     <div class="modal-buttons">
-      ${ae.mine ? `<button class="btn btn-ghost" id="aeCancel">${t('予約をとりけす', 'Cancel booking')}</button>` : ''}
+      ${ae.mine && ae.closesAt > Date.now() ? `<button class="btn btn-ghost" id="aeCancel">${t('予約をとりけす', 'Cancel booking')}</button>` : ''}
       <button class="btn btn-throne" id="aeTreasury">${t('👑 王座の宝物庫', '👑 Throne Vault')}</button>
       ${ae.mode.id === 'zero' ? `<button class="btn btn-ghost" id="aeChronicle">${t('📜 断罪録', '📜 Chronicle')}</button>` : ''}
       <button class="btn btn-ghost" id="aeClose">${t('とじる', 'Close')}</button>
@@ -363,8 +363,8 @@ function renderVault(data) {
     return `<div class="tv-item ${state}">
       <div class="tv-icon">${i.icon || CAT_ICON[i.cat] || '❖'}</div>
       <div class="tv-body">
-        <div class="tv-name">${i.name}<span class="tv-dan">${t(`第${i.dan}段`, `St.${i.dan}`)}</span></div>
-        <div class="tv-desc">${i.desc}</div>
+        <div class="tv-name">${catName(i)}<span class="tv-dan">${t(`第${i.dan}段`, `St.${i.dan}`)}</span></div>
+        <div class="tv-desc">${catDesc(i)}</div>
       </div>
       <button class="tv-buy" data-buy="${i.id}" ${state === 'buy' ? '' : 'disabled'}>${label}</button>
     </div>`;
@@ -404,7 +404,7 @@ function renderVault(data) {
       try {
         const res = await api('/api/throne/buy', { method: 'POST', body: { itemId: btn.dataset.buy } });
         if (res.user) { session.user = res.user; updateTopbar(); }
-        toast(t(`👑 「${res.got.name}」を手に入れました！`, `👑 You obtained 「${res.got.name}」!`), 'ok', 3500);
+        toast(t(`👑 「${res.got.name}」を手に入れました！`, `👑 You obtained 「${catName(res.got)}」!`), 'ok', 3500);
         closeModal();
         openThroneVault();
       } catch (err) {

@@ -275,7 +275,11 @@ export class Engine {
     }
     const added = [];
     for (let i = 0; i < n && empties.length > 0; i++) {
-      const k = Math.floor(this.rng.next() * empties.length);
+      // お邪魔マスの選択に共有シードRNG(this.rng)を使うと、攻撃を受けた側だけ
+      // 乱数ストリームが進み、以後の drawPiece() のピース列が相手とズレて
+      // 「同一シードのピース列を両者に配布」という公平化が崩れる。
+      // 妨害配置は盤面公平性に無関係なので Math.random() を使う。
+      const k = Math.floor(Math.random() * empties.length);
       const [r, c] = empties.splice(k, 1)[0];
       this.grid[r * SIZE + c] = 9;
       added.push([r, c]);

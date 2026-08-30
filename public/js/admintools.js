@@ -21,6 +21,10 @@ const isAdmin = () => !!session.user && session.user.role === 'admin' && staffEx
 export const god = { invincible: false, noGarbage: false, combo: false, mult: 1, fever: false, freezeEnemy: false, stopTimer: false, ultInfinite: true };
 
 let godTimer = null;
+// applyGod が前回このエンジンに書き込んだ god 由来の値。×1／OFF に戻したとき、
+// モードが積んだ値を握り潰さずに「自分が書いた分だけ」戻すために覚えておく。
+let appliedMult = 1;
+let appliedCombo = false;
 function applyGod() {
   const m = getCurrentMode();
   const e = m && m.engine;
@@ -28,10 +32,16 @@ function applyGod() {
   const view = getViewRef();
   if (view) view.godInvincible = god.invincible;
   e.fortressUntil = god.noGarbage ? 8.64e15 : (e.fortressUntil > 8e15 ? 0 : e.fortressUntil);
+  // コンボ永続を OFF に戻したら、自分が立てた streakShield も畳む。
   if (god.combo) e.streakShield = true;
+  else if (appliedCombo && e.streakShield) e.streakShield = false;
+  appliedCombo = god.combo;
   // このループは全ユーザーで毎秒走る — 無条件で書くと、ダンジョンのパークや
   // 地獄ラッシュの剛力の遺物など「モードが積んだ scoreMult」を握り潰す。
+  // ×1 に戻したときも、自分が最後に書いた値がそのまま残っているときだけ 1 に戻す。
   if (god.mult !== 1) e.scoreMult = god.mult;
+  else if (appliedMult !== 1 && e.scoreMult === appliedMult) e.scoreMult = 1;
+  appliedMult = god.mult;
   if (god.fever) { e.feverUntil = 8.64e15; e.feverMult = Math.max(e.feverMult || 2, 2); $('#hudScore').classList.add('fever'); }
   else if (e.feverUntil > 8e15) { e.feverUntil = 0; $('#hudScore').classList.remove('fever'); }
   if (god.freezeEnemy) {

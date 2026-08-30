@@ -349,8 +349,16 @@ export function createParties(deps) {
     if (seats && p.members.length > seats) {
       return { error: `このモードは${seats}人までです（いま${p.members.length}人）` };
     }
-    const busy = p.members.filter(m => m.userId !== leaderId && statusOf(m.userId) !== 'menu');
-    if (busy.length) return { error: '対戦中のメンバーがいます。終わるまで待ってください' };
+    // 'playing' は本当に対戦中。'offline' は切断猶予中で、招待側(invite)と同じく
+    // 「対戦中」とは区別して正しい文言を返す（誤メッセージで最大90秒ブロックしない）。
+    // どちらも i18n.js に対訳のある既存文言だけを使う（新しい日本語は増やさない）。
+    const others = p.members.filter(m => m.userId !== leaderId);
+    if (others.some(m => statusOf(m.userId) === 'playing')) {
+      return { error: '対戦中のメンバーがいます。終わるまで待ってください' };
+    }
+    if (others.some(m => statusOf(m.userId) === 'offline')) {
+      return { error: 'その人はいまオフラインです' };
+    }
     p.launch = { mode, at: now(), by: leaderId };
     sendToUser(leaderId, { type: 'party_launch_begin', mode }, { primaryOnly: true });
     return { ok: true };

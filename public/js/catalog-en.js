@@ -62,6 +62,13 @@ export const CATALOG_EN = {
   ult_timestop: { name: 'Time Stop', desc: '+12s on the clock / freezes bosses for 20s' },
   ult_judgement: { name: 'Divine Judgement', desc: 'Annihilates the board for a colossal score' },
   ult_admin: { name: 'Omnipotence [Staff]', desc: 'Staff-only: board wipe + instant gauge refill' },
+  // admin-exclusive booster items (item_god_*)
+  item_god_wipe: { name: 'God Strike [Staff]', desc: 'Wipes the board and grants +50,000 (multiplier applies)' },
+  item_god_time: { name: 'Time Mastery [Staff]', desc: '+120s on the clock / seals enemy attacks for 60s' },
+  item_god_hand: { name: 'Creator’s Hand [Staff]', desc: 'The best 3 pieces + the next 12 draws are big line-clearing pieces' },
+  item_god_mult: { name: 'Divine Might [Staff]', desc: '10× score for 30 seconds' },
+  item_god_shield: { name: 'Absolute Guard [Staff]', desc: '60s of no game-over, garbage immunity, and a permanent combo' },
+  item_god_nuke: { name: 'Cataclysm [Staff]', desc: 'Strips 99% of the enemy’s HP (or +100,000 if no enemy)' },
   // admin-exclusive gear
   skin_admin: { name: 'Rainbow [Staff]', desc: 'Staff-only blocks shimmering in rainbow' },
   board_admin: { name: 'Throne Room [Staff]', desc: 'A staff-only stage of royal gold' },

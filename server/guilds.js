@@ -137,7 +137,11 @@ export function addGuildPoints(db, user, pts, weekId) {
   w.byMember[user.id] = (w.byMember[user.id] || 0) + pts;
   guild.lifetime = (guild.lifetime || 0) + pts;
   // keep only the last 8 weeks
-  const keys = Object.keys(guild.weekly).sort();
+  // weekId は 'W2954' のような文字列。桁数が同じ間は辞書順=数値順だが、桁が
+  // 変わる境界（'W9999' → 'W10000'）では 'W10000' < 'W9999' となり、辞書順ソート
+  // だと最新週が先頭に来て shift() で消えてしまう。数値部で比べて古い週から落とす。
+  const wkNum = k => { const n = parseInt(String(k).replace(/^\D+/, ''), 10); return Number.isFinite(n) ? n : Infinity; };
+  const keys = Object.keys(guild.weekly).sort((a, b) => wkNum(a) - wkNum(b));
   while (keys.length > 8) delete guild.weekly[keys.shift()];
   return pts;
 }

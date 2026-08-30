@@ -55,6 +55,9 @@ function pushFeed(item, fresh) {
   if (feed.length > 40) feed.shift();
   tickerIdx = Math.min(7, feed.slice(-8).length - 1);
   showTicker(item, fresh);
+  // 初回接続時にフィードが空だと hello_ok 側の cycleTicker() が呼ばれず、
+  // 以後 feed が来ても自動循環タイマーが張られないまま止まる。未始動ならここで張る。
+  if (!tickerTimer) cycleTicker();
 }
 
 export function getFeed() { return feed.slice(); }
@@ -193,7 +196,7 @@ async function showProfileCard(name) {
           <b class="${(p.thrones || []).length ? `crowned${Math.min(3, p.thrones.length)}` : ''}">${p.guildTag ? `<span class="lb-tag">[${escapeHtml(p.guildTag)}]</span>` : ''}${escapeHtml(p.name)}</b>
           ${p.title ? `<span class="pc-title" style="color:${escapeHtml(p.title.color || '#fff')}">《${escapeHtml(p.title.id ? catName(p.title) : p.title.name)}》</span>` : ''}
           <small class="muted">${p.kind === 'resident'
-            ? `${escapeHtml((LANG === 'en' && p.archLabelEn) || p.archLabel || '')} ・ ${p.online ? t('🟢 オンライン', '🟢 online') : t(`⚫ ${p.hours ? `${p.hours[0]}時〜${p.hours[1] % 24}時に出現` : 'オフライン'}`, '⚫ offline')}`
+            ? `${escapeHtml((LANG === 'en' && p.archLabelEn) || p.archLabel || '')} ・ ${p.online ? t('🟢 オンライン', '🟢 online') : t(`⚫ ${p.hours ? `${p.hours[0]}時〜${p.hours[1] % 24}時に出現` : 'オフライン'}`, `⚫ ${p.hours ? `appears ${p.hours[0]}:00–${p.hours[1] % 24}:00` : 'offline'}`)}`
             : t(`Lv.${p.level} プレイヤー`, `Level ${p.level} player`)}</small>
         </div>
       </div>
@@ -245,7 +248,7 @@ function appendMsg(msg, scroll = true, box = $('#chatMsgs')) {
       ev.stopPropagation();
       showingOriginal = !showingOriginal;
       bubble.textContent = showingOriginal ? msg.text : msg.tr.text;
-      btn.textContent = showingOriginal ? `🌐 ${t('翻訳を表示', 'Show translation')}` : `🌐 ${t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}`;
+      btn.textContent = showingOriginal ? `🌐 ${t('翻訳を表示', 'Show translation')}` : `🌐 ${msg.tr.engine !== 'table' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}`;
     };
   }
   // タップでリアクション/返信。名前タップでプロフィールカード。

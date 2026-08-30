@@ -147,7 +147,7 @@ function defOf(id) {
 
 // Contribution of one finished game, per track key.
 function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, items, pieces, stage, depth }) {
-  const isPvp = mode === 'pvp' || mode === 'tournament' || mode === 'royale';
+  const isPvp = mode === 'pvp' || mode === 'tournament' || mode === 'royale' || mode === 'team';
   return {
     games: 1,
     score,
@@ -156,7 +156,7 @@ function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, 
     win: won ? 1 : 0,
     pvpWin: isPvp && won ? 1 : 0,
     aiWin: mode.startsWith('ai') && won ? 1 : 0,
-    bossWin: (mode === 'boss' || mode === 'boss_rush') && won ? 1 : 0,
+    bossWin: (mode === 'boss' || mode === 'boss_rush' || mode === 'raid') && won ? 1 : 0,
     floors,
     wave,
     ults,
@@ -243,7 +243,10 @@ export function claimMissionBonus(user, weekNum, scope) {
   const bonus = daily ? DAILY_ALL_BONUS : WEEKLY_ALL_BONUS;
   const flag = daily ? 'dailyBonusClaimed' : 'weeklyBonusClaimed';
   if (ms[flag]) return { error: 'すでに受け取り済みです' };
-  if (!set.every(r => r.claimed)) return { error: 'まだ全て達成していません' };
+  // プール変更でプールから消えた id（defOf が null）は view から除かれ、
+  // 受け取りもできない孤児行。全達成判定も view と同じ母集合に揃えないと、
+  // 見えない未受取行がコンプリートボーナスを永久に塞ぐ。
+  if (!set.filter(r => defOf(r.id)).every(r => r.claimed)) return { error: 'まだ全て達成していません' };
   ms[flag] = true;
   user.coins += bonus.coins;
   user.gems += bonus.gems;

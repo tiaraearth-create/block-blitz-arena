@@ -129,6 +129,9 @@ const MODE_LABEL = {
   dungeon_under: ['地下', 'Underworld'], dungeon_heaven: ['天界', 'Heavens'],
   ai_easy: ['AI戦', 'VS AI'], ai_normal: ['AI戦', 'VS AI'], ai_hard: ['AI戦', 'VS AI'],
   ai_oni: ['AI戦', 'VS AI'], ai_kami: ['AI戦', 'VS AI'], ai_souzou: ['AI戦', 'VS AI'],
+  ai: ['AI戦', 'VS AI'], sprint: ['タイムアタック', 'Time Attack'],
+  dungeon_abyss: ['深淵ダンジョン', 'The Abyss'],
+  team: ['チーム戦', 'Team'], raid: ['レイド', 'Raid'], coop: ['協力プレイ', 'Co-op'],
 };
 const modeLabel = id => (MODE_LABEL[id] ? tr(MODE_LABEL[id][0], MODE_LABEL[id][1]) : id);
 
@@ -547,8 +550,21 @@ export function showSettingsModal() {
       </div>`);
     c.querySelector('#rlNo').onclick = () => { closeModal(); showSettingsModal(); };
     c.querySelector('#rlYes').onclick = () => {
-      for (const key of ['bba_settings', 'bba_best', 'bba_oni', 'bba_kami', 'bba_guest_name']) {
-        localStorage.removeItem(key);
+      const keys = [
+        'bba_settings', 'bba_guest_name',
+        // 隠し難易度・隠しモードの解放状態（神／創造神／幽霊屋敷）
+        'bba_kami', 'bba_souzou', 'bba_ghost',
+        // ゲストのベストスコア・ローカル記録
+        'bba_best', 'bba_meltdown_best', 'bba_chimera_best', 'bba_dig_best',
+        'bba_ghost_best', 'bba_chaos_best', 'bba_coop_best', 'bba_survival_best',
+        'bba_survival_wave', 'bba_boss_max', 'bba_rush_depth', 'bba_weekly_best',
+        'bba_daily_record', 'bba_dungeon_abyss_max', 'bba_puzzle_stars', 'bba_puzzle_stage',
+      ];
+      for (const key of keys) localStorage.removeItem(key);
+      // タイムアタックのベストは時間別に複数（bba_sprint_60 等）あるので前方一致で消す。
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('bba_sprint_')) localStorage.removeItem(k);
       }
       location.reload();
     };
@@ -698,13 +714,19 @@ export function showJukeboxModal() {
 // Leaderboard
 // ---------------------------------------------------------------------------
 
+// タブ連打時のレース対策：これらの一覧を開くたびに世代を進め、await から
+// 戻った時点で最新世代でなければ（＝別タブに切り替わっていれば）描画しない。
+let viewGen = 0;
+
 export async function openLeaderboard(board = 'score') {
   showScreen('leaderboard');
+  const gen = ++viewGen;
   $$('[data-lb]').forEach(t => t.classList.toggle('active', t.dataset.lb === board));
   const list = $('#lbList');
   list.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
   try {
     const data = await api(`/api/leaderboard?board=${board}`);
+    if (gen !== viewGen) return;
     if (!data.rows.length) {
       list.innerHTML = `<p class="muted center">${tr('まだ記録がありません。最初の挑戦者になろう！', 'No records yet — be the first challenger!')}</p>`;
       return;
@@ -743,6 +765,7 @@ export async function openLeaderboard(board = 'score') {
           : board === 'rating' ? `${rankOf(r.rating).icon}${fmt(r.rating)}` : fmt(r.bestScore)}</div>
       </div>`).join('');
   } catch (err) {
+    if (gen !== viewGen) return;
     list.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
   }
 }
@@ -1044,8 +1067,10 @@ async function renderInvTitles() {
     body.innerHTML = `<p class="muted center">${tr('称号はアカウント登録すると集められます', 'Register an account to start collecting titles')}</p>`;
     return;
   }
+  const gen = ++viewGen;
   let data;
-  try { data = await api('/api/titles'); } catch (err) { body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`; return; }
+  try { data = await api('/api/titles'); } catch (err) { if (gen !== viewGen) return; body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`; return; }
+  if (gen !== viewGen) return;
   const earned = new Set(data.earned || []);
   const list = data.titles.slice().sort((a, b) => (earned.has(b.id) ? 1 : 0) - (earned.has(a.id) ? 1 : 0));
   const shown = invTitleFilter === 'earned' ? list.filter(t => earned.has(t.id)) : list;
@@ -1382,6 +1407,7 @@ function fmtResetIn(ms) {
 export async function openMissions(tab = msTab) {
   showScreen('missions');
   msTab = tab;
+  const gen = ++viewGen;
   $$('[data-ms]').forEach(x => x.classList.toggle('active', x.dataset.ms === tab));
   const body = $('#msBody');
   body.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
@@ -1390,9 +1416,11 @@ export async function openMissions(tab = msTab) {
     try {
       achCache = (await api('/api/achievements')).achievements;
     } catch (err) {
+      if (gen !== viewGen) return;
       body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
       return;
     }
+    if (gen !== viewGen) return;
     renderAchievements();
     return;
   }
@@ -1406,9 +1434,11 @@ export async function openMissions(tab = msTab) {
   try {
     missionsCache = (await api('/api/missions')).missions;
   } catch (err) {
+    if (gen !== viewGen) return;
     body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
     return;
   }
+  if (gen !== viewGen) return;
   renderMissions();
 }
 
@@ -3484,15 +3514,18 @@ let guildData = null;
 export async function openGuild(tab = guildTab) {
   showScreen('guild');
   guildTab = tab;
+  const gen = ++viewGen;
   $$('[data-gd]').forEach(x => x.classList.toggle('active', x.dataset.gd === tab));
   const body = $('#guildBody');
   body.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
   try {
     guildData = await api('/api/guilds');
   } catch (err) {
+    if (gen !== viewGen) return;
     body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
     return;
   }
+  if (gen !== viewGen) return;
   if (tab === 'mine') renderMyGuild();
   else if (tab === 'rank') renderGuildRank();
   else renderGuildFind();
@@ -3710,12 +3743,14 @@ function showGuildSettingsModal(g, d) {
 
 export async function openNews() {
   showScreen('news');
+  const gen = ++viewGen;
   const body = $('#newsBody');
   body.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
   $('#btnNewsPost').classList.toggle('hidden', !(session.user && session.user.role === 'admin'));
   $('#btnNewsPost').onclick = () => showNewsPostModal();
   let data;
-  try { data = await api('/api/news'); } catch (err) { body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`; return; }
+  try { data = await api('/api/news'); } catch (err) { if (gen !== viewGen) return; body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`; return; }
+  if (gen !== viewGen) return;
   markNewsSeen(data.latestAt);
   const isAdmin = session.user && session.user.role === 'admin';
   body.innerHTML = data.news.length ? data.news.map(n => `

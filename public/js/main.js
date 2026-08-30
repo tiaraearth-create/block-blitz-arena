@@ -368,7 +368,15 @@ function dismissSplash(e) {
   splash.addEventListener('pointerup', e => { e.preventDefault(); e.stopPropagation(); });
   splash.addEventListener('click', dismissSplash);
   window.addEventListener('keydown', function onKey(e) {
-    if (!splash.classList.contains('hidden')) dismissSplash();
+    // スプラッシュが表示される前（起動直後の約250msの判定待ち）はまだ hidden。
+    // その間の打鍵でリスナーを消費してしまうと、表示後にキーボードで閉じられ
+    // なくなる。表示されている時だけ閉じ、閉じ終えたらリスナーを解除する。
+    if (splash.classList.contains('hidden')) {
+      // クリック／タップ等で既に閉じられていた場合はここで解除して漏らさない。
+      if (splash.classList.contains('ts-out')) window.removeEventListener('keydown', onKey);
+      return;
+    }
+    dismissSplash();
     window.removeEventListener('keydown', onKey);
   });
   // Fallback audio unlock for the no-splash (autoplay-allowed) case.

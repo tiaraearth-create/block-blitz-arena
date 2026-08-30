@@ -191,7 +191,7 @@ export function earnedTitles(user) {
   if (s.maxCombo >= 10) out.push('combo10');
   if (s.bestScore >= 100000) out.push('score100k');
   if (s.pvpWins >= 10) out.push('pvp10');
-  if (s.rating >= 1200) out.push('rate1200');
+  if (Math.max(s.ratingBest || 0, s.rating) >= 1200) out.push('rate1200');
   if (user.coins >= 10000) out.push('rich');
   if ((s.bossMax || 0) >= 2) out.push('bosshunt');
   if (has('maou')) out.push('maoslayer');
@@ -205,7 +205,7 @@ export function earnedTitles(user) {
   // 👁️ 断罪
   if ((s.zeroCuts || 0) >= 1) out.push('zerocut');      // 封印を破るとどめ
   if ((s.zeroNamed || 0) >= 50) out.push('zeronamed');  // 名指しされた回数（負け側の勲章）
-  if (has('zero')) out.push('zeroseven');
+  if (has('zero7')) out.push('zeroseven');
   if ((s.aePlays || 0) >= 10) out.push('guest');
   // 到達したら剥がれない称号にする。現在連勝（s.winStreak）だけを見ていたので、
   // ランクマッチで1敗した瞬間に獲得済みの「連勝街道」が未獲得に戻り、
@@ -216,8 +216,8 @@ export function earnedTitles(user) {
   // winStreakBest は後から足したフィールドなので、連勝中の既存アカウントが
   // winStreakBest=0 / winStreak>0 になりうる。Math.max で両方を見る。
   if (Math.max(s.winStreakBest || 0, s.winStreak || 0) >= 5) out.push('streak5');
-  if (s.rating >= 1500) out.push('diamond');
-  if (s.rating >= 1700) out.push('grandmaster');
+  if (Math.max(s.ratingBest || 0, s.rating) >= 1500) out.push('diamond');
+  if (Math.max(s.ratingBest || 0, s.rating) >= 1700) out.push('grandmaster');
   if (s.gamesPlayed >= 200) out.push('veteran');
   if (s.maxCombo >= 15) out.push('combo15');
   if (s.bestScore >= 300000) out.push('score300k');

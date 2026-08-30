@@ -43,7 +43,7 @@ const SERVER_MSG_EN = {
   // v2.12: 英語面に日本語のトーストが出ていたぶんをまとめて追加。
   // trServer は表に無い文字列をそのまま返すので、抜けても壊れない ──
   // だから気づかれないまま残る。増やしたら必ずここも足すこと。
-  'ファイルが大きすぎます（最大12MB）': 'That file is too large (12MB max)',
+  'ファイルが大きすぎます（最大4MB）': 'That file is too large (4MB max)',
   'その名前は使えません。別の名前でどうぞ': 'That name is not available — please pick another',
   '名前を入力してください': 'Enter a name',
   'メッセージが空です': 'Your message is empty',
@@ -56,7 +56,7 @@ const SERVER_MSG_EN = {
   '接続数が上限に達しています。しばらくしてからお試しください': 'The server is at capacity — please try again shortly',
   '同時接続が多すぎます': 'Too many simultaneous connections',
   '同じアカウントの接続が多すぎます': 'Too many connections from this account',
-  'その名前は使われています。別の名前になりました': 'That name is taken — you have been given another',
+  'その名前は使えません。別の名前になりました': 'That name is taken — you have been given another',
   '結果の送信が多すぎます。しばらく待ってください': 'Too many results submitted — please wait a moment',
   '送信が多すぎます。しばらく待ってください': 'Too many submissions — please wait a moment',
   'アイテムを持っていません': 'You do not have that item',
@@ -191,11 +191,25 @@ const SERVER_MSG_EN = {
   '管理者専用のアイテムです': 'Staff-only item',
   '管理者専用の装備です（非売品）': 'Staff-only gear (not for sale)',
   '管理者専用の装備です': 'Staff-only gear',
-  'ファイルが大きすぎます（最大64MB）': 'File is too large (max 64MB)',
+  'データが大きすぎます（最大64KB）': 'That data is too large (64KB max)',
   'JSONとして読み取れませんでした': 'Could not parse the file as JSON',
   '接続タイムアウト': 'Connection timed out',
   '対戦相手が見つかりません': 'Opponent not found',
   '再戦の相手はもういません': 'Your opponent has left — no rematch',
+  // v2.16: trServer は通るのに表に無かったプレイヤー向け固定文言を追加。
+  '🛠 サーバー更新のためマッチングを中止しました。少し待ってからもう一度お試しください': '🛠 Matchmaking was cancelled for a server update — please wait a moment and try again',
+  'その時間枠は存在しません': 'That time slot does not exist',
+  'その枠はもう終わっています': 'That slot has already ended',
+  '開催中の枠からは変更できません': 'You cannot switch away from a slot that is live',
+  '開始の連打はできません。少し待ってください': 'You are starting too fast — please wait a moment',
+  '報告箱がいっぱいです。少し時間をおいてからお願いします': 'The report box is full — please try again a little later',
+  'サーバー内部でエラーが発生しました': 'An internal server error occurred',
+  '投票がありません': 'No poll is running',
+  // 👁️ 断罪（管理者ゼロ）── 取引投票と伝言まわりのサーバー送信文言。
+  'もう投票しました': 'You have already voted',
+  '投票を受け付けられません': 'Your vote could not be accepted',
+  '伝言は、段にとどめを刺した人だけが残せます': 'Only the player who landed the finishing blow on a tier can leave a message',
+  '伝言を入力してください': 'Enter a message',
 };
 
 const SERVER_MSG_PATTERNS = [
@@ -205,6 +219,7 @@ const SERVER_MSG_PATTERNS = [
   [/^コインが足りません（([\d,]+)必要）$/, (m) => `Not enough coins (need ${m[1]})`],
   [/^ギルドは満員です（最大(\d+)人）$/, (m) => `The guild is full (max ${m[1]} members)`],
   [/^ギルド設立には🪙(\d+)必要です$/, (m) => `Founding a guild costs 🪙${m[1]}`],
+  [/^このモードは(\d+)人までです（いま(\d+)人）$/, (m) => `This mode is for up to ${m[1]} players (you have ${m[2]} now)`],
 ];
 
 export function trServer(msg) {
@@ -223,7 +238,15 @@ export function applyStaticI18n() {
   document.documentElement.lang = LANG;
   if (LANG !== 'en') return;
 
-  const set = (sel, text) => { const el = document.querySelector(sel); if (el) el.textContent = text; };
+  const set = (sel, text) => {
+    const el = document.querySelector(sel);
+    if (!el) return;
+    // 通知ドット(.nav-dot)を内包する要素は textContent 代入だとドットごと消える。
+    // ドット要素を退避してからテキストを入れ、差し戻す（id/hidden 状態を保つ）。
+    const dot = el.querySelector('.nav-dot');
+    el.textContent = text;
+    if (dot) el.appendChild(dot);
+  };
 
   // menu buttons
   set('#btnSolo', '▶ Solo Play');
@@ -311,6 +334,8 @@ export function applyStaticI18n() {
   // 🤝 フレンド（v2.12 で追加）
   set('#screen-friends .sub-header h2', '🤝 Friends');
   set('[data-fr="list"]', 'Friends');
+  // 「申請」タブは中に通知ドット(#frReqDot)を内包しているが、set() が
+  // ドットを退避・差し戻すので textContent 代入でも消えない。
   set('[data-fr="requests"]', 'Requests');
   set('[data-fr="find"]', 'Find');
   set('[data-fr="settings"]', 'Settings');

@@ -52,7 +52,7 @@ function seatPlan(botSeats) {
 // セッション
 // ---------------------------------------------------------------------------
 
-export function createSession(deps, humanSocks) {
+export function createSession(deps, humanSocks, run = null) {
   const {
     Engine, chooseMove, pickResidentBot, pickPersona, sockName,
     now = () => Date.now(), random = Math.random, uuid,
@@ -66,6 +66,9 @@ export function createSession(deps, humanSocks) {
   const botSeats = Math.max(MIN_BOT_SEATS, seats - humans);
   const seed = Math.floor(random() * 2 ** 31);
   const used = new Set(seated.map(sockName));
+  // その日すでに処刑された住人は抽選から外す（説明文「その日はもう戻ってきません」）。
+  // run を渡さない旧テスト等では従来どおり（除外なし）。
+  if (run && Array.isArray(run.fallen)) for (const f of run.fallen) if (f && f.name) used.add(f.name);
 
   const entrants = seated.map(ws => ({
     ws, human: true, name: sockName(ws), score: 0, cuts: 0, missed: 0,
@@ -135,6 +138,8 @@ export function tick(s, run, deps) {
       if (deps.emit) for (const x of s.entrants) if (x.human) {
         deps.emit(x, { type: 'zero_complete', dan: DAN.length });
       }
+      // 👑 称号「七冠奪還」── 七段すべてが陥落したその場に居合わせた人にバッジ 'zero7'。
+      if (deps.onZeroSevenBadge) deps.onZeroSevenBadge(s.entrants.filter(x => x.human).map(x => x.name));
     }
     return;
   }
@@ -209,7 +214,12 @@ export function tick(s, run, deps) {
     s.lastState = t;
     if (emit) {
       const view = stateView(s, run);
-      for (const e of s.entrants) if (e.human) emit(e, { ...view, you: youView(e) });
+      // canWill は視聴者ごとに違う（とどめを刺して未記入の段があるか）。共有 view の
+      // ハードコード null を上書きして配る ── 再接続後も伝言を書く権利を復元できる。
+      for (const e of s.entrants) if (e.human) {
+        const canWill = (run.broken || []).some(b => b.by === e.name && !b.will);
+        emit(e, { ...view, canWill, you: youView(e) });
+      }
     }
   }
 }
@@ -232,7 +242,14 @@ function resolveExpiredVerdicts(s, run, danIndex, deps) {
     if (say) say('missed', danIndex, { you: v.target, name: victim ? victim.name : undefined, seed: v.at });
     if (emit) {
       for (const x of s.entrants) if (x.human) {
-        emit(x, { type: 'zero_missed', target: v.target, victim: victim ? victim.name : null });
+        // 落とした本人には赤マス座標も送る ── モード説明「時間内に斬れないと
+        // 赤マスがそのままお邪魔になる」を満たすため、クライアントは自分が target の
+        // ときこの cells を盤面へお邪魔として書き込む。他人には座標は送らない。
+        const mine = x.name === v.target;
+        emit(x, {
+          type: 'zero_missed', target: v.target, victim: victim ? victim.name : null,
+          cells: mine ? v.cells : undefined, mine,
+        });
       }
     }
   }
@@ -255,7 +272,10 @@ function fireVerdicts(s, run, danIndex, deps) {
     e.lastVerdictAt = t;
     // 取引「今夜の的を八列すべてにしてやる」= 寄せる列を無効化する
     const mark = run.dealMarkAll ? -1 : s.targetCol;
-    const { cells, keystone } = pickVerdictCells(e.grid, danIndex, mark, random);
+    // 人間の盤面はサーバーが持たない（zero_state 同期は存在しない）ので、的は
+    // 全マスから選ぶ。以前は e.grid（常に undefined）を渡していて「空きマスから選ぶ」
+    // 設計を装っていたが実体は全マス対象だった ── null を渡して意図を明示する。
+    const { cells, keystone } = pickVerdictCells(null, danIndex, mark, random);
     if (!cells.length) continue;
     // 杭が効いていれば予告が伸びる。取引で縮むこともある。
     const warnMs = Math.max(1200, dan.warnMs + (s.warnBonus || 0) - (run.dealWarnCut || 0));
@@ -325,12 +345,21 @@ export function submitCut(s, run, name, verdictId, clearedCells, deps) {
 }
 
 // トップアウト。回数無制限だが、そのたびにゼロが回復する。
-export function topOut(s, run, name, deps) {
+export function topOut(s, run, name, deps, userId = null) {
   const { now = () => Date.now(), say } = deps;
   const e = s.entrants.find(x => x.human && x.name === name);
   if (!e || !e.alive) return false;
+  const t = now();
+  // クールダウンはユーザー単位で run（世界で1本の共有進捗）に持つ。席単位の
+  // e.alive だけだと、zero_leave→zero_join で新セッションの alive:true な席を
+  // 即座に得られ、60秒に1回の上限を回避して共有進捗を巻き戻せた（griefing）。
+  if (userId) {
+    run.topoutAt = run.topoutAt || {};
+    if (t - (run.topoutAt[userId] || 0) < REVIVE_SEC * 1000) return false;
+    run.topoutAt[userId] = t;
+  }
   e.alive = false;
-  e.downUntil = now() + REVIVE_SEC * 1000;
+  e.downUntil = t + REVIVE_SEC * 1000;
   const danIndex = run.dan | 0;
   run.dealt = Math.max(0, (run.dealt || 0) - Math.round(danHpFor(danIndex, s.humans, run) * TOPOUT_HEAL));
   if (say) say('revive', danIndex, { you: name, seed: now() });
@@ -437,8 +466,14 @@ export function latestWill(run) {
 
 function runDeal(s, run, danIndex, deps, elapsed, t) {
   const { emit, say, residentVoters, residentChoice, random = Math.random } = deps;
+  // 発火はセッション基準の elapsed ではなく「枠(スロット)の20分地点」で測る。
+  // クライアントの1走行は120秒でセッションが作り直されるため、セッション基準では
+  // DEAL_AT_SEC(=1200秒) に構造的に到達できず、取引が本番で一度も発動しなかった。
+  // run.slotStartsAt（現在スロットの開始時刻, ms）を adminevent 側が書き込む。
+  // 無い場合は後方互換でセッション基準にフォールバックする。
+  const slotElapsed = run.slotStartsAt ? (t - run.slotStartsAt) / 1000 : elapsed;
   // 開幕
-  if (!run.deal && elapsed >= DEAL_AT_SEC && run.dealDoneFor !== danIndex) {
+  if (!run.deal && slotElapsed >= DEAL_AT_SEC && run.dealDoneFor !== danIndex) {
     run.deal = makeDeal(run.dayKey || 'x', danIndex, t);
     if (say) say('deal', danIndex, { seed: t });
     if (emit) for (const x of s.entrants) if (x.human) emit(x, { type: 'zero_deal', deal: dealView(run.deal) });

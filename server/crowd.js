@@ -10,7 +10,7 @@
 // }
 
 import { residentStats, archetype, tierOf, jstHour, jstWeekday } from './residents.js';
-import { SHOP_ITEMS, BOSSES, TITLES } from './catalog.js';
+import { SHOP_ITEMS, BOSSES, RAID_BOSSES, TITLES } from './catalog.js';
 import { enName } from '../public/js/catalog-en.js';
 import { ACHIEVEMENTS } from './achievements.js';
 // チャット3.0 (v2.6): 再出防止メモリ + 話題スレッド + 生成合成エンジン
@@ -76,10 +76,26 @@ const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
 // 名前ではなくカタログの項目そのものを返す。英語面の描画で id から英語名を
 // 引けるようにするため（以前は日本語名がそのまま英文に挿さっていた）。
+// throneOnly（王座の欠片専用）と gachaOnly（ガチャ限定）は除外する。前者は
+// コイン・ジェム・ガチャのどれでも手に入らない世界進捗報酬なので「買った/引いた」
+// と言わせると設定が壊れ、未解放段の品名ネタバレにもなる。後者は名前に【ガチャ限定】
+// が付くので「買った」系の文面と矛盾する。index.js のガチャ抽選フィルタと同型。
 function cosmeticItem() {
-  const pool = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && i.cat !== 'ult');
+  const pool = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly && !i.gachaOnly && i.cat !== 'ult');
   return pick(pool);
 }
+
+// 住人が正当に持ちうる称号だけを {title} スロットに使う。residentStats(r).title と
+// 同じ分岐（residents.js:317-326）に現れる id 群。towerlord「百塔の覇者」は
+// dungeonMax≤99 のクランプで到達不能なので入れない（「頂は人間に残す」不変条件）。
+const RESIDENT_TITLE_IDS = new Set(['kamislayer', 'tourneyking', 'onislayer', 'diamond', 'rate1200', 'score100k', 'veteran', 'addict', 'rookie']);
+const RESIDENT_TITLES = TITLES.filter(t => RESIDENT_TITLE_IDS.has(t.id));
+
+// 人間だけの頂点を主張する実績は {ach} スロットから除外する（F100制覇・深淵A100
+// 制覇・創造神撃破）。住人の dungeonMax は99止まりで、residentStats はこれらの
+// バッジを持たせない — 称号 towerlord を外したのと同じ不変条件。
+const ACH_HUMAN_ONLY = new Set(['ach_dun100', 'ach_abyss100', 'ach_souzou']);
+const RESIDENT_ACHIEVEMENTS = ACHIEVEMENTS.filter(a => !ACH_HUMAN_ONLY.has(a.id));
 
 // Slots resolve to a language-neutral value first, then render per language.
 // A shared `cache` keeps both translations of one line in agreement (the
@@ -93,12 +109,14 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'me': v = r ? r.name : ''; break;
     case 'mode': v = (r && r.favMode) || 'solo'; break;
     case 'mode2': v = r ? pick(r.modes) : 'solo'; break;
-    case 'floor': v = Math.max(2, Math.min(100, (st ? st.dungeonMax : 20) + rint(-6, 3))); break;
+    // 99止まり: 塔100F制覇は人間だけのもの（residents.js:296 の dungeonMax クランプに揃える）。
+    case 'floor': v = Math.max(2, Math.min(99, (st ? st.dungeonMax : 20) + rint(-6, 3))); break;
     case 'rating': v = st ? st.rating : 1000; break;
     case 'level': v = st ? st.level : 5; break;
     case 'tier': v = st ? st.tier : tierOf(1000); break;
     case 'n': v = rint(2, 9); break;
-    case 'wave': v = st ? Math.max(3, st.survivalWave + rint(-3, 2)) : 8; break;
+    // WAVE も99止まりに揃える（residents.js:347 の survivalWave クランプと同じ）。
+    case 'wave': v = st ? Math.max(3, Math.min(99, st.survivalWave + rint(-3, 2))) : 8; break;
     case 'combo': v = r ? Math.max(3, Math.round(3 + r.skill * 12 + rint(-1, 1))) : 6; break;
     // 自慢する点数はランキングの自己ベスト（residentStats）から出す。
     // skill から別式で作ると、住人強化のたびに「チャットでは6万点なのに
@@ -117,8 +135,11 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'winner': v = ''; break;
     case 'item': v = cosmeticItem(); break;      // オブジェクトごと保持し言語別に描画
     case 'boss': v = pick(BOSSES); break;         // 同上
-    case 'title': v = pick(TITLES); break;        // 同上
-    case 'ach': v = pick(ACHIEVEMENTS); break;
+    // プロフィールの称号を優先し、無ければ住人が正当に持ちうる称号だけから引く。
+    // TITLES 全体から引くと towerlord「百塔の覇者」等をフィードで名乗り、プロフィール
+    // （residentStats）と食い違う（「頂は人間に残す」不変条件を破る）。
+    case 'title': v = (st && st.title) || pick(RESIDENT_TITLES); break;   // オブジェクトごと保持し言語別に描画
+    case 'ach': v = pick(RESIDENT_ACHIEVEMENTS); break;
     case 'question': v = ctx.poll || ''; break;   // pollオブジェクトごと保持し言語別に描画
     // v2.6 新モードの進行度 — 塔の進みからそれっぽい数字を出す
     case 'depth': v = Math.max(3, Math.round(((st ? st.dungeonMax : 20) || 8) * 0.75) + rint(-4, 3)); break;
@@ -609,18 +630,26 @@ function genTopicDialogue(ctx) {
     const fA = gen.smartPick(`follow.${kindA}`, (FOLLOWS[kindA] || []).filter(archOkFor(a)), { now: ctx.now, rid: a.id });
     if (fA) script.push([a, fA, { name: b.name }]);
   }
-  gen.adoptTopic(id, ctx);
+  // まず全行をレンダリングして「全部新鮮に流せる」ことを確かめてから副作用を確定する。
+  // 途中で棄却する場合、表示されない文を surface メモリに焼き付けたり、話題スレッドを
+  // 乗っ取ったり、住人を noteSpoken で黙らせてはいけない（会話は流れていないため）。
+  const built = [];
+  const seen = new Set();   // 同一バッチ内の重複も従来どおり弾く
   let delay = 0;
-  const out = [];
   for (const [r, srcE, extra] of script) {
     delay += 3000 + rnd() * 9000;
     const rendered = renderBoth(r, ctx, srcE, extra);
-    if (!rendered || !gen.surfaceFresh(rendered.text, ctx.now)) return null;   // rare — just skip this tick
-    gen.noteSurface(rendered.text, ctx.now);
-    gen.noteSpoken(r.id, ctx.now);
-    out.push({ resident: r, text: rendered.text, tr: rendered.tr, delay });
+    if (!rendered || !gen.surfaceFresh(rendered.text, ctx.now) || seen.has(rendered.text)) return null;   // rare — 副作用なしで中断
+    seen.add(rendered.text);
+    built.push({ resident: r, text: rendered.text, tr: rendered.tr, delay });
   }
-  return out;
+  // 全行そろった — ここで初めて話題採用・surface・spoken を確定する。
+  gen.adoptTopic(id, ctx);
+  for (const x of built) {
+    gen.noteSurface(x.text, ctx.now);
+    gen.noteSpoken(x.resident.id, ctx.now);
+  }
+  return built;
 }
 
 // Returns [{ resident, text, delay }] or null when the cast is too thin.
@@ -691,8 +720,6 @@ const FEED = [
   { id: 'join',     icon: '👋', w: 2,  min: 0,    ja: '{me} が新しく参加しました！ようこそ！',        en: '{me} just joined — welcome!', newbie: true },
 ];
 
-const RAID_NAMES = ['深海のクラーケン', '魔竜ティアマト', '冥王ハデス'];
-
 export function composeFeed(ctx) {
   const active = ctx.active || [];
   if (!active.length) return null;
@@ -704,7 +731,13 @@ export function composeFeed(ctx) {
     if (!cands.length) continue;
     const r = pick(cands);
     const extra = {};
-    if (f.id === 'raid') extra.boss = pick(RAID_NAMES);
+    // RAID_BOSSES はオブジェクト（nameEn 持ち）。文字列を渡すと renderSlot の
+    // boss 分岐が素通しし、英語面 textEn に日本語ボス名が挿さる回帰になる。
+    if (f.id === 'raid') extra.boss = pick(RAID_BOSSES);
+    // 「自己ベスト更新」速報は実際のランキング値（bestScore）そのものを告知する。
+    // {score} スロットの 86〜100% 丸めだと、更新と言いながらプロフィール/ランキングの
+    // 自己ベストを下回る数字が出て矛盾する。
+    if (f.id === 'record') extra.score = residentStats(r, ctx.now).bestScore;
     const ctxOthers = { ...ctx, active: active.filter(x => x.id !== r.id) };
     const cache = {};   // same numbers in both languages
     // 各面はその面の言語で描く。r をそのまま渡すと fill が住人の lang を使うので、
@@ -943,6 +976,34 @@ const REPLY_RULES = [
   ['question', /[?？]$/],
 ];
 
+// 名指し判定。単純な部分文字列一致だと2文字の住人名が日常語に埋もれて誤爆する
+// （『レイ』が『プレイ』『レイド』、英語の 'Kai' が 'Kaito'）。境界を見る:
+//   ・ラテン名: 前後が英数字でない（単語境界）。
+//   ・カナ名: 名前の端が別のカナに続いていない（プレイ/レイド を弾く）。
+//     さん/ちゃん 等の敬称は語頭がひらがなでも許す（レイさん・むぎちゃん）。
+const isKata = c => (c >= 'ァ' && c <= 'ヶ') || c === 'ー';
+const isHira = c => c >= 'ぁ' && c <= 'ん';
+const isLatinWord = c => /[A-Za-z0-9]/.test(c);
+const HONORIFIC = /^(さん|くん|ちゃん|さま|っち|きゅん|ちゃ)/;
+function nameMentioned(text, name) {
+  if (!name || name.length < 2) return false;
+  const latin = /^[\x00-\x7F]+$/.test(name);
+  const first = name[0], last = name[name.length - 1];
+  for (let from = 0, idx; (idx = text.indexOf(name, from)) !== -1; from = idx + 1) {
+    const before = idx > 0 ? text[idx - 1] : '';
+    const after = idx + name.length < text.length ? text[idx + name.length] : '';
+    if (latin) {
+      if (!isLatinWord(before) && !isLatinWord(after)) return true;
+      continue;
+    }
+    const badBefore = before && ((isKata(first) && isKata(before)) || (isHira(first) && isHira(before)));
+    let badAfter = after && ((isKata(last) && isKata(after)) || (isHira(last) && isHira(after)));
+    if (badAfter && isHira(last) && HONORIFIC.test(text.slice(idx + name.length))) badAfter = false;
+    if (!badBefore && !badAfter) return true;
+  }
+  return false;
+}
+
 // Returns [{ resident, text, delay }]. `residents` = currently active cast.
 // forcedName: a resident who MUST answer first (a direct reply to their
 // message) — even quiet lurkers respond when spoken to directly.
@@ -955,7 +1016,7 @@ export function chooseReplies(text, ctx, forcedName = null) {
   const lang = /[ぁ-んァ-ヶ一-龠ー]/.test(t) ? 'ja' : 'en';
 
   // Mentioned residents always answer; a direct-reply target leads the queue.
-  let mentioned = active.filter(r => r.name.length >= 2 && t.includes(r.name));
+  let mentioned = active.filter(r => nameMentioned(t, r.name));
   if (forced) mentioned = [forced, ...mentioned.filter(r => r.id !== forced.id)];
 
   let category = 'generic';

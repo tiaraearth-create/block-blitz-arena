@@ -75,6 +75,8 @@ export class GameView {
     this.drag = null;
     this.glowCells = null;
     this.dangerCells = null;
+    this.dangerUntil = 0;
+    this.dangerTotal = 0;
     this.keystoneCell = -1;
     this.coolCells = null;
     this.oreCells = null;
@@ -171,6 +173,9 @@ export class GameView {
     };
 
     this.canvas.addEventListener('pointerdown', e => {
+      // Already dragging with another pointer? A second finger / the palm
+      // touching the canvas must not hijack or replace the active drag.
+      if (this.drag) return;
       if (!this.engine || this.engine.over || !this.running || this.inputLocked) return;
       const { x, y } = pos(e);
       const slot = this.trayHit(x, y);
@@ -181,21 +186,25 @@ export class GameView {
           return;
         }
         try { this.canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
-        this.drag = { index: slot, piece: this.engine.hand[slot], px: x, py: y };
+        this.drag = { index: slot, piece: this.engine.hand[slot], px: x, py: y, pointerId: e.pointerId };
         audio.pickup();
         e.preventDefault();
       }
     });
 
     this.canvas.addEventListener('pointermove', e => {
-      if (!this.drag) return;
+      // Only the pointer that started the drag may move it — a second finger's
+      // movement must not drag the held piece to its position.
+      if (!this.drag || e.pointerId !== this.drag.pointerId) return;
       const { x, y } = pos(e);
       this.drag.px = x;
       this.drag.py = y;
     });
 
     const drop = e => {
-      if (!this.drag) return;
+      // Only the pointer that started the drag may release it — a second
+      // finger's pointerup must not drop the held piece.
+      if (!this.drag || e.pointerId !== this.drag.pointerId) return;
       const { x, y } = pos(e);
       const anchor = this.dragAnchor();
       const { index, piece } = this.drag;
@@ -231,7 +240,7 @@ export class GameView {
       }
     };
     this.canvas.addEventListener('pointerup', drop);
-    this.canvas.addEventListener('pointercancel', () => { if (this.drag) { this.drag = null; audio.putback(); } });
+    this.canvas.addEventListener('pointercancel', e => { if (this.drag && e.pointerId === this.drag.pointerId) { this.drag = null; audio.putback(); } });
   }
 
   trayHit(x, y) {

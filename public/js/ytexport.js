@@ -378,12 +378,19 @@ export function showYouTubeStudio() {
     starting = true;              // recording はまだ false。この間も操作を止める
     status(t('準備中…', 'Getting ready…'));
     btnRec.disabled = true;
+    // hush() は「これから予約する音」しか止められない。すでに start() 済みの
+    // パッド／ベース／ドローンは自分の長さぶん鳴り続ける。いちばん長いのは
+    // 1小節ぶん伸びるパッド（stepDur*16 = 240/bpm 秒）で、遅い曲だと3秒を超える。
+    // 先読みぶん（最大で lookahead 先に予約済み）＋1小節を待てば、直前の試聴が
+    // 完全に鳴り終わってから dest を繋げられるので、頭に残響が混ざらない。
+    const selInfo = tracks.find(x => x.id === sel);
+    const barMs = selInfo && selInfo.bpm ? Math.ceil(240000 / selInfo.bpm) : 3200;
     setTimeout(() => {
       btnRec.disabled = false;
       starting = false;
       if (studioState !== session || recording) { status(''); return; }   // 待つ間に閉じられた
       beginRec();
-    }, Math.round((audio.lookahead || 0.35) * 1000) + 120);
+    }, Math.round((audio.lookahead || 0.35) * 1000) + barMs + 120);
   };
 
   const beginRec = () => {
@@ -396,7 +403,11 @@ export function showYouTubeStudio() {
       return;
     }
     const wasMusicOn = audio.musicOn;
-    audio.setMusicEnabled(true);
+    // フラグだけ立てる。setMusicEnabled(true) は syncTrack() を呼び、hush() 直後の
+    // この時点では previewTrack=null のため lockedTrack||trackName（通常メニュー曲）を
+    // step0 から即スケジュールしてしまう ── その1拍目は取り消せず録画の頭に混ざる。
+    // 頭出しは rec.start() 後の preview(sel)/restart() が担うので、ここでは鳴らさない。
+    audio.musicOn = true;
     const dest = audio.ctx.createMediaStreamDestination();
     audio.musicGain.connect(dest);
     studioState.dest = dest;
