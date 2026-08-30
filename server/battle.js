@@ -15,7 +15,8 @@ import { zeroSay, moodFor } from './zero.js';
 import { createSession as createZeroSession, tick as tickZero, submitCut as zeroCut,
   submitStake as zeroStake, submitDealVote as zeroDealVote,
   submitWill as zeroWill, latestWill as zeroLatestWill, addHuman as zeroAddHuman,
-  topOut as zeroTopOut, stateView as zeroStateView, ZERO_TICK } from './zero-session.js';
+  topOut as zeroTopOut, stateView as zeroStateView, syncBoard as zeroSyncBoard,
+  ZERO_TICK } from './zero-session.js';
 import { eventBonus } from './events.js';
 import { danAt, DAN as ZERO_DAN } from './zero.js';
 import { createParties } from './party.js';
@@ -999,6 +1000,15 @@ export function initBattle(server, deps) {
       match.moves = 0;
       match.turnEndsAt = Date.now() + (COUNTDOWN * 1000) + COOP_TURN_MS;
     }
+    // 🚩 陣取り: 協力と同じ1盤面だが、点は個人・消したラインは領土。
+    if (mode === 'land') {
+      match.engine = new Engine(seed);
+      match.turn = 0;
+      match.moves = 0;
+      match.owner = new Array(LAND_CELLS).fill(0);
+      match.turnEndsAt = Date.now() + (COUNTDOWN * 1000) + LAND_TURN_MS;
+      match.landEndsAt = Date.now() + (COUNTDOWN + match.duration) * 1000;
+    }
     // Raid: everyone fights one shared boss whose HP scales with party size.
     if (mode === 'raid') {
       const def = RAID_BOSSES[crypto.randomInt(RAID_BOSSES.length)];
@@ -1035,10 +1045,15 @@ export function initBattle(server, deps) {
       });
     }
     // Co-op bots wait their turn instead of playing their own board.
-    for (const p of match.players) if (p.sock.isBot && mode !== 'coop') p.sock.startPlay(match, p.slot);
+    for (const p of match.players) if (p.sock.isBot && mode !== 'coop' && mode !== 'land') p.sock.startPlay(match, p.slot);
     if (mode === 'coop') {
       match.coopTick = setInterval(() => coopTick(match), 400);
       setTimeout(() => { if (!match.ended) coopBroadcast(match, null); }, COUNTDOWN * 1000);
+    }
+    // 🚩 陣取りも同じ作法（自分の盤面は持たず、手番を待つ）
+    if (mode === 'land') {
+      match.landTick = setInterval(() => landTick(match), 400);
+      setTimeout(() => { if (!match.ended) landBroadcast(match, null); }, COUNTDOWN * 1000);
     }
     if (mode === 'raid') {
       // Server-driven boss attacks + HP sync.
@@ -1167,6 +1182,131 @@ export function initBattle(server, deps) {
       : Date.now() >= match.turnEndsAt;
     if (!due) return;
     coopAutoMove(match);
+  }
+
+  // -------------------------------------------------------------------------
+  // 🚩 陣取りデュエル — 2人・1つの盤面・交互に打つ。消したラインが領土になる。
+  //
+  // 上の協力プレイ（サーバー権威の1盤面 ＋ クライアント側のミラー Engine ＋
+  // 確定手のブロードキャスト）をそのまま**複製**したもの。違いは3つだけ:
+  //   * 点は共有ではなく「打った人のもの」（協力は共有スコアが仕様）
+  //   * ラインを消すと、その行／列の8マスが自分の色の領土になる。
+  //     相手の領土も上塗りで奪える ── だから終盤まで逆転が残る。
+  //   * 勝敗は時間切れ時の「領土数 → 同数ならスコア」
+  // 協力側に mode 分岐を足さずに複製したのは、協力の「絶対にズレない」を
+  // 一切触らないため。あちらは共有スコアが仕様で、こちらは per-player が仕様。
+  //
+  // owner は 64 要素（0=中立 / 1=slot0 / 2=slot1）。盤面のブロックとは別物で、
+  // ラインが消えてマスが空になっても領土は残る。
+  // -------------------------------------------------------------------------
+
+  const LAND_TURN_MS = Number(process.env.LAND_TURN_MS) || 12000;
+  const LAND_BOT_THINK_MS = 1500;
+  const LAND_CELLS = 64;
+
+  function landCounts(match) {
+    const c = [0, 0];
+    if (!match.owner) return c;
+    for (const o of match.owner) { if (o === 1) c[0]++; else if (o === 2) c[1]++; }
+    return c;
+  }
+
+  function landBroadcast(match, move) {
+    const e = match.engine;
+    const counts = landCounts(match);
+    for (const p of match.players) {
+      if (p.sock.isBot) continue;
+      send(p.sock, {
+        type: 'land_state',
+        move,                                  // { slot, index, row, col, took } or null
+        turn: match.turn,
+        // 時計は機械ごとに違うので、協力と同じく「残り時間」で送る。
+        turnRemain: Math.max(0, match.turnEndsAt - Date.now()),
+        turnMs: LAND_TURN_MS,
+        endsIn: Math.max(0, match.landEndsAt - Date.now()),
+        scores: match.players.map(q => q.score),
+        moves: match.moves,
+        over: e.over,
+        grid: e.snapshot(),                    // ズレたときの復旧用
+        owner: match.owner.slice(),            // 領土（0/1/2）
+        counts,                                // [slot0の領土数, slot1の領土数]
+        hand: e.hand.map(q => (q ? q.shape : null)),
+      });
+    }
+  }
+
+  // 1手を共有盤面へ適用する。違法手なら false。
+  function landApply(match, slot, index, row, col, opts = {}) {
+    const e = match.engine;
+    if (match.ended || e.over) return false;
+    if (match.turn !== slot) return false;
+    if (Date.now() < match.startedAt + COUNTDOWN * 1000) return false;
+    const piece = e.hand[index];
+    if (!piece || !e.canPlace(piece, row, col)) return false;
+
+    const result = e.place(index, row, col);
+    if (!result) return false;
+    match.moves++;
+    const p = match.players[slot];
+    p.moves = (p.moves || 0) + 1;
+    // 点は打った人のもの。engine.score は共有なので差分では取れない
+    // （相手の手ぶんまで自分に入る）— 1手ぶんの gained をそのまま使う。
+    p.score += result.gained || 0;
+    p.lines = (p.lines || 0) + (result.lineCount || 0);
+    p.maxCombo = Math.max(p.maxCombo, e.maxCombo);
+
+    // 消した行／列の8マスを自分の領土にする。相手の領土も上塗りで奪う。
+    const mark = slot + 1;
+    let took = 0;
+    for (const r of result.fullRows || []) {
+      for (let c = 0; c < 8; c++) { const k = r * 8 + c; if (match.owner[k] !== mark) took++; match.owner[k] = mark; }
+    }
+    for (const c of result.fullCols || []) {
+      for (let r = 0; r < 8; r++) { const k = r * 8 + c; if (match.owner[k] !== mark) took++; match.owner[k] = mark; }
+    }
+
+    match.turn = (slot + 1) % match.players.length;
+    match.turnEndsAt = Date.now() + LAND_TURN_MS;
+    landBroadcast(match, { slot, index, row, col, took, auto: !!opts.auto });
+    // 盤面が詰んだら、そこで打ち切って領土で決める（時間切れを待たない）。
+    if (e.over) {
+      clearInterval(match.landTick);
+      setTimeout(() => endMatch(match, 'land_over'), 900);
+    }
+    return true;
+  }
+
+  // 手番の人の代わりに打つ（ボットの手番／時間切れ／切断した相手）。
+  // これが無いと1手で止まる。
+  function landAutoMove(match) {
+    const e = match.engine;
+    const cur = match.players[match.turn];
+    const level = cur.sock.isBot ? (cur.sock.level || 'normal') : 'hard';
+    const mv = chooseMove(e, level);
+    if (!mv) {
+      e.over = true;
+      clearInterval(match.landTick);
+      landBroadcast(match, null);
+      setTimeout(() => endMatch(match, 'land_over'), 900);
+      return;
+    }
+    landApply(match, match.turn, mv.index, mv.row, mv.col, { auto: true });
+  }
+
+  function landTick(match) {
+    if (match.ended) return;
+    if (Date.now() >= match.landEndsAt) { endMatch(match, 'timeout'); return; }
+    if (match.engine.over) return;
+    if (Date.now() < match.startedAt + COUNTDOWN * 1000) return;
+    const cur = match.players[match.turn];
+    const isBot = cur.sock.isBot;
+    // 切断した相手の手番はサーバーが即代打する（協力と同じ作法）。
+    const gone = !isBot && cur.sock.readyState !== cur.sock.OPEN;
+    const due = (isBot || gone)
+      ? Date.now() >= match.turnEndsAt - LAND_TURN_MS + LAND_BOT_THINK_MS
+      : Date.now() >= match.turnEndsAt;
+    if (!due) return;
+    landAutoMove(match);
   }
 
   function broadcastState(match, fromSlot, state) {
@@ -1346,11 +1486,20 @@ export function initBattle(server, deps) {
     clearInterval(match.raidAtk);
     clearInterval(match.raidSync);
     clearInterval(match.coopTick);
+    clearInterval(match.landTick);
     matches.delete(match.id);
     for (const p of match.players) if (p.sock.isBot) p.sock.stop();
 
     const ts = teamScores(match);
     let winTeam = ts[0] > ts[1] ? 0 : ts[1] > ts[0] ? 1 : -1;   // -1 = draw
+    // 🚩 陣取りは点ではなく領土で決める（同数のときだけ点で割る）。
+    // 棄権・切断の上書きより前に置くこと ── 逃げ得にしない。
+    if (match.mode === 'land' && match.owner && match.players.length === 2) {
+      const lc = landCounts(match);
+      const [a, b] = match.players;
+      winTeam = lc[0] > lc[1] ? a.team : lc[1] > lc[0] ? b.team
+        : a.score > b.score ? a.team : b.score > a.score ? b.team : -1;
+    }
     if (reason === 'forfeit') {
       const alive = match.players.find(p => !p.forfeited && !p.sock.isBot);
       if (alive) winTeam = alive.team;
@@ -1476,7 +1625,8 @@ export function initBattle(server, deps) {
             // 協力は盤面共有だが、ピース数は「誰が置いたか」を記録する per-player の
             // p.moves を渡す。共有の match.moves を渡すと両者に総手数が二重計上され、
             // ボット/代打の手まで人間の実績（s.piecesPlaced）に入っていた。
-            pieces: match.mode === 'coop' ? (p.moves || 0) : (p.pieces || 0),
+            // 🚩 陣取りも共有盤面なので、置いた数は per-player の p.moves で数える。
+            pieces: (match.mode === 'coop' || match.mode === 'land') ? (p.moves || 0) : (p.pieces || 0),
             // Tournament: the badge/bonus fires only on winning the FINAL.
             // 自己対戦は勝敗を付けない（PvP勝利系ミッション/実績・勝利報酬を稼がせない）。
             won: selfPlay ? false : (match.tourney ? (outcome === 1 && !!match.tourney.final) : outcome === 1),
@@ -1495,6 +1645,10 @@ export function initBattle(server, deps) {
         bossDead: !!match.bossDead,
         coop: match.mode === 'coop'
           ? { score: match.engine.score, lines: match.engine.linesCleared, combo: match.engine.maxCombo, moves: match.moves, best: me ? (me.stats.coopBest || 0) : 0 }
+          : null,
+        // 🚩 陣取り: 最終盤の領土と内訳（結果画面がそのまま描ける形）
+        land: match.mode === 'land' && match.owner
+          ? { owner: match.owner.slice(), counts: landCounts(match), yours: p.slot + 1, moves: match.moves }
           : null,
         you: { slot: p.slot, team: p.team },
         players: playersInfo,
@@ -1769,10 +1923,11 @@ export function initBattle(server, deps) {
 
   function roomOf(ws) { return ws.roomCode ? rooms.get(ws.roomCode) : null; }
 
-  // mode: 'duel' (1v1) | 'team' (2v2) | 'coop' (two players, one board).
+  // mode: 'duel' (1v1) | 'team' (2v2) | 'coop' (two players, one board)
+  //     | 'land' (🚩 陣取りデュエル: 2人・1盤面・交互・消したラインが領土)
   // `team` is kept in sync for older clients that only know the boolean.
   function cleanSettings(s = {}) {
-    let mode = ['duel', 'team', 'coop'].includes(s.mode) ? s.mode : (s.team ? 'team' : 'duel');
+    let mode = ['duel', 'team', 'coop', 'land'].includes(s.mode) ? s.mode : (s.team ? 'team' : 'duel');
     if (s.team === true && s.mode === undefined) mode = 'team';
     if (s.team === false && s.mode === undefined) mode = 'duel';
     return {
@@ -1815,6 +1970,7 @@ export function initBattle(server, deps) {
     if (room.players[0] !== ws) { send(ws, { type: 'room_error', error: 'ホストのみ開始できます' }); return; }
     const need = roomSeats(room);
     const coop = room.settings.mode === 'coop';
+    const land = room.settings.mode === 'land';
     if (room.players.length > need) {
       send(ws, { type: 'room_error', error: `この設定では最大${need}人です（チーム戦に変更してください）` });
       return;
@@ -1833,8 +1989,9 @@ export function initBattle(server, deps) {
     rooms.delete(room.code);
     for (const p of players) p.roomCode = null;
     createMatch({
-      mode: coop ? 'coop' : room.settings.team ? 'team' : 'duel',
+      mode: coop ? 'coop' : land ? 'land' : room.settings.team ? 'team' : 'duel',
       entries,
+      // 陣取りは時間制。部屋で選んだ長さ（60/120/180秒）をそのまま使う。
       duration: coop ? COOP_MAX_SECS : room.settings.duration,
       rated: false,
     });
@@ -2608,6 +2765,8 @@ export function initBattle(server, deps) {
           // client 'state' there let one player dictate the shared score and
           // write it into the other player's coopBest.
           if (match.mode === 'coop') return;
+          // 🚩 陣取りも同じくサーバー権威の1盤面。点は landApply が付ける。
+          if (match.mode === 'land') return;
           // A finished player's score is already locked in for Elo — a late
           // frame must not move it.
           if (me.finished) return;
@@ -2646,6 +2805,27 @@ export function initBattle(server, deps) {
           if (!sockRate(ws, 'zeroJoinTimes', 5, 30_000)) return;
           zeroSeatOut(ws);                 // 念のため。前の部屋を残さない
           startZeroSession([ws], zrun);    // 枠ごとに1部屋（生きた部屋があれば合流）
+          return;
+        }
+        // 👁️ 断罪 — 盤面同期。
+        //
+        // バトルロイヤルの 'state'（上の case）とまったく同じ作法で、人間の盤面と
+        // スコアをサーバーが持つ。これが無かったせいで
+        //   * 「斬った」申告に裏づけが取れない（点灯セルを返すだけで必ず成功した）
+        //   * 赤マスを空きマスから選べない
+        //   * 人間の点が段のHPに一切入らない（sim-zero.mjs の前提と食い違う）
+        // の3つが同時に起きていた。
+        // クライアントは1手ごと＋700〜900ms間隔で送る想定。上限はロイヤルと同じ
+        // 10秒で40回（正規の使い方なら十分に余裕がある）。
+        case 'zero_state': {
+          if (!sockRate(ws, 'zeroStateTimes', 40, 10_000)) return;
+          const sess = zeroSessionOf(ws);
+          const run = db.meta.adminEventRun;
+          if (!sess || !run) return;
+          zeroSyncBoard(sess, run, sockName(ws), {
+            grid: sanitizeGrid(msg.grid),
+            score: Math.min(1_000_000, Math.floor(Number(msg.score) || 0)),
+          }, zeroDeps(sess));
           return;
         }
         // 断罪を斬った申告
@@ -2842,7 +3022,26 @@ export function initBattle(server, deps) {
         case 'finish': {
           if (!match || match.ended || !me) return;
           if (match.mode === 'coop') return;   // co-op ends when the shared board tops out
+          // 🚩 陣取りは時間切れ（または盤面の詰み）でサーバーが終わらせる。
+          // クライアント申告の finish を通すと、点も領土もサーバーが持っている
+          // のに終了だけ相手より先に宣言できてしまう。
+          if (match.mode === 'land') return;
           finishPlayer(match, me.slot, msg.score, msg.lines, msg.combo);
+          break;
+        }
+        // 🚩 陣取りデュエル: 共有盤面へ1手。作法は coop_place と同じ。
+        case 'land_place': {
+          if (!match || match.ended || !me || match.mode !== 'land') return;
+          if (!sockRate(ws, '_landRate', 40, 10000)) return;
+          const ok = landApply(match, me.slot, Number(msg.index), Number(msg.row), Number(msg.col));
+          // 弾いたとき（手番違い／盤面がズレている）は権威の状態を送り直す。
+          if (!ok) send(ws, {
+            type: 'land_reject', turn: match.turn,
+            grid: match.engine.snapshot(),
+            owner: match.owner ? match.owner.slice() : null,
+            scores: match.players.map(q => q.score),
+            hand: match.engine.hand.map(q => (q ? q.shape : null)),
+          });
           break;
         }
         case 'coop_place': {
@@ -3102,7 +3301,9 @@ export function initBattle(server, deps) {
           p.forfeited = true;
           p.finished = true;
           const otherHumans = match.players.filter(q => q !== p && !q.sock.isBot && !q.forfeited);
-          if ((match.mode === 'duel' || match.mode === 'attack') && match.players.length === 2 && otherHumans.length === 1) {
+          // 🚩 陣取りも1対1なので、抜けたらその場で終わり（残った人の勝ち）。
+          if ((match.mode === 'duel' || match.mode === 'attack' || match.mode === 'land')
+              && match.players.length === 2 && otherHumans.length === 1) {
             endMatch(match, 'forfeit');
           } else if (otherHumans.length === 0) {
             endMatch(match, 'abandoned');

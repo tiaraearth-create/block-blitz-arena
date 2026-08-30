@@ -75,6 +75,187 @@ function sanitizeGuilds(guilds) {
   return out;
 }
 
+const isPlainObj = o => !!o && typeof o === 'object' && !Array.isArray(o);
+// JSON.parse は "__proto__" を素の own プロパティとして作る。ファイル由来の
+// キーで新しい入れ物を組み立てるときは必ずここを通す。
+const unsafeKey = k => k === '__proto__' || k === 'constructor' || k === 'prototype';
+
+// --- 🧩 パズル工房と 🎞 デイリーリプレイ（db.meta 配下）の合流 ----------------
+//
+// この2つは db.meta の他のキーと違って「片方だけを採る」では済まない。
+// db.meta の既定の規則は『生きている側がまだ値を持っていないキーだけ採用する』
+// なので、ディスクが飛んだあと復元するまでの窓で誰かが1つでもステージを
+// 投稿すると（＝live 側に db.meta.workshop ができると）、**バックアップに
+// 入っていた全ステージが丸ごと落ちる**。プレイヤーの作品が復元で消えるのは
+// このファイルが防ぐべき事故の中でも最悪の部類なので、中身を突き合わせて
+// 合流させる。
+//
+// 工房のデータは全部 db.meta.workshop の中にある（ユーザーのレコード側には
+// 投稿数もいいね履歴も還元記録も持っていない ── 投稿数は stages を by で
+// 数え、いいね済みは stage.likedBy、還元は payout.by で見ている）。
+// だから mergeEarned ではなくここが工房の保全の全てになる。
+const WS_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';  // index.js の WS_CODE_CHARS と同じ表
+const WS_CODE_LEN = 6;
+const WS_LIKE_MAX = 3000;                 // index.js の WS_LIKE_MAX
+const WS_AUTHOR_COIN_DAY_CAP = 300;       // index.js の WS_AUTHOR_COIN_DAY_CAP
+const DAILY_REPLAY_KEEP = 60;             // index.js の DAILY_REPLAY_KEEP
+const DAILY_REPLAY_DAYS = 2;              // index.js の DAILY_REPLAY_DAYS
+
+// 共有コードが空いているものを引く（衝突した作品の引っ越し先）。
+function freeWorkshopCode(stages) {
+  for (let tries = 0; tries < 200; tries++) {
+    let c = '';
+    for (let i = 0; i < WS_CODE_LEN; i++) c += WS_CODE_CHARS[Math.floor(Math.random() * WS_CODE_CHARS.length)];
+    if (!stages[c]) return c;
+  }
+  return null;
+}
+
+// 同じ作品か。共有コードは6文字のランダムなので、別々の機体で同じコードが
+// 振られる可能性はゼロではない。作者と投稿時刻で見分ける。
+const sameStage = (a, b) => a.by === b.by && a.at === b.at;
+
+// 同じ1作品の2つのコピーを1つにまとめる。
+function unionStage(cur, inc) {
+  // ❤️ いいね済みは **和集合**。ここが二重いいねを止めている唯一の記録なので、
+  // 片方に入っていた人を落とすと、復元後にその人がもう一度♡を押せてしまう。
+  const a = Array.isArray(cur.likedBy) ? cur.likedBy : (cur.likedBy = []);
+  const seen = new Set(a);
+  for (const id of (Array.isArray(inc.likedBy) ? inc.likedBy : [])) {
+    if (!id || seen.has(id) || a.length >= WS_LIKE_MAX) continue;
+    a.push(id); seen.add(id);
+  }
+  // likes は表示用の数。和集合の件数と、両側が申告している数の大きいほうを採る
+  // （古い記録が likedBy を持っていない場合に♡が減って見えないように）。
+  cur.likes = Math.max(a.length, Number(cur.likes) || 0, Number(inc.likes) || 0);
+  cur.plays = Math.max(Number(cur.plays) || 0, Number(inc.plays) || 0);
+  // 片方の作品データが欠けていたら補う。盤面が無いステージは遊べない＝
+  // 事実上失われたのと同じなので、拾えるものは拾う。
+  if (!Array.isArray(cur.board) && Array.isArray(inc.board)) cur.board = inc.board;
+  if (!Array.isArray(cur.pieces) && Array.isArray(inc.pieces)) cur.pieces = inc.pieces;
+  if (!Array.isArray(cur.solution) && Array.isArray(inc.solution)) cur.solution = inc.solution;
+  if (!cur.title && inc.title) cur.title = inc.title;
+  if (!cur.byName && inc.byName) cur.byName = inc.byName;
+}
+
+// db.meta.workshop の合流。live を書き換えて返す。
+function mergeWorkshop(live, inc) {
+  if (!isPlainObj(inc)) return isPlainObj(live) ? live : undefined;
+  if (!isPlainObj(live)) live = {};
+  const stages = isPlainObj(live.stages) ? live.stages : (live.stages = {});
+  for (const [code, s] of Object.entries(isPlainObj(inc.stages) ? inc.stages : {})) {
+    if (!isPlainObj(s) || unsafeKey(code)) continue;
+    const cur = stages[code];
+    if (!cur || !isPlainObj(cur)) { stages[code] = { ...s, code }; continue; }
+    if (sameStage(cur, s)) { unionStage(cur, s); continue; }
+    // 同じコードに別の作品が座っている。片方を捨てるのは「プレイヤーの作品を
+    // 失う」ことなので、空いているコードへ移して両方残す（共有された古い
+    // コードは live 側の作品を指したままになるが、作品自体は消えない）。
+    const moved = freeWorkshopCode(stages);
+    if (moved) stages[moved] = { ...s, code: moved };
+  }
+  // 🪙 作者への還元記録（その日いくら払ったか）。同じ日なら **足して** から
+  // 1日の上限で止める ── ディスクが飛んだあとに払った分とファイルに残って
+  // いる分は別の支払いなので、大きいほうを採ると上限をもう一周できてしまう。
+  // 迷ったら閉じる側。日が違うときは新しい日の記録を残す（古い日の記録は
+  // index.js の workshopPayoutDay が次の支払いで作り直すので止め金にならない）。
+  const lp = live.payout, ip = inc.payout;
+  if (isPlainObj(ip)) {
+    if (!isPlainObj(lp)) live.payout = ip;
+    else if (String(lp.day) === String(ip.day)) {
+      const by = isPlainObj(lp.by) ? lp.by : (lp.by = {});
+      for (const [uid, n] of Object.entries(isPlainObj(ip.by) ? ip.by : {})) {
+        if (unsafeKey(uid)) continue;
+        by[uid] = Math.min(WS_AUTHOR_COIN_DAY_CAP, (Number(by[uid]) || 0) + (Number(n) || 0));
+      }
+    } else if (String(ip.day) > String(lp.day)) {   // 'YYYY-MM-DD' は辞書順＝時系列順
+      live.payout = ip;
+    }
+  }
+  return live;
+}
+
+// db.meta.dailyReplays の合流。
+// 日替わりで捨てられる一時データなので「絶対に失ってはいけない」類ではないが、
+// 落とすと 👻ゴースト盤面がその日いっぱい空になる（＝復元直後にちょうど
+// 見に来た人にだけ機能が消えて見える）。突き合わせは1日ぶんを uid で束ねる
+// だけで済むので保全する。上限は index.js と同じ「新しい2日 × 60件」で
+// 押さえるので、細工したファイルで db.json を膨らませることはできない。
+function mergeDailyReplays(live, inc) {
+  if (!isPlainObj(inc)) return isPlainObj(live) ? live : undefined;
+  if (!isPlainObj(live)) live = {};
+  for (const [day, rows] of Object.entries(inc)) {
+    // 日付キーの形を必ず確かめる（"__proto__" もここで落ちる）。
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Array.isArray(rows)) continue;
+    const cur = Array.isArray(live[day]) ? live[day] : (live[day] = []);
+    const byUid = new Map();
+    for (const r of cur) if (r && r.uid) byUid.set(r.uid, r);
+    for (const r of rows) {
+      if (!r || !r.uid || !Array.isArray(r.moves)) continue;
+      const have = byUid.get(r.uid);
+      if (!have) { cur.push(r); byUid.set(r.uid, r); continue; }
+      // 1人1行。よいほうの回を残す（ボードに載るのはその人のベスト）。
+      if ((Number(r.score) || 0) > (Number(have.score) || 0)) Object.assign(have, r);
+    }
+    live[day] = cur
+      .sort((a, b) => ((b.score || 0) - (a.score || 0)) || ((a.at || 0) - (b.at || 0)))
+      .slice(0, DAILY_REPLAY_KEEP);
+  }
+  for (const d of Object.keys(live).sort().reverse().slice(DAILY_REPLAY_DAYS)) delete live[d];
+  return live;
+}
+
+// 名前で照合して id が入れ替わった人を、db.meta 側の記録でも読み替える。
+// 工房の作者(by)・いいね済み(likedBy)・還元記録(payout.by)と、リプレイの uid は
+// すべてユーザー id なので、やらないと「自分の作品なのに削除できない」
+// 「一度押した♡をもう一度押せる」「還元の1日上限がリセットされる」が起きる。
+function remapMetaIds(meta, idRemap) {
+  if (!isPlainObj(meta) || !idRemap || !idRemap.size) return;
+  const w = meta.workshop;
+  if (isPlainObj(w)) {
+    if (isPlainObj(w.stages)) {
+      for (const s of Object.values(w.stages)) {
+        if (!isPlainObj(s)) continue;
+        if (s.by && idRemap.has(s.by)) s.by = idRemap.get(s.by);
+        if (Array.isArray(s.likedBy)) {
+          const out = [];
+          for (const id of s.likedBy) {
+            const n = idRemap.get(id) || id;
+            if (n && !out.includes(n)) out.push(n);
+          }
+          s.likedBy = out;
+          s.likes = Math.max(Number(s.likes) || 0, out.length);
+        }
+      }
+    }
+    if (isPlainObj(w.payout) && isPlainObj(w.payout.by)) {
+      const by = {};
+      for (const [id, n] of Object.entries(w.payout.by)) {
+        const k = idRemap.get(id) || id;
+        if (unsafeKey(k)) continue;
+        // 同じ人の2つの id が1つに畳まれたら、払った額は足す（上限で止める）。
+        by[k] = Math.min(WS_AUTHOR_COIN_DAY_CAP, (Number(by[k]) || 0) + (Number(n) || 0));
+      }
+      w.payout.by = by;
+    }
+  }
+  const dr = meta.dailyReplays;
+  if (isPlainObj(dr)) {
+    for (const [day, rows] of Object.entries(dr)) {
+      if (!Array.isArray(rows)) continue;
+      const seen = new Map();
+      for (const r of rows) {
+        if (!r || !r.uid) continue;
+        r.uid = idRemap.get(r.uid) || r.uid;
+        const have = seen.get(r.uid);
+        // 付け替えで同じ人の行が2つになることがある。よいほうだけ残す。
+        if (!have || (Number(r.score) || 0) > (Number(have.score) || 0)) seen.set(r.uid, r);
+      }
+      dr[day] = rows.filter(r => r && r.uid && seen.get(r.uid) === r);
+    }
+  }
+}
+
 // How "far along" a user record is — used to pick a winner on username clashes.
 function progressOf(u) {
   const s = (u && u.stats) || {};
@@ -510,11 +691,25 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     // `hallOfFame.some(e => e.season === prev.id)` の重複チェックがあり、
     // 記録済みのシーズンなら印を進めるだけで戻る（報酬もそこで止まる）。
     const META_NOT_RESTORED = new Set(['seedHash', 'lastRankRewardWeek', 'backupAt', 'backupVersion']);
+    // 🧩 workshop と 🎞 dailyReplays は「片方だけを採る」では守れない。
+    // 既定の規則は『live 側がまだ値を持っていないキーだけ採用する』なので、
+    // 復元までの窓で誰か1人がステージを投稿しただけで、バックアップ側の
+    // 全ステージ（＝プレイヤーの作品）が丸ごと落ちる。中身を突き合わせる。
+    const META_MERGED = new Map([
+      ['workshop', mergeWorkshop],
+      ['dailyReplays', mergeDailyReplays],
+    ]);
     for (const k of Object.keys(data.meta)) {
       if (META_NOT_RESTORED.has(k)) continue;
       // ファイルの中身は外から来る。JSON.parse は "__proto__" を素の own プロパティ
       // として作るが、代入するとプロトタイプの setter が動いてしまうので通さない。
       if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+      const merge = META_MERGED.get(k);
+      if (merge && isPlainObj(data.meta[k])) {
+        const merged = merge(db.meta[k], data.meta[k]);
+        if (merged !== undefined) db.meta[k] = merged;
+        continue;
+      }
       if (db.meta[k] == null && data.meta[k] != null) db.meta[k] = data.meta[k];
     }
     // Weekly payouts: an empty post-deploy boot may have stamped the current
@@ -522,6 +717,10 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     // re-run for the restored users (per-record `rewarded` flags keep it safe).
     delete db.meta.lastRankRewardWeek;
   }
+  // 🧩🎞 db.meta の中にもユーザー id を持つ記録がある（工房の作者・いいね済み・
+  // 還元記録、リプレイの uid）。ここでやるのは、上の合流で両側の記録が
+  // db.meta に揃った直後だから。ギルド名簿の付け替えと同じ理由・同じ形。
+  remapMetaIds(db.meta, idRemap);
   // 🤝 ギルドの名簿にも同じ付け替えを効かせる。ここでやるのは、
   // ギルドが db.guilds に入るのがこの直前だから。
   // やらないと、id が入れ替わった人が名簿の中で存在しない id になり

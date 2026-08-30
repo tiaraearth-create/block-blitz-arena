@@ -22,6 +22,12 @@
   --purple: #b06bff;
   --pink: #ff6bd4;
   --gold: #ffd75e;
+  /* 🚩陣取りデュエルの陣営色。CSS だけでなく盤面(canvas)の塗りにも使うので
+     トークンにしてある ── modes.js からは
+     getComputedStyle(document.documentElement).getPropertyValue('--land-p1')
+     で取れる。ここを変えれば帯・数字・盤面の色が一斉に揃う。 */
+  --land-p1: #5b8bff;
+  --land-p2: #ff6bd4;
 }
 
 html, body { height: 100%; overflow: hidden; }
@@ -2380,6 +2386,212 @@ body[data-screen="game"] .pt-peek { opacity: 1; }
   50%      { outline-color: rgba(67,217,232,0.35); outline-offset: 7px; }
 }
 
+/* ============ 第3波の新モード ============ */
+/* メニューのモードボタン。既存の .btn-melt / .btn-puzzle と同じ作り
+   （135deg のグラデ + 6px の底 + 影 + 文字影）で、色だけが違う。
+   ずっと動く飾りは付けていない（.btn-chaos のような常時アニメは
+   隠し難易度の特別扱いなので、通常モードでは真似しない）。 */
+.btn-chain {
+  background: linear-gradient(135deg, #0891b2, #4f46e5 60%, #312e81);
+  box-shadow: 0 6px 0 #1e1b4b, 0 8px 24px rgba(79,70,229,0.42);
+  text-shadow: 0 2px 4px rgba(0,0,0,0.4);
+}
+.btn-blueprint {
+  background: linear-gradient(135deg, #1d4ed8, #0e7490 60%, #0c4a6e);
+  box-shadow: 0 6px 0 #0a3550, 0 8px 24px rgba(14,116,144,0.42);
+  text-shadow: 0 2px 4px rgba(0,0,0,0.4);
+}
+.btn-workshop {
+  background: linear-gradient(135deg, #f97316, #a16207 65%, #713f12);
+  box-shadow: 0 6px 0 #4a2a0c, 0 8px 24px rgba(249,115,22,0.4);
+  text-shadow: 0 2px 4px rgba(0,0,0,0.4);
+}
+
+/* ---- 🏗️ ブループリント: 盤面に薄く重ねる設計図 ---- */
+/* 接頭辞が blp- なのは、bp- が 🎫バトルパス（.bp-cell / .bp-tier / .bp-row …）
+   に取られているから。bp-cell は min-height:74px と display:flex を持つので、
+   設計図のマスに使うと 8 行が縦に伸びて盤面から溢れる（実機で確認した）。 */
+/* 盤面は canvas なので、設計図は canvas の上に置く「透明な板」で描く。
+   左右上下の位置と大きさ（left / top / width / height）は盤面の実寸に
+   合わせて modes.js がインライン style で入れる ── ここは見た目だけ。
+   .game-canvas-wrap（position: relative）の直下に置くこと。
+   中身は 64 個の <i class="blp-cell">（設計図のマスに .on を足す）。 */
+.blp-overlay {
+  position: absolute; z-index: 3; pointer-events: none;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  animation: fadeIn .25s ease;
+}
+.blp-cell { margin: 7%; border-radius: 3px; }
+/* 設計図のマス（まだ埋まっていない）: 青写真らしく破線＋うすい水色 */
+.blp-cell.on {
+  background: rgba(67,217,232,0.12);
+  border: 1px dashed rgba(67,217,232,0.55);
+  box-shadow: inset 0 0 8px rgba(67,217,232,0.18);
+}
+/* 図どおりに埋まったマス */
+.blp-cell.on.done {
+  background: rgba(94,232,110,0.20);
+  border: 1px solid rgba(94,232,110,0.70);
+  box-shadow: inset 0 0 8px rgba(94,232,110,0.25);
+}
+/* 図の外にはみ出したマス（＝作品が崩れる手） */
+.blp-cell.bad {
+  background: rgba(255,93,93,0.20);
+  border: 1px solid rgba(255,93,93,0.75);
+}
+
+/* 今日の図柄の見出し帯。盤面の上、通常フローに置く（.coop-bar と同じ考え方で
+   盤面には一切かぶせない）。 */
+.blp-panel {
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(10,13,30,0.75); border: 1px solid var(--line);
+  border-radius: 14px; padding: 7px 12px;
+  width: 100%; max-width: 430px; margin: 0 auto 6px;
+  flex-shrink: 0;
+}
+.blp-figure { font-size: 22px; flex: 0 0 auto; }
+.blp-name { font-weight: 800; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.blp-count {
+  margin-left: auto; flex: 0 0 auto;
+  font-weight: 900; font-size: 14px; color: var(--cyan);
+  font-variant-numeric: tabular-nums;
+}
+.blp-panel.done { border-color: rgba(94,232,110,0.55); background: rgba(94,232,110,0.10); }
+.blp-panel.done .blp-count { color: var(--green); }
+
+/* ---- 🚩 陣取りデュエル: 領土の色分け ---- */
+/* 帯は「slot0 / 中立 / slot1」の3枚。幅は modes.js が counts から入れる。 */
+.land-bar {
+  display: flex; height: 12px; border-radius: 6px; overflow: hidden;
+  background: rgba(0,0,0,0.35); margin: 0 10px 4px; flex-shrink: 0;
+}
+.land-seg { height: 100%; transition: width .25s ease; }
+.land-seg.p1 { background: linear-gradient(90deg, var(--land-p1), var(--cyan)); }
+.land-seg.p2 { background: linear-gradient(90deg, var(--purple), var(--land-p2)); }
+.land-seg.neutral { background: rgba(255,255,255,0.08); }
+.land-counts {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 0 12px 4px; font-size: 12px; font-weight: 900;
+  font-variant-numeric: tabular-nums; flex-shrink: 0;
+}
+.land-counts .p1 { color: var(--land-p1); }
+.land-counts .p2 { color: var(--land-p2); }
+/* 誰の手番か。.coop-turn-label と同じ言い回しにそろえてある。 */
+.land-turn { text-align: center; font-weight: 900; font-size: 13px; color: var(--muted); transition: color .2s; }
+.land-turn.mine { color: var(--green); text-shadow: 0 0 14px rgba(94,232,110,0.55); }
+/* 凡例やモーダルで「どっちが自分の色か」を出すための小さな四角 */
+.land-chip { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+.land-chip.p1 { background: var(--land-p1); }
+.land-chip.p2 { background: var(--land-p2); }
+
+/* ---- 👻 ゴーストリプレイ / 残像レース ---- */
+/* 再生中であることの帯。盤面の上、通常フロー（.opp-panel と同じ寸法感）。 */
+.replay-bar {
+  position: relative; z-index: 4;
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(10,13,30,0.75); border: 1px solid rgba(176,107,255,0.45);
+  border-radius: 14px; padding: 7px 12px;
+  width: 100%; max-width: 430px; margin: 0 auto 6px;
+  flex-shrink: 0;
+}
+.replay-tag { font-size: 11px; font-weight: 900; letter-spacing: .08em; color: var(--purple); flex: 0 0 auto; }
+.replay-who { font-weight: 800; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 「○点差」。差の符号で色を変える（緑=勝っている / 赤=負けている）。 */
+.replay-diff {
+  margin-left: auto; flex: 0 0 auto;
+  font-weight: 900; font-size: 14px; font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.replay-diff.ahead { color: var(--green); }
+.replay-diff.behind { color: var(--red); }
+/* 再生中の点滅ドット（唯一の常時アニメ。reduced-motion で止める） */
+.replay-live-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--purple); box-shadow: 0 0 8px rgba(176,107,255,0.8);
+  animation: replayBlink 1.2s ease-in-out infinite;
+}
+@keyframes replayBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+/* 盤面そのものが「これは再生です」と分かる薄い枠。指は通す。 */
+.game-canvas-wrap.replaying::before {
+  content: ''; position: absolute; inset: 0; z-index: 2;
+  border-radius: 12px; pointer-events: none;
+  box-shadow: inset 0 0 0 2px rgba(176,107,255,0.45);
+}
+/* 盤面の上端に浮かせる「▶ 再生中」。fixed ではなく盤面の中の absolute
+   なので、セーフエリアは #topbar / .menu-content 側の指定で足りている。 */
+.replay-overlay {
+  position: absolute; left: 50%; transform: translateX(-50%); top: 8px; z-index: 6;
+  pointer-events: none;
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(13,17,38,0.9); border: 1px solid rgba(176,107,255,0.5);
+  border-radius: 999px; padding: 5px 12px;
+  font-size: 12px; font-weight: 800; color: var(--text);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  animation: fadeIn .2s ease;
+}
+
+/* ---- ❄️ 氷結ブロックの凡例（盤面の外） ---- */
+/* 盤面の氷は game.js の drawIceBlock() が canvas に描く。ここは
+   チュートリアルやモーダルで「これが氷」と見せるためだけの絵。 */
+.ice-legend { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.ice-swatch {
+  position: relative; flex: 0 0 auto;
+  width: 20px; height: 20px; border-radius: 4px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.55), rgba(190,235,255,0.28));
+  border: 1px solid rgba(220,245,255,0.65);
+  box-shadow: inset 0 0 6px rgba(255,255,255,0.5);
+}
+/* 斜めのハイライト2本（drawIceBlock と同じ見え方にそろえる） */
+.ice-swatch::after {
+  content: ''; position: absolute; inset: 1px; border-radius: 3px;
+  background: linear-gradient(120deg,
+    transparent 34%, rgba(255,255,255,0.85) 36%, transparent 40%,
+    transparent 58%, rgba(255,255,255,0.6) 60%, transparent 64%);
+}
+/* ヒビ（ICE_CRACKED）。中心から走る線を2本重ねる。 */
+.ice-swatch.cracked::before {
+  content: ''; position: absolute; inset: 0; border-radius: 4px; z-index: 1;
+  background: linear-gradient(24deg,
+      transparent 46%, rgba(255,255,255,0.95) 47%, rgba(255,255,255,0.95) 53%, transparent 54%),
+    linear-gradient(-58deg,
+      transparent 47%, rgba(255,255,255,0.75) 48%, rgba(255,255,255,0.75) 52%, transparent 53%);
+}
+
+/* ---- 🛠️ パズル工房 ---- */
+/* 一覧カードは新規CSSなし ── screens.js が既存の
+   .ms-list / .ms-row / .ms-info / .ms-name / .ms-prog / .ms-empty /
+   .tabs / .tab / .settings-row / .modal-buttons / .guild-hero-stats /
+   .modal input をそのまま使っている（確認ずみ）。
+   足りていないのは「作る」側の塗り盤だけなので、そこだけ用意する。 */
+.ws-edit-grid {
+  display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px;
+  width: min(288px, 74vw); margin: 0 auto 10px; padding: 4px;
+  border-radius: 10px; background: rgba(0,0,0,0.28);
+  touch-action: none; /* なぞって塗るのでスクロールに取られない */
+}
+.ws-edit-cell {
+  aspect-ratio: 1 / 1; border-radius: 3px;
+  background: rgba(255,255,255,0.07); cursor: pointer;
+}
+.ws-edit-cell.on { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.28); }
+.ws-palette { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-bottom: 10px; }
+.ws-swatch {
+  width: 26px; height: 26px; border-radius: 7px; flex: 0 0 auto;
+  border: 2px solid transparent; cursor: pointer; padding: 0;
+  transition: transform .12s;
+}
+.ws-swatch:active { transform: scale(0.92); }
+.ws-swatch.sel { border-color: #fff; box-shadow: 0 0 10px rgba(255,255,255,0.5); }
+
+@media (max-width: 520px) {
+  .blp-panel, .replay-bar { padding: 5px 9px; gap: 7px; }
+  .blp-name, .replay-who { font-size: 12px; }
+  .land-bar { margin: 0 6px 4px; }
+  .ws-edit-grid { width: min(268px, 82vw); }
+}
+
 /* ============ ♿ prefers-reduced-motion ============ */
 /* 端末で「視差効果を減らす」を入れている人向け。止めるのは
    ずっと動きつづける飾り（浮遊・バウンド・パルス・グロー・点滅）だけ。
@@ -2404,6 +2616,8 @@ body[data-screen="game"] .pt-peek { opacity: 1; }
   .ae-banner.live,
   .rl-storm,
   .rl-danger.risk,
+  /* 👻 リプレイ再生中の点滅ドット（色と「▶ 再生中」の文字で分かる） */
+  .replay-live-dot,
   .mm-spinner span,
   .kami-rays,
   .crowned3 { animation: none; }

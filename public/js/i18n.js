@@ -236,6 +236,19 @@ const SERVER_MSG_EN = {
   // ---- 🎁 本日の無料ギフト / 🧳 ゲスト記録の引き継ぎ（index.js）----
   '本日の無料ギフトは受け取り済みです': 'The free gift for today has already been claimed',
   'ゲスト記録の引き継ぎは1アカウント1回だけです（すでに実行済み）': 'Guest progress can be imported only once per account (already done)',
+  // ---- 🧩 パズル工房（index.js の /api/workshop/*）----
+  // 英文は server/index.js が同じ応答に載せている errorEn とそろえてある
+  // （どちらの経路で拾っても同じ文が出る）。数が入る文言は下の
+  // SERVER_MSG_PATTERNS 側。
+  '投稿が多すぎます。時間をおいてください': 'Too many submissions — please try again later',
+  'クリアの記録が読めません。もう一度自分でクリアしてから投稿してください': 'That clear record is unreadable — clear the stage yourself once more, then submit',
+  'そのステージはサーバー側で再生してもクリアできませんでした（解けるステージだけ投稿できます）': 'Replaying your clear on the server did not solve the stage — only solvable stages can be published',
+  '工房がいっぱいです。しばらくしてからお試しください': 'The workshop is full — please try again later',
+  '共有コードを発行できませんでした。もう一度お試しください': 'Could not mint a share code — please try again',
+  'そのコードのステージは見つかりません': 'No stage with that code',
+  'すでに♡を送っています': 'You already liked this stage',
+  '♡の受付は上限に達しました': 'This stage has reached its like limit',
+  '自分が投稿したステージだけ削除できます': 'You can only delete stages you published',
 };
 
 const SERVER_MSG_PATTERNS = [
@@ -246,6 +259,13 @@ const SERVER_MSG_PATTERNS = [
   [/^ギルドは満員です（最大(\d+)人）$/, (m) => `The guild is full (max ${m[1]} members)`],
   [/^ギルド設立には🪙(\d+)必要です$/, (m) => `Founding a guild costs 🪙${m[1]}`],
   [/^このモードは(\d+)人までです（いま(\d+)人）$/, (m) => `This mode is for up to ${m[1]} players (you have ${m[2]} now)`],
+  // 🧩 パズル工房の投稿検査。数はサーバーの定数（WS_TITLE_MAX / WS_MIN_CELLS /
+  // WS_MAX_PIECES / WS_MAX_PER_USER）から埋まるので、上限を調整しても英訳が
+  // 死なないように正規表現で受ける。
+  [/^ステージ名は(\d+)〜(\d+)文字で入力してください$/, (m) => `The stage name must be ${m[1]}–${m[2]} characters`],
+  [/^盤面が不正です（8×8・光るマスは(\d+)個以上）$/, (m) => `Invalid board (8×8, at least ${m[1]} glowing cells)`],
+  [/^ピースは(\d+)〜(\d+)個で指定してください$/, (m) => `Provide ${m[1]}–${m[2]} pieces`],
+  [/^投稿できるのは1人(\d+)ステージまでです。古いものを削除してください$/, (m) => `You can publish up to ${m[1]} stages — delete an old one first`],
 ];
 
 export function trServer(msg) {

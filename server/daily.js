@@ -8,6 +8,11 @@
 // ---------------------------------------------------------------------------
 
 import { jstDayKey } from './adminevent.js';
+// engine.js はクライアント側のファイルだが中身は純ロジック（DOM を触らない）で、
+// server/battle.js も同じように直接 import している。形の定義を二重に持つと
+// 「設計図どおりに置いたのにピースの形が違う」という最悪のズレが起きるので、
+// ここでも SHAPES を本家から読む（コピーを作らない）。
+import { Rng, SHAPES, SIZE } from '../public/js/engine.js';
 
 export { jstDayKey };
 
@@ -68,4 +73,245 @@ export function dailyGhostFactor(now = Date.now()) {
 // 次のJST 0:00 のエポックms — デイリーの締め切り表示に使う。
 export function nextJstMidnight(now = Date.now()) {
   return Math.floor((now + 9 * 3600000) / 86400000 + 1) * 86400000 - 9 * 3600000;
+}
+
+// ---------------------------------------------------------------------------
+// 🧩 ブループリント（設計図パズル）の日替わり生成
+//
+// 「盤面に薄く映った設計図どおりに、渡されたピースだけで寸分違わず組み上げる」
+// 逆パズル。ライン成立で作品が崩れる＝揃えてはいけない、というルールなので
+// 設計図そのものに満杯の行・列があってはならない。
+//
+// 生成は逆算式: 図柄のシルエットを先に決め → それを実ピース（SHAPES）で
+// 敷き詰め → 敷き詰めに使ったピースをそのまま手札として配る。ランダムに配って
+// 解けるか試す方式だと「その日だけ誰も解けない」が起こりうるので採らない。
+// 敷き詰めは 1x1 が SHAPES にある以上どんな連結形でも必ず最後まで進むため、
+// 「組めない設計図」は原理的に出てこない。
+// ---------------------------------------------------------------------------
+
+// 図柄のシルエット。8行×8文字、'#' が設計図のマス（'.' は空き）。
+// 掟: どの行も8マス埋めない／どの列も8マス埋めない（＝完成させてもラインが
+// 揃わない）。読みやすさのために絵で持つ。追加するときも同じ掟を守ること —
+// 破っていても下の BLUEPRINT_FIGURES で弾かれるだけで落ちはしないが、
+// その図柄は永久に出番が無くなる。
+const BLUEPRINT_ART = [
+  { id: 'heart', icon: '💗', ja: 'ハート', en: 'Heart', rows: [
+    '........',
+    '.##.##..',
+    '#######.',
+    '#######.',
+    '.#####..',
+    '..###...',
+    '...#....',
+    '........',
+  ] },
+  { id: 'sword', icon: '🗡️', ja: '剣', en: 'Sword', rows: [
+    '........',
+    '...##...',
+    '...##...',
+    '...##...',
+    '.######.',
+    '...##...',
+    '...##...',
+    '..####..',
+  ] },
+  { id: 'crown', icon: '👑', ja: '王冠', en: 'Crown', rows: [
+    '........',
+    '#..#..#.',
+    '#.###.#.',
+    '#######.',
+    '#######.',
+    '#######.',
+    '........',
+    '........',
+  ] },
+  { id: 'star', icon: '⭐', ja: '星', en: 'Star', rows: [
+    '........',
+    '...#....',
+    '..###...',
+    '#######.',
+    '.#####..',
+    '..###...',
+    '.##.##..',
+    '........',
+  ] },
+  { id: 'tree', icon: '🌲', ja: '木', en: 'Tree', rows: [
+    '........',
+    '...#....',
+    '..###...',
+    '.#####..',
+    '#######.',
+    '.#####..',
+    '...#....',
+    '...#....',
+  ] },
+  { id: 'house', icon: '🏠', ja: '家', en: 'House', rows: [
+    '........',
+    '...##...',
+    '..####..',
+    '.######.',
+    '.######.',
+    '.##..##.',
+    '.##..##.',
+    '........',
+  ] },
+  { id: 'gem', icon: '💎', ja: '宝石', en: 'Gem', rows: [
+    '........',
+    '..###...',
+    '.#####..',
+    '#######.',
+    '#######.',
+    '.#####..',
+    '..###...',
+    '........',
+  ] },
+  { id: 'bolt', icon: '⚡', ja: '稲妻', en: 'Bolt', rows: [
+    '....###.',
+    '...###..',
+    '..###...',
+    '.######.',
+    '..####..',
+    '..###...',
+    '.###....',
+    '........',
+  ] },
+];
+
+function cellsOfArt(rows) {
+  const out = [];
+  for (let r = 0; r < SIZE; r++) {
+    const line = rows[r] || '';
+    for (let c = 0; c < SIZE; c++) if (line[c] === '#') out.push(r * SIZE + c);
+  }
+  return out;
+}
+
+// セル集合に満杯の行・列があるか。設計図の合否判定と、後続の「置いた結果が
+// 崩れないか」の確認の両方に使えるように export する。
+export function blueprintHasFullLine(cells) {
+  const rows = new Array(SIZE).fill(0), cols = new Array(SIZE).fill(0);
+  for (const i of cells) { rows[(i / SIZE) | 0]++; cols[i % SIZE]++; }
+  return rows.some(n => n >= SIZE) || cols.some(n => n >= SIZE);
+}
+
+// 出題に使える図柄だけを残す。掟を破った図柄（＝完成させるとラインが揃う）は
+// ここで落ちるので、blueprintFor() が崩れる設計図を返すことはない。
+export const BLUEPRINT_FIGURES = BLUEPRINT_ART
+  .map(f => ({ id: f.id, icon: f.icon, ja: f.ja, en: f.en, cells: cellsOfArt(f.rows) }))
+  .filter(f => f.cells.length > 0 && !blueprintHasFullLine(f.cells));
+
+// 設計図の種。お題（dailySeed）と同じ流儀の文字列ハッシュだが、図柄が
+// お題と連動して回ってしまわないように別の接頭辞で取る。
+export function blueprintSeed(dayKey) {
+  let h = 0;
+  const s = `bba-blueprint-${dayKey}`;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return (h >>> 0) & 0x7fffffff;
+}
+
+// シルエットを SHAPES だけで過不足なく敷き詰める。毎回「まだ空いている
+// 一番若いマス」を必ず覆う置き方の中から選ぶので、置き逃しは起きない。
+// 大きいピースを優先しつつ乱数で揺らして、日ごとに手札の顔ぶれを変える。
+function tileCells(cells, rng) {
+  const free = new Set(cells);
+  const out = [];
+  while (free.size) {
+    let target = Infinity;
+    for (const i of free) if (i < target) target = i;
+    const tr = (target / SIZE) | 0, tc = target % SIZE;
+    const seen = new Set();
+    let best = null, bestW = -1;
+    for (let si = 0; si < SHAPES.length; si++) {
+      const sc = SHAPES[si].cells;
+      for (const [ar, ac] of sc) {
+        const r0 = tr - ar, c0 = tc - ac;
+        if (r0 < 0 || c0 < 0) continue;
+        const key = `${si}:${r0}:${c0}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        let ok = true;
+        for (const [dr, dc] of sc) {
+          const r = r0 + dr, c = c0 + dc;
+          if (r >= SIZE || c >= SIZE || !free.has(r * SIZE + c)) { ok = false; break; }
+        }
+        if (!ok) continue;
+        // 大きさ1段ぶんの差は乱数で覆るが、2段ぶんは覆らない重み付け。
+        // 手札が 1x1 だらけの「作業」にならないようにしつつ、日ごとの顔ぶれは変える。
+        const w = sc.length * 1.5 + rng.next() * 1.9;
+        if (w > bestW) { bestW = w; best = { shape: si, at: [r0, c0] }; }
+      }
+    }
+    // SHAPES に 1x1 がある限りここは通らない。将来 1x1 が消されたときに
+    // 静かに壊れないよう、諦めて null を返す（呼び出し側が次の図柄へ移る）。
+    if (!best) return null;
+    for (const [dr, dc] of SHAPES[best.shape].cells) free.delete((best.at[0] + dr) * SIZE + best.at[1] + dc);
+    out.push(best);
+  }
+  return out;
+}
+
+// 配る順が「置く順」そのものだと答えが透けるので混ぜる。どの順でも組めるのは
+// 敷き詰めが互いに重ならないから（置く順序は解に影響しない）。
+function shuffleInPlace(arr, rng) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = rng.int(i + 1);
+    const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  }
+  return arr;
+}
+
+// その日の設計図。同じ dayKey なら何度呼んでも同じものを返す（全員が同じ図を解く）。
+export function blueprintFor(dayKey) {
+  const seed = blueprintSeed(dayKey);
+  const n = BLUEPRINT_FIGURES.length;
+  for (let k = 0; k < n; k++) {
+    const fig = BLUEPRINT_FIGURES[(seed + k) % n];
+    const rng = new Rng((seed ^ 0x5f3a1c9) >>> 0);
+    const laid = tileCells(fig.cells, rng);
+    if (!laid) continue;
+    shuffleInPlace(laid, rng);
+    const pieces = laid.map(p => ({
+      shape: p.shape,
+      color: SHAPES[p.shape].color,
+      cells: SHAPES[p.shape].cells.map(([r, c]) => [r, c]),
+      at: [p.at[0], p.at[1]],
+    }));
+    return {
+      dayKey,
+      seed,
+      id: fig.id,
+      icon: fig.icon,
+      name: fig.ja,
+      nameEn: fig.en,
+      cells: fig.cells.slice(),
+      cellCount: fig.cells.length,
+      pieces,
+      pieceCount: pieces.length,
+    };
+  }
+  return null; // 図柄がゼロ件のときだけ。BLUEPRINT_FIGURES が空でない限り起きない。
+}
+
+// 設計図の自己点検。テストと、繋ぎ込み側の「おかしなものを出さない」確認用。
+// 返り値: { ok, reasons } — reasons は日本語の理由（開発者向け、UIには出さない）。
+export function verifyBlueprint(bp) {
+  const reasons = [];
+  if (!bp) return { ok: false, reasons: ['設計図が空'] };
+  if (!bp.cells || !bp.cells.length) reasons.push('マスが空');
+  if (blueprintHasFullLine(bp.cells || [])) reasons.push('完成形でラインが揃ってしまう');
+  const covered = new Set();
+  for (const p of bp.pieces || []) {
+    const [r0, c0] = p.at;
+    for (const [dr, dc] of p.cells) {
+      const r = r0 + dr, c = c0 + dc;
+      if (r < 0 || c < 0 || r >= SIZE || c >= SIZE) { reasons.push('ピースが盤外にはみ出す'); continue; }
+      const i = r * SIZE + c;
+      if (covered.has(i)) reasons.push('ピースが重なる');
+      covered.add(i);
+    }
+  }
+  const want = new Set(bp.cells || []);
+  for (const i of want) if (!covered.has(i)) { reasons.push('設計図に届かないマスがある'); break; }
+  for (const i of covered) if (!want.has(i)) { reasons.push('設計図の外に出るマスがある'); break; }
+  return { ok: reasons.length === 0, reasons };
 }

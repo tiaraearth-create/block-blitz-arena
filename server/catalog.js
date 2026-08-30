@@ -98,6 +98,43 @@ export const BOOST_ITEMS = [
 // `nameEn` mirrors CATALOG_EN in public/js/i18n.js (which is what the CLIENT
 // renders). The server needs its own copy because it writes English live-feed
 // lines — without it, English readers got "X defeated スライムキング".
+// ---- Boss signature techniques (ボス専用技) ----
+// The generic patterns (garbage / quake / breath_row / laser_col / curse_hand)
+// are declared client-side in modes.js (BOSS_MOVES). A *signature* move belongs
+// to exactly ONE boss, so its tuning lives here instead — the catalog stays the
+// single source of truth and the numbers ride along to the client on the boss
+// object itself (`boss.techs`, shipped by GET /api/bosses, which spreads each
+// entry). modes.js only has to dispatch on the move id.
+//   Shape: { id, name, nameEn, telegraph, ...params, msg/msgEn strings }
+// The `${boss.emoji}` prefix used by the existing move toasts is added by the
+// caller, exactly like BOSS_MOVES lines do — these strings carry no emoji of
+// their own except the technique's own 🧊.
+export const BOSS_TECHNIQUES = {
+  // 🧊 絶対零度 — 氷雪女王フリオーネ専用。予告つき（＝赤マスをラインで切れば
+  // 防げる）で、着弾したマスは「氷結ブロック」になる。お邪魔(9)より厄介で、
+  // iceHp 回のライン消しに耐える想定。実処理は modes.js のボス技ハンドラ。
+  freeze: {
+    id: 'freeze',
+    boss: 'frost',
+    name: '絶対零度',
+    nameEn: 'Absolute Zero',
+    telegraph: true,          // BOSS_MOVES と同じ意味：予告 → 赤マス → 着弾
+    cells: 5,                 // フェーズ1で氷結させる空きマス数
+    cells2: 8,                // フェーズ2（HP50%以下）で氷結させる空きマス数
+    iceHp: 2,                 // 氷が割れるまでに必要なライン消し回数（1=通常ブロック相当）
+    cellValue: 5,             // 盤面に書き込む色番号。PALETTE[5]=シアンで氷に見える
+                              // （専用スロットを足すなら public/js/themes.js が必要 — 担当外）
+    shake: 16,                // view.shake に渡す推奨値
+    flash: 0.35,              // view.screenFlash に渡す推奨値
+    telegraphMsg:   '⚠️ 絶対零度の予告！赤マスをラインで切れ！',
+    telegraphMsgEn: '⚠️ Absolute Zero incoming! Cut the red cells with a line!',
+    hitMsg:         '🧊 絶対零度！盤面が凍りついた',
+    hitMsgEn:       '🧊 Absolute Zero! The board freezes over',
+    cutMsg:         '🧊 絶対零度を斬った！',
+    cutMsgEn:       '🧊 You cut through Absolute Zero!',
+  },
+};
+
 export const BOSSES = [
   { id: 'slime',  name: 'スライムキング',   nameEn: 'Slime King',       emoji: '🟢', hp: 3000,  atkSec: 12, atkCells: 3, gemsFirst: 50,
     moves: ['garbage'], moves2: ['garbage'], atk2: 0.75 },
@@ -109,8 +146,13 @@ export const BOSSES = [
     moves: ['garbage', 'curse_hand'], moves2: ['garbage', 'curse_hand', 'breath_row'], atk2: 0.7 },
   { id: 'mecha',  name: '機械神エクスマキナ', nameEn: 'Deus Ex Machina', emoji: '⚙️', hp: 40000, atkSec: 8, atkCells: 6, gemsFirst: 300,
     moves: ['garbage', 'laser_col', 'quake'], moves2: ['laser_col', 'laser_col2', 'quake'], atk2: 0.72 },
+  // 看板ボスなので専用技 freeze（絶対零度）持ち。techs は BOSS_TECHNIQUES の
+  // 同じオブジェクトを指しているだけ（/api/bosses でそのままクライアントへ）。
+  // modes.js が freeze を未対応の間は BOSS_MOVES のフォールバックで
+  // お邪魔弾扱いになるだけなので、既存プレイは壊れない。
   { id: 'frost',  name: '氷雪女王フリオーネ', nameEn: 'Frost Queen Frione', emoji: '🧊', hp: 60000, atkSec: 8, atkCells: 7, gemsFirst: 500,
-    moves: ['garbage', 'curse_hand'], moves2: ['garbage', 'curse_hand2', 'breath_row'], atk2: 0.7 },
+    moves: ['garbage', 'curse_hand', 'freeze'], moves2: ['garbage', 'curse_hand2', 'breath_row', 'freeze'], atk2: 0.7,
+    techs: { freeze: BOSS_TECHNIQUES.freeze } },
 ];
 
 // Raid-exclusive bosses: never appear in the solo boss mode.

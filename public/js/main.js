@@ -855,6 +855,158 @@ $('#btnDig').onclick = () => {
   m.querySelector('#dgStart2').onclick = () => { audio.click(); closeModal(); startDig(); };
 };
 
+// ---------------------------------------------------------------------------
+// 第3波の新モード導線（⛓️ 連鎖カスケード / 🏗️ ブループリント / 🛠️ パズル工房）
+//
+// ボタン要素は index.html 側（#btnChain / #btnBlueprint / #btnWorkshop）にある
+// が、index.html は担当外なので「無ければ JS から足す」形にしてある（screens.js
+// の ensureHallOfFameNav / ensureWorkshopNav と同じ流儀）。既にあるものは拾う
+// だけなので二重には生えない。
+//
+// #btnWorkshop は screens.js の ensureWorkshopNav() も拾って openWorkshop() を
+// 直に割り当てる。main.js は import の評価が終わったあとに走る＝こちらの
+// onclick が後勝ちになるので、他モードと同じ「開始モーダル」を挟める。
+//
+// 起動関数は modes.js 側でまだ名前が固まっていないので import はせず、
+// window 経由で「あれば呼ぶ・無ければトーストで止める」形にしてある。
+// modes.js の実装が間に合わなくてもメニューは絶対に壊れない。
+// ---------------------------------------------------------------------------
+
+// 候補名を順に試して、最初に見つかった関数を呼ぶ。見つからなければトースト。
+function callModeEntry(names, args) {
+  for (const name of names) {
+    const fn = window[name];
+    if (typeof fn === 'function') {
+      try {
+        fn.apply(window, args || []);
+      } catch (err) {
+        // モード側が落ちてもメニューまで道連れにしない（自動報告には乗る）。
+        console.error(err);
+        toast(t('モードを開始できませんでした', 'Could not start this mode'), 'err');
+      }
+      return true;
+    }
+  }
+  toast(t('準備中です', 'Coming soon'));
+  return false;
+}
+
+// メニューのモード一覧にボタンを1つ確保する。戻り値は button（作れなければ null）。
+function ensureModeButton(id, cls, label, afterId) {
+  try {
+    let btn = $('#' + id);
+    if (!btn) {
+      const list = $('#screen-menu .menu-buttons');
+      if (!list) return null;
+      btn = document.createElement('button');
+      btn.id = id;
+      btn.className = `btn ${cls} btn-big`;
+      const after = afterId ? $('#' + afterId) : null;
+      if (after && after.parentNode === list) list.insertBefore(btn, after.nextSibling);
+      else list.appendChild(btn);
+    }
+    // index.html の文言は日本語固定で、i18n.js の applyStaticI18n() に対応する
+    // 行が入るまで英語面でも日本語のままになる。ここで毎回 t() の結果に揃えて
+    // おけば、i18n.js が追いついても同じ文言なので取り合いにならない。
+    btn.textContent = label;
+    return btn;
+  } catch {
+    return null;   // メニューの形が変わっても他の導線は死なせない
+  }
+}
+
+function modeLocalBest(key) {
+  const v = Number(localStorage.getItem(key) || 0);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+function modeStatBest(field) {
+  return (session.user && session.user.stats && Number(session.user.stats[field])) || 0;
+}
+
+// ---- ⛓️ chain cascade (連鎖カスケード) ----
+function showChainSetup() {
+  const best = Math.max(modeLocalBest('bba_chain_best'), modeStatBest('chainBest'));
+  const maxChain = Math.max(modeLocalBest('bba_chain_max'), modeStatBest('chainMax'));
+  const m = showModal(`
+    <h2>⛓️ ${t('連鎖カスケード', 'Chain Cascade')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('ラインを消すと<b>上のブロックが下に落ちてくる</b>！落ちた先でまたラインが揃えば<b>連鎖</b>し、連鎖が続くほど<b>スコア倍率が跳ね上がる</b>。<br><small>盤面を崩さず「あと1マス」を残して積み、一撃で雪崩を起こせ — 置ける場所が無くなったら終了。</small>',
+          'Clearing a line makes <b>everything above it fall</b> — and if the landing forms another line, it <b>chains</b>. The longer the chain, <b>the bigger the score multiplier</b>.<br><small>Stack with one gap left, then trigger the avalanche in a single move. It ends when nothing fits.</small>')}
+    </p>
+    ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}${maxChain ? t(` / 最大${maxChain}連鎖`, ` / longest ${maxChain}-chain`) : ''}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="cnCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-coop" id="cnStart">⛓️ ${t('連鎖を起こす', 'Start the cascade')}</button>
+    </div>`);
+  m.querySelector('#cnCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#cnStart').onclick = () => {
+    audio.click();
+    closeModal();
+    // modes.js 側の名前が確定していないので候補を順に試す。
+    callModeEntry(['startChainMode', 'startChain', 'startCascade']);
+  };
+}
+
+// ---- 🏗️ blueprint (日替わりの設計図) ----
+function showBlueprintSetup() {
+  const clears = Math.max(modeLocalBest('bba_blueprint_clears'), modeStatBest('blueprintClears'));
+  const m = showModal(`
+    <h2>🏗️ ${t('ブループリント', 'Blueprint')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('<b>日替わりの設計図どおりに</b>ピースを組み上げる、全員同じお題のパズル。<br><small>配られるピースは設計図をちょうど作れるぶんだけ。<b>ラインを揃えてしまうと作品が消えてしまう</b>ので、いつもと逆の頭で置き場所を考えろ！</small>',
+          'Build <b>today\'s blueprint</b> exactly as drawn — the same puzzle for everyone, every day.<br><small>You get precisely the pieces the drawing needs. <b>Complete a line and your artwork vanishes</b> — so think the opposite way round!</small>')}
+    </p>
+    ${clears ? `<p class="center" style="font-size:13px;font-weight:800">${t(`これまでに ${fmt(clears)}枚 完成`, `${fmt(clears)} blueprints completed`)}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="bpCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-gold" id="bpStart">🏗️ ${t('今日の設計図に挑む', "Build today's blueprint")}</button>
+    </div>`);
+  m.querySelector('#bpCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#bpStart').onclick = () => {
+    audio.click();
+    closeModal();
+    callModeEntry(['startBlueprint', 'startBlueprintMode', 'startBlueprintDaily']);
+  };
+}
+
+// ---- 🛠️ puzzle workshop (自作ステージ) ----
+function showWorkshopSetup() {
+  const canEdit = typeof window.openWorkshopEditor === 'function';
+  const m = showModal(`
+    <h2>🛠️ ${t('パズル工房', 'Puzzle Workshop')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('みんなが作ったパズルで遊べる工房。<b>6文字の共有コード</b>で友達の作品にも飛べる。<br><small>自分で盤面を描いて投稿もできる — 自分でクリアできた図だけが公開されるので、解けない問題は出てこない。遊ばれるほど作者に🪙が入る！</small>',
+          'A workshop full of player-made puzzles — jump straight to a friend\'s stage with its <b>6-letter share code</b>.<br><small>You can build and publish your own, too: only stages you have solved yourself go live, so nothing is unsolvable. Authors earn 🪙 every time their stage is played!</small>')}
+    </p>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="wsCancel2">${t('やめる', 'Cancel')}</button>
+      ${canEdit ? `<button class="btn btn-ghost" id="wsMake2">🛠️ ${t('作る', 'Create')}</button>` : ''}
+      <button class="btn btn-puzzle" id="wsOpen2">🧩 ${t('ステージを探す', 'Browse stages')}</button>
+    </div>`);
+  m.querySelector('#wsCancel2').onclick = () => { audio.click(); closeModal(); };
+  const make = m.querySelector('#wsMake2');
+  if (make) make.onclick = () => { audio.click(); closeModal(); callModeEntry(['openWorkshopEditor']); };
+  m.querySelector('#wsOpen2').onclick = () => {
+    audio.click();
+    closeModal();
+    // 一覧は screens.js が window.openWorkshop として公開済み（audio.click は向こうで鳴る）。
+    callModeEntry(['openWorkshop']);
+  };
+}
+
+function ensureNewModeButtons() {
+  const chain = ensureModeButton('btnChain', 'btn-chain', `⛓️ ${t('連鎖カスケード', 'Chain Cascade')}`, 'btnChimera');
+  if (chain) chain.onclick = () => { audio.click(); showChainSetup(); };
+  const blueprint = ensureModeButton('btnBlueprint', 'btn-blueprint', `🏗️ ${t('ブループリント', 'Blueprint')}`, 'btnDaily');
+  if (blueprint) blueprint.onclick = () => { audio.click(); showBlueprintSetup(); };
+  // screens.js が先に onclick を入れているので、ここで上書きして開始モーダルを挟む。
+  const workshop = ensureModeButton('btnWorkshop', 'btn-workshop', `🛠️ ${t('パズル工房', 'Puzzle Workshop')}`, 'btnPuzzle');
+  if (workshop) workshop.onclick = () => { audio.click(); showWorkshopSetup(); };
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ensureNewModeButtons, { once: true });
+else ensureNewModeButtons();
+
 // ---- time attack ----
 $('#btnSprint').onclick = () => {
   audio.click();

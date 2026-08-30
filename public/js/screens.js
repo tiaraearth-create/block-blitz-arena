@@ -1,7 +1,7 @@
 // Sub-screens: auth modal, leaderboard, shop, battle pass, admin panel.
 import { session, api, setToken, refreshMe } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, toast, fmt, updateTopbar, confettiBurst, rankOf, staffUiOn, setStaffUi, staffExtras } from './dom.js';
-import { getSkin, BOARDS } from './themes.js';
+import { getSkin, BOARDS, PALETTE } from './themes.js';
 import { audio, TRACK_INFO } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
 import { reconnectChat, markNewsSeen } from './chat.js';
@@ -4595,3 +4595,395 @@ function showNewsPostModal() {
     } catch (err) { m.querySelector('#npErr').textContent = err.message; }
   };
 }
+
+// ---------------------------------------------------------------------------
+// 🧩 パズル工房 (I6) — みんなの自作ステージの閲覧・コード入力・いいね
+//
+// 画面(section)を増やすと dom.js の SCREENS と index.html を触ることになるので、
+// 🏛️殿堂(showHallOfFame)と同じくモーダルで作る。非同期レースのガードも殿堂と
+// 同じ作りで、画面用の viewGen とは別勘定の wsGen を使う（await から戻った
+// 時点で世代が変わっている＝タブが切り替わった／閉じられたら描かない）。
+//
+// サーバー側（server/index.js 担当）の想定API:
+//   GET  /api/workshop/stages?sort=popular|new&limit=40
+//          -> { stages: [{ code, name, nameEn, author, likes, plays, liked,
+//                          grid, pieces, at }] }
+//   GET  /api/workshop/stages/:code      -> { stage: {...} }
+//   POST /api/workshop/stages/:code/like -> { likes, liked }
+// どれも未実装／空でも画面は壊さない（「まだありません」で止まるだけ）。
+// キー名のゆらぎ（stages/rows/items、code/shareCode、likes/likeCount …）は
+// normalizeWorkshopStage() が吸収する。
+//
+// 実際に遊ぶ／エディタを開くのは modes.js 担当。ここからは
+//   window.startWorkshopStage(code, stage)   ステージを遊ぶ
+//   window.openWorkshopEditor()              自作ステージのエディタを開く
+// を呼ぶだけにしてある（未実装なら「準備中」のトーストで止まる）。
+// ---------------------------------------------------------------------------
+
+const WS_SORTS = ['popular', 'new'];
+const WS_LIKED_KEY = 'bba_workshop_liked';   // いいね済みコード（サーバーが liked を返さない場合の控え）
+
+let wsSort = 'popular';
+let wsStages = [];
+let wsGen = 0;
+
+function wsLikedCodes() {
+  try {
+    const a = JSON.parse(localStorage.getItem(WS_LIKED_KEY) || '[]');
+    return Array.isArray(a) ? a.map(String) : [];
+  } catch { return []; }
+}
+function wsRememberLike(code) {
+  const a = wsLikedCodes();
+  if (a.includes(code)) return;
+  a.push(code);
+  try { localStorage.setItem(WS_LIKED_KEY, JSON.stringify(a.slice(-300))); } catch { /* 容量超過などは無視 */ }
+}
+
+// 図柄。8x8=64マス（0=空、1..9=色）に揃える。64要素の配列でも、8行の配列でも、
+// "0012.." のような64文字の文字列でも読めるようにしてある（形が変わっても落ちない）。
+function wsNormalizeGrid(src) {
+  let cells = null;
+  if (Array.isArray(src)) {
+    if (src.length === 64 && !Array.isArray(src[0])) cells = src;
+    else if (src.length === 8) {
+      cells = [];
+      for (const row of src) {
+        const r = typeof row === 'string' ? row.split('') : Array.isArray(row) ? row : null;
+        if (!r || r.length !== 8) return null;
+        for (const v of r) cells.push(v);
+      }
+    }
+  } else if (typeof src === 'string') {
+    const s = src.replace(/[^0-9]/g, '');
+    if (s.length === 64) cells = s.split('');
+  }
+  if (!cells || cells.length !== 64) return null;
+  return cells.map(v => {
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) && n > 0 ? Math.min(9, n) : 0;
+  });
+}
+
+// 1件ぶんの正規化。読めなければ null（＝一覧から静かに落とす）。
+function normalizeWorkshopStage(s, fallbackCode = '') {
+  if (!s || typeof s !== 'object') return null;
+  const inner = (s.stage && typeof s.stage === 'object') ? s.stage : s;
+  const code = String(s.code || s.shareCode || s.share || inner.code || fallbackCode || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{4,8}$/.test(code)) return null;
+  const nameJa = String(s.name || s.title || inner.name || '').trim();
+  const nameEn = String(s.nameEn || s.titleEn || '').trim();
+  const author = String(s.author || s.authorName || s.by || s.username || (s.user && s.user.username) || '').trim();
+  const likes = Math.max(0, Math.floor(Number(s.likes ?? s.likeCount ?? s.hearts ?? 0)) || 0);
+  const plays = Math.max(0, Math.floor(Number(s.plays ?? s.playCount ?? s.played ?? 0)) || 0);
+  const pieces = Array.isArray(s.pieces) ? s.pieces : Array.isArray(inner.pieces) ? inner.pieces : null;
+  const pieceCount = pieces ? pieces.length : Math.max(0, Math.floor(Number(s.pieceCount ?? s.pieces ?? 0)) || 0);
+  const likedRaw = s.liked ?? s.likedByMe ?? s.myLike ?? s.isLiked;
+  return {
+    code,
+    name: (LANG === 'en' && nameEn ? nameEn : nameJa) || tr(`ステージ ${code}`, `Stage ${code}`),
+    author: author || tr('名無しの職人', 'Anonymous'),
+    likes, plays, pieceCount,
+    liked: likedRaw === undefined ? wsLikedCodes().includes(code) : !!likedRaw,
+    grid: wsNormalizeGrid(s.grid ?? s.cells ?? s.board ?? inner.grid ?? inner.cells ?? null),
+    at: Number(s.at ?? s.createdAt ?? s.postedAt ?? 0) || 0,
+    raw: s,
+  };
+}
+
+function normalizeWorkshopList(data) {
+  const raw = Array.isArray(data) ? data
+    : (data && (data.stages || data.rows || data.items || data.list)) || null;
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const s of raw) {
+    const st = normalizeWorkshopStage(s);
+    if (!st || seen.has(st.code)) continue;
+    seen.add(st.code);
+    out.push(st);
+  }
+  return out;
+}
+
+// 図柄のミニプレビュー。新規CSSを増やさずに済むよう、8x8のグリッドを
+// インラインstyleだけで描く（cell=1マスの px）。
+function wsPreviewHtml(grid, cell = 7) {
+  const side = cell * 8 + 7;
+  if (!grid) {
+    return `<div style="width:${side}px;height:${side}px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+      border-radius:8px;background:rgba(255,255,255,0.06);font-size:${Math.round(side / 2.4)}px">🧩</div>`;
+  }
+  const cells = grid.map(v => {
+    const col = v ? (PALETTE[v] || PALETTE[1])[0] : 'rgba(255,255,255,0.07)';
+    return `<i style="display:block;border-radius:1px;background:${col}"></i>`;
+  }).join('');
+  return `<div style="display:grid;grid-template-columns:repeat(8,${cell}px);grid-auto-rows:${cell}px;gap:1px;
+    flex:0 0 auto;padding:3px;border-radius:8px;background:rgba(0,0,0,0.28)">${cells}</div>`;
+}
+
+function wsLikeLabel(st) { return `${st.liked ? '❤️' : '🤍'} ${fmt(st.likes)}`; }
+
+function wsCardHtml(st) {
+  const code = escapeHtml(st.code);
+  return `
+    <div class="ms-row" data-ws-code="${code}">
+      ${wsPreviewHtml(st.grid)}
+      <div class="ms-info">
+        <div class="ms-name">${escapeHtml(st.name)}</div>
+        <div class="ms-prog"><span style="white-space:nowrap">👤 ${escapeHtml(st.author)}</span>${
+          st.pieceCount ? ` <span style="white-space:nowrap">・ 🧩 ${tr(`${st.pieceCount}ピース`, `${st.pieceCount} pieces`)}</span>` : ''}</div>
+        <div class="ms-prog"><span style="white-space:nowrap">❤️ ${fmt(st.likes)}</span> <span style="white-space:nowrap">・ ▶ ${tr(`${fmt(st.plays)}回`, `${fmt(st.plays)} plays`)}</span> <span style="white-space:nowrap">・ <b style="letter-spacing:.1em">${code}</b></span></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px;flex:0 0 auto">
+        <button class="btn btn-sm btn-primary" data-ws-play="${code}">▶ ${tr('遊ぶ', 'Play')}</button>
+        <button class="btn btn-sm btn-ghost" data-ws-like="${code}">${wsLikeLabel(st)}</button>
+      </div>
+    </div>`;
+}
+
+function wsEmptyHtml() {
+  return `<div class="ms-empty">
+      <p>${tr('まだ公開されたステージがありません', 'No stages published yet')}</p>
+      <button class="btn btn-gold" id="wsMakeFirst">🛠️ ${tr('最初の1作を作る', 'Build the first one')}</button>
+    </div>`;
+}
+
+// モーダル本体。開き直しではなくタブ切り替えでも中身だけ差し替える。
+export async function openWorkshop(sort = wsSort) {
+  audio.click();
+  wsSort = WS_SORTS.includes(sort) ? sort : 'popular';
+  const m = showModal(`
+    <h2>🧩 ${tr('パズル工房', 'Puzzle Workshop')}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:8px">${tr('みんなが作ったステージで遊ぼう。気に入ったら❤️を送ろう',
+      'Play stages built by other players — send a ❤️ if you like one')}</p>
+    <div class="settings-row" style="justify-content:center;gap:6px;flex-wrap:wrap">
+      <input id="wsCode" type="text" maxlength="6" placeholder="ABC123" style="width:110px;text-transform:uppercase" autocomplete="off">
+      <button class="btn btn-sm btn-primary" id="wsGo">🔍 ${tr('コードで開く', 'Open code')}</button>
+      <button class="btn btn-sm btn-gold" id="wsNew">🛠️ ${tr('作る', 'Create')}</button>
+    </div>
+    <div class="tabs" id="wsTabs" style="justify-content:center;flex-wrap:wrap">
+      <button class="tab ${wsSort === 'popular' ? 'active' : ''}" data-ws="popular">🔥 ${tr('人気', 'Popular')}</button>
+      <button class="tab ${wsSort === 'new' ? 'active' : ''}" data-ws="new">🆕 ${tr('新着', 'Newest')}</button>
+    </div>
+    <div id="wsBody" class="ms-list" style="max-height:50vh;overflow-y:auto"><p class="muted center">${tr('読み込み中…', 'Loading…')}</p></div>
+    <div class="modal-buttons"><button class="btn btn-primary" id="wsClose">${tr('閉じる', 'Close')}</button></div>`);
+  m.querySelector('#wsClose').onclick = closeModal;
+  m.querySelector('#wsNew').onclick = () => wsOpenEditor();
+  const codeInput = m.querySelector('#wsCode');
+  const go = () => openWorkshopByCode(codeInput.value);
+  m.querySelector('#wsGo').onclick = go;
+  codeInput.onkeydown = e => { if (e.key === 'Enter') go(); };
+  m.querySelectorAll('[data-ws]').forEach(b => {
+    b.onclick = () => {
+      if (wsSort === b.dataset.ws) return;
+      audio.click();
+      wsSort = b.dataset.ws;
+      m.querySelectorAll('[data-ws]').forEach(x => x.classList.toggle('active', x === b));
+      loadWorkshopList(m);
+    };
+  });
+  await loadWorkshopList(m);
+  return m;
+}
+
+async function loadWorkshopList(m) {
+  const gen = ++wsGen;
+  const body = m.querySelector('#wsBody');
+  if (!body) return;
+  body.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
+  let data = null;
+  // API がまだ無くても「まだありません」で止める（画面は壊さない）。
+  try { data = await api(`/api/workshop/stages?sort=${encodeURIComponent(wsSort)}&limit=40`); } catch { data = null; }
+  if (gen !== wsGen || !m.isConnected) return;
+  wsStages = normalizeWorkshopList(data);
+  renderWorkshopList(m);
+}
+
+function renderWorkshopList(m) {
+  const body = m.querySelector('#wsBody');
+  if (!body) return;
+  if (!wsStages.length) {
+    body.innerHTML = wsEmptyHtml();
+    const b = body.querySelector('#wsMakeFirst');
+    if (b) b.onclick = () => wsOpenEditor();
+    return;
+  }
+  body.innerHTML = wsStages.map(wsCardHtml).join('');
+  bindWorkshopCards(body);
+}
+
+// カード内のボタン。プレビュー／名前の側を押したら詳細モーダルへ。
+function bindWorkshopCards(root) {
+  root.querySelectorAll('[data-ws-play]').forEach(b => {
+    b.onclick = e => { e.stopPropagation(); playWorkshopStage(wsFind(b.dataset.wsPlay) || { code: b.dataset.wsPlay, raw: null }); };
+  });
+  root.querySelectorAll('[data-ws-like]').forEach(b => {
+    b.onclick = e => { e.stopPropagation(); likeWorkshopStage(b.dataset.wsLike, b); };
+  });
+  root.querySelectorAll('[data-ws-code]').forEach(el => {
+    el.onclick = () => { const st = wsFind(el.dataset.wsCode); if (st) showWorkshopStageModal(st); };
+  });
+}
+
+function wsFind(code) { return wsStages.find(s => s.code === String(code || '').toUpperCase()) || null; }
+
+// 6文字コードで1件だけ取ってくる（modes.js からも使えるよう export + window）。
+export async function fetchWorkshopStage(code) {
+  const c = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{4,8}$/.test(c)) return null;
+  let data = null;
+  try { data = await api(`/api/workshop/stages/${encodeURIComponent(c)}`); } catch { return null; }
+  const raw = (data && (data.stage || data.item || data.data)) || data;
+  return normalizeWorkshopStage(raw, c);
+}
+
+async function openWorkshopByCode(code) {
+  const c = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{6}$/.test(c)) {
+    audio.error();
+    toast(tr('6文字の共有コードを入力してください', 'Enter the 6-character share code'), 'err');
+    return;
+  }
+  audio.click();
+  const st = await fetchWorkshopStage(c);
+  if (!st) {
+    audio.error();
+    toast(tr('そのコードのステージは見つかりませんでした', 'No stage with that code'), 'err');
+    return;
+  }
+  showWorkshopStageModal(st);
+}
+
+// 1件の詳細。ここからも遊ぶ／いいね／コードのコピーができる。
+function showWorkshopStageModal(st) {
+  const m = showModal(`
+    <h2>🧩 ${escapeHtml(st.name)}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:8px">👤 ${escapeHtml(st.author)}${
+      st.pieceCount ? ` ・ 🧩 ${tr(`${st.pieceCount}ピース`, `${st.pieceCount} pieces`)}` : ''}</p>
+    <div style="display:flex;justify-content:center;margin-bottom:10px">${wsPreviewHtml(st.grid, 16)}</div>
+    <div class="guild-hero-stats" style="justify-content:center;margin-bottom:10px">
+      <span>❤️ <b>${fmt(st.likes)}</b></span><span>▶ <b>${fmt(st.plays)}</b></span>
+      <span>${tr('コード', 'Code')} <b style="letter-spacing:.12em">${escapeHtml(st.code)}</b></span>
+    </div>
+    <div class="settings-row" style="justify-content:center;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-sm btn-ghost" id="wsCopy">📋 ${tr('コードをコピー', 'Copy code')}</button>
+      <button class="btn btn-sm btn-ghost" id="wsLike1">${wsLikeLabel(st)}</button>
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="wsBack">← ${tr('一覧へ', 'Back')}</button>
+      <button class="btn btn-primary" id="wsPlay1">▶ ${tr('遊ぶ', 'Play')}</button>
+    </div>`);
+  m.querySelector('#wsBack').onclick = () => openWorkshop();
+  m.querySelector('#wsPlay1').onclick = () => playWorkshopStage(st);
+  m.querySelector('#wsLike1').onclick = e => likeWorkshopStage(st.code, e.currentTarget, st);
+  m.querySelector('#wsCopy').onclick = async () => {
+    // 非セキュアな LAN(http) には navigator.clipboard が無い。party.js と同じ退避。
+    let ok = false;
+    try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(st.code); ok = true; } } catch { /* 下へ退避 */ }
+    if (!ok) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = st.code; document.body.appendChild(ta); ta.select();
+        ok = document.execCommand('copy'); ta.remove();
+      } catch { ok = false; }
+    }
+    toast(ok ? tr('共有コードをコピーしました', 'Share code copied')
+             : tr(`コピーできませんでした（コード: ${st.code}）`, `Could not copy (code: ${st.code})`),
+      ok ? 'ok' : 'err', ok ? 1500 : 3000);
+  };
+}
+
+// ❤️ いいね（1人1回）。サーバーが likes/liked を返せばそれを、返さなければ
+// 手元で +1 して押した状態にする。押せたコードは localStorage にも控える。
+async function likeWorkshopStage(code, btn, single = null) {
+  const c = String(code || '').toUpperCase();
+  const st = single && single.code === c ? single : wsFind(c);
+  if (!session.user) {
+    audio.error();
+    toast(tr('❤️ はアカウント登録で押せます', 'Create an account to send a ❤️'), 'err');
+    showAuthModal();
+    return;
+  }
+  if (st && st.liked) { toast(tr('もう❤️を送っています', 'You already liked this stage')); return; }
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api(`/api/workshop/stages/${encodeURIComponent(c)}/like`, { method: 'POST', body: {} });
+    const n = Number(res && (res.likes ?? res.likeCount));
+    if (st) {
+      st.likes = Number.isFinite(n) && n >= 0 ? n : st.likes + 1;
+      st.liked = res && res.liked !== undefined ? !!res.liked : true;
+    }
+    wsRememberLike(c);
+    audio.coin();
+    // 一覧ごと描き直すとスクロール位置が飛ぶので、押したボタンだけ書き換える。
+    if (btn) {
+      btn.disabled = false;
+      if (st) btn.textContent = wsLikeLabel(st);
+    }
+    // 同じステージのカードが一覧側にも出ているときは、そちらの数字も合わせる。
+    // コードは英数字だけ（正規化ずみ）なので、そのまま属性セレクタに置ける。
+    if (st && /^[A-Z0-9]{4,8}$/.test(c)) {
+      document.querySelectorAll(`[data-ws-like="${c}"]`).forEach(b => {
+        if (b !== btn) b.textContent = wsLikeLabel(st);
+      });
+    }
+  } catch (err) {
+    if (btn) btn.disabled = false;
+    audio.error();
+    toast(err.message, 'err');
+  }
+}
+
+// ▶ 遊ぶ／🛠️ 作る は modes.js 担当の実装を呼ぶだけ。まだ無ければ静かに断る。
+function playWorkshopStage(st) {
+  const fn = window.startWorkshopStage;
+  if (typeof fn !== 'function') {
+    audio.error();
+    toast(tr('このステージで遊ぶ機能はまもなく公開されます', 'Playing workshop stages is coming soon'), 'err');
+    return;
+  }
+  closeModal();
+  try { fn(st.code, st.raw || null); }
+  catch (err) { audio.error(); toast(err && err.message ? err.message : String(err), 'err'); }
+}
+
+function wsOpenEditor() {
+  const fn = window.openWorkshopEditor;
+  if (typeof fn !== 'function') {
+    audio.error();
+    toast(tr('ステージ作成はまもなく公開されます', 'The stage editor is coming soon'), 'err');
+    return;
+  }
+  if (!session.user) { toast(tr('投稿はアカウント登録で解放されます', 'Publishing needs an account'), 'err'); showAuthModal(); return; }
+  closeModal();
+  try { fn(); }
+  catch (err) { audio.error(); toast(err && err.message ? err.message : String(err), 'err'); }
+}
+
+// modes.js（および main.js）から呼べるようにしておく。screens.js は modes.js を
+// import している側なので、逆向きは window 経由でしか繋げない。
+window.openWorkshop = openWorkshop;
+window.fetchWorkshopStage = fetchWorkshopStage;
+
+// メニューの「🧩 工房」ボタン。index.html にはまだ無いのでここで足す
+// （ensureHallOfFameNav と同じ作り。後から生えたら拾うだけで二重にしない）。
+function ensureWorkshopNav() {
+  try {
+    let btn = $('#btnWorkshop');
+    if (!btn) {
+      const nav = $('#screen-menu .menu-nav');
+      if (!nav) return;
+      btn = document.createElement('button');
+      btn.className = 'nav-btn';
+      btn.id = 'btnWorkshop';
+      btn.innerHTML = `<span>🧩</span>${tr('工房', 'Workshop')}`;
+      const before = $('#btnAdmin');
+      if (before && before.parentNode === nav) nav.insertBefore(btn, before);
+      else nav.appendChild(btn);
+    }
+    btn.onclick = () => openWorkshop();
+  } catch { /* メニューの形が変わっても他の導線は死なせない */ }
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ensureWorkshopNav, { once: true });
+else ensureWorkshopNav();

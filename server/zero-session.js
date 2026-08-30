@@ -22,6 +22,7 @@ import {
   seatsFor, lanesFor, moodFor, pickVerdictCells, verdictAccepts,
   MIN_BOT_SEATS, REVIVE_SEC, EXECUTIONS_PER_SLOT, EXECUTIONS_PER_DAY, SIZE,
   MISS_HEAL, TOPOUT_HEAL, SEATS_MAX, missHealFor,
+  GRID_FRESH_MS, HUMAN_DPM_CAP, HUMAN_BUDGET_MAX_SEC,
   makeDeal, dealTally, dealWinner, clearDealEffects, dealForDay,
   DEAL_AT_SEC, DEAL_SEC, HUMAN_VOTE_WEIGHT,
 } from './zero.js';
@@ -99,6 +100,9 @@ export function createSession(deps, humanSocks, run = null) {
   const entrants = seated.map(ws => ({
     ws, human: true, name: sockName(ws), score: 0, cuts: 0, missed: 0,
     alive: true, downUntil: 0, lastSeen: now(),
+    // 盤面同期（zero_state）。届くまでは null ＝「サーバーは盤面を知らない」。
+    grid: null, gridAt: 0, gridPrev: null, gridPrevAt: 0,
+    syncScore: null, syncAt: 0, dealt: 0,
   }));
 
   const plan = seatPlan(botSeats);
@@ -202,6 +206,8 @@ export function addHuman(s, ws, deps, run = null) {
   const e = {
     ws, human: true, name, score: 0, cuts: 0, missed: 0,
     alive: true, downUntil: 0, lastSeen: now(),
+    grid: null, gridAt: 0, gridPrev: null, gridPrevAt: 0,
+    syncScore: null, syncAt: 0, dealt: 0,
   };
   s.entrants.push(e);
   // 一度上がった人数は下げない。抜けたぶんHPを下げるのは、与えたダメージを
@@ -389,10 +395,15 @@ function fireVerdicts(s, run, danIndex, deps) {
     e.lastVerdictAt = t;
     // 取引「今夜の的を八列すべてにしてやる」= 寄せる列を無効化する
     const mark = run.dealMarkAll ? -1 : s.targetCol;
-    // 人間の盤面はサーバーが持たない（zero_state 同期は存在しない）ので、的は
-    // 全マスから選ぶ。以前は e.grid（常に undefined）を渡していて「空きマスから選ぶ」
-    // 設計を装っていたが実体は全マス対象だった ── null を渡して意図を明示する。
-    const { cells, keystone } = pickVerdictCells(null, danIndex, mark, random);
+    // zero_state で同期された盤面が新しければ、それを渡す ── 赤マスが
+    // 「いま空いているマス」から選ばれる（pickVerdictCells の本来の設計）。
+    // まだ届いていない／古いときだけ null（全マスから選ぶ・安全側）。
+    const grid = e.grid && (t - (e.gridAt || 0)) <= GRID_FRESH_MS ? e.grid : null;
+    let { cells, keystone } = pickVerdictCells(grid, danIndex, mark, random);
+    // 盤面が満杯で空きマスが無いときは、的が1つも出せない＝その人だけ断罪が
+    // 飛ばなくなる（＝落とす罰も受けない）。埋まった盤面はどのみち詰み寸前
+    // なので、全マスから選び直して必ず名指しする。
+    if (!cells.length && grid) ({ cells, keystone } = pickVerdictCells(null, danIndex, mark, random));
     if (!cells.length) continue;
     // 杭が効いていれば予告が伸びる。取引で縮むこともある。
     const warnMs = Math.max(1200, dan.warnMs + (s.warnBonus || 0) - (run.dealWarnCut || 0));
@@ -433,16 +444,91 @@ export function submitStake(s, run, name, cols, deps) {
   return { ok: true, ready };
 }
 
+// ---------------------------------------------------------------------------
+// 盤面同期（zero_state）
+// ---------------------------------------------------------------------------
+//
+// バトルロイヤルの 'state' と同じ作法。クライアントが grid と score を定期的に
+// （＋1手ごとに）送り、サーバーが席に保存する。レート制限は battle.js の
+// sockRate が持つ（他の zero_* と同じ）。
+//
+// ■ 人間の点を段に入れる（住人＝火力／人間＝鍵 との関係）
+// zero.js の役割分けは「住人が7割を削り、人間が残り3割の封印を斬る」。
+// 人間の点も**7割の側にだけ**入れる ── 封印は今までどおり斬らないと1ミリも
+// 減らないので、役割の壁はそのまま残る。変わるのは「自分の点が段のバーを
+// 動かす」という手応えと、scripts/sim-zero.mjs が最初から前提にしていた
+// 火力の式（住人＋人間）に実装が追いつくこと。
+// 入れすぎて段が一瞬で溶けないよう、1人あたり毎分 HUMAN_DPM_CAP で頭打ちにする。
+export function syncBoard(s, run, name, payload, deps = {}) {
+  const { now = () => Date.now() } = deps;
+  if (!s || s.ended || !payload) return { ok: false, why: 'no-session' };
+  const t = now();
+  const e = s.entrants.find(x => x.human && !x.left && x.name === name);
+  if (!e) return { ok: false, why: 'no-seat' };
+  e.lastSeen = t;
+
+  let gotGrid = false;
+  if (Array.isArray(payload.grid) && payload.grid.length >= SIZE * SIZE) {
+    // 呼び出し側（battle.js）が sanitizeGrid 済みだが、単体でも安全にする。
+    const g = new Array(SIZE * SIZE);
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const v = Math.floor(Number(payload.grid[i]));
+      g[i] = Number.isFinite(v) && v > 0 ? Math.min(9, v) : 0;
+    }
+    // 直近2枚を持つ（verdictAccepts が「置く前／置いた後」どちらの実装でも
+    // 正しく裏づけを取れるようにするため。理由は zero.js の注記）。
+    e.gridPrev = e.grid; e.gridPrevAt = e.gridAt || 0;
+    e.grid = g; e.gridAt = t; gotGrid = true;
+  }
+  const dealt = applyHumanScore(s, run, e, payload.score, t);
+  return { ok: true, grid: gotGrid, dealt };
+}
+
+// 申告スコアの増分を段のHPに入れる。増分だけを見るので、走行が変わって
+// スコアが 0 に戻っても（クライアントの1走行は120秒）巻き戻らない。
+function applyHumanScore(s, run, e, rawScore, t) {
+  const score = Math.floor(Number(rawScore));
+  if (!Number.isFinite(score) || score < 0) return 0;
+  const last = e.syncAt || 0;
+  const prev = e.syncScore;
+  e.syncAt = t;
+  e.syncScore = score;
+  // 初回、または新しい走行（スコアが下がった）＝基準を取り直すだけ。
+  if (prev == null || score < prev) return 0;
+  const gained = score - prev;
+  if (gained <= 0) return 0;
+  e.score = (e.score || 0) + gained;      // 席の一覧に出る、この枠での累計
+  if (!run || !e.alive) return 0;
+  const danIndex = run.dan | 0;
+  if (danIndex >= DAN.length) return 0;
+  // 前回の同期からの経過時間ぶんだけ。黙っていた時間は繰り越さない。
+  const span = Math.max(0, Math.min(HUMAN_BUDGET_MAX_SEC * 1000, last ? t - last : 0));
+  const budget = Math.floor(HUMAN_DPM_CAP * span / 60_000);
+  const add = Math.min(gained, budget);
+  if (add <= 0) return 0;
+  const softCap = softCapFor(danIndex, s.humans, run);
+  const before = run.dealt || 0;
+  // 点は封印の手前で必ず止まる（住人の火力とまったく同じ扱い）。
+  run.dealt = Math.min(softCap, before + add);
+  const applied = run.dealt - before;
+  e.dealt = (e.dealt || 0) + applied;
+  return applied;
+}
+
 export function submitCut(s, run, name, verdictId, clearedCells, deps) {
   const { now = () => Date.now(), say, emit } = deps;
   const t = now();
   const v = s.verdicts.find(x => x.id === verdictId && x.target === name);
-  const r = verdictAccepts(v, t, clearedCells);
+  const e = s.entrants.find(x => x.name === name);
+  // 同期済みの盤面があれば、それを裏づけに使う（zero.js の verdictAccepts 参照）。
+  const board = e && e.grid
+    ? { grid: e.grid, at: e.gridAt || 0, prev: e.gridPrev || null, prevAt: e.gridPrevAt || 0 }
+    : null;
+  const r = verdictAccepts(v, t, clearedCells, board);
   if (!r.ok) return { ok: false, why: r.why };
   v.resolved = true;
   s.verdicts = s.verdicts.filter(x => !x.resolved);
 
-  const e = s.entrants.find(x => x.name === name);
   if (e) e.cuts = (e.cuts || 0) + 1;
   if (deps.onStat) deps.onStat(name, 'zeroCuts');
   // 👑 王座の欠片。急所ごと斬れば上乗せ。

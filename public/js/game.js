@@ -1,9 +1,92 @@
 // GameView: canvas renderer + input controller for one board (player or spectator).
-import { SIZE, shapeSize } from './engine.js';
+import { SIZE, shapeSize, ICE, ICE_CRACKED } from './engine.js';
 import { PALETTE, getSkin, getBoard } from './themes.js';
 import { ParticleSystem } from './particles.js';
 import { audio } from './audio.js';
 import { getSettings, particleFactor } from './settings.js';
+
+// ---------------------------------------------------------------------------
+// ❄️ 氷結ブロック (engine.js の ICE=10 / ICE_CRACKED=11)
+// ---------------------------------------------------------------------------
+// お邪魔(9)は PALETTE に1エントリ足すだけで済んだが、氷は「半透明＋質感」なので
+// 色2本では表せない。PALETTE は 9 番までしか無く、10/11 をスキン関数に渡すと
+// PALETTE[ci] の分割代入がその場で落ちる（描画が止まる）ので、
+// 盤面のマス値を描く経路はすべて withIce() を通してここで横取りする。
+// getSkin() の戻り値をそのまま包むので、色覚サポート（themes.js の
+// withColorMarks ラッパ）とは二重にならない ── 氷は色 index を持たないため
+// 記号を重ねる対象でもなく、包む順序に関係なく通常色だけに記号が付く。
+
+export function drawIceBlock(ctx, x, y, s, cracked, alpha = 1) {
+  const a = Math.max(0, Math.min(1, Number(alpha) >= 0 ? Number(alpha) : 1));
+  if (a <= 0.02 || !(s > 0)) return;
+  const pad = s * 0.06;
+  const bx = x + pad, by = y + pad, bs = s - pad * 2;
+  const rad = s * 0.16;
+  const body = () => {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(bx, by, bs, bs, rad);
+    else ctx.rect(bx, by, bs, bs);
+  };
+  ctx.save();
+  ctx.globalAlpha = a;
+  const g = ctx.createLinearGradient(bx, by, bx, by + bs);
+  g.addColorStop(0, 'rgba(236,251,255,0.72)');
+  g.addColorStop(0.55, 'rgba(170,226,247,0.50)');
+  g.addColorStop(1, 'rgba(112,182,222,0.62)');
+  ctx.fillStyle = g;
+  body(); ctx.fill();
+  // 厚みのある透明に見せる斜めのハイライト2本
+  ctx.globalAlpha = a * 0.55;
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = Math.max(1, s * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(bx + bs * 0.18, by + bs * 0.74); ctx.lineTo(bx + bs * 0.60, by + bs * 0.14);
+  ctx.moveTo(bx + bs * 0.54, by + bs * 0.88); ctx.lineTo(bx + bs * 0.86, by + bs * 0.46);
+  ctx.stroke();
+  ctx.globalAlpha = a;
+  ctx.strokeStyle = 'rgba(226,248,255,0.85)';
+  ctx.lineWidth = Math.max(1, s * 0.045);
+  body(); ctx.stroke();
+  if (cracked) {
+    // ヒビ: 中心から3方向。白いフチ→濃い線の順に重ねて氷の上に浮かせる。
+    ctx.lineCap = 'round';
+    const cx = bx + bs * 0.44, cy = by + bs * 0.5;
+    const crack = () => {
+      ctx.beginPath();
+      ctx.moveTo(bx + bs * 0.12, by + bs * 0.18); ctx.lineTo(cx, cy); ctx.lineTo(bx + bs * 0.30, by + bs * 0.92);
+      ctx.moveTo(cx, cy); ctx.lineTo(bx + bs * 0.94, by + bs * 0.40);
+      ctx.moveTo(cx, cy); ctx.lineTo(bx + bs * 0.74, by + bs * 0.94);
+    };
+    ctx.globalAlpha = a * 0.85;
+    ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+    ctx.lineWidth = Math.max(1.5, s * 0.10);
+    crack(); ctx.stroke();
+    ctx.strokeStyle = 'rgba(38,86,122,0.78)';
+    ctx.lineWidth = Math.max(1, s * 0.05);
+    crack(); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// 元のスキン関数ごとにラッパを1つだけ作って使い回す（毎フレーム生成しない）。
+// themes.js 側も同じ流儀でキャッシュしているので、getSkin() の戻り値の
+// 同一性は保たれ、ここの Map も膨らまない。
+const _iceSkins = new Map();
+function withIce(draw) {
+  let wrapped = _iceSkins.get(draw);
+  if (!wrapped) {
+    wrapped = function (ctx, x, y, s, ci, alpha = 1) {
+      if (ci === ICE || ci === ICE_CRACKED) { drawIceBlock(ctx, x, y, s, ci === ICE_CRACKED, alpha); return; }
+      draw(ctx, x, y, s, ci, alpha);
+    };
+    _iceSkins.set(draw, wrapped);
+  }
+  return wrapped;
+}
+
+// 盤面のマス値（engine.grid 由来）を描くときは必ずこれを通す。
+// 手札・ゴーストは piece.color(1..8) しか出さないので素の getSkin() で足りる。
+export function boardSkin(skinId) { return withIce(getSkin(skinId)); }
 
 export class GameView {
   constructor(canvas, opts = {}) {
@@ -352,6 +435,18 @@ export class GameView {
       );
     }
 
+    // ❄️ 氷結: 揃ったのに消えなかった線を水色で光らせ、ヒビが入ったマスを
+    // 一度弾ませる。文字は出さない ── 「消えない」ことは絵で伝わるほうが速い。
+    if (result.frozenCount > 0) {
+      for (const r of result.frozenRows) this.flashes.push({ kind: 'row', index: r, t: now, color: '#9be3ff' });
+      for (const c of result.frozenCols) this.flashes.push({ kind: 'col', index: c, t: now, color: '#9be3ff' });
+      for (const [r, c] of result.crackedCells) {
+        this.spawnAnim.set(r * SIZE + c, now);
+        this.particles.ring(this.boardX + (c + 0.5) * this.cell, this.boardY + (r + 0.5) * this.cell, this.cell * 0.9, '#9be3ff');
+      }
+      if (getSettings().shake) this.shake = Math.max(this.shake, 4);
+    }
+
     if (this.onPlace) this.onPlace(result);
     if (result.over) {
       // Staff "invincible" switch / 絶対防御 item: the board resets instead.
@@ -539,7 +634,7 @@ export class GameView {
 
   drawBlocks() {
     const { ctx, cell } = this;
-    const skin = getSkin(this.skinId);
+    const skin = boardSkin(this.skinId);
     const ghost = this.drag && this.weldTargetAt(this.drag.px, this.drag.py, this.drag.index) === -1
       ? this.ghostInfo() : null;
 
@@ -693,22 +788,33 @@ export class GameView {
     if (!piece) return null;
     const valid = this.engine.canPlace(piece, anchor.r, anchor.c);
     const willRows = new Set(), willCols = new Set();
+    // ❄️ 氷結: 揃っても氷があると消えない線。白く光らせると「消える」と嘘に
+    // なるので、別の集合に分けて水色で見せる（resolveLines の判定と同じ規則）。
+    const freezeRows = new Set(), freezeCols = new Set();
     if (valid) {
       // simulate: which rows/cols become full?
       const g = this.engine.grid;
       const temp = new Set(piece.cells.map(([dr, dc]) => (anchor.r + dr) * SIZE + (anchor.c + dc)));
       for (let r = 0; r < SIZE; r++) {
-        let full = true;
-        for (let c = 0; c < SIZE; c++) { const k = r * SIZE + c; if (!g[k] && !temp.has(k)) { full = false; break; } }
-        if (full) willRows.add(r);
+        let full = true, ice = false;
+        for (let c = 0; c < SIZE; c++) {
+          const k = r * SIZE + c;
+          if (!g[k] && !temp.has(k)) { full = false; break; }
+          if (g[k] === ICE) ice = true;
+        }
+        if (full) (ice ? freezeRows : willRows).add(r);
       }
       for (let c = 0; c < SIZE; c++) {
-        let full = true;
-        for (let r = 0; r < SIZE; r++) { const k = r * SIZE + c; if (!g[k] && !temp.has(k)) { full = false; break; } }
-        if (full) willCols.add(c);
+        let full = true, ice = false;
+        for (let r = 0; r < SIZE; r++) {
+          const k = r * SIZE + c;
+          if (!g[k] && !temp.has(k)) { full = false; break; }
+          if (g[k] === ICE) ice = true;
+        }
+        if (full) (ice ? freezeCols : willCols).add(c);
       }
     }
-    return { anchor, piece, valid, willRows, willCols };
+    return { anchor, piece, valid, willRows, willCols, freezeRows, freezeCols };
   }
 
   drawDrag() {
@@ -769,6 +875,15 @@ export class GameView {
         for (const c of ghost.willCols) ctx.fillRect(this.boardX + c * cell, this.boardY, cell, this.boardSize);
         ctx.globalAlpha = 1;
       }
+      // 揃うけれど氷で止まる線は水色で。「白く光ったのに消えない」を防ぐ。
+      if (valid && ghost.freezeRows && (ghost.freezeRows.size || ghost.freezeCols.size)) {
+        const pulse = 0.18 + 0.12 * Math.sin(this.time * 8);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#9be3ff';
+        for (const r of ghost.freezeRows) ctx.fillRect(this.boardX, this.boardY + r * cell, this.boardSize, cell);
+        for (const c of ghost.freezeCols) ctx.fillRect(this.boardX + c * cell, this.boardY, cell, this.boardSize);
+        ctx.globalAlpha = 1;
+      }
     }
 
     // floating piece above finger
@@ -790,7 +905,8 @@ export class GameView {
 
   drawDying() {
     const { ctx, cell } = this;
-    const skin = getSkin(this.skinId);
+    // 消えるのは盤面のマスなので、ヒビ(11)が混ざりうる ── boardSkin を使う。
+    const skin = boardSkin(this.skinId);
     for (const d of this.dying) {
       const p = (this.time - d.t) / 0.35;
       const x = this.boardX + d.c * cell, y = this.boardY + d.r * cell;
@@ -803,7 +919,7 @@ export class GameView {
     for (const f of this.flashes) {
       const p = (this.time - f.t) / 0.4;
       ctx.globalAlpha = (1 - p) * 0.5;
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = f.color || '#ffffff';   // 氷で止まった線は水色（既定は従来どおり白）
       if (f.kind === 'row') ctx.fillRect(this.boardX, this.boardY + f.index * cell, this.boardSize, cell);
       else ctx.fillRect(this.boardX + f.index * cell, this.boardY, cell, this.boardSize);
     }
@@ -931,7 +1047,7 @@ export class MiniBoard {
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const cell = Math.min(rect.width, rect.height) / SIZE;
-    const skin = getSkin(this.skinId);
+    const skin = boardSkin(this.skinId);
     ctx.clearRect(0, 0, rect.width, rect.height);
     ctx.fillStyle = 'rgba(255,255,255,0.04)';
     for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {

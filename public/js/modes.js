@@ -1,7 +1,11 @@
 // Game mode controllers: Solo, VS AI, Online (1v1 / 2v2 team / custom rooms),
 // plus the admin-only autopilot.
-import { Engine, shapeSize, Rng, SHAPES } from './engine.js';
+import { Engine, shapeSize, Rng, SHAPES, ICE, ICE_CRACKED } from './engine.js';
 import { GameView, MiniBoard } from './game.js';
+// 🧩 工房のエディタが盤面・ピースを DOM の小さなグリッドで描くのに使う。
+// engine.grid のマス値を canvas に描く経路は game.js の boardSkin() が担当
+// （PALETTE には 10/11 が無いので、そちらへ渡してはいけない）。
+import { PALETTE } from './themes.js';
 import { chooseMove, AI_LEVELS, planImmortalMove } from './ai.js';
 import { audio } from './audio.js';
 import { session, api, refreshMe, BattleClient } from './net.js';
@@ -2275,7 +2279,18 @@ const BOSS_MOVES = {
   quake:       { name: '大地震',         nameEn: 'Quake',          telegraph: false },
   curse_hand:  { name: '呪縛',           nameEn: 'Hand Curse',     telegraph: false },
   curse_hand2: { name: '二重呪縛',       nameEn: 'Double Curse',   telegraph: false },
+  // 🧊 ボス専用技（server/catalog.js の BOSS_TECHNIQUES）。名前と文言は
+  // m.boss.techs.freeze から引くが、技を持たないボスに freeze が回ってきても
+  // 落ちないよう既定値をここにも持たせておく。
+  freeze:      { name: '絶対零度',       nameEn: 'Absolute Zero',  telegraph: true, ice: true },
 };
+
+// そのボスが持っている専用技の定義。持っていなければ null。
+// 参照の形は仕様書どおり（m.boss.techs は frost 以外 undefined）。
+function bossTech(m, moveId) {
+  const techs = m && m.boss && m.boss.techs;
+  return (techs && techs[moveId]) || null;
+}
 
 function bossAtkMs(m) {
   return m.boss.atkSec * 1000 * (m.phase2 ? (m.boss.atk2 || 0.75) : 1);
@@ -2302,6 +2317,15 @@ function bossMoveCells(m, moveId) {
     for (let i = 0; i < n; i++) picked.push(cols.splice((Math.random() * cols.length) | 0, 1)[0]);
     return empty.filter(k => picked.includes(k % 8));
   }
+  // 🧊 絶対零度: 空きマスから tech.cells（第二形態は cells2）個を抽選。
+  // お邪魔弾と同じ「ばらまき」だが、数はボスの atkCells ではなく技の定義。
+  if (moveId === 'freeze') {
+    const tech = bossTech(m, 'freeze');
+    const want = Math.max(1, (m.phase2 ? (tech && tech.cells2) : (tech && tech.cells)) || 5);
+    const out = [];
+    for (let i = 0; i < want && empty.length; i++) out.push(empty.splice((Math.random() * empty.length) | 0, 1)[0]);
+    return out;
+  }
   const n = Math.max(1, m.boss.atkCells + (m.atkCellsDelta || 0));
   const out = [];
   for (let i = 0; i < n && empty.length; i++) out.push(empty.splice((Math.random() * empty.length) | 0, 1)[0]);
@@ -2324,7 +2348,14 @@ function bossBeginMove(m) {
   m.nextAtk = Date.now() + bossTelegraphMs(m);
   view.dangerCells = new Set(cells);
   audio.countdown(false);
-  toast(t(`⚠️ ${m.boss.emoji} ${def.name}の予告！赤マスをラインで切れ！`, `⚠️ ${def.nameEn} incoming! Cut the red cells with a line!`), 'err', 1700);
+  // 専用技は自前の予告文言を持っている（絵文字は文言側に含まれるので、
+  // 呼び出し側で付けるのはボスの顔だけ ── 仕様書の取り決めどおり）。
+  const tech = bossTech(m, moveId);
+  if (tech && tech.telegraphMsg) {
+    toast(t(`${m.boss.emoji} ${tech.telegraphMsg}`, `${m.boss.emoji} ${tech.telegraphMsgEn || tech.telegraphMsg}`), 'err', 1700);
+  } else {
+    toast(t(`⚠️ ${m.boss.emoji} ${def.name}の予告！赤マスをラインで切れ！`, `⚠️ ${def.nameEn} incoming! Cut the red cells with a line!`), 'err', 1700);
+  }
 }
 
 function bossInstantMove(m, moveId) {
@@ -2383,9 +2414,18 @@ function bossImpact(m) {
     toast(t('🛡️ 絶対防御が攻撃を無効化！', '🛡️ Absolute Guard nullified the attack!'), 'ok', 1500);
     return;
   }
+  // 🧊 絶対零度だけは、お邪魔(9)ではなく氷結ブロックを書き込む。
+  // iceHp は engine の2段階（ICE → ICE_CRACKED → 消滅）にそのまま対応する:
+  //   iceHp>=2 → ICE(10) を置く（ライン2回で割れる）
+  //   iceHp<=1 → ICE_CRACKED(11) を置く（ライン1回で消える＝通常ブロック相当）
+  // catalog の cellValue（シアン5）は、氷が engine/描画に無かった頃の
+  // 代替色なので使わない ── 10/11 は game.js の boardSkin が氷として描く。
+  const tech = bossTech(m, pa.moveId);
+  const isFreeze = pa.moveId === 'freeze';
+  const fill = isFreeze ? ((tech && tech.iceHp <= 1) ? ICE_CRACKED : ICE) : 9;
   const landed = [];
   for (const k of pa.cells) {
-    if (!e.grid[k]) { e.grid[k] = 9; landed.push(k); }
+    if (!e.grid[k]) { e.grid[k] = fill; landed.push(k); }
   }
   m.garbageTaken = (m.garbageTaken || 0) + landed.length;
   audio.bossAttack();
@@ -2394,11 +2434,18 @@ function bossImpact(m) {
   for (const k of landed) {
     const r = (k / 8) | 0, c = k % 8;
     view.spawnAnim.set(k, view.time);
-    view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
+    // 氷は水色（PALETTE の 5）の粒で弾けさせる。burstCell は色 index しか
+    // 受けないので 10/11 は渡さない（PALETTE に無い値で落ちるのを避ける）。
+    view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, isFreeze ? 5 : 9, 'fx_default');
   }
-  view.shake = 12;
+  view.shake = isFreeze ? ((tech && tech.shake) || 16) : 12;
+  if (isFreeze) view.screenFlash = Math.max(view.screenFlash || 0, (tech && tech.flash) || 0.35);
   const def = BOSS_MOVES[pa.moveId] || BOSS_MOVES.garbage;
-  toast(t(`${m.boss.emoji} ${def.name}が直撃！`, `${m.boss.emoji} ${def.nameEn} hits!`), 'err', 1300);
+  if (isFreeze && tech && tech.hitMsg) {
+    toast(t(`${m.boss.emoji} ${tech.hitMsg}`, `${m.boss.emoji} ${tech.hitMsgEn || tech.hitMsg}`), 'err', 1800);
+  } else {
+    toast(t(`${m.boss.emoji} ${def.name}が直撃！`, `${m.boss.emoji} ${def.nameEn} hits!`), 'err', 1300);
+  }
   // 直書きで埋まった行・列はここで消す。addGarbage() と違って engine を
   // 通らないので、これが無いと満杯の行が居座ったままになる ──
   // ブレスは「ある行の空きマス全部」、レーザーは「ある列の空きマス全部」を
@@ -2424,6 +2471,11 @@ function bossTryCut(m, result) {
   m.pendingAtk = null;
   view.dangerCells = null;
   m.cuts = (m.cuts || 0) + 1;
+  // 専用技を切ったときは、その技の「切った」文言を出す。
+  const cutTech = bossTech(m, pa.moveId);
+  if (cutTech && cutTech.cutMsg) {
+    toast(t(`${m.boss.emoji} ${cutTech.cutMsg}`, `${m.boss.emoji} ${cutTech.cutMsgEn || cutTech.cutMsg}`), 'ok', 1800);
+  }
   m.nextAtk = Date.now() + Math.max(2500, bossAtkMs(m) - bossTelegraphMs(m));
   const dmg = Math.round((200 + m.maxHp * 0.018) * (m.counterMult || 1));
   m.hp -= dmg;
@@ -3145,6 +3197,18 @@ class DailyMode {
     this.practice = attempt
       ? !!attempt.practice
       : (!!info.played || (!session.user && !!dailyLocalRecord(info.day)));
+    // 🎞 I16: この回の着手ログ。結果送信に replay として同梱する。
+    this.moves = [];
+    // 📼 I1: 隣で走らせる残像（{ replay, username, score } / 無ければ null）。
+    // 既定は null なので、従来のデイリーの挙動は1ミリも変わらない。
+    this.ghost = (attempt && attempt.ghost) || null;
+  }
+
+  // 着手を1つ記録する。サーバーの上限（200手）を超えたぶんは捨てる
+  // ── 送っても丸ごと破棄されるだけなので、送信量を無駄に増やさない。
+  recordMove(index, row, col) {
+    if (this.moves.length >= DAILY_REPLAY_MAX_MOVES) return;
+    this.moves.push({ h: index | 0, r: row | 0, c: col | 0, t: Math.max(0, Date.now() - this.startedAt) });
   }
 
   start() {
@@ -3156,6 +3220,7 @@ class DailyMode {
     $('#hudTimer').classList.remove('hidden');
     showItemBar(false);   // fair play: no boosters / ultimates
     this.startedAt = Date.now();
+    this.moves = [];
     const v = getView();
     setModeTheme({ ...equippedTheme(), boardId: 'board_sunset' });
     this.engine = new Engine(this.info.seed);
@@ -3163,7 +3228,11 @@ class DailyMode {
     v.setEngine(this.engine);
     v.inputLocked = false;
     v.onPlace = () => this.onPlace();
+    // 🎞 着手の記録だけを取る「見張り」。false を返すので、game.js は
+    // これまでどおり自分で place() → applyResult() を続ける（進行は不変）。
+    v.onIntentPlace = (i, r, c) => { this.recordMove(i, r, c); return false; };
     v.onGameOver = () => this.finish();
+    if (this.ghost) this.startGhostRace();
     this.updateHud();
     updateRerollHud(this.engine);
     updateAutoBtn();
@@ -3191,6 +3260,7 @@ class DailyMode {
     const tm = $('#hudTimer');
     tm.textContent = t(`残り${this.piecesLeft()}個`, `${this.piecesLeft()} left`);
     tm.classList.toggle('urgent', this.piecesLeft() <= 5);
+    if (this.ghost) this.updateGhostHud();
   }
 
   onPlace() {
@@ -3217,6 +3287,9 @@ class DailyMode {
       day: this.info.day,
       // 開始時に予約した挑戦の証。記録回はこれが一致したときだけ確定する。
       ...(this.attemptId ? { attemptId: this.attemptId } : {}),
+      // 🎞 I16 ゴーストリプレイ。報酬計算には一切渡らない追加欄なので、
+      // 壊れていても・送らなくても従来どおり動く（seed はサーバーが上書きする）。
+      ...(this.moves.length ? { replay: { seed: this.info.seed, moves: this.moves, score: e.score } } : {}),
     });
     // 送信そのものが失敗した回。サーバーには開始時の予約（0点）が残ったまま
     // なので、記録もされないし今日はもう挑戦し直せない ── ここを「練習」と
@@ -3256,6 +3329,7 @@ class DailyMode {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-ghost" id="rGhosts">${t('👻 みんなの走り', '👻 Ghosts')}</button>
         <button class="btn btn-ghost" id="rRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
         <button class="btn btn-daily" id="rAgain">${t('もう一度（練習）', 'Again (practice)')}</button>
       </div>`, { dismissable: false });
@@ -3264,6 +3338,9 @@ class DailyMode {
       closeModal(); endToMenu();
       if (window.__bbaOpenLeaderboard) window.__bbaOpenLeaderboard('daily');
     };
+    // 👻 その日のTOP3のリプレイ。走り終えた直後がいちばん見たい瞬間。
+    const gb = m.querySelector('#rGhosts');
+    if (gb) gb.onclick = () => { closeModal(); this.destroy(); endToMenu(); openDailyReplays(this.info.day); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startDaily({ ...this.info, played: true }); };
   }
 
@@ -3273,7 +3350,90 @@ class DailyMode {
     if (this.ended) { closeModal(); endToMenu(); return; }
     this.finish();
   }
-  destroy() { this.ended = true; }
+
+  // ---- 📼 I1 残像レース（this.ghost があるときだけ動く） ----------------
+  //
+  // 隣のミニ盤面で、選んだ人の走りを実時間で再生する。相手は録画なので
+  // 干渉は一切なく、こちらの盤面・シード・お題はふだんのデイリーのまま。
+
+  startGhostRace() {
+    const g = this.ghost;
+    const rep = g && g.replay;
+    if (!rep || !Array.isArray(rep.moves) || !rep.moves.length) { this.ghost = null; return; }
+    // 残像の盤面は「同じ種・同じお題」で作り直す。engine.js は決定的なので
+    // これだけで録画どおりに再現できる。
+    this.ghostEngine = new Engine(this.info.seed);
+    applyDailyModifier(this.ghostEngine, this.info.modifier);
+    this.ghostIdx = 0;
+    this.ghostScore = 0;
+    const panel = $('#oppPanel');
+    panel.classList.remove('hidden');
+    const cards = $('#oppCards');
+    cards.classList.remove('strip', 'compact');
+    cards.innerHTML = `
+      <div class="opp-card" data-slot="ghost">
+        <canvas></canvas>
+        <div class="opp-name">👻 ${escapeHtml(g.username || t('残像', 'Ghost'))}</div>
+        <div class="opp-score" id="ghostScore">0</div>
+        <div class="opp-combo" id="ghostDiff"></div>
+      </div>`;
+    const btn = $('#btnOppDensity');
+    if (btn) btn.classList.add('hidden');
+    this.ghostBoard = new MiniBoard(cards.querySelector('canvas'));
+    this.ghostBoard.setGrid(this.ghostEngine.snapshot());
+    getView().resize();
+    this.ghostTimer = setTimeout(() => this.ghostStep(), Math.max(200, rep.moves[0].t || 600));
+    toast(t(`📼 ${g.username || '残像'} の走りと同時対走！`, `📼 Racing ${g.username || 'the ghost'}'s replay!`), 'announce', 2600);
+  }
+
+  ghostStep() {
+    if (this.ended || !this.ghostEngine) return;
+    const rep = this.ghost.replay;
+    const mv = rep.moves[this.ghostIdx];
+    if (!mv) { this.ghostFinished = true; this.updateGhostHud(); return; }
+    // 録画が壊れていても止まらない。打てない手が来たらそこで再生を終える。
+    this.ghostEngine.over = false;
+    const res = this.ghostEngine.place(mv.h, mv.r, mv.c);
+    if (!res) { this.ghostFinished = true; this.updateGhostHud(); return; }
+    this.ghostScore = this.ghostEngine.score;
+    this.ghostIdx++;
+    if (this.ghostBoard) this.ghostBoard.setGrid(this.ghostEngine.snapshot());
+    this.updateGhostHud();
+    const next = rep.moves[this.ghostIdx];
+    // 録画の t（開始からの経過ms）どおりの間合いで進める。極端な間は詰める。
+    const wait = next ? Math.min(4000, Math.max(160, (next.t || 0) - (mv.t || 0))) : 0;
+    if (next) this.ghostTimer = setTimeout(() => this.ghostStep(), wait);
+    else { this.ghostFinished = true; this.updateGhostHud(); }
+  }
+
+  updateGhostHud() {
+    const sc = $('#ghostScore');
+    if (sc) sc.textContent = fmt(this.ghostScore || 0);
+    const df = $('#ghostDiff');
+    if (!df) return;
+    const diff = (this.engine ? this.engine.score : 0) - (this.ghostScore || 0);
+    df.textContent = diff >= 0
+      ? t(`+${fmt(diff)} リード`, `+${fmt(diff)} ahead`)
+      : t(`${fmt(diff)} 差`, `${fmt(diff)} behind`);
+    df.style.color = diff >= 0 ? '#6bd97b' : '#ff6b6b';
+  }
+
+  stopGhostRace() {
+    clearTimeout(this.ghostTimer);
+    this.ghostTimer = null;
+    this.ghostEngine = null;
+    this.ghostBoard = null;
+    const cards = $('#oppCards');
+    if (cards && cards.querySelector('.opp-card[data-slot="ghost"]')) cards.innerHTML = '';
+    $('#oppPanel').classList.add('hidden');
+  }
+
+  destroy() {
+    this.ended = true;
+    this.stopGhostRace();
+    // 着手の見張りを次のモードへ持ち越さない。
+    if (view) view.onIntentPlace = null;
+  }
 }
 
 // 挑戦の予約。ログイン中で、まだ今日の記録が無い回だけサーバーに登録する。
@@ -3297,7 +3457,9 @@ async function reserveDailyAttempt(info) {
   return { practice: !!(res && res.practice), attemptId: (res && res.attemptId) || null };
 }
 
-export async function startDaily(info) {
+// opts.ghost = { username, score, replay } を渡すと 📼残像レース になる。
+// 省略時は従来どおりのデイリー（挙動は完全に同じ）。
+export async function startDaily(info, opts = {}) {
   if (dailyStarting) return;   // 「挑戦する」の二度押しで1日を2回消費させない
   dailyStarting = true;
   try {
@@ -3326,7 +3488,7 @@ export async function startDaily(info) {
     }
     if (!attempt) { toast(t('デイリーを開始できませんでした', 'Could not start the Daily'), 'err'); return; }
     if (currentMode) currentMode.destroy();
-    currentMode = new DailyMode(cur, attempt);
+    currentMode = new DailyMode(cur, { ...attempt, ghost: opts.ghost || null });
     window.__bbaMode = currentMode;
     currentMode.start();
   } finally {
@@ -4287,6 +4449,9 @@ class OnlineMode extends VersusBase {
       .on('error', m => { if (m.error) toast(trServer(m.error), 'err', 3000); })
       .on('coop_state', msg => this.onCoopState(msg))
       .on('coop_reject', msg => this.onCoopReject(msg))
+      // 🚩 陣取りデュエル（協力プレイと同じサーバー権威の1盤面）
+      .on('land_state', msg => this.onLandState(msg))
+      .on('land_reject', msg => this.onLandReject(msg))
       .on('coop_partner_left', () => toast(t('相棒が離脱しました。残りはサーバーが代打します！', 'Your partner left — the server will play their turns!'), 'err', 4000))
       .on('emote', msg => this.showEmote(msg.slot, msg.emoji))
       .on('tourney_state', msg => this.onTourneyState(msg))
@@ -4435,7 +4600,12 @@ class OnlineMode extends VersusBase {
 
     $('#roomPlayers').innerHTML = msg.players.map((p, i) => `
       <div class="room-player ${p.isYou ? 'me' : ''}">
-        <span class="rp-team">${(msg.settings.mode || (msg.settings.team ? 'team' : 'duel')) === 'coop' ? '🤝' : msg.settings.team ? (i < 2 ? '🟦' : '🟥') : '⚔️'}</span>
+        <span class="rp-team">${(() => {
+          const rm = msg.settings.mode || (msg.settings.team ? 'team' : 'duel');
+          if (rm === 'coop') return '🤝';
+          if (rm === 'land') return '🚩';
+          return msg.settings.team ? (i < 2 ? '🟦' : '🟥') : '⚔️';
+        })()}</span>
         <span class="rp-name">${escapeHtml(p.name)}${p.isYou ? t('（あなた）', ' (you)') : ''}</span>
         ${p.isHost ? `<span class="rp-host">${t('👑 ホスト', '👑 Host')}</span>` : ''}
       </div>`).join('');
@@ -4449,10 +4619,11 @@ class OnlineMode extends VersusBase {
         ${[60, 120, 180].map(d => `<button data-v="${d}" ${s.duration === d ? 'class="active"' : ''} ${dis}>${d / 60}${t('分', 'min')}</button>`).join('')}
       </div></div>
       <div class="settings-row"><label>${t('👥 モード', '👥 Mode')}</label><div class="seg" data-rs="mode">
-        ${[['duel', '1v1'], ['team', t('2v2チーム', '2v2 Team')], ['coop', t('🤝 協力', '🤝 Co-op')]].map(([v, l]) =>
+        ${[['duel', '1v1'], ['team', t('2v2チーム', '2v2 Team')], ['coop', t('🤝 協力', '🤝 Co-op')], ['land', t('🚩 陣取り', '🚩 Land Grab')]].map(([v, l]) =>
           `<button data-v="${v}" ${mode === v ? 'class="active"' : ''} ${dis}>${l}</button>`).join('')}
       </div></div>
       ${mode === 'coop' ? `<p class="muted center" style="font-size:11px">${t('🤝 2人で1つの盤面を交互に操作。ボット補充ONなら1人でも遊べます', '🤝 Two players share one board, taking turns. Bot fill lets you play solo')}</p>` : ''}
+      ${mode === 'land' ? `<p class="muted center" style="font-size:11px">${t('🚩 2人で1つの盤面を交互に操作。消したライン8マスが自分の色になり、領土が広いほうが勝ち（合言葉ルーム専用）', '🚩 Two players share one board, taking turns. Every line you clear paints 8 squares your colour — most territory wins (code rooms only)')}</p>` : ''}
       <div class="settings-row"><label>${t('🤖 ボット補充', '🤖 Fill with bots')}</label><input type="checkbox" id="rsBotFill" ${s.botFill ? 'checked' : ''} ${dis}></div>
       <div class="settings-row"><label>${t('💪 ボットの強さ', '💪 Bot strength')}</label><div class="seg" data-rs="botLevel">
         ${[['random', '🎲'], ['easy', t('弱', 'Easy')], ['normal', t('中', 'Mid')], ['hard', t('強', 'Hard')], ['oni', t('鬼', 'Oni')]].map(([v, l]) =>
@@ -5018,6 +5189,189 @@ class OnlineMode extends VersusBase {
     fill.classList.toggle('urgent', remain < 4000 && this.coopTurn === this.mySlot);
   }
 
+  // ---- 🚩 陣取りデュエル (mode 'land') ------------------------------------
+  //
+  // 協力プレイと同じ「サーバー権威の1盤面・交互の手番」だが、消したライン
+  // 8マスがそのまま自分の領土になる（相手の色は上塗りできる）。勝敗は
+  // 領土数 → 同数ならスコア。判定はすべてサーバーが持っているので、こちらは
+  // ミラー Engine に確定手を再生して描き、領土を色で重ねるだけ。
+
+  setupLand(msg) {
+    this.isLand = true;
+    const opp = msg.players.find(p => !p.isYou);
+    this.mySlot = msg.you.slot;
+    this.myOwner = msg.you.slot + 1;    // owner の値は 0=中立 / 1=slot0 / 2=slot1
+    this.oppName = opp ? opp.name : '???';
+    this.landTurn = 0;
+    this.landTurnRemain = 0;
+    this.landTurnMs = 12000;
+    this.landCounts = [0, 0];
+    this.landScores = [0, 0];
+    this.landEndsIn = (msg.duration || MATCH_SECONDS) * 1000;
+
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
+    $('#bossPanel').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    $('#coopBar').classList.remove('hidden');
+    showItemBar(false);   // 共有盤面: アイテムも奥義も無し
+
+    const v = getView();
+    v.setTheme(equippedTheme());
+    this.engine = new Engine(msg.seed);
+    v.setEngine(this.engine);
+    v.inputLocked = true;
+    v.onPlace = null;
+    v.onGameOver = () => { /* 終わりを決めるのはサーバー */ };
+    // 置く操作はすべてサーバーへ投げる。確定手は land_state で返ってくる。
+    v.onIntentPlace = (index, row, col) => {
+      if (this.ended) return true;
+      if (this.landTurn !== this.mySlot) {
+        audio.error();
+        toast(t(`いまは${this.oppName}さんの番です`, `It's ${this.oppName}'s turn`), 'err', 1200);
+        return true;
+      }
+      this.client.send({ type: 'land_place', index, row, col });
+      v.inputLocked = true;          // サーバーの返事が来るまで固定
+      return true;
+    };
+    // 手札もサーバーが持ち主。協力プレイと同じくリロールを二重に封じる。
+    $('#btnReroll').classList.add('hidden');
+    this.engine.rerolls = 0;
+    this.engine.reroll = () => false;
+    this.landOverlay = new CellOverlay();
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('battle');
+    this.updateLandHud();
+
+    const emoteBtn = $('#btnEmote');
+    emoteBtn.classList.remove('hidden');
+    emoteBtn.onclick = () => this.toggleEmotePicker();
+
+    toast(t(`🚩 ${this.oppName}さんと陣取り！ ラインを消したマスがあなたの色になる ── 広いほうが勝ち！`,
+      `🚩 Land Grab vs ${this.oppName}! Every square you clear turns your colour — most territory wins!`), 'announce', 4200);
+
+    countdownOverlay(msg.countdown || 3, afterCountdown(this, () => {
+      if (this.ended || currentMode !== this) return;
+      this.landStarted = true;
+      this.applyLandTurn();
+      this.landInt = setInterval(() => this.tickLandBar(), 120);
+    }), audio);
+  }
+
+  onLandState(msg) {
+    if (this.ended || !this.engine || !this.isLand) return;
+    // 確定した1手をミラー盤面に再生する（協力プレイとまったく同じ作法）。
+    if (msg.move) {
+      const result = this.engine.place(msg.move.index, msg.move.row, msg.move.col);
+      if (result) {
+        getView().applyResult(result);
+        if (msg.move.slot === this.mySlot && msg.move.auto) {
+          audio.error();
+          toast(t('⏰ 時間切れ ── かわりに置きました', '⏰ Out of time — the server placed it for you'), 'err', 2600);
+        }
+        if (msg.move.took) {
+          const mine = msg.move.slot === this.mySlot;
+          const v = getView();
+          v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.24,
+            t(`🚩 ${msg.move.took}マス獲得`, `🚩 +${msg.move.took} squares`),
+            mine ? '#6bd97b' : '#ff6b6b', 1.5);
+          if (mine) audio.coin();
+        }
+      }
+    }
+    // 権威の再同期 — ズレへの保険（協力プレイと同じ）。
+    if (Array.isArray(msg.grid)) {
+      const mine = this.engine.snapshot();
+      if (msg.grid.some((v, i) => v !== mine[i])) {
+        for (let i = 0; i < msg.grid.length; i++) this.engine.grid[i] = msg.grid[i];
+        console.warn('[land] board resynced from server');
+      }
+    }
+    this.applyCoopHand(msg.hand);   // 手札の作り直しは協力プレイと共通
+    if (Array.isArray(msg.owner)) this.paintLand(msg.owner);
+    if (Array.isArray(msg.counts)) this.landCounts = msg.counts;
+    if (Array.isArray(msg.scores)) {
+      this.landScores = msg.scores;
+      this.engine.score = msg.scores[this.mySlot] || 0;
+    }
+    this.landTurn = msg.turn;
+    this.landTurnRemain = msg.turnRemain || 0;
+    this.landTurnMs = msg.turnMs || 12000;
+    this.landTurnAt = Date.now();
+    this.landEndsIn = msg.endsIn || 0;
+    this.landEndsAt = Date.now() + this.landEndsIn;
+    this.applyLandTurn();
+    this.updateLandHud();
+  }
+
+  onLandReject(msg) {
+    if (this.ended || !this.engine || !this.isLand) return;
+    if (Array.isArray(msg.grid)) {
+      for (let i = 0; i < msg.grid.length; i++) this.engine.grid[i] = msg.grid[i];
+    }
+    if (Array.isArray(msg.owner)) this.paintLand(msg.owner);
+    if (Array.isArray(msg.scores)) this.landScores = msg.scores;
+    this.applyCoopHand(msg.hand);
+    this.landTurn = msg.turn;
+    this.applyLandTurn();
+    audio.putback();
+    // 無言で盤面が戻ると「バグった」ようにしか見えない。理由を出す。
+    toast(t('その手は通りませんでした（盤面を合わせ直しました）',
+      'That move did not go through — the board has been resynced'), 'err', 2400);
+  }
+
+  // 領土を盤面の上に色で重ねる。自分＝青、相手＝赤。
+  paintLand(owner) {
+    if (!this.landOverlay) return;
+    const marks = new Map();
+    for (let k = 0; k < 64; k++) {
+      const o = owner[k] | 0;
+      if (!o) continue;
+      marks.set(k, o === this.myOwner ? 'own_me' : 'own_foe');
+    }
+    this.landOverlay.set(marks);
+  }
+
+  applyLandTurn() {
+    if (!this.landStarted || this.ended) return;
+    getView().inputLocked = this.landTurn !== this.mySlot;
+  }
+
+  updateLandHud() {
+    if (!this.engine) return;
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
+    const mineCount = this.landCounts[this.mySlot] || 0;
+    const foeCount = this.landCounts[1 - this.mySlot] || 0;
+    $('#hudSub').textContent = t(`🚩 あなた ${mineCount} ・ ${this.oppName} ${foeCount}`,
+      `🚩 You ${mineCount} ・ ${this.oppName} ${foeCount}`);
+    const tm = $('#hudTimer');
+    const left = Math.max(0, Math.ceil((this.landEndsAt ? this.landEndsAt - Date.now() : this.landEndsIn) / 1000));
+    tm.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    tm.classList.toggle('urgent', left <= 15);
+    const mine = this.landTurn === this.mySlot;
+    const label = $('#coopTurnLabel');
+    label.textContent = mine
+      ? t('🎯 あなたの番！', '🎯 Your turn!')
+      : t(`⏳ ${this.oppName}さんの番…`, `⏳ ${this.oppName} is thinking…`);
+    label.classList.toggle('mine', mine);
+  }
+
+  tickLandBar() {
+    if (this.ended) return;
+    const total = this.landTurnMs || 12000;
+    const elapsed = Date.now() - (this.landTurnAt || Date.now());
+    const remain = Math.max(0, (this.landTurnRemain || 0) - elapsed);
+    const fill = $('#coopTurnFill');
+    fill.style.width = `${Math.max(0, Math.min(100, (remain / total) * 100))}%`;
+    fill.classList.toggle('urgent', remain < 4000 && this.landTurn === this.mySlot);
+    this.updateLandHud();
+  }
+
   onMatchFound(msg) {
     // 「敗退表示のまま次のラウンドが来た」回だけ、下の2つのガードを飛び越える。
     //
@@ -5049,6 +5403,7 @@ class OnlineMode extends VersusBase {
     this.isTeam = msg.mode === 'team';
     this.isRaid = msg.mode === 'raid';
     if (msg.mode === 'coop') { this.setupCoop(msg); return; }
+    if (msg.mode === 'land') { this.setupLand(msg); return; }
 
     const others = msg.players.filter(p => !p.isYou).map(p => ({
       slot: p.slot,
@@ -5350,6 +5705,7 @@ class OnlineMode extends VersusBase {
     this.ended = true;
     clearTimeout(this.resultTimeout);
     clearInterval(this.stateInt);
+    clearInterval(this.landInt);
     this.stopTimer();
     getView().inputLocked = true;
     if (msg.user) { session.user = msg.user; updateTopbar(); }
@@ -5398,6 +5754,17 @@ class OnlineMode extends VersusBase {
         .sort((a, b) => (a.slot === msg.you.slot ? -1 : b.slot === msg.you.slot ? 1 : 0))
         .map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? t('あなた', 'You') : escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`)
         .join('');
+    }
+
+    // 🚩 陣取り: 勝敗を決めたのは点ではなく領土なので、その内訳を先頭に出す。
+    if (msg.land && Array.isArray(msg.land.counts)) {
+      const mineN = msg.land.counts[msg.you.slot] || 0;
+      const foeN = msg.land.counts[1 - msg.you.slot] || 0;
+      scoreRows = `
+        <div class="rs-row"><span>${t('🚩 あなたの領土', '🚩 Your territory')}</span><b>${mineN}</b></div>
+        <div class="rs-row"><span>${t('🚩 相手の領土', '🚩 Their territory')}</span><b>${foeN}</b></div>
+        <div class="rs-row"><span>${t('置いたピース', 'Pieces placed')}</span><b>${fmt(msg.land.moves || 0)}</b></div>
+        ${scoreRows}`;
     }
 
     const myRating = msg.user && msg.user.stats ? msg.user.stats.rating : null;
@@ -5466,6 +5833,8 @@ class OnlineMode extends VersusBase {
     this.stopTimer();
     clearInterval(this.stateInt);
     clearInterval(this.coopInt);
+    clearInterval(this.landInt);
+    if (this.landOverlay) { this.landOverlay.destroy(); this.landOverlay = null; }
     clearTimeout(this.resultTimeout);
     const dl = $('#zeroDeal'); if (dl) dl.remove();
     $('#bossPanel').classList.add('hidden');
@@ -6332,6 +6701,11 @@ class ZeroMode extends VersusBase {
       return;
     }
 
+    // 盤面同期を開始する。カウントダウン中から送っておくと、最初の1手を
+    // 斬ったときにもサーバーが「直前の盤面」を1枚持っている状態になる。
+    this.pushState();
+    this.every(850, () => this.pushState());
+
     countdownOverlay(3, afterCountdown(this, () => {
       if (this.ended || currentMode !== this) return;
       v.inputLocked = false;
@@ -6463,9 +6837,31 @@ class ZeroMode extends VersusBase {
     });
   }
 
+  // 👁️ U18 / U29 / C22: 盤面と点をサーバーへ同期する。
+  //
+  // これを送らないと、サーバー側の3つの仕組みが「安全側の何もしない」まま
+  // 眠り続ける ── 斬った申告は無検証で通り、人間の点は段のHPに入らず、
+  // 赤マスは埋まっているマスからも選ばれてしまう。
+  // 送るのは ①1手置くごと ②850ms ごと の2経路。
+  // レート制限は10秒で40回なので、850ms間隔（約11回）＋着手ぶんで十分収まる。
+  pushState() {
+    if (this.ended || !this.client || !this.engine) return;
+    try {
+      this.client.send({ type: 'zero_state', grid: this.engine.snapshot(), score: this.engine.score });
+    } catch { /* 切れていれば次の周期で送り直せばよい */ }
+  }
+
+  onPlace(result) {
+    this.handlePlace(result);
+    // 同期は「斬った」申告の *あと* に送る。先に送ると、サーバーが裏づけに使う
+    // 直近の盤面が「線が消えた後」になり、消せる形だったのかが分からなくなる
+    // （赤マスはもともと空きマスに点くので、消えた後の盤面には手がかりが無い）。
+    this.pushState();
+  }
+
   // 置いた結果、赤マスを通るラインを消していたら「斬った」。
   // 判定はボス戦の予告技とまったく同じ形。
-  onPlace(result) {
+  handlePlace(result) {
     this.updateMyHud(this.engine);
     updateRerollHud(this.engine);
     // 🪧 今夜の的の列を縦に消したら杭が入る。
@@ -6917,6 +7313,7 @@ function endToMenu() {
   }
   if (view) view.stop();
   stopAutopilot();
+  stopTutorial();   // 🎓 コーチマークをメニューへ持ち越さない
   // どのモードでも、3-2-1 の途中で抜けるとオーバーレイだけがメニューの上に
   // 残っていた（countdownOverlay は中断できないため）。ここで必ず片付ける。
   clearIntroOverlays();
@@ -6933,6 +7330,10 @@ export function startSolo() {
   currentMode = new SoloMode();
   window.__bbaMode = currentMode;
   currentMode.start();
+  // 🎓 いちばん最初のソロだけ、盤面の上にガイドを重ねる（I17）。
+  // ソロ本体には一切触らない ── 監視は setInterval のポーリングだけで、
+  // engine / view のフックは奪わない。
+  maybeStartTutorial(currentMode);
 }
 
 export function startMeltdown() {
@@ -6996,3 +7397,1776 @@ export function cancelMatchmaking() {
 export { endToMenu };
 
 export { updateRerollHud, handleEngineOver, updateAutoBtn };
+
+// ===========================================================================
+// 🎓 I17 初回インタラクティブチュートリアル
+// ===========================================================================
+// 初めてソロを始めた人にだけ、実際に遊んでいる盤面の上へ吹き出しを重ねる。
+//
+// 設計の要点:
+//  ・ソロの進行に一切割り込まない。engine.place / view.onPlace / onIntentPlace は
+//    どれも奪わず、160ms のポーリングで「置いた／消した」を観測するだけにする。
+//    こうしておけば、途中でチュートリアルが例外を投げてもソロは無傷で続く。
+//  ・どのステップにも必ず「スキップ」がある（＝詰まない）。
+//  ・完了／スキップで localStorage の bba_tut_done を立て、二度と出さない。
+//    ゲームオーバーで終わったときは立てない（まだ何も学べていないため）。
+//  ・CSS は第1波の #tutTip / .tut-top / .tut-btns / .tut-pulse をそのまま使う。
+//    #tutTip は transform: translateX(-50%) を既定で持つので、inline の left は
+//    「吹き出しの中心をどこに置くか」を渡すこと（ここでは left は触らない）。
+// ---------------------------------------------------------------------------
+
+const TUT_KEY = 'bba_tut_done';
+
+export function tutorialDone() {
+  // localStorage が使えない環境（プライベートモード等）では「済み」扱いにして
+  // 出さない。出せないガイドを出そうとして例外を投げるより無害。
+  try { return localStorage.getItem(TUT_KEY) === '1'; } catch { return true; }
+}
+
+function markTutorialDone() {
+  try { localStorage.setItem(TUT_KEY, '1'); } catch { /* 保存できなくても進行は止めない */ }
+}
+
+// デバッグ／やり直し用。メニューから呼ぶ導線は別担当（main.js）。
+export function resetTutorial() {
+  try { localStorage.removeItem(TUT_KEY); } catch { /* ignore */ }
+}
+
+let activeTutorial = null;
+
+export function stopTutorial() {
+  if (activeTutorial) activeTutorial.teardown(false);
+  activeTutorial = null;
+}
+
+function maybeStartTutorial(mode) {
+  stopTutorial();   // 前の回の吹き出しを絶対に持ち越さない
+  if (tutorialDone()) return;
+  if (!mode || mode.mode !== 'solo') return;
+  const tut = new Tutorial(mode);
+  activeTutorial = tut;
+  // 盤面のレイアウト（resize）が終わってから測る。
+  setTimeout(() => { if (activeTutorial === tut) tut.start(); }, 420);
+}
+
+class Tutorial {
+  constructor(mode) {
+    this.mode = mode;
+    this.tip = null;
+    this.step = 0;
+    this.poll = null;
+    this.pulsed = [];
+    this.stopped = false;
+    this.basePlaced = 0;
+    this.baseLines = 0;
+    this.hintKey = '';
+  }
+
+  // ---- 出入り口 ----------------------------------------------------------
+
+  start() {
+    if (this.tip || this.stopped) return;
+    const e = this.mode && this.mode.engine;
+    if (!e) { this.teardown(false); return; }
+    this.basePlaced = e.piecesPlaced || 0;
+    this.baseLines = e.linesCleared || 0;
+    const tip = document.createElement('div');
+    tip.id = 'tutTip';
+    document.body.appendChild(tip);
+    this.tip = tip;
+    this.step = 0;
+    this.render();
+    this.poll = setInterval(() => this.tick(), 160);
+  }
+
+  teardown(completed) {
+    if (this.stopped) return;
+    this.stopped = true;
+    clearInterval(this.poll);
+    this.poll = null;
+    this.clearPulse();
+    if (view && view.glowCells) view.glowCells = null;
+    if (this.tip) { this.tip.remove(); this.tip = null; }
+    if (activeTutorial === this) activeTutorial = null;
+    if (completed) markTutorialDone();
+  }
+
+  skip() {
+    audio.click();
+    this.teardown(true);
+    toast(t('🎓 チュートリアルを閉じました', '🎓 Tutorial closed'), 'info', 1800);
+  }
+
+  finishAll() {
+    audio.coin();
+    this.teardown(true);
+    toast(t('🎓 準備完了！たくさん消して自己ベストを狙おう！',
+      '🎓 You are ready — clear lines and chase your best score!'), 'ok', 3000);
+  }
+
+  // ---- ハイライト --------------------------------------------------------
+
+  pulse(sel) {
+    const el = $(sel);
+    // 隠れているボタンに枠だけ付けても意味がないので、見えている物だけ。
+    if (!el || el.classList.contains('hidden')) return null;
+    el.classList.add('tut-pulse');
+    this.pulsed.push(el);
+    return el;
+  }
+
+  clearPulse() {
+    for (const el of this.pulsed) el.classList.remove('tut-pulse');
+    this.pulsed = [];
+  }
+
+  // 「あと1手で1列そろう」置き方をひとつ探す。engine.placements() をそのまま
+  // 使うので、盤面の判定はエンジンと必ず一致する。
+  lineHint() {
+    const e = this.mode && this.mode.engine;
+    if (!e || e.over) return null;
+    // 吹き出しは盤面の上端2行あたりを隠す位置に立つことがある。列（たて）は
+    // 必ず見えるので、隠れうる 0〜1 行目の「よこ」は次点あつかいにして、
+    // 見える候補があるならそちらを光らせる。
+    let fallback = null;
+    const take = h => {
+      if (h.kind === 'col' || h.line >= 2) return h;
+      if (!fallback) fallback = h;
+      return null;
+    };
+    for (let i = 0; i < 3; i++) {
+      const p = e.hand[i];
+      if (!p) continue;
+      for (const [row, col] of e.placements(p)) {
+        const filled = new Set();
+        for (const [dr, dc] of p.cells) filled.add((row + dr) * 8 + (col + dc));
+        const rows = new Set(), cols = new Set();
+        for (const [dr, dc] of p.cells) { rows.add(row + dr); cols.add(col + dc); }
+        for (const r of rows) {
+          let full = true;
+          for (let c = 0; c < 8; c++) { const k = r * 8 + c; if (!e.grid[k] && !filled.has(k)) { full = false; break; } }
+          if (full) { const h = take({ kind: 'row', line: r, row, col, index: i }); if (h) return h; }
+        }
+        for (const c of cols) {
+          let full = true;
+          for (let r = 0; r < 8; r++) { const k = r * 8 + c; if (!e.grid[k] && !filled.has(k)) { full = false; break; } }
+          if (full) { const h = take({ kind: 'col', line: c, row, col, index: i }); if (h) return h; }
+        }
+      }
+    }
+    return fallback;
+  }
+
+  // 対象の行／列のうち「すでに埋まっているマス」を光らせる。
+  // view.glowCells は drawBlocks が『マスに値があるとき』にだけ拾うので、
+  // 空マスを入れても描かれない（入れても無害だが、入れない方が誠実）。
+  showHint(hint) {
+    const e = this.mode && this.mode.engine;
+    const v = view;
+    if (!e || !v) return;
+    const cells = new Set();
+    for (let n = 0; n < 8; n++) {
+      const k = hint.kind === 'row' ? hint.line * 8 + n : n * 8 + hint.line;
+      if (e.grid[k]) cells.add(k);
+    }
+    v.glowCells = cells;
+  }
+
+  // ---- 本文 --------------------------------------------------------------
+
+  stepCount() { return 4; }
+
+  content() {
+    const n = this.step;
+    if (n === 0) {
+      return {
+        top: true,
+        title: t('🎓 ① まずは1手おいてみよう（1/4）', '🎓 1. Place your first block (1/4)'),
+        body: t('下の3つが「手札」。指でつかんで盤面へドラッグ！',
+          'Those three pieces are your hand — drag one onto the board!'),
+        hint: null,
+        next: null,
+      };
+    }
+    if (n === 1) {
+      return {
+        top: true,
+        title: t('🎓 ② 1列そろえて消す（2/4）', '🎓 2. Fill a line to clear it (2/4)'),
+        body: t('たて or よこの8マスが埋まると、その列がまるごと消えて大量得点！',
+          'Fill all 8 squares of a row or column and it clears for big points!'),
+        hint: this.hintKey
+          ? t('✨ 光っている列を完成させよう！', '✨ Complete the glowing line!')
+          : null,
+        next: t('わかった', 'Got it'),
+      };
+    }
+    if (n === 2) {
+      return {
+        top: false,
+        title: t('🎓 ③ ゴーストとコンボ', '🎓 3. Ghost preview & combos'),
+        body: t('ドラッグ中は落ちる位置が半透明の「ゴースト」で見える。消える列は白く光って予告されるので、置く前に確かめよう。',
+          'While dragging, a translucent ghost shows the landing spot. Lines that will clear glow white before you drop.'),
+        hint: t('🔥 続けて消すと「コンボ」！ 連続するほど倍率が上がってスコアが跳ね上がる。',
+          '🔥 Clear on consecutive placements for a COMBO — the multiplier climbs fast.'),
+        next: t('次へ', 'Next'),
+      };
+    }
+    return {
+      top: false,
+      title: t('🎓 ④ 2つの切り札', '🎓 4. Your two lifelines'),
+      body: t('🔄 リロール：置く場所が無くなりそうなとき、手札を丸ごと引き直せる（1ゲーム1回）。',
+        '🔄 Reroll: swap your whole hand when you are running out of room (once per game).'),
+      hint: t('⚡ 奥義：ラインを消すとゲージが溜まり、100%で必殺技が撃てる。',
+        '⚡ Ultimate: clearing lines charges the gauge — fire it at 100%.'),
+      next: t('はじめる！', 'Start playing!'),
+    };
+  }
+
+  // 盤面を触ってもらうステップでは、吹き出しが「盤面も手札も隠さない」場所に
+  // 立つのが理想。縦持ちだと盤面の下と手札の間がふつう大きく空くので、
+  // 入るならそこへ。入らなければ HUD のすぐ下（✕/🔄/⚡ だけは必ず押せる位置）。
+  positionTip(preferTop) {
+    const tip = this.tip;
+    if (!tip) return;
+    if (!preferTop) { tip.classList.remove('tut-top'); tip.style.top = ''; return; }
+    tip.classList.add('tut-top');
+    const canvas = $('#gameCanvas');
+    const v = view;
+    const h = tip.offsetHeight || 170;
+    if (canvas && v && v.cell) {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width) {
+        const boardBottom = rect.top + v.boardY + v.boardSize;
+        // 手札の枠(trayY..trayY+trayH)は縦に広いが、コマ自体はその中央あたりに
+        // 描かれる（game.js の drawTray）。上端で測ると使える隙間をほぼ全部
+        // 捨ててしまうので、コマが始まるあたりまでを空きとみなす。
+        // 横持ちは手札が盤面の右なので、下は canvas の底まで空いている。
+        const trayTop = v.sideTray ? (rect.top + rect.height) : (rect.top + v.trayY + v.trayH * 0.38);
+        if (trayTop - boardBottom >= h + 12) {
+          tip.style.top = `${Math.round(boardBottom + 8)}px`;
+          return;
+        }
+      }
+    }
+    const hud = document.querySelector('#screen-game .game-hud');
+    const r = hud && hud.getBoundingClientRect();
+    tip.style.top = r && r.height ? `${Math.round(r.bottom + 8)}px` : '';
+  }
+
+  render() {
+    const tip = this.tip;
+    if (!tip) return;
+    const c = this.content();
+    tip.innerHTML = [
+      `<b>${escapeHtml(c.title)}</b>`,
+      `<p>${escapeHtml(c.body)}</p>`,
+      c.hint ? `<small>${escapeHtml(c.hint)}</small>` : '',
+      '<div class="tut-btns">',
+      `<button class="btn btn-ghost" id="tutSkip">${t('スキップ', 'Skip')}</button>`,
+      c.next ? `<button class="btn btn-primary" id="tutNext">${escapeHtml(c.next)}</button>` : '',
+      '</div>',
+      // 盤面を触ってもらう①②は、吹き出しが盤面と手札の間に収まるかどうかが
+      // 高さで決まる。番号は見出しに入れてあるので、この2つでは行を足さない。
+      c.top ? '' : `<small>${this.step + 1} / ${this.stepCount()}</small>`,
+    ].join('');
+    const skip = tip.querySelector('#tutSkip');
+    if (skip) skip.onclick = () => this.skip();
+    const next = tip.querySelector('#tutNext');
+    if (next) next.onclick = () => this.advance();
+    // 高さが決まってから置き場所を決める（中身によって高さが変わるため）。
+    this.positionTip(!!c.top);
+  }
+
+  advance() {
+    audio.click();
+    if (this.step >= this.stepCount() - 1) { this.finishAll(); return; }
+    this.step++;
+    this.clearPulse();
+    if (view) view.glowCells = null;
+    this.hintKey = '';
+    if (this.step === 3) {
+      // 実際のボタンを光らせる。奥義バーが出ていないモードでは何も起きない。
+      this.pulse('#btnReroll');
+      this.pulse('#btnUlt');
+    }
+    this.render();
+  }
+
+  // ---- 監視（ポーリング）------------------------------------------------
+
+  tick() {
+    const m = this.mode;
+    // モードが差し替わった／終わったら、記録は立てずに静かに畳む。
+    if (!m || m.ended || currentMode !== m || !m.engine) { this.teardown(false); return; }
+    // 結果モーダルなど、上に何か出ているときは黙る。
+    const e = m.engine;
+    if (this.step === 0) {
+      if ((e.piecesPlaced || 0) > this.basePlaced) {
+        audio.coin();
+        this.advance();
+      }
+      return;
+    }
+    if (this.step === 1) {
+      if ((e.linesCleared || 0) > this.baseLines) {
+        // 実際に消せた ── いちばん伝わる瞬間なので、そこで次へ。
+        this.advance();
+        return;
+      }
+      const hint = this.lineHint();
+      const key = hint ? `${hint.kind}:${hint.line}` : '';
+      if (key !== this.hintKey) {
+        this.hintKey = key;
+        if (hint) this.showHint(hint);
+        else if (view) view.glowCells = null;
+        this.render();
+      }
+    }
+  }
+}
+
+// ===========================================================================
+// ⛓️ I3 連鎖カスケード
+// ===========================================================================
+// 盤面に「重力」がある専用モード。1手ごとに残ったブロックが下へ落ち、
+// 落下で行が揃えばそれも自動で消え、また落ちる ── これを繰り返すのが「連鎖」。
+//
+// エンジンには何も足していない（第3波前半の結論どおり）。
+// compactDown() + resolveLines() を guard 付きのループで回すだけ。
+// 連鎖数のカウントと倍率はこのモードの責務。
+//
+// 倍率: 1連鎖 ×1 / 2連鎖 ×2 / 3連鎖 ×4 …（2のべき乗、×64 で頭打ち）。
+// 「置いた瞬間の消去」を1連鎖目と数えるので、置いた手が何も消さずに
+// 落下してはじめて揃った回は 1連鎖（×1）── 落ちただけで倍率は付かない。
+// ---------------------------------------------------------------------------
+
+const CHAIN_GUARD = 16;                 // 無限ループよけ（仕様書の雛形どおり）
+const CHAIN_STEP_MS = 420;              // 1連鎖ぶんの見せ時間
+const CHAIN_COLORS = ['#ffffff', '#ffe14d', '#ffa93d', '#ff6bd4', '#43d9e8', '#9be3ff'];
+
+function chainMult(chainNo) {
+  if (chainNo <= 1) return 1;
+  return Math.min(64, Math.pow(2, chainNo - 1));
+}
+
+function chainColor(chainNo) {
+  return CHAIN_COLORS[Math.min(CHAIN_COLORS.length - 1, Math.max(0, chainNo - 1))];
+}
+
+class ChainMode {
+  constructor() {
+    this.mode = 'chain';
+    this.usesIntent = true;
+    // 重力で盤面が丸ごと動くモードなので、盤面を直接書き換えるアイテムや
+    // 奥義とは相性が悪い（浮いたブロックが残る）。純粋な連鎖勝負にする。
+    this.noItems = true;
+    this.timers = [];
+  }
+
+  after(ms, fn) { const id = setTimeout(fn, ms); this.timers.push(id); return id; }
+  clearTimers() { for (const id of this.timers) clearTimeout(id); this.timers = []; }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    $('#chaosBar').classList.add('hidden');
+    showItemBar(false);
+    this.startedAt = Date.now();
+    this.ended = false;
+    this.cascading = false;
+    this.guard = 0;
+    this.chainNo = 0;
+    this.maxChain = 0;
+    this.chainScore = 0;
+    const v = getView();
+    setModeTheme({ ...equippedTheme(), boardId: 'board_ocean' });
+    this.engine = new Engine();
+    v.setEngine(this.engine);
+    v.inputLocked = false;
+    v.onIntentPlace = (i, r, c) => this.intent(i, r, c);
+    v.onPlace = null;
+    v.onGameOver = () => this.finish();
+    this.updateHud();
+    updateRerollHud(this.engine);
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('battle');
+    toast(t('⛓️ ブロックは必ず下へ落ちる！ 消して落として、連鎖でスコアを爆発させろ！',
+      '⛓️ Everything falls! Clear a line, let the rest drop — chain reactions multiply your score!'), 'announce', 3600);
+  }
+
+  best() {
+    return Number(localStorage.getItem('bba_chain_best') || 0);
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+    $('#hudSub').textContent = t(
+      `⛓️ 最大${this.maxChain}連鎖 ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`,
+      `⛓️ Best chain ${this.maxChain} ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`);
+    const tm = $('#hudTimer');
+    tm.textContent = this.cascading && this.chainNo >= 1 ? `⛓️${this.chainNo}` : `⛓️${this.maxChain}`;
+    tm.classList.toggle('urgent', this.cascading && this.chainNo >= 3);
+  }
+
+  intent(index, row, col) {
+    const e = this.engine;
+    const piece = e.hand[index];
+    // 連鎖の演出中は次の手を受けない（受けると落下途中の盤面に置ける）。
+    if (!piece || this.ended || this.cascading || !e.canPlace(piece, row, col)) return true;
+    const result = e.place(index, row, col);
+    if (!result) return true;
+    const v = getView();
+    // 落下はこのあと回すので、この時点の「詰み」判定は当てにならない。
+    // 連鎖が終わってから hasAnyMove() で判定し直す。
+    result.over = false;
+    e.over = false;
+    v.applyResult(result);
+    // 置いた手そのものの消去が1連鎖目。何も消えなかったなら 0 から数え直す
+    // （落ちて初めて揃った回に倍率を付けないため）。
+    this.chainNo = result.lineCount > 0 ? 1 : 0;
+    this.guard = 0;
+    this.cascading = true;
+    v.inputLocked = true;
+    this.updateHud();
+    this.cascadeStep();
+    return true;
+  }
+
+  // 連鎖1波ぶん。仕様書の雛形（compactDown → resolveLines → guard）そのまま。
+  cascadeStep() {
+    if (this.ended) return;
+    const e = this.engine;
+    const v = getView();
+    if (this.guard++ >= CHAIN_GUARD) { this.endCascade(); return; }
+    const before = e.grid.slice();
+    if (e.compactDown() === 0) { this.endCascade(); return; }
+    // 落下でマスが動くと spawnAnim の key と実セルがズレる。捨てて張り直す。
+    v.spawnAnim.clear();
+    for (let k = 0; k < 64; k++) {
+      if (e.grid[k] && !before[k]) v.spawnAnim.set(k, v.time);
+    }
+    const r = e.resolveLines();
+    if (r.lineCount === 0) { this.endCascade(); return; }
+    this.chainNo++;
+    const mult = chainMult(this.chainNo);
+    const gained = Math.round((r.lineCount * r.lineCount * 100 + r.clearedCells.length) * mult);
+    e.score += gained;
+    e.linesCleared += r.lineCount;
+    e.streak++;
+    if (e.streak > e.maxCombo) e.maxCombo = e.streak;
+    this.chainScore += gained;
+    this.maxChain = Math.max(this.maxChain, this.chainNo);
+    // 演出は既存の applyResult に丸ごと任せる（消去パーティクル・ライン点滅・
+    // 効果音まで同じ経路になる）。合成 result なので frozenCount は付けない。
+    v.applyResult({
+      placedCells: [],
+      color: 0,
+      fullRows: r.fullRows, fullCols: r.fullCols,
+      clearedCells: r.clearedCells, lineCount: r.lineCount,
+      gained, streak: e.streak,
+      // 連鎖で盤面が空になったら、それは正真正銘の全消し（昇華）。
+      perfect: e.grid.every(x => x === 0),
+      over: false,
+    });
+    if (this.chainNo >= 2) {
+      const cx = v.boardX + v.boardSize / 2;
+      const cy = v.boardY + v.boardSize * 0.22;
+      v.addFloatText(cx, cy, t(`⛓️ ${this.chainNo}連鎖！ ×${mult}`, `⛓️ ${this.chainNo} CHAIN! ×${mult}`),
+        chainColor(this.chainNo), 1.6 + Math.min(1, this.chainNo * 0.12));
+      v.screenFlash = Math.max(v.screenFlash || 0, Math.min(0.5, 0.12 + this.chainNo * 0.06));
+      audio.combo(Math.min(9, this.chainNo + 2));
+    }
+    this.updateHud();
+    this.after(CHAIN_STEP_MS, () => this.cascadeStep());
+  }
+
+  endCascade() {
+    if (this.ended) return;
+    const e = this.engine;
+    const v = getView();
+    this.cascading = false;
+    if (this.chainNo >= 3) {
+      confettiBurst(20 + this.chainNo * 8);
+      toast(t(`⛓️ ${this.chainNo}連鎖！ ×${chainMult(this.chainNo)}`,
+        `⛓️ ${this.chainNo}-chain! ×${chainMult(this.chainNo)}`), 'announce', 2000);
+    }
+    this.chainNo = 0;
+    // 落下で空きが増えることがあるので、判定はここで1回だけ。
+    if (!e.hasAnyMove()) {
+      e.over = true;
+      v.inputLocked = true;
+      this.updateHud();
+      this.finish();
+      return;
+    }
+    e.over = false;
+    v.inputLocked = false;
+    this.updateHud();
+  }
+
+  async finish() {
+    if (this.ended) return;
+    this.ended = true;
+    this.clearTimers();
+    getView().inputLocked = true;
+    const e = this.engine;
+    const localBest = this.best();
+    const isBest = e.score > 0 && e.score >= localBest;
+    // main.js の開始画面が読む2つの控え（bba_chain_best / bba_chain_max）。
+    try {
+      if (e.score > localBest) localStorage.setItem('bba_chain_best', String(e.score));
+      if (this.maxChain > Number(localStorage.getItem('bba_chain_max') || 0)) {
+        localStorage.setItem('bba_chain_max', String(this.maxChain));
+      }
+    } catch { /* 保存できなくても結果表示は続ける */ }
+    const rewards = await submitResult({
+      mode: 'chain', score: e.score, lines: e.linesCleared,
+      maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
+    });
+    // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
+    if (currentMode !== this) return;
+    if (isBest) confettiBurst();
+    const m = showModal(`
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : 'GAME OVER'}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        <div class="rs-row"><span>${t('⛓️ 最大連鎖', '⛓️ Longest chain')}</span><b>${this.maxChain}</b></div>
+        <div class="rs-row"><span>${t('連鎖で稼いだ点', 'Points from chains')}</span><b>${fmt(this.chainScore)}</b></div>
+        <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
+      </div>`, { dismissable: false, peekable: true });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startChain(); };
+  }
+
+  quit() {
+    // すでに結果まで進んでいるなら finish() は先頭で即 return するので、
+    // ここで戻さないと ✕ →「終了する」を押しても何も起きない画面に残る。
+    if (this.ended) { closeModal(); endToMenu(); return; }
+    this.finish();
+  }
+
+  destroy() {
+    this.ended = true;
+    this.clearTimers();
+    $('#hudTimer').classList.add('hidden');
+    $('#hudTimer').classList.remove('urgent');
+    if (view) { view.onIntentPlace = null; view.inputLocked = false; }
+  }
+}
+
+export function startChain() {
+  if (currentMode) currentMode.destroy();
+  currentMode = new ChainMode();
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+// main.js 側がどちらの名前で繋いでも動くように別名も出しておく。
+export { startChain as startChainMode };
+
+// main.js のメニューは import ではなく window から名前を引く（callModeEntry）。
+// 候補の先頭から順に探すので、実際に呼ばれるのは startChainMode。
+window.startChainMode = () => startChain();
+window.startChain = () => startChain();
+
+// ===========================================================================
+// 🏗️ I2 ブループリント（日替わりの「組み立て」パズル）
+// ===========================================================================
+// 配られたピースを設計図どおりに置いて、その日の作品を完成させる。
+// 遺跡（PuzzleMode）と同じ「固定キュー」の骨格だが、勝利条件が真逆:
+//   ・遺跡  = 光るマスを *消す*
+//   ・設計図 = 光るマスを *埋める*。ラインが揃うと作品が崩れる（＝揃えてはいけない）
+// 設計図には満杯の行・列が無いことがサーバー側で保証されているので、
+// 設計図どおりに置いている限りラインは絶対に揃わない。
+// ---------------------------------------------------------------------------
+
+// JST の日付キー。server/adminevent.js の jstDayKey() と同じ形。
+function jstDayKeyClient(ts = Date.now()) {
+  const d = new Date(ts + 9 * 3600 * 1000);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+// server/daily.js の blueprintSeed() と同じ文字列ハッシュ（照合用・フォールバック用）。
+function blueprintSeedClient(dayKey) {
+  let h = 0;
+  const s = `bba-blueprint-${dayKey}`;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return (h >>> 0) & 0x7fffffff;
+}
+
+// マス集合に満杯の行・列があるか（server/daily.js の blueprintHasFullLine と同義）。
+function blueprintHasFullLine(cells) {
+  const rows = new Array(8).fill(0);
+  const cols = new Array(8).fill(0);
+  for (const k of cells) { rows[(k / 8) | 0]++; cols[k % 8]++; }
+  return rows.some(n => n >= 8) || cols.some(n => n >= 8);
+}
+
+// サーバーの戻り値を、このモードが使う形にそろえる。
+// 形が違う／壊れているものは null にして、呼び出し側が次の手段へ進めるようにする。
+function normalizeBlueprint(raw) {
+  const bp = raw && raw.blueprint ? raw.blueprint : raw;
+  if (!bp || !Array.isArray(bp.cells) || !Array.isArray(bp.pieces)) return null;
+  const cells = bp.cells.map(n => n | 0).filter(n => n >= 0 && n < 64);
+  if (!cells.length || !bp.pieces.length) return null;
+  const pieces = [];
+  for (const p of bp.pieces) {
+    const si = (p && p.shape) | 0;
+    if (!SHAPES[si]) return null;   // 知らない形が混じっていたら信用しない
+    pieces.push({ shape: si, color: SHAPES[si].color, cells: SHAPES[si].cells });
+  }
+  return {
+    dayKey: String(bp.dayKey || jstDayKeyClient()),
+    id: String(bp.id || 'figure'),
+    icon: String(bp.icon || '🏗️'),
+    name: String(bp.name || '設計図'),
+    nameEn: String(bp.nameEn || bp.name || 'Blueprint'),
+    cells,
+    pieces,
+    local: false,
+  };
+}
+
+// 配信口がまだ無いときの控え。ピースをランダムに（重ならないように）並べ、
+// その和集合をその日の設計図にする ── 絵柄にはならないが、
+//   ・必ず組める（ピースの配置がそのまま模範解答）
+//   ・満杯の行・列を持たない
+// というルールは満たすので、モードとしては完全に成立する。
+// 本番の絵柄（ハート・剣・王冠…）は server/daily.js の blueprintFor() が持っている。
+function localBlueprint(dayKey) {
+  const seed = blueprintSeedClient(dayKey);
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const rng = new Rng(((seed ^ (attempt * 0x9e3779b9)) >>> 0) || 1);
+    const grid = new Array(64).fill(false);
+    const pieces = [];
+    const want = 6 + rng.int(3);   // 6〜8個
+    let guard = 400;
+    while (pieces.length < want && guard-- > 0) {
+      const si = rng.int(SHAPES.length);
+      const cells = SHAPES[si].cells;
+      const { rows, cols } = shapeSize(cells);
+      const r0 = rng.int(Math.max(1, 8 - rows + 1));
+      const c0 = rng.int(Math.max(1, 8 - cols + 1));
+      let ok = true;
+      for (const [dr, dc] of cells) {
+        const r = r0 + dr, c = c0 + dc;
+        if (r >= 8 || c >= 8 || grid[r * 8 + c]) { ok = false; break; }
+      }
+      if (!ok) continue;
+      for (const [dr, dc] of cells) grid[(r0 + dr) * 8 + (c0 + dc)] = true;
+      pieces.push({ shape: si, color: SHAPES[si].color, cells });
+    }
+    if (pieces.length < 4) continue;
+    const list = [];
+    for (let k = 0; k < 64; k++) if (grid[k]) list.push(k);
+    if (blueprintHasFullLine(list)) continue;   // 揃ってはいけないので作り直し
+    for (let i = pieces.length - 1; i > 0; i--) {   // 決定的にシャッフル
+      const j = rng.int(i + 1);
+      const tmp = pieces[i]; pieces[i] = pieces[j]; pieces[j] = tmp;
+    }
+    return {
+      // アイコンは 📐。HUD の見出しが「🏗️ …」で始まるので、ここを 🏗️ に
+      // すると「🏗️ 🏗️今日の設計図」と二重になる。
+      dayKey, id: 'local', icon: '📐',
+      name: '今日の設計図', nameEn: "Today's Blueprint",
+      cells: list, pieces, local: true,
+    };
+  }
+  return null;
+}
+
+// 設計図を手に入れる。専用の配信口 → 今日のお題に相乗り → ローカル生成 の順。
+// ※ server/index.js に `GET /api/daily/blueprint` が入れば ① で本番の絵柄になる。
+export async function fetchBlueprint() {
+  try {
+    const bp = normalizeBlueprint(await api('/api/daily/blueprint'));
+    if (bp) return bp;
+  } catch { /* 未実装なら次へ */ }
+  try {
+    const day = await api('/api/daily');
+    const bp = normalizeBlueprint(day && day.blueprint);
+    if (bp) return bp;
+    if (day && day.day) return localBlueprint(String(day.day));
+  } catch { /* オフラインでも遊べるように次へ */ }
+  return localBlueprint(jstDayKeyClient());
+}
+
+// ---------------------------------------------------------------------------
+// 盤面に重ねる薄色のガイド
+//
+// game.js の view.glowCells は「値の入っているマス」しか光らせないので、
+// これから埋める *空きマス* を示すのには使えない。CSS も担当外なので、
+// canvas の実寸（view.boardX / boardY / cell）に合わせた position:fixed の
+// 小さな div を並べて重ねる。pointer-events:none なのでドラッグは素通りする。
+// ---------------------------------------------------------------------------
+
+class CellOverlay {
+  constructor() {
+    const root = document.createElement('div');
+    root.id = 'bpOverlay';
+    root.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;z-index:6';
+    document.body.appendChild(root);
+    this.root = root;
+    this.marks = new Map();     // cellIndex -> 'want' | 'stray'
+    this.nodes = new Map();     // cellIndex -> HTMLElement
+    this.int = setInterval(() => this.sync(), 200);
+  }
+
+  static style(kind) {
+    // 🏗️ 設計図: これから埋めるマス／はみ出したマス
+    if (kind === 'stray') return 'background:rgba(255,59,59,0.20);border:1px solid rgba(255,107,107,0.75);';
+    // 🚩 陣取り: 自分の領土（青）／相手の領土（赤）。ブロックの上に薄く重ねる。
+    if (kind === 'own_me') return 'background:rgba(91,139,255,0.34);border:2px solid rgba(155,190,255,0.85);';
+    if (kind === 'own_foe') return 'background:rgba(255,93,93,0.30);border:2px solid rgba(255,150,150,0.85);';
+    return 'background:rgba(155,227,255,0.15);border:1px dashed rgba(155,227,255,0.6);';
+  }
+
+  set(marks) {
+    this.marks = marks;
+    for (const [k, el] of this.nodes) {
+      if (!marks.has(k)) { el.remove(); this.nodes.delete(k); }
+    }
+    this.sync();
+  }
+
+  sync() {
+    const v = view;
+    const canvas = $('#gameCanvas');
+    if (!v || !canvas || !v.cell) return;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width) return;
+    const s = Math.max(1, v.cell - 2);
+    for (const [k, kind] of this.marks) {
+      let el = this.nodes.get(k);
+      if (!el) {
+        el = document.createElement('div');
+        el.style.position = 'absolute';
+        el.style.borderRadius = '4px';
+        this.root.appendChild(el);
+        this.nodes.set(k, el);
+      }
+      const r = (k / 8) | 0, c = k % 8;
+      const x = Math.round(rect.left + v.boardX + c * v.cell + 1);
+      const y = Math.round(rect.top + v.boardY + r * v.cell + 1);
+      const w = Math.round(s);
+      const next = `position:absolute;border-radius:4px;box-sizing:border-box;left:${x}px;top:${y}px;width:${w}px;height:${w}px;${CellOverlay.style(kind)}`;
+      // 200ms ごとに回るので、変わっていないときは触らない（再レイアウトを避ける）。
+      if (el.dataset.css !== next) { el.setAttribute('style', next); el.dataset.css = next; }
+    }
+  }
+
+  destroy() {
+    clearInterval(this.int);
+    this.int = null;
+    if (this.root) { this.root.remove(); this.root = null; }
+    this.nodes.clear();
+  }
+}
+
+// 🏗️ の記録（その日の★）。
+function blueprintRecord() {
+  try { return JSON.parse(localStorage.getItem('bba_blueprint_record') || '{}') || {}; } catch { return {}; }
+}
+
+class BlueprintMode {
+  constructor(bp) {
+    this.mode = 'blueprint';
+    this.usesIntent = true;
+    this.noItems = true;   // 固定キューの詰将棋 — アイテム／奥義は盤面契約を壊す
+    this.bp = bp;
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    $('#chaosBar').classList.add('hidden');
+    showItemBar(false);
+    $('#btnReroll').classList.add('hidden');   // 引き直しは設計図を壊す
+    this.startedAt = Date.now();
+    this.ended = false;
+    this.crumbles = 0;
+    this.strayCells = new Set();
+    this.want = new Set(this.bp.cells);
+    this.queue = this.bp.pieces.slice();
+    this.total = this.queue.length;
+    const v = getView();
+    setModeTheme({ ...equippedTheme(), boardId: 'board_default' });
+    this.engine = new Engine();
+    this.engine.rerolls = 0;
+    this.engine.refillHand = () => {};        // キューだけが供給源
+    this.engine.reroll = () => false;
+    this.engine.hand = [this.queue.shift() || null, this.queue.shift() || null, this.queue.shift() || null];
+    v.setEngine(this.engine);
+    v.inputLocked = false;
+    v.onIntentPlace = (i, r, c) => this.intent(i, r, c);
+    v.onPlace = null;
+    v.onGameOver = () => this.finish(false);
+    this.overlay = new CellOverlay();
+    this.paint();
+    this.updateHud();
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('ruins');
+    toast(t(`🏗️ ${this.bp.icon}「${this.bp.name}」を組み立てよう！ 光る形どおりに置く ── 列を揃えると崩れるぞ！`,
+      `🏗️ Build ${this.bp.icon} "${this.bp.nameEn}"! Fill the glowing shape — completing a line makes it crumble!`), 'announce', 4000);
+  }
+
+  remaining() { return this.queue.length + this.engine.hand.filter(Boolean).length; }
+
+  // まだ埋まっていない設計図のマス。
+  missing() {
+    const e = this.engine;
+    let n = 0;
+    for (const k of this.want) if (!e.grid[k]) n++;
+    return n;
+  }
+
+  // 手札＋キューに残っているマス数。missing() を下回ったら完成は不可能。
+  cellsLeft() {
+    let n = 0;
+    for (const p of this.queue) n += p.cells.length;
+    for (const p of this.engine.hand) if (p) n += p.cells.length;
+    return n;
+  }
+
+  paint() {
+    if (!this.overlay) return;
+    const e = this.engine;
+    const marks = new Map();
+    for (const k of [...this.strayCells]) if (!e.grid[k]) this.strayCells.delete(k);
+    for (const k of this.want) if (!e.grid[k]) marks.set(k, 'want');
+    for (const k of this.strayCells) if (e.grid[k]) marks.set(k, 'stray');
+    this.overlay.set(marks);
+  }
+
+  intent(index, row, col) {
+    const e = this.engine;
+    const piece = e.hand[index];
+    if (!piece || this.ended || !e.canPlace(piece, row, col)) return true;
+    const placed = [];
+    for (const [dr, dc] of piece.cells) placed.push((row + dr) * 8 + (col + dc));
+    const result = e.place(index, row, col);
+    if (!result) return true;
+    e.hand[index] = this.queue.shift() || null;   // 固定キュー、ランダム補充なし
+    // place() は補充前の手札で「詰み」を判定している。補充後に判定し直す。
+    e.over = false;
+    result.over = false;
+    const v = getView();
+    v.applyResult(result);
+    // 設計図の外へ出たマス。ここが1つでもあると完成形にはならないので、
+    // 赤く出して「いま何が起きたか」をその場で見せる。
+    let stray = 0;
+    for (const k of placed) if (!this.want.has(k)) { this.strayCells.add(k); stray++; }
+    if (stray) {
+      audio.error();
+      toast(t(`⚠️ 設計図の外に${stray}マスはみ出した`, `⚠️ ${stray} square(s) outside the blueprint`), 'err', 1600);
+    }
+    // ラインが揃った ＝ 作品が崩れた。設計図には満杯の行・列が無いので、
+    // これは必ず「設計図の外に置いた」結果として起きる。
+    if (result.lineCount > 0) {
+      this.crumbles++;
+      const penalty = 300 * result.lineCount;
+      e.score = Math.max(0, e.score - penalty);
+      v.screenFlash = Math.max(v.screenFlash || 0, 0.5);
+      v.shake = Math.max(v.shake || 0, 18);
+      audio.bossAttack();
+      toast(t(`🏗️ 作品が崩れた！ −${fmt(penalty)}点（列を揃えてはいけない）`,
+        `🏗️ The build crumbled! −${fmt(penalty)} (never complete a line)`), 'err', 2600);
+      // 消えたマスは設計図の控えからも外れる ── 埋め直せるように印を戻す。
+      for (const [r, c] of result.clearedCells) this.strayCells.delete(r * 8 + c);
+    }
+    this.paint();
+    this.updateHud();
+    if (this.ended) return true;
+    if (this.missing() === 0 && this.strayCells.size === 0) { this.finish(true); return true; }
+    // もう埋めきれない／置く場所が無い ＝ そこで終わり。
+    if (this.missing() > this.cellsLeft() || this.remaining() === 0 || !e.hasAnyMove()) {
+      this.finish(false);
+    }
+    return true;
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
+    const name = t(this.bp.name, this.bp.nameEn);
+    $('#hudSub').textContent = t(`🏗️ ${this.bp.icon}${name} ・ 残り${this.missing()}マス${this.crumbles ? ` ・ 崩壊${this.crumbles}` : ''}`,
+      `🏗️ ${this.bp.icon}${name} — ${this.missing()} left${this.crumbles ? ` ・ ${this.crumbles} crumble(s)` : ''}`);
+    const tm = $('#hudTimer');
+    tm.textContent = `🏗️${this.remaining()}`;
+    tm.classList.toggle('urgent', this.missing() > this.cellsLeft());
+  }
+
+  stars(secs) {
+    if (this.crumbles === 0 && this.strayCells.size === 0 && secs <= 90) return 3;
+    if (this.crumbles <= 1 && secs <= 210) return 2;
+    return 1;
+  }
+
+  async finish(won) {
+    if (this.ended) return;
+    this.ended = true;
+    getView().inputLocked = true;
+    const e = this.engine;
+    const secs = (Date.now() - this.startedAt) / 1000;
+    const stars = won ? this.stars(secs) : 0;
+    if (won) {
+      // 完成ボーナス: マス数 × 40 ＋ ★ボーナス。
+      e.score += this.want.size * 40 + stars * 500;
+      confettiBurst(stars >= 3 ? 70 : 40);
+      audio.victory();
+      try {
+        const rec = blueprintRecord();
+        const first = !rec[this.bp.dayKey];
+        if ((rec[this.bp.dayKey] || 0) < stars) {
+          rec[this.bp.dayKey] = stars;
+          localStorage.setItem('bba_blueprint_record', JSON.stringify(rec));
+        }
+        // main.js の開始画面が読む「これまでに何枚完成させたか」。
+        // 同じ日の再挑戦では増やさない（枚数であって回数ではない）。
+        if (first) {
+          const n = Number(localStorage.getItem('bba_blueprint_clears') || 0) + 1;
+          localStorage.setItem('bba_blueprint_clears', String(n));
+        }
+      } catch { /* 保存できなくても進行は止めない */ }
+    } else {
+      audio.gameOver();
+    }
+    const rewards = await submitResult({
+      mode: 'blueprint', score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
+      duration: secs, won,
+    });
+    // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
+    if (currentMode !== this) return;
+    const starStr = won ? '★'.repeat(stars) + '☆'.repeat(3 - stars) : '';
+    // なぜ終わったのかを一行で言う。ピースは設計図ちょうどぶんしか配られない
+    // ので、外に置いた時点で「もう足りない」が確定して終わる ── その理由を
+    // 出さないと、プレイヤーには理不尽な打ち切りに見える。
+    const why = won ? '' : (this.missing() > this.cellsLeft()
+      ? t('残りのピースでは設計図を埋めきれなくなりました（はみ出したぶんが足りません）',
+          'The remaining pieces can no longer fill the blueprint — what spilled out is what you needed')
+      : (this.remaining() === 0
+        ? t('ピースを使い切りました', 'You ran out of pieces')
+        : t('もう置ける場所がありません', 'No legal moves left')));
+    const m = showModal(`
+      <div class="result-banner ${won ? 'win' : 'lose'}">${won ? `${t('🏗️ 完成！', '🏗️ BUILT!')} ${starStr}` : t('🏗️ 未完成…', '🏗️ UNFINISHED…')}</div>
+      <p class="muted center">${escapeHtml(`${this.bp.icon} ${t(this.bp.name, this.bp.nameEn)}`)}</p>
+      ${why ? `<p class="muted center" style="font-size:13px">${escapeHtml(why)}</p>` : ''}
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('タイム', 'Time')}</span><b>${secs.toFixed(1)}s</b></div>
+        ${won ? '' : `<div class="rs-row"><span>${t('残りマス', 'Squares left')}</span><b>${this.missing()}</b></div>`}
+        <div class="rs-row"><span>${t('🏗️ 崩壊', '🏗️ Crumbles')}</span><b>${this.crumbles}</b></div>
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Try again')}</button>
+      </div>`, { dismissable: false, peekable: true });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => {
+      closeModal();
+      this.destroy();
+      currentMode = new BlueprintMode(this.bp);
+      window.__bbaMode = currentMode;
+      currentMode.start();
+    };
+  }
+
+  quit() {
+    // すでに結果まで進んでいるなら finish() は先頭で即 return するので、
+    // ここで戻さないと ✕ →「終了する」を押しても何も起きない画面に残る。
+    if (this.ended) { closeModal(); endToMenu(); return; }
+    this.finish(false);
+  }
+
+  destroy() {
+    this.ended = true;
+    $('#hudTimer').classList.add('hidden');
+    $('#hudTimer').classList.remove('urgent');
+    $('#btnReroll').classList.remove('hidden');
+    if (this.overlay) { this.overlay.destroy(); this.overlay = null; }
+    if (view) view.onIntentPlace = null;
+  }
+}
+
+let blueprintStarting = false;
+
+export async function startBlueprint() {
+  if (blueprintStarting) return;   // 二度押しで2回取りに行かせない
+  blueprintStarting = true;
+  try {
+    const bp = await fetchBlueprint();
+    if (!bp) {
+      toast(t('今日の設計図を読み込めませんでした', 'Could not load today\'s blueprint'), 'err', 3000);
+      return;
+    }
+    if (currentMode) currentMode.destroy();
+    currentMode = new BlueprintMode(bp);
+    window.__bbaMode = currentMode;
+    currentMode.start();
+  } finally {
+    blueprintStarting = false;
+  }
+}
+
+// main.js のメニューは window から名前を引く（callModeEntry）。
+window.startBlueprint = () => startBlueprint();
+
+// ===========================================================================
+// 👻 I16 デイリーのゴーストリプレイ ／ 📼 I1 残像レース
+// ===========================================================================
+// 記録は着手ログだけ（{h, r, c, t}）。engine.js が決定的なので、
+// new Engine(seed) を作って同じお題を適用し、moves を順に place() するだけで
+// その人の走りが完全に再現できる。t は再生の間合い（演出）にしか使わない。
+// ---------------------------------------------------------------------------
+
+// サーバー側の上限と同じ。超えたぶんは送っても丸ごと捨てられる。
+const DAILY_REPLAY_MAX_MOVES = 200;
+
+// お題によっては録画を再現できない。
+// 🪨瓦礫（rubble）の初期配置は engine.addGarbage() が **Math.random()** で
+// 決めていて（対戦で攻撃を受けた側だけ乱数列が進まないための意図的な仕様）、
+// シードから復元できない。しかも保存される録画は {h,r,c,t} だけなので、
+// 配置を後から取り戻す手段が無い ── 同じ手を並べても盤面が合わない。
+// 嘘の再生を見せるよりは、その日は再生を出さないほうが誠実。
+// （直すなら「デイリーの瓦礫だけ engine.rng で決める」＝全員同じ配置にする
+//   のが筋。デイリーは全員が同じ手続きを踏むので乱数列はズレない。ただし
+//   既存モードの挙動を変える変更なので、この波では触っていない。）
+function replayReproducible(mod) {
+  return !(mod && mod.id === 'rubble');
+}
+
+// 壊れた／古い形の録画で再生側が落ちないように、必ずここを通す。
+function sanitizeReplayClient(rep) {
+  if (!rep || !Array.isArray(rep.moves)) return null;
+  const moves = [];
+  for (const m of rep.moves.slice(0, DAILY_REPLAY_MAX_MOVES)) {
+    if (!m) continue;
+    const h = m.h | 0, r = m.r | 0, c = m.c | 0;
+    if (h < 0 || h > 2 || r < 0 || r > 7 || c < 0 || c > 7) return null;
+    moves.push({ h, r, c, t: Math.max(0, m.t | 0) });
+  }
+  if (!moves.length) return null;
+  return { seed: rep.seed | 0, moves, score: Math.max(0, rep.score | 0) };
+}
+
+export async function fetchDailyReplays(day) {
+  try {
+    const q = day ? `?day=${encodeURIComponent(day)}` : '';
+    return await api(`/api/daily/replays${q}`);
+  } catch {
+    return null;
+  }
+}
+
+// 👻 その日の走りの一覧。TOP3 ＋（あれば）自分の回。
+export async function openDailyReplays(day) {
+  audio.click();
+  const m = showModal(`<h2>👻 ${t('みんなの走り', 'Ghost replays')}</h2><p class="muted center">${t('読み込み中…', 'Loading…')}</p>`);
+  const data = await fetchDailyReplays(day);
+  if (!m.isConnected) return;   // 閉じられた後に描き込まない
+  const rows = (data && Array.isArray(data.rows)) ? data.rows.slice() : [];
+  if (data && data.mine && !rows.some(r => r.you)) rows.push(data.mine);
+  const meta = data ? { day: data.day, seed: data.seed, modifier: data.modifier } : null;
+  if (!rows.length) {
+    m.innerHTML = `
+      <h2>👻 ${t('みんなの走り', 'Ghost replays')}</h2>
+      <p class="ms-empty">${t('まだ今日の記録がありません。いちばん乗りになろう！', 'No runs recorded today yet — be the first!')}</p>
+      <div class="modal-buttons"><button class="btn btn-primary" id="grClose">${t('閉じる', 'Close')}</button></div>`;
+    const b = m.querySelector('#grClose');
+    if (b) b.onclick = () => { audio.click(); closeModal(); };
+    return;
+  }
+  const mod = (data && data.modifier) || {};
+  const playable = replayReproducible(mod);
+  m.innerHTML = `
+    <h2>👻 ${t('みんなの走り', 'Ghost replays')}</h2>
+    <p class="muted center">${escapeHtml(`${data.day} ${mod.icon || ''}${t(mod.ja || '', mod.en || '')}`)}</p>
+    ${playable ? '' : `<p class="muted center">${t('🪨 この日のお題は瓦礫の位置がひとりずつ違うため、走りを再生できません',
+      '🪨 On rubble day the debris layout differs per player, so runs cannot be replayed')}</p>`}
+    <div class="ms-list" id="grList"></div>
+    <div class="modal-buttons"><button class="btn btn-primary" id="grClose">${t('閉じる', 'Close')}</button></div>`;
+  const list = m.querySelector('#grList');
+  rows.forEach((row, i) => {
+    const el = document.createElement('div');
+    el.className = 'ms-row';
+    const medal = row.rank === 1 ? '🥇' : row.rank === 2 ? '🥈' : row.rank === 3 ? '🥉' : `#${row.rank}`;
+    el.innerHTML = `
+      <div class="ms-info">
+        <div class="ms-name">${medal} ${escapeHtml(row.username || '???')}${row.you ? ` <small>(${t('あなた', 'you')})</small>` : ''}</div>
+        <div class="ms-prog">${fmt(row.score)}${t('点', ' pts')}</div>
+      </div>
+      ${playable ? `<button class="btn btn-ghost" data-watch="${i}">${t('👻 観る', '👻 Watch')}</button>
+      <button class="btn btn-primary" data-race="${i}">${t('📼 対走', '📼 Race')}</button>` : ''}`;
+    list.appendChild(el);
+  });
+  list.querySelectorAll('[data-watch]').forEach(b => {
+    b.onclick = () => {
+      const row = rows[b.dataset.watch | 0];
+      audio.click();
+      closeModal();
+      startDailyReplay(row, { ...meta, username: row.username });
+    };
+  });
+  list.querySelectorAll('[data-race]').forEach(b => {
+    b.onclick = () => {
+      const row = rows[b.dataset.race | 0];
+      audio.click();
+      closeModal();
+      startDailyRace(row);
+    };
+  });
+  const close = m.querySelector('#grClose');
+  if (close) close.onclick = () => { audio.click(); closeModal(); };
+}
+
+// 📼 その人の残像と同時対走する。デイリー本体はふだんどおりの手続き
+// （/api/daily で今日のお題を取り直し → 予約 → 開始）を通す。
+export async function startDailyRace(row) {
+  const rep = sanitizeReplayClient(row && row.replay);
+  if (!rep) { toast(t('この走りは再生できません', 'This run cannot be replayed'), 'err', 2600); return; }
+  let info = null;
+  try {
+    info = await api('/api/daily');
+  } catch {
+    toast(t('サーバーに接続できません', 'Cannot reach the server'), 'err');
+    return;
+  }
+  if (!replayReproducible(info && info.modifier)) {
+    toast(t('🪨 今日のお題では残像レースができません（瓦礫の位置がひとりずつ違うため）',
+      '🪨 No ghost racing today — the rubble layout differs per player'), 'err', 3600);
+    return;
+  }
+  startDaily(info, { ghost: { username: row.username, score: row.score, replay: rep } });
+}
+
+// ---------------------------------------------------------------------------
+// 👻 再生専用モード。盤面はふだんの GameView をそのまま使い、
+// inputLocked で読み取り専用にする（＝描画・演出の経路は本編と同じ）。
+// ---------------------------------------------------------------------------
+
+class ReplayMode {
+  constructor(replay, meta) {
+    this.mode = 'replay';
+    this.replay = replay;
+    this.meta = meta || {};
+    this.speed = 1;
+    this.timer = null;
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    $('#chaosBar').classList.add('hidden');
+    showItemBar(false);
+    $('#btnReroll').classList.add('hidden');
+    this.ended = false;
+    this.idx = 0;
+    const v = getView();
+    setModeTheme({ ...equippedTheme(), boardId: 'board_sunset' });
+    this.engine = new Engine(this.replay.seed);
+    applyDailyModifier(this.engine, this.meta.modifier);
+    v.setEngine(this.engine);
+    v.inputLocked = true;          // 読み取り専用 ── 触っても盤面は動かない
+    v.onPlace = null;
+    v.onIntentPlace = null;
+    v.onGameOver = null;
+    this.updateHud();
+    v.start();
+    audio.playTrack('battle');
+    this.buildBar();
+    toast(t(`👻 ${this.meta.username || ''}さんの走りを再生中`, `👻 Replaying ${this.meta.username || 'this run'}`), 'announce', 2600);
+    this.timer = setTimeout(() => this.step(), 700);
+  }
+
+  // 速度と閉じるのボタン。既存の .zero-deal と同じ「盤面の下に置く帯」の作法。
+  buildBar() {
+    const wrap = document.createElement('div');
+    wrap.id = 'replayBar';
+    wrap.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:60;display:flex;gap:8px;align-items:center';
+    wrap.innerHTML = `
+      <button class="btn btn-ghost" id="rpSpeed">${t('⏩ 等速', '⏩ 1×')}</button>
+      <button class="btn btn-primary" id="rpClose">${t('閉じる', 'Close')}</button>`;
+    document.body.appendChild(wrap);
+    this.bar = wrap;
+    const sp = wrap.querySelector('#rpSpeed');
+    sp.onclick = () => {
+      audio.click();
+      this.speed = this.speed === 1 ? 2 : this.speed === 2 ? 4 : 1;
+      sp.textContent = this.speed === 1 ? t('⏩ 等速', '⏩ 1×') : `⏩ ${this.speed}×`;
+    };
+    wrap.querySelector('#rpClose').onclick = () => { audio.click(); this.quit(); };
+  }
+
+  step() {
+    if (this.ended) return;
+    const mv = this.replay.moves[this.idx];
+    if (!mv) { this.finish(); return; }
+    const e = this.engine;
+    // 固定の録画なので、詰み判定で止めない（次の手が本当に打てるかで判断する）。
+    e.over = false;
+    const res = e.place(mv.h, mv.r, mv.c);
+    if (!res) { this.finish(); return; }
+    res.over = false;
+    getView().applyResult(res);
+    this.idx++;
+    this.updateHud();
+    const next = this.replay.moves[this.idx];
+    if (!next) { this.timer = setTimeout(() => this.finish(), 900); return; }
+    const gap = Math.min(3000, Math.max(150, (next.t || 0) - (mv.t || 0)));
+    this.timer = setTimeout(() => this.step(), gap / this.speed);
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
+    $('#hudSub').textContent = t(`👻 ${this.meta.username || '記録'} の走り`, `👻 ${this.meta.username || 'Recorded'} run`);
+    $('#hudTimer').textContent = `${this.idx}/${this.replay.moves.length}`;
+  }
+
+  finish() {
+    if (this.ended) return;
+    this.ended = true;
+    clearTimeout(this.timer);
+    // 操作バーは結果モーダル(z-index 50)より手前(60)に浮くので、
+    // 残したままだと「閉じる」がモーダルの上に重なって見える。先に畳む。
+    if (this.bar) { this.bar.remove(); this.bar = null; }
+    const e = this.engine;
+    const m = showModal(`
+      <div class="result-banner draw">👻 ${t('再生おわり', 'Replay finished')}</div>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('走った人', 'Runner')}</span><b>${escapeHtml(this.meta.username || '???')}</b></div>
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        <div class="rs-row"><span>${t('手数', 'Moves')}</span><b>${this.idx}</b></div>
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-ghost" id="rList">${t('👻 ほかの走り', '👻 Other runs')}</button>
+        <button class="btn btn-primary" id="rRace">${t('📼 この人と対走', '📼 Race this run')}</button>
+      </div>`, { dismissable: false, peekable: true });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
+    m.querySelector('#rList').onclick = () => { closeModal(); this.destroy(); endToMenu(); openDailyReplays(this.meta.day); };
+    m.querySelector('#rRace').onclick = () => {
+      closeModal(); this.destroy(); endToMenu();
+      startDailyRace({ username: this.meta.username, score: e.score, replay: this.replay });
+    };
+  }
+
+  quit() {
+    if (this.ended) { closeModal(); endToMenu(); return; }
+    this.ended = true;
+    clearTimeout(this.timer);
+    this.destroy();
+    endToMenu();
+  }
+
+  destroy() {
+    this.ended = true;
+    clearTimeout(this.timer);
+    this.timer = null;
+    if (this.bar) { this.bar.remove(); this.bar = null; }
+    $('#hudTimer').classList.add('hidden');
+    $('#btnReroll').classList.remove('hidden');
+  }
+}
+
+export function startDailyReplay(row, meta) {
+  const rep = sanitizeReplayClient(row && row.replay);
+  if (!rep) { toast(t('この走りは再生できません', 'This run cannot be replayed'), 'err', 2600); return; }
+  if (!replayReproducible(meta && meta.modifier)) {
+    toast(t('🪨 この日のお題は再生に対応していません', '🪨 Runs from this day cannot be replayed'), 'err', 3000);
+    return;
+  }
+  if (currentMode) currentMode.destroy();
+  currentMode = new ReplayMode(rep, { ...(meta || {}), username: row.username });
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+// ===========================================================================
+// 🧩 I6 パズル工房 — 共有ステージのプレイと、投稿用エディタ
+// ===========================================================================
+// 遊ぶ側の契約は 🧩パズル遺跡（PuzzleMode）とまったく同じにしてある:
+//   ・手札3枚。1手置いたら、その枠へ固定キューの先頭を補充
+//   ・リロール／ランダム補充／アイテム／奥義は無し
+//   ・補充のあとに e.over = false で「詰み」を判定し直す
+// サーバーの投稿検証（verifyWorkshopClear）もこの契約で動いているので、
+// ここがズレると「手元では解けたのに投稿が弾かれる」が起きる。
+// ---------------------------------------------------------------------------
+
+const WS_MAX_PIECES = 12;      // server/index.js の WS_MAX_PIECES と同じ
+const WS_MIN_CELLS = 4;        // 同 WS_MIN_CELLS
+const WS_TITLE_MAX = 24;       // 同 WS_TITLE_MAX
+
+// 盤面の1マスの色。10/11（氷）は PALETTE に無いので水色で代用する
+// ── エディタが出せるのは 1..9 だけだが、他人のステージには氷が入りうる。
+function wsCellColor(v) {
+  if (v === ICE || v === ICE_CRACKED) return '#9be3ff';
+  const p = PALETTE[v];
+  return p ? p[0] : 'transparent';
+}
+
+// 8×8 を DOM の CSS グリッドで描く（canvas を持ち出さずに済む小さな絵）。
+function wsBoardHtml(board, opts = {}) {
+  const size = opts.size || 22;
+  const cells = [];
+  for (let k = 0; k < 64; k++) {
+    const v = board[k] | 0;
+    cells.push(`<i data-k="${k}" style="display:block;border-radius:3px;background:${v ? wsCellColor(v) : 'rgba(255,255,255,0.06)'}"></i>`);
+  }
+  return `<div class="ws-grid" style="display:grid;grid-template-columns:repeat(8,${size}px);grid-auto-rows:${size}px;gap:2px;justify-content:center">${cells.join('')}</div>`;
+}
+
+// SHAPES の1つを小さく描く。
+function wsShapeHtml(si, size = 9) {
+  const cells = SHAPES[si].cells;
+  const { rows, cols } = shapeSize(cells);
+  const set = new Set(cells.map(([r, c]) => r * 8 + c));
+  const out = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const on = set.has(r * 8 + c);
+      out.push(`<i style="display:block;border-radius:2px;background:${on ? wsCellColor(SHAPES[si].color) : 'transparent'}"></i>`);
+    }
+  }
+  return `<span style="display:inline-grid;grid-template-columns:repeat(${cols},${size}px);grid-auto-rows:${size}px;gap:1px;vertical-align:middle">${out.join('')}</span>`;
+}
+
+// サーバーの1件を、このモードが使う形にそろえる。
+function normalizeWorkshopStageForPlay(raw) {
+  const s = (raw && raw.stage) ? raw.stage : (raw && raw.raw ? raw.raw : raw);
+  if (!s || !Array.isArray(s.board) || s.board.length !== 64) return null;
+  if (!Array.isArray(s.pieces) || !s.pieces.length) return null;
+  const pieces = [];
+  for (const i of s.pieces) {
+    const si = i | 0;
+    if (!SHAPES[si]) return null;
+    pieces.push({ shape: si, cells: SHAPES[si].cells, color: SHAPES[si].color });
+  }
+  return {
+    code: String(s.code || '').toUpperCase(),
+    title: String(s.title || s.name || '???'),
+    author: String(s.author || '???'),
+    par: s.par | 0,
+    bestScore: s.bestScore | 0,
+    board: s.board.map(v => v | 0),
+    pieces,
+  };
+}
+
+class WorkshopMode {
+  // stage: normalizeWorkshopStageForPlay() の戻り値
+  // opts.onCleared(moves, score) を渡すと、投稿用の「作者のクリア」取りにも使える
+  constructor(stage, opts = {}) {
+    this.mode = 'workshop';
+    this.usesIntent = true;
+    this.noItems = true;   // 固定キューの契約 — アイテム／奥義は解を壊す
+    this.stage = stage;
+    this.authoring = !!opts.authoring;
+    this.onCleared = opts.onCleared || null;
+  }
+
+  start() {
+    showScreen('game');
+    $('#oppPanel').classList.add('hidden');
+    const dl = $('#zeroDeal'); if (dl) dl.remove();
+    $('#bossPanel').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.remove('hidden');
+    $('#chaosBar').classList.add('hidden');
+    showItemBar(false);
+    $('#btnReroll').classList.add('hidden');
+    this.startedAt = Date.now();
+    this.ended = false;
+    this.moves = [];
+    this.targets = new Set();
+    for (let k = 0; k < 64; k++) if (this.stage.board[k]) this.targets.add(k);
+    this.queue = this.stage.pieces.slice();
+    this.total = this.queue.length;
+    const v = getView();
+    setModeTheme({ ...equippedTheme(), boardId: 'board_default' });
+    this.engine = new Engine();
+    this.engine.grid = this.stage.board.slice();
+    this.engine.rerolls = 0;
+    this.engine.refillHand = () => {};        // 固定キューだけが供給源
+    this.engine.reroll = () => false;
+    this.engine.hand = [this.queue.shift() || null, this.queue.shift() || null, this.queue.shift() || null];
+    v.setEngine(this.engine);
+    v.glowCells = this.targets;               // 消すべき光るマス
+    v.inputLocked = false;
+    v.onIntentPlace = (i, r, c) => this.intent(i, r, c);
+    v.onPlace = null;
+    v.onGameOver = () => this.finish(false);
+    this.updateHud();
+    updateAutoBtn();
+    v.start();
+    audio.playTrack('ruins');
+    // プレイ数と作者への還元はサーバーが数える（金額はクライアントから指定できない）。
+    if (!this.authoring && session.user && this.stage.code) {
+      api(`/api/workshop/stages/${encodeURIComponent(this.stage.code)}/play`, { method: 'POST' })
+        .catch(() => { /* 数えられなくても遊びは続く */ });
+    }
+    toast(this.authoring
+      ? t('🛠️ 自分でクリアしてみよう！ この手順がそのまま投稿の「解けます」の証明になります',
+        '🛠️ Clear it yourself — this run becomes the proof that your stage is solvable')
+      : t(`🧩「${this.stage.title}」光るブロックをすべて消そう！`, `🧩 "${this.stage.title}" — clear every glowing block!`),
+      'announce', 3400);
+  }
+
+  remaining() { return this.queue.length + this.engine.hand.filter(Boolean).length; }
+
+  intent(index, row, col) {
+    const e = this.engine;
+    const piece = e.hand[index];
+    if (!piece || this.ended || !e.canPlace(piece, row, col)) return true;
+    const result = e.place(index, row, col);
+    if (!result) return true;
+    this.moves.push({ h: index | 0, r: row | 0, c: col | 0, t: Math.max(0, Date.now() - this.startedAt) });
+    e.hand[index] = this.queue.shift() || null;   // 固定キュー、ランダム補充なし
+    for (const [r, c] of result.clearedCells) this.targets.delete(r * 8 + c);
+    // place() は補充前の手札で判定している。補充後に判定し直す。
+    e.over = false;
+    result.over = false;
+    getView().applyResult(result);
+    this.updateHud();
+    if (this.ended) return true;
+    if (this.targets.size === 0) { this.finish(true); return true; }
+    if (!e.hasAnyMove()) {
+      e.over = true;
+      this.finish(false);
+    }
+    return true;
+  }
+
+  updateHud() {
+    const el = $('#hudScore');
+    el.textContent = fmt(this.engine.score);
+    applyScoreFit(el, fmt(this.engine.score));
+    $('#hudSub').textContent = t(`🧩 ${this.stage.title} ・ 残り${this.targets.size}マス`,
+      `🧩 ${this.stage.title} — ${this.targets.size} left`);
+    $('#hudTimer').textContent = `🧩${this.remaining()}`;
+  }
+
+  async finish(won) {
+    if (this.ended) return;
+    this.ended = true;
+    getView().inputLocked = true;
+    const e = this.engine;
+    const secs = (Date.now() - this.startedAt) / 1000;
+    if (won) { confettiBurst(40); audio.victory(); } else { audio.gameOver(); }
+    // 投稿用の試遊はここで折り返す（スコア送信もしない）。
+    if (this.authoring) {
+      const cb = this.onCleared;
+      const moves = this.moves.slice();
+      const score = e.score;
+      if (won && cb) { cb(moves, score); return; }
+      const m = showModal(`
+        <div class="result-banner lose">${t('❌ クリアできませんでした', '❌ Not solved')}</div>
+        <p class="muted center">${t('投稿するには、自分で1回クリアする必要があります。', 'You must clear it once yourself before publishing.')}</p>
+        <p class="muted center">${t(`残り${this.targets.size}マス`, `${this.targets.size} squares left`)}</p>
+        <div class="modal-buttons">
+          <button class="btn btn-ghost" id="wsBack">${t('🛠️ 作りなおす', '🛠️ Back to editor')}</button>
+          <button class="btn btn-primary" id="wsRetry">${t('もう一度挑戦', 'Try again')}</button>
+        </div>`, { dismissable: false });
+      m.querySelector('#wsRetry').onclick = () => { closeModal(); this.ended = false; this.start(); };
+      m.querySelector('#wsBack').onclick = () => { closeModal(); this.destroy(); endToMenu(); openWorkshopEditor(this.stage); };
+      return;
+    }
+    const rewards = await submitResult({
+      mode: 'workshop', score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
+      duration: secs, won,
+    });
+    // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
+    if (currentMode !== this) return;
+    const m = showModal(`
+      <div class="result-banner ${won ? 'win' : 'lose'}">${won ? t('🧩 クリア！', '🧩 SOLVED!') : t('❌ 失敗…', '❌ FAILED…')}</div>
+      <p class="muted center">${escapeHtml(`${this.stage.title} — ${this.stage.author}`)}</p>
+      <div class="result-stats">
+        <div class="rs-row"><span>${t('タイム', 'Time')}</span><b>${secs.toFixed(1)}s</b></div>
+        <div class="rs-row"><span>${t('使った手数', 'Moves used')}</span><b>${this.moves.length}${this.stage.par ? ` / ${t('作者', 'author')} ${this.stage.par}` : ''}</b></div>
+        ${won ? '' : `<div class="rs-row"><span>${t('残りブロック', 'Blocks left')}</span><b>${this.targets.size}</b></div>`}
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}${this.stage.bestScore ? ` / ${fmt(this.stage.bestScore)}` : ''}</b></div>
+        ${rewardsRows(rewards)}
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-ghost" id="rList">${t('🧩 工房へ', '🧩 Workshop')}</button>
+        <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Retry')}</button>
+      </div>`, { dismissable: false, peekable: true });
+    m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
+    m.querySelector('#rList').onclick = () => {
+      closeModal(); this.destroy(); endToMenu();
+      if (window.openWorkshop) window.openWorkshop();
+    };
+  }
+
+  quit() {
+    // すでに結果まで進んでいるなら finish() は先頭で即 return するので、
+    // ここで戻さないと ✕ →「終了する」を押しても何も起きない画面に残る。
+    if (this.ended) { closeModal(); endToMenu(); return; }
+    this.finish(false);
+  }
+
+  destroy() {
+    this.ended = true;
+    $('#hudTimer').classList.add('hidden');
+    $('#btnReroll').classList.remove('hidden');
+    if (view) { view.onIntentPlace = null; view.glowCells = null; }
+  }
+}
+
+// screens.js の「▶ 遊ぶ」がこの名前で呼ぶ（第2引数は一覧の生ステージ、無ければ null）。
+export async function startWorkshopStage(code, stage) {
+  let st = normalizeWorkshopStageForPlay(stage);
+  if (!st || !st.board) {
+    // 一覧には board が入っていない（軽くするため）ので個別取得する。
+    try {
+      st = normalizeWorkshopStageForPlay(await api(`/api/workshop/stages/${encodeURIComponent(String(code || '').toUpperCase())}`));
+    } catch {
+      st = null;
+    }
+  }
+  if (!st) {
+    toast(t('このステージを読み込めませんでした', 'Could not load that stage'), 'err', 3000);
+    return;
+  }
+  if (currentMode) currentMode.destroy();
+  currentMode = new WorkshopMode(st);
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+// ---------------------------------------------------------------------------
+// 🛠️ 投稿エディタ
+//
+// 手順は3つだけ:
+//   ① 盤面を塗る（光るマスが「消すべきマス」になる）
+//   ② 配るピースを並べる（この順で配られる ＝ 固定キュー）
+//   ③ 自分でクリアする → その手順を replay として添えて投稿
+// サーバーは③を再生して「本当に解ける」ことを確かめてから公開する。
+// ---------------------------------------------------------------------------
+
+// 作りかけを持ち回るための下書き（モーダルを閉じても消えない）。
+let wsDraft = null;
+
+function wsNewDraft() {
+  return { board: new Array(64).fill(0), pieces: [], color: 1, title: '' };
+}
+
+export function openWorkshopEditor(fromStage) {
+  if (!session.user) {
+    // screens.js 側でログイン確認済みだが、直接呼ばれたときの保険。
+    toast(t('ステージの投稿にはアカウントが必要です', 'You need an account to publish a stage'), 'err', 3000);
+    return;
+  }
+  if (fromStage && Array.isArray(fromStage.board)) {
+    // 「作りなおす」で戻ってきたとき ── 下書きをそのまま復元する。
+    wsDraft = wsDraft || wsNewDraft();
+    wsDraft.board = fromStage.board.slice();
+    wsDraft.pieces = fromStage.pieces.map(p => p.shape);
+  }
+  if (!wsDraft) wsDraft = wsNewDraft();
+  wsEditorStep1();
+}
+
+// ---- ① 盤面 ----
+function wsEditorStep1() {
+  const d = wsDraft;
+  const swatches = [];
+  for (let v = 1; v <= 9; v++) {
+    swatches.push(`<button class="btn btn-ghost ws-sw" data-color="${v}" style="min-width:0;padding:6px 8px;background:${wsCellColor(v)}"></button>`);
+  }
+  const m = showModal(`
+    <h2>🛠️ ${t('ステージを作る（1/3）', 'Create a stage (1/3)')}</h2>
+    <p class="muted center">${t('光らせたマスが「消すべきブロック」になります（4マス以上）。タップで塗る／もう一度で消す。',
+      'The squares you paint become the blocks to clear (4 or more). Tap to paint, tap again to erase.')}</p>
+    <div id="wsBoardWrap">${wsBoardHtml(d.board, { size: 26 })}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:10px">${swatches.join('')}</div>
+    <p class="muted center" id="wsCount"></p>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="wsClear">${t('全消し', 'Clear all')}</button>
+      <button class="btn btn-ghost" id="wsCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-primary" id="wsNext">${t('次へ ▶', 'Next ▶')}</button>
+    </div>`, { dismissable: false });
+
+  const count = () => d.board.reduce((a, v) => a + (v ? 1 : 0), 0);
+  const refreshCount = () => {
+    const n = count();
+    m.querySelector('#wsCount').textContent = t(`光るマス ${n} / 64（${WS_MIN_CELLS}以上・全マスは不可）`,
+      `${n} / 64 glowing (need ${WS_MIN_CELLS}+, cannot be all 64)`);
+  };
+  const paint = () => {
+    m.querySelector('#wsBoardWrap').innerHTML = wsBoardHtml(d.board, { size: 26 });
+    bindCells();
+    refreshCount();
+  };
+  const bindCells = () => {
+    m.querySelectorAll('#wsBoardWrap [data-k]').forEach(el => {
+      el.style.cursor = 'pointer';
+      el.onclick = () => {
+        const k = el.dataset.k | 0;
+        d.board[k] = d.board[k] ? 0 : d.color;
+        el.style.background = d.board[k] ? wsCellColor(d.board[k]) : 'rgba(255,255,255,0.06)';
+        audio.pickup();
+        refreshCount();
+      };
+    });
+  };
+  const markSwatch = () => {
+    m.querySelectorAll('.ws-sw').forEach(b => {
+      b.style.outline = (b.dataset.color | 0) === d.color ? '3px solid #fff' : 'none';
+    });
+  };
+  m.querySelectorAll('.ws-sw').forEach(b => {
+    b.onclick = () => { d.color = b.dataset.color | 0; audio.click(); markSwatch(); };
+  });
+  m.querySelector('#wsClear').onclick = () => { audio.click(); d.board.fill(0); paint(); };
+  m.querySelector('#wsCancel').onclick = () => { audio.click(); closeModal(); if (window.openWorkshop) window.openWorkshop(); };
+  m.querySelector('#wsNext').onclick = () => {
+    const n = count();
+    if (n < WS_MIN_CELLS) { audio.error(); toast(t(`光るマスを${WS_MIN_CELLS}個以上にしてください`, `Paint at least ${WS_MIN_CELLS} squares`), 'err', 2200); return; }
+    if (n >= 64) { audio.error(); toast(t('全マスを埋めることはできません', 'The board cannot be completely full'), 'err', 2200); return; }
+    audio.click();
+    closeModal();
+    wsEditorStep2();
+  };
+  bindCells();
+  refreshCount();
+  markSwatch();
+}
+
+// ---- ② ピース ----
+function wsEditorStep2() {
+  const d = wsDraft;
+  const picker = SHAPES.map((s, i) => `<button class="btn btn-ghost" data-shape="${i}" style="min-width:0;padding:6px">${wsShapeHtml(i, 8)}</button>`).join('');
+  const m = showModal(`
+    <h2>🛠️ ${t('ステージを作る（2/3）', 'Create a stage (2/3)')}</h2>
+    <p class="muted center">${t(`配るピースを並べます（この順に配られます・最大${WS_MAX_PIECES}個）。`,
+      `Pick the pieces in the order they will be dealt (up to ${WS_MAX_PIECES}).`)}</p>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:center;max-height:150px;overflow:auto">${picker}</div>
+    <p class="muted center">${t('▼ 配る順', '▼ Deal order')}</p>
+    <div id="wsQueue" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;min-height:26px"></div>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="wsBack">${t('◀ 盤面へ', '◀ Board')}</button>
+      <button class="btn btn-ghost" id="wsPop">${t('1つ戻す', 'Undo')}</button>
+      <button class="btn btn-primary" id="wsPlay">${t('自分でクリアする ▶', 'Clear it yourself ▶')}</button>
+    </div>`, { dismissable: false });
+
+  const drawQueue = () => {
+    m.querySelector('#wsQueue').innerHTML = d.pieces.length
+      ? d.pieces.map((si, i) => `<span title="${i + 1}">${wsShapeHtml(si, 7)}</span>`).join('')
+      : `<span class="muted">${t('まだ1つも選んでいません', 'No pieces chosen yet')}</span>`;
+  };
+  m.querySelectorAll('[data-shape]').forEach(b => {
+    b.onclick = () => {
+      if (d.pieces.length >= WS_MAX_PIECES) { audio.error(); toast(t(`ピースは${WS_MAX_PIECES}個までです`, `Up to ${WS_MAX_PIECES} pieces`), 'err', 2000); return; }
+      d.pieces.push(b.dataset.shape | 0);
+      audio.pickup();
+      drawQueue();
+    };
+  });
+  m.querySelector('#wsPop').onclick = () => { audio.click(); d.pieces.pop(); drawQueue(); };
+  m.querySelector('#wsBack').onclick = () => { audio.click(); closeModal(); wsEditorStep1(); };
+  m.querySelector('#wsPlay').onclick = () => {
+    if (!d.pieces.length) { audio.error(); toast(t('ピースを1つ以上選んでください', 'Choose at least one piece'), 'err', 2200); return; }
+    audio.click();
+    closeModal();
+    wsEditorTestRun();
+  };
+  drawQueue();
+}
+
+// ---- ③ 自分でクリア → 投稿 ----
+function wsEditorTestRun() {
+  const d = wsDraft;
+  const stage = {
+    code: '', title: t('作成中のステージ', 'Draft stage'), author: (session.user && session.user.username) || '',
+    par: 0, bestScore: 0,
+    board: d.board.slice(),
+    pieces: d.pieces.map(si => ({ shape: si, cells: SHAPES[si].cells, color: SHAPES[si].color })),
+  };
+  if (currentMode) currentMode.destroy();
+  currentMode = new WorkshopMode(stage, {
+    authoring: true,
+    onCleared: (moves, score) => wsPublishPrompt(moves, score),
+  });
+  window.__bbaMode = currentMode;
+  currentMode.start();
+}
+
+function wsPublishPrompt(moves, score) {
+  const d = wsDraft;
+  const m = showModal(`
+    <div class="result-banner win">${t('🧩 クリア！ 投稿できます', '🧩 Solved — ready to publish')}</div>
+    <p class="muted center">${t(`手数 ${moves.length} ・ スコア ${fmt(score)}`, `${moves.length} moves ・ ${fmt(score)} pts`)}</p>
+    <div class="settings-row">
+      <label for="wsTitle">${t('ステージ名', 'Stage name')}</label>
+      <input id="wsTitle" type="text" maxlength="${WS_TITLE_MAX}" value="${escapeHtml(d.title || '')}" placeholder="${t('2〜24文字', '2–24 characters')}">
+    </div>
+    <p class="muted center">${t('この手順をサーバーが再生して、本当に解けることを確かめてから公開されます。',
+      'The server replays your clear to confirm the stage is solvable before publishing.')}</p>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="wsAbort">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-ghost" id="wsEdit">${t('🛠️ 直す', '🛠️ Edit')}</button>
+      <button class="btn btn-primary" id="wsPublish">${t('📤 投稿する', '📤 Publish')}</button>
+    </div>`, { dismissable: false });
+  const input = m.querySelector('#wsTitle');
+  m.querySelector('#wsAbort').onclick = () => { audio.click(); closeModal(); endToMenu(); };
+  m.querySelector('#wsEdit').onclick = () => { audio.click(); closeModal(); endToMenu(); wsEditorStep1(); };
+  m.querySelector('#wsPublish').onclick = async () => {
+    const title = String(input.value || '').trim();
+    if (title.length < 2) { audio.error(); toast(t('ステージ名を2文字以上で入力してください', 'The stage name needs at least 2 characters'), 'err', 2400); return; }
+    d.title = title;
+    const btn = m.querySelector('#wsPublish');
+    btn.disabled = true;
+    btn.textContent = t('送信中…', 'Publishing…');
+    try {
+      const res = await api('/api/workshop/stages', {
+        method: 'POST',
+        body: { title, board: d.board, pieces: d.pieces, replay: { moves } },
+      });
+      audio.coin();
+      closeModal();
+      endToMenu();
+      wsDraft = null;   // 公開できた下書きは捨てる
+      toast(t(`📤 公開しました！ 共有コード: ${res.code}`, `📤 Published! Share code: ${res.code}`), 'ok', 6000);
+      if (window.openWorkshop) window.openWorkshop('new');
+    } catch (err) {
+      audio.error();
+      btn.disabled = false;
+      btn.textContent = t('📤 投稿する', '📤 Publish');
+      toast(err.message || t('投稿できませんでした', 'Could not publish'), 'err', 4000);
+    }
+  };
+  setTimeout(() => { try { input.focus(); } catch { /* ignore */ } }, 120);
+}
+
+// screens.js が window 経由で呼ぶ約束になっている2つ。
+// main.js から import しても使えるよう export もしてある。
+window.startWorkshopStage = (code, stage) => { startWorkshopStage(code, stage); };
+window.openWorkshopEditor = () => { openWorkshopEditor(); };

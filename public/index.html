@@ -73,7 +73,20 @@
           <button class="btn btn-oni btn-big" id="btnSurvival">💀 サバイバル</button>
           <button class="btn btn-melt btn-big" id="btnMeltdown">☢️ メルトダウン</button>
           <button class="btn btn-chimera btn-big" id="btnChimera">🧬 キメラ工房</button>
+          <!-- ⛓️🏗️🛠️ は第3波の新モード。他のモードボタンと同じく日本語が正。
+               英語面は main.js の ensureNewModeButtons() → ensureModeButton() が
+               起動時に t() の結果へ textContent を揃える（言語切替はページごと
+               リロードされるので、これで日英とも常に正しい）。i18n.js の
+               applyStaticI18n() に set('#btnChain', ...) を足しても同じ文言に
+               なるだけで取り合いにはならない。 -->
+          <button class="btn btn-chain btn-big" id="btnChain">⛓️ 連鎖カスケード</button>
+          <button class="btn btn-blueprint btn-big" id="btnBlueprint">🏗️ ブループリント</button>
           <button class="btn btn-puzzle btn-big" id="btnPuzzle">🧩 パズル遺跡</button>
+          <!-- #btnWorkshop は screens.js の ensureWorkshopNav() が探している id。
+               ここに在ると screens.js はナビへの自動追加をやめてこのボタンを拾い、
+               openWorkshop() を割り当てる（二重に生えない）。main.js は
+               screens.js の評価より後に走るので、上書きしたければできる。 -->
+          <button class="btn btn-workshop btn-big" id="btnWorkshop">🛠️ パズル工房</button>
           <button class="btn btn-dig btn-big" id="btnDig">⛏️ 採掘場</button>
           <button class="btn btn-ghostmode btn-big hidden" id="btnGhost">👻 幽霊屋敷</button>
           <button class="btn btn-chaos btn-big hidden" id="btnChaos">🌪️ カオスモード</button>
