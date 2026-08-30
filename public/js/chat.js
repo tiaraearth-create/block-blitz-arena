@@ -147,11 +147,12 @@ function cancelReply() {
 }
 
 // バッジの絵文字。screens.js の badgeIcons（プロフィール／ランキング）と
-// 同じ25種を必ず全部持たせる ── under・heaven・zero・adminevent・
+// 同じ26種を必ず全部持たせる ── under・heaven・zero・adminevent・
 // bronze・silver・gold の7つが抜けていたせいで、👁️断罪や👑管理者イベント制覇と
 // いったいちばん希少なバッジが、チャットのプロフィールカードでだけ
 // 見分けのつかない 🎖️ に潰れていた（同じバッジが画面ごとに違って見える）。
-// バッジを増やすときは screens.js:78 / screens.js:726 の表もいっしょに直すこと。
+// バッジを増やすときは screens.js の badgeIcons 2か所（showProfileModal /
+// ランキング描画）と BADGE_INFO・BADGE_ORDER もいっしょに直すこと。
 const PROFILE_BADGES = {
   bronze: '🥉', silver: '🥈', gold: '🥇',
   oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️',
@@ -159,7 +160,22 @@ const PROFILE_BADGES = {
   tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', daily7: '📅',
   puzzle: '🧩', dig: '⛏️', ghost: '👻',
   crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈',
+  guildquest: '🎖️',
 };
+// 🏛 シーズン刻印バッジ `s{N}champ`（s3champ, s4champ …）はシーズンが終わるたびに
+// サーバー（server/index.js の settleSeasonHallOfFame）が新しいidを作るので、
+// 上の固定表では持ちきれない。固定キーを引く手前でこの正規表現に通すこと。
+// screens.js 側の seasonBadgeNo() と同じ扱い。
+const SEASON_BADGE_RE = /^s(\d{1,4})champ$/;
+function seasonBadgeNo(id) {
+  const m = SEASON_BADGE_RE.exec(String(id || ''));
+  return m ? Number(m[1]) : 0;
+}
+// プロフィールカードのバッジ1つぶん。動的なシーズン刻印を先に見て、
+// そのあと固定表を引く。名前は screens.js のインベントリ側で出す。
+function profileBadgeIcon(id) {
+  return seasonBadgeNo(id) ? '🏛' : PROFILE_BADGES[id] || '🎖️';
+}
 // 👑 王座のボード名（プロフィールカード表示用）
 const THRONE_LABELS = {
   score: ['スコア', 'Score'], rating: ['レート', 'Rating'], sprint: ['タイムアタック', 'Time Attack'],
@@ -207,7 +223,7 @@ async function showProfileCard(name) {
         <div class="pc-stat"><b>F${fmtNum(p.dungeonMax)}</b><span>${t('ダンジョン', 'Dungeon')}</span></div>
       </div>
       ${(p.thrones || []).length ? `<p class="center pc-thrones">👑 ${p.thrones.map(b => THRONE_LABELS[b] ? t(THRONE_LABELS[b][0], THRONE_LABELS[b][1]) : b).join(' ・ ')} ${t('王者', 'Champion')}</p>` : ''}
-      ${(p.badges || []).length ? `<p class="center pc-badges">${p.badges.map(b => PROFILE_BADGES[b] || '🎖️').join(' ')}</p>` : ''}
+      ${(p.badges || []).length ? `<p class="center pc-badges">${p.badges.map(b => profileBadgeIcon(b)).join(' ')}</p>` : ''}
       ${p.kind === 'resident' ? `<p class="muted center" style="font-size:11px">${t('この住人はアリーナのAIプレイヤーです', 'This resident is one of the arena AI players')}</p>` : ''}
     </div>
     <div class="modal-buttons"><button class="btn btn-primary" id="pcClose">${t('閉じる', 'Close')}</button></div>`);

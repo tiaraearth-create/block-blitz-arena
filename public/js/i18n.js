@@ -210,6 +210,32 @@ const SERVER_MSG_EN = {
   '投票を受け付けられません': 'Your vote could not be accepted',
   '伝言は、段にとどめを刺した人だけが残せます': 'Only the player who landed the finishing blow on a tier can leave a message',
   '伝言を入力してください': 'Enter a message',
+  // ---- 🔁 ミッションの引き直し（missions.js / index.js の /api/missions/reroll）----
+  '受け取り済みのミッションは引き直せません': 'A claimed mission cannot be rerolled',
+  'きょうの引き直しは使い切りました': 'No mission rerolls left today',
+  '引き直せるお題がもうありません': 'No other missions left to draw',
+  'ミッションを選んでください': 'Pick a mission first',
+  'このミッションは引き直せません': 'That mission cannot be rerolled',
+  'ミッションの引き直しはまだ使えません': 'Mission rerolls are not available yet',
+  '引き直しが多すぎます。少し待ってください': 'Too many rerolls — please wait a moment',
+  '引き直しに失敗しました': 'The reroll failed',
+  // ---- 🏰 ギルドクエストの金庫（guilds.js）----
+  'そのクエストは見つかりません': 'Quest not found',
+  'そのクエストは今週のものではありません': 'That quest is not part of this week',
+  'ギルドがまだ達成していません': 'Your guild has not completed it yet',
+  '今週は別のギルドで金庫を開けています': 'You already opened another guild vault this week',
+  // ---- 📕 コレクション図鑑（catalog.js の claimCollection）----
+  '受け取れるセットがありません': 'No collection sets ready to claim',
+  'まだコンプしていないか、受け取り済みです': 'Not complete yet, or already claimed',
+  // ---- 🔔 挑戦状（friends.js）----
+  '挑戦状を送れませんでした': 'The challenge could not be sent',
+  '自分には送れません': 'You cannot send that to yourself',
+  '今日のデイリーチャレンジの記録がまだありません': 'You have no Daily Challenge record today yet',
+  'この相手にはもう送っています': 'You have already sent one to this player',
+  'その挑戦状はありません': 'There is no such challenge',
+  // ---- 🎁 本日の無料ギフト / 🧳 ゲスト記録の引き継ぎ（index.js）----
+  '本日の無料ギフトは受け取り済みです': 'The free gift for today has already been claimed',
+  'ゲスト記録の引き継ぎは1アカウント1回だけです（すでに実行済み）': 'Guest progress can be imported only once per account (already done)',
 };
 
 const SERVER_MSG_PATTERNS = [

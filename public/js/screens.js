@@ -73,9 +73,33 @@ export function showAuthModal() {
   m.querySelector('#authPass').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
 }
 
+// 🏛 シーズン刻印バッジ `s{N}champ`（s3champ, s4champ …）。シーズンが終わるたびに
+// server/index.js の settleSeasonHallOfFame() が `s${prev.number}champ` という
+// 新しいidを作る動的バッジなので、固定キーの表では持ちきれない（表に無いidは
+// 素の 🎖️ や空欄に潰れる）。アイコン・名前・解除条件はここで組み立て、
+// どの表を引くときも「固定キーを引く手前」で必ずこれを通すこと。
+// 綴りはサーバー側の SEASON_BADGE_RE = /^s\d{1,4}champ$/ に合わせてある。
+const SEASON_BADGE_RE = /^s(\d{1,4})champ$/;
+function seasonBadgeNo(id) {
+  const m = SEASON_BADGE_RE.exec(String(id || ''));
+  return m ? Number(m[1]) : 0;
+}
+function seasonBadgeInfo(n) {
+  return {
+    icon: '🏛',
+    ja: `シーズン${n} 王者`, en: `Season ${n} Champion`,
+    cja: `シーズン${n}の殿堂ボードで1位になる`, cen: `Finish #1 on a Season ${n} Hall of Fame board`,
+  };
+}
+// 固定バッジは BADGE_INFO（下で定義）、動的なシーズン刻印はここ経由で引く。
+function badgeInfoOf(id) {
+  const n = seasonBadgeNo(id);
+  return n ? seasonBadgeInfo(n) : BADGE_INFO[id] || null;
+}
+
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅', guildquest: '🎖️' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
@@ -86,7 +110,7 @@ function showProfileModal() {
       <div class="rs-row"><span>${tr('オンライン戦績', 'Online record')}</span><b>${tr(`${u.stats.pvpWins}勝 ${u.stats.pvpLosses}敗`, `${u.stats.pvpWins}W ${u.stats.pvpLosses}L`)}</b></div>
       <div class="rs-row"><span>${tr('AI撃破', 'AI wins')}</span><b>${fmt(u.stats.aiWins)}</b></div>
       <div class="rs-row"><span>${tr('プレイ回数', 'Games played')}</span><b>${fmt(u.stats.gamesPlayed)}</b></div>
-      <div class="rs-row"><span>${tr('バッジ', 'Badges')}</span><b>${u.badges.length ? u.badges.map(b => badgeIcons[b] || '🎖️').join(' ') : tr('なし', 'None')}</b></div>
+      <div class="rs-row"><span>${tr('バッジ', 'Badges')}</span><b>${u.badges.length ? u.badges.map(b => seasonBadgeNo(b) ? '🏛' : badgeIcons[b] || '🎖️').join(' ') : tr('なし', 'None')}</b></div>
       ${u.guild ? `<div class="rs-row"><span>${tr('ギルド', 'Guild')}</span><b>${u.guild.icon} [${escapeHtml(u.guild.tag)}] ${escapeHtml(u.guild.name)}${u.guild.owner ? ' 👑' : ''}</b></div>` : ''}
     </div>
     <div class="modal-buttons">
@@ -454,6 +478,10 @@ export function showSettingsModal() {
           <button data-p="high" ${s.particles === 'high' ? 'class="active"' : ''}>${tr('多め', 'High')}</button>
         </div>
       </div>
+      <div class="settings-row">
+        <label>${tr('🔣 色にマークを付ける', '🔣 Show shape marks')}<br><small class="muted" style="font-weight:600">${tr('色が見分けにくいときに、ブロックへ形の記号を重ねます', 'Overlays a shape on each block for easier telling apart')}</small></label>
+        <input type="checkbox" id="setColorMarks" ${s.colorMarks ? 'checked' : ''}>
+      </div>
       ${session.user ? `
       <div class="settings-row">
         <label>${tr('✏️ 名前を変更', '✏️ Change name')}</label>
@@ -512,6 +540,14 @@ export function showSettingsModal() {
   m.querySelector('#setSfxOn').onchange = e => { updateSettings({ sfxOn: e.target.checked }); audio.click(); };
   m.querySelector('#setMusicOn').onchange = e => updateSettings({ musicOn: e.target.checked });
   m.querySelector('#setShake').onchange = e => updateSettings({ shake: e.target.checked });
+  m.querySelector('#setColorMarks').onchange = e => {
+    updateSettings({ colorMarks: e.target.checked });
+    audio.click();
+    // The board runs on a rAF loop, so it picks the flag up on the next frame;
+    // nudge a repaint anyway so a paused/idle view updates right away.
+    const v = window.__bbaView;
+    if (v && typeof v.render === 'function') { try { v.render(); } catch { /* view already torn down */ } }
+  };
   m.querySelector('#setChatTr').onchange = e => {
     updateSettings({ chatTranslate: e.target.checked });
     toast(e.target.checked ? tr('🌐 チャットを自動翻訳します', '🌐 Chat will be auto-translated') : tr('🌐 自動翻訳をオフにしました', '🌐 Auto-translation off'), 'ok');
@@ -724,11 +760,16 @@ export async function openLeaderboard(board = 'score') {
   $$('[data-lb]').forEach(t => t.classList.toggle('active', t.dataset.lb === board));
   const list = $('#lbList');
   list.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
+  // 🏛️ 殿堂への導線。メニューにもボタンを出すが、順位を見ている流れから
+  // 歴代の記録へ寄り道できるほうが自然なのでここにも置く。
+  const hofLink = `<button class="btn btn-sm btn-ghost" id="lbHof" style="width:100%;margin-bottom:8px">🏛️ ${tr('シーズン殿堂（歴代TOP3）', 'Hall of Fame (past top 3)')}</button>`;
+  const bindHof = () => { const b = $('#lbHof'); if (b) b.onclick = () => showHallOfFame(); };
   try {
     const data = await api(`/api/leaderboard?board=${board}`);
     if (gen !== viewGen) return;
     if (!data.rows.length) {
-      list.innerHTML = `<p class="muted center">${tr('まだ記録がありません。最初の挑戦者になろう！', 'No records yet — be the first challenger!')}</p>`;
+      list.innerHTML = `${hofLink}<p class="muted center">${tr('まだ記録がありません。最初の挑戦者になろう！', 'No records yet — be the first challenger!')}</p>`;
+      bindHof();
       return;
     }
     const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
@@ -745,12 +786,12 @@ export async function openLeaderboard(board = 'score') {
       }).join('');
       rewardHead = `<div class="lb-rewards">🎁 <b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
     }
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅' };
-    list.innerHTML = rewardHead + data.rows.map((r, i) => `
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅', guildquest: '🎖️' };
+    list.innerHTML = hofLink + rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
         <div class="lb-name ${r.crowns ? `crowned${Math.min(3, r.crowns)}` : ''}">${r.throne ? `<span class="lb-crown" title="${tr('現王者', 'Reigning champion')}">👑</span>` : ''}${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
-          <span class="lb-badges">${(r.badges || []).map(b => badgeIcons[b] || '').join('')}</span>
+          <span class="lb-badges">${(r.badges || []).map(b => seasonBadgeNo(b) ? '🏛' : badgeIcons[b] || '').join('')}</span>
           ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.id ? catName(r.title) : r.title.name)}》</span>` : ''}
           <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}${board === 'sprint' && r.sprint180 ? ` ・ ${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? ` ・ 🌑A${fmt(r.abyssMax)}` : ''}</div>
         </div>
@@ -764,11 +805,187 @@ export async function openLeaderboard(board = 'score') {
           : board === 'dig' ? `${fmt(r.digDepth || 0)}m`
           : board === 'rating' ? `${rankOf(r.rating).icon}${fmt(r.rating)}` : fmt(r.bestScore)}</div>
       </div>`).join('');
+    bindHof();
   } catch (err) {
     if (gen !== viewGen) return;
     list.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
   }
 }
+
+// ---------------------------------------------------------------------------
+// 🏛️ シーズン殿堂（I13）— 歴代シーズンのTOP3
+//
+// 画面（section）を増やすと dom.js の SCREENS を触ることになるので、ここは
+// モーダルで作る。中身はランキング画面と同じ「タブ＝ボード／行＝順位」構造。
+// /api/halloffame がまだ無いサーバーでは「まだありません」で止まる。
+// ---------------------------------------------------------------------------
+
+// ボードの見出し。サーバーの各シーズンが name / nameEn を持って来るので、
+// それを優先し、ここは絵文字つきの既定ラベルとして使う（未知の id はそのまま）。
+const HOF_BOARD_LABEL = {
+  rating:  ['📈 レート',           '📈 Rating'],
+  score:   ['🏆 ハイスコア',       '🏆 High Score'],
+  wins:    ['🎯 週間チャレンジ優勝', '🎯 Weekly Challenge wins'],
+  sprint:  ['⏱️ タイムアタック',   '⏱️ Time Attack'],
+  dungeon: ['🏰 ダンジョン',       '🏰 Dungeon'],
+  weekly:  ['🎯 ウィークリー',     '🎯 Weekly'],
+  puzzle:  ['🧩 パズル遺跡',       '🧩 Puzzle Ruins'],
+  dig:     ['⛏️ 採掘場',           '⛏️ The Mines'],
+};
+const HOF_BOARD_ORDER = ['rating', 'score', 'wins', 'sprint', 'dungeon', 'weekly', 'puzzle', 'dig'];
+// サーバーが送ってきたボード名（日英）。id -> [ja, en]
+let hofNames = {};
+function hofBoardLabel(id) {
+  const n = hofNames[id];
+  if (Array.isArray(n)) return tr(n[0], n[1]);
+  const L = HOF_BOARD_LABEL[id];
+  return Array.isArray(L) ? tr(L[0], L[1]) : id;
+}
+
+// /api/halloffame は { seasons: [{ season, number, name, nameEn, endsAt, badge,
+// boards: [{ id, name, nameEn, entrants, top: [{rank, username, value, resident}] }] }] }。
+// boards が配列でもオブジェクトでも読めるようにしてある（形が変わっても落ちない）。
+function normalizeHof(data) {
+  const raw = Array.isArray(data) ? data
+    : (data && (data.seasons || data.halls || data.rows)) || null;
+  if (!Array.isArray(raw)) return [];
+  hofNames = {};
+  const entry = (e, i) => ({
+    rank: Number(e && e.rank) || i + 1,
+    username: String((e && (e.username || e.name)) || '—'),
+    value: Number((e && (e.value ?? e.score ?? e.best ?? e.rating)) || 0) || 0,
+    entrants: 0,
+  });
+  const takeBoard = (out, id, list, name, nameEn) => {
+    if (!Array.isArray(list) || !list.length) return;
+    if (name) hofNames[id] = [name, nameEn || name];
+    out[id] = list.slice(0, 3).map(entry);
+  };
+  return raw.map(s => {
+    const boards = {};
+    const entrants = {};
+    const bs = s && s.boards;
+    if (Array.isArray(bs)) {
+      for (const b of bs) {
+        if (!b || !b.id) continue;
+        takeBoard(boards, b.id, b.top || b.rows || b.entries, b.name, b.nameEn);
+        if (boards[b.id]) entrants[b.id] = Number(b.entrants) || 0;
+      }
+    } else if (bs && typeof bs === 'object') {
+      for (const [k, v] of Object.entries(bs)) takeBoard(boards, k, v);
+    } else if (Array.isArray(s && (s.top3 || s.top))) {
+      takeBoard(boards, 'score', s.top3 || s.top);
+    }
+    return {
+      number: Number(s && (s.number ?? s.season ?? s.n)) || 0,
+      name: (LANG === 'en' && s && s.nameEn ? s.nameEn : (s && s.name)) || '',
+      endedAt: Number(s && (s.endsAt ?? s.endedAt ?? s.at)) || 0,
+      boards, entrants,
+    };
+  }).filter(s => Object.keys(s.boards).length)
+    .sort((a, b) => b.number - a.number);
+}
+
+function hofValue(board, e) {
+  if (board === 'wins') return tr(`${fmt(e.value)}回`, `${fmt(e.value)}x`);
+  if (board === 'dungeon') return `F${fmt(e.value)}`;
+  if (board === 'dig') return `${fmt(e.value)}m`;
+  if (board === 'puzzle') return tr(`ステージ${fmt(e.value)}`, `Stage ${fmt(e.value)}`);
+  if (board === 'rating') return `${rankOf(e.value).icon}${fmt(e.value)}`;
+  return fmt(e.value);
+}
+
+let hofSeasons = null;
+let hofBoard = null;
+let hofGen = 0;   // モーダル内の非同期レース対策（画面用の viewGen とは別勘定）
+
+export async function showHallOfFame() {
+  audio.click();
+  const m = showModal(`
+    <h2>🏛️ ${tr('シーズン殿堂', 'Hall of Fame')}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:8px">${tr('歴代シーズンの上位3名', 'The top 3 of every past season')}</p>
+    <div class="tabs" id="hofTabs" style="justify-content:center;flex-wrap:wrap"></div>
+    <div id="hofBody" class="lb-list" style="max-height:52vh;overflow-y:auto"><p class="muted center">${tr('読み込み中…', 'Loading…')}</p></div>
+    <div class="modal-buttons"><button class="btn btn-primary" id="hofClose">${tr('閉じる', 'Close')}</button></div>`);
+  m.querySelector('#hofClose').onclick = closeModal;
+
+  const gen = ++hofGen;
+  let data = null;
+  try { data = await api('/api/halloffame'); } catch { data = null; }
+  // await のあとは必ずガード。閉じられた／開き直された後には描かない。
+  if (gen !== hofGen || !m.isConnected) return;
+  hofSeasons = normalizeHof(data);
+  const body = m.querySelector('#hofBody');
+  if (!hofSeasons.length) {
+    body.innerHTML = `<p class="muted center">${tr('まだ殿堂入りしたシーズンがありません', 'No seasons in the Hall of Fame yet')}</p>`;
+    return;
+  }
+  const avail = [];
+  for (const id of HOF_BOARD_ORDER) if (hofSeasons.some(s => s.boards[id])) avail.push(id);
+  for (const s of hofSeasons) for (const k of Object.keys(s.boards)) if (!avail.includes(k)) avail.push(k);
+  if (!avail.includes(hofBoard)) hofBoard = avail[0];
+
+  const tabs = m.querySelector('#hofTabs');
+  tabs.innerHTML = avail.map(id =>
+    `<button class="tab ${id === hofBoard ? 'active' : ''}" data-hof="${escapeHtml(id)}">${escapeHtml(hofBoardLabel(id))}</button>`).join('');
+  tabs.querySelectorAll('[data-hof]').forEach(b => {
+    b.onclick = () => {
+      audio.click();
+      hofBoard = b.dataset.hof;
+      tabs.querySelectorAll('[data-hof]').forEach(x => x.classList.toggle('active', x === b));
+      renderHofBody(body);
+    };
+  });
+  renderHofBody(body);
+}
+
+function renderHofBody(body) {
+  const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉';
+  const seasons = (hofSeasons || []).filter(s => s.boards[hofBoard] && s.boards[hofBoard].length);
+  if (!seasons.length) {
+    body.innerHTML = `<p class="muted center">${tr('このランキングの記録はまだありません', 'No records on this board yet')}</p>`;
+    return;
+  }
+  body.innerHTML = seasons.map(s => {
+    const n = s.entrants ? s.entrants[hofBoard] : 0;
+    return `
+    <div class="inv-sec" style="margin-bottom:10px">
+      <div class="inv-sec-head">
+        <span>${s.number ? `S${s.number}` : ''} ${escapeHtml(s.name)}</span>
+        <span class="muted">${s.endedAt ? new Date(s.endedAt).toLocaleDateString(LANG === 'en' ? 'en-US' : 'ja-JP') : ''}${
+          n ? ` ・ ${tr(`${fmt(n)}人中`, `of ${fmt(n)}`)}` : ''}</span>
+      </div>
+      ${s.boards[hofBoard].map((e, i) => `
+        <div class="lb-row ${session.user && e.username === session.user.username ? 'me' : ''}">
+          <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
+          <div class="lb-name">${escapeHtml(e.username)}</div>
+          <div class="lb-score">${hofValue(hofBoard, e)}</div>
+        </div>`).join('')}
+    </div>`;
+  }).join('');
+}
+
+// メニューの「🏛️ 殿堂」ボタン。index.html 側にはまだ無いのでここで足す。
+// 後から index.html に #btnHallOfFame が生えたら、それを拾うだけで二重にしない。
+function ensureHallOfFameNav() {
+  try {
+    let btn = $('#btnHallOfFame');
+    if (!btn) {
+      const nav = $('#screen-menu .menu-nav');
+      if (!nav) return;
+      btn = document.createElement('button');
+      btn.className = 'nav-btn';
+      btn.id = 'btnHallOfFame';
+      btn.innerHTML = `<span>🏛️</span>${tr('殿堂', 'Hall of Fame')}`;
+      const after = $('#btnLeaderboard');
+      if (after && after.parentNode === nav) nav.insertBefore(btn, after.nextSibling);
+      else nav.appendChild(btn);
+    }
+    btn.onclick = () => showHallOfFame();
+  } catch { /* メニューの形が変わっても他の導線は死なせない */ }
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ensureHallOfFameNav, { once: true });
+else ensureHallOfFameNav();
 
 // ---------------------------------------------------------------------------
 // Shop
@@ -785,6 +1002,14 @@ let shopBoosters = null;
 let shopTab = 'skin';
 let shopRole = null;   // admin sees exclusive gear — refetch when the role changes
 
+// 🔥 日替わりセール／🎁 無料ギフト（I14）。どちらも古いサーバー（deals も gift も
+// 返さない）では null のままで、値引きバッジもギフトの棚も一切出ない＝従来の
+// 見た目に戻るだけ。セールは時間で変わるので、品目のキャッシュには寿命をつける。
+let shopDeals = null;      // Map(itemId -> { price, was, off, endsAt })
+let shopGift = null;       // { available, claimed, coins, gems, nextAt } | null
+let shopFetchedAt = 0;
+const SHOP_CACHE_MS = 60000;
+
 export async function openShop(tab = shopTab) {
   showScreen('shop');
   shopTab = tab;
@@ -793,11 +1018,14 @@ export async function openShop(tab = shopTab) {
   grid.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
   try {
     const role = session.user ? session.user.role : 'guest';
-    if (!shopItems || shopRole !== role) {
+    if (!shopItems || shopRole !== role || Date.now() - shopFetchedAt > SHOP_CACHE_MS) {
       const data = await api('/api/shop');
       shopItems = data.items;
       shopBoosters = data.boosters || [];
       shopRole = role;
+      shopFetchedAt = Date.now();
+      shopDeals = normalizeDeals(data.deals);
+      shopGift = normalizeGift(data.gift || data.freeGift);
     }
   } catch (err) {
     grid.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
@@ -806,12 +1034,148 @@ export async function openShop(tab = shopTab) {
   renderShop();
 }
 
+// ---- 🔥 セールの読み取り（サーバーの形に幅を持たせる） ----------------------
+// deals は配列でも { itemId: {...} } でも受ける。壊れた／期限切れの行は
+// 単に「セールなし」に落ちるだけで、通常価格の表示に戻る。
+function normalizeDeals(raw) {
+  const map = new Map();
+  if (!raw) return map;
+  const list = Array.isArray(raw)
+    ? raw
+    : (typeof raw === 'object'
+      ? Object.entries(raw).map(([id, v]) => (v && typeof v === 'object' ? { id, ...v } : { id, price: v }))
+      : []);
+  for (const d of list) {
+    if (!d) continue;
+    const id = d.id || d.itemId;
+    if (!id) continue;
+    const price = Number(d.price ?? d.salePrice ?? d.newPrice);
+    const was = Number(d.was ?? d.basePrice ?? d.origPrice ?? d.oldPrice);
+    const off = Number(d.off ?? d.pct ?? d.percent ?? d.discount);
+    const endsAt = Number(d.endsAt ?? d.until ?? d.expiresAt) || 0;
+    map.set(id, {
+      price: Number.isFinite(price) ? price : null,
+      was: Number.isFinite(was) ? was : null,
+      off: Number.isFinite(off) ? off : null,
+      endsAt,
+    });
+  }
+  return map;
+}
+
+// /api/shop の gift は { day, available, claimed, nextAt }。中身（何が出るか）は
+// 受け取ってみるまで分からない＝サーバー抽選なので、金額は一切表示しない。
+function normalizeGift(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    available: raw.available === undefined ? !raw.claimed : !!raw.available,
+    claimed: !!(raw.claimed ?? raw.taken),
+    nextAt: Number(raw.nextAt ?? raw.resetAt ?? raw.nextResetAt) || 0,
+  };
+}
+
+// その品が「いま値引きされているか」。値引きになっていない／期限切れの行は
+// null を返し、呼び出し側は定価表示にフォールバックする。
+function dealFor(item) {
+  if (!shopDeals || !item) return null;
+  const d = shopDeals.get(item.id);
+  if (!d) return null;
+  const was = d.was != null ? d.was : Number(item.price);
+  if (!Number.isFinite(was) || was <= 0) return null;
+  let price = d.price;
+  if (price == null && d.off != null) price = Math.max(0, Math.round(was * (1 - d.off / 100)));
+  if (price == null || !(was > price)) return null;
+  if (d.endsAt && d.endsAt <= Date.now()) return null;
+  const off = d.off != null ? d.off : Math.round((1 - price / was) * 100);
+  return { price, was, off, endsAt: d.endsAt };
+}
+
+// 値札。セール中は元値に打ち消し線を引いて隣に割引後を出す。
+function priceLabel(cur, item, deal) {
+  return deal
+    ? `${cur} <s style="opacity:.55;font-weight:400">${fmt(deal.was)}</s> <b>${fmt(deal.price)}</b>`
+    : `${cur} ${fmt(item.price)}`;
+}
+
+function saleBadge(deal) {
+  if (!deal) return '';
+  return `<div class="shop-sale" style="font-size:11px;font-weight:800;color:var(--red)">🔥 ${tr(`${deal.off}%OFF`, `${deal.off}% OFF`)}${
+    deal.endsAt ? ` <span class="muted" style="font-weight:600" data-deal-end="${deal.endsAt}">…</span>` : ''}</div>`;
+}
+
+function dealRemainText(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600), mn = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (h >= 1) return tr(`残り${h}時間${mn}分`, `${h}h ${mn}m left`);
+  if (mn >= 1) return tr(`残り${mn}分${sec}秒`, `${mn}m ${sec}s left`);
+  return tr(`残り${sec}秒`, `${sec}s left`);
+}
+
+// カウントダウンは1本のタイマーで全部の [data-deal-end] を更新する。
+// 対象が画面から消えたら自分で止まるので、画面を離れても回りっぱなしにならない。
+let dealTimer = null;
+function tickDeals() {
+  const els = document.querySelectorAll('[data-deal-end]');
+  if (!els.length) { if (dealTimer) { clearInterval(dealTimer); dealTimer = null; } return; }
+  const now = Date.now();
+  els.forEach(el => {
+    const end = Number(el.dataset.dealEnd) || 0;
+    el.textContent = end > now ? dealRemainText(end - now) : tr('終了しました', 'Ended');
+  });
+}
+function startDealTimer() {
+  tickDeals();
+  if (!dealTimer && document.querySelector('[data-deal-end]')) dealTimer = setInterval(tickDeals, 1000);
+}
+
+// 🎁 無料ギフトの棚。gift を返さないサーバーでは何も足さない。
+function appendGiftBanner(grid) {
+  if (!shopGift) return;
+  const g = shopGift;
+  const el = document.createElement('div');
+  el.className = 'shop-gift';
+  el.style.cssText = 'grid-column:1 / -1;display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:10px;border:1px dashed var(--gold);border-radius:12px;background:rgba(255,215,94,0.08)';
+  el.innerHTML = `
+    <b>🎁 ${tr('本日の無料ギフト', 'Today\'s free gift')}</b>
+    <span class="muted" style="font-size:12px">${tr('中身は開けてのお楽しみ（1日1回）', 'A surprise every day — once per day')}</span>
+    ${g.claimed
+      ? `<span class="muted">✓ ${tr('受取済み', 'Claimed')}${g.nextAt > Date.now() ? ` ・ ${tr(`次は${fmtResetIn(g.nextAt - Date.now())}後`, `next in ${fmtResetIn(g.nextAt - Date.now())}`)}` : ''}</span>`
+      : `<button class="btn btn-sm btn-gold" id="shopGiftClaim">${tr('受け取る', 'Claim')}</button>`}`;
+  grid.appendChild(el);
+  const btn = el.querySelector('#shopGiftClaim');
+  if (btn) btn.onclick = () => claimShopGift(btn);
+}
+
+async function claimShopGift(btn) {
+  if (!session.user) { showAuthModal(); return; }
+  btn.disabled = true;
+  try {
+    // 中身も受取済みフラグもサーバー側。こちらは押したことを伝えるだけで、
+    // 返ってきた gift は表示にしか使わない（user は api() が反映する）。
+    const res = await api('/api/shop/gift', { method: 'POST', body: {} });
+    const g = (res && res.gift) || {};
+    const gname = LANG === 'en' && g.nameEn ? g.nameEn : (g.name || '');
+    audio.coin();
+    confettiBurst(25);
+    updateTopbar();
+    toast(tr(`🎁 無料ギフト： ${g.icon || ''}${gname}${g.amount ? ` ×${fmt(g.amount)}` : ''}`,
+      `🎁 Free gift: ${g.icon || ''}${gname}${g.amount ? ` ×${fmt(g.amount)}` : ''}`), 'ok', 3500);
+    shopFetchedAt = 0;   // 受取済みの状態を取り直す
+    openShop(shopTab);
+  } catch (err) {
+    audio.error();
+    toast(err.message, 'err');
+    btn.disabled = false;
+  }
+}
+
 function renderShop() {
   if (shopTab === 'item') { renderBoosterShop(); return; }
   const grid = $('#shopGrid');
   const u = session.user;
   const items = shopItems.filter(i => i.cat === shopTab);
   grid.innerHTML = '';
+  appendGiftBanner(grid);
   if (shopTab === 'ult') {
     const note = document.createElement('p');
     note.className = 'muted center';
@@ -832,6 +1196,8 @@ function renderShop() {
       ? equippedUlt() === item.id
       : u ? u.equipped[item.cat] === item.id : !!item.default;
     const cur = item.currency === 'gems' ? '💎' : '🪙';
+    // 値引きは「まだ買っていない・買える品」にだけ意味がある。
+    const deal = (!owned && !item.adminOnly && !item.throneOnly && !item.gachaOnly) ? dealFor(item) : null;
     const el = document.createElement('div');
     el.className = `shop-item ${equipped ? 'equipped' : ''}`;
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
@@ -839,6 +1205,7 @@ function renderShop() {
       <div class="shop-preview" data-pv="${item.id}"></div>
       <div class="shop-name">${item.adminOnly || item.throneOnly ? '👑 ' : ''}${catName(item)}</div>
       <div class="shop-desc">${catDesc(item)}</div>
+      ${saleBadge(deal)}
       ${equipped
         ? `<button class="btn btn-sm btn-ghost" disabled>${tr('✓ 装備中', '✓ Equipped')}</button>`
         : owned
@@ -849,13 +1216,14 @@ function renderShop() {
               ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${tr('👑 イベント専用', '👑 Event only')}</button>`
             : item.gachaOnly
               ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${tr('🎰 ガチャ限定', '🎰 Gacha only')}</button>`
-              : `<button class="btn btn-sm btn-gold" data-act="buy">${cur} ${fmt(item.price)}</button>`}
+              : `<button class="btn btn-sm btn-gold" data-act="buy">${priceLabel(cur, item, deal)}</button>`}
     `;
     grid.appendChild(el);
     renderPreview(el.querySelector('.shop-preview'), item);
     const btn = el.querySelector('[data-act]');
     if (btn) btn.onclick = () => (btn.dataset.act === 'buy' ? buyItem(item) : equipItem(item));
   });
+  startDealTimer();
 }
 
 // ---------------------------------------------------------------------------
@@ -898,8 +1266,11 @@ const BADGE_INFO = {
   crown5:     { icon: '👑', ja: '五冠',          en: 'Five Crowns',     cja: '王座を同時に5つ保持',               cen: 'Hold 5 thrones at once' },
   crown7:     { icon: '🌈', ja: '全冠制覇',      en: 'Total Domination', cja: '7つの王座をすべて同時に保持',       cen: 'Hold all 7 thrones at once' },
   daily7:     { icon: '📅', ja: '日課の鬼',      en: 'Daily Devotee',   cja: 'デイリーチャレンジを7日連続クリア', cen: 'Clear the Daily Challenge 7 days in a row' },
+  guildquest: { icon: '🎖️', ja: 'ギルドの誉れ',  en: 'Guild Honors',    cja: 'ギルド週間クエストを3本すべて達成して受け取る', cen: 'Claim all 3 weekly guild quests' },
 };
-const BADGE_ORDER = ['oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'under', 'heaven', 'abyss', 'zero', 'tourney', 'royale', 'adminevent', 'weekly1', 'daily7', 'puzzle', 'dig', 'ghost', 'bronze', 'silver', 'gold', 'crown2', 'crown3', 'crown5', 'crown7'];
+// 🏛 シーズン刻印（s{N}champ）はシーズンごとに増えるのでここには並べない。
+// 持っているぶんだけ renderInvBadges が末尾に足す（seasonBadgeInfo 参照）。
+const BADGE_ORDER = ['oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'under', 'heaven', 'abyss', 'zero', 'tourney', 'royale', 'adminevent', 'weekly1', 'daily7', 'guildquest', 'puzzle', 'dig', 'ghost', 'bronze', 'silver', 'gold', 'crown2', 'crown3', 'crown5', 'crown7'];
 // 👑 王座のボード名は [日本語, English] のペアで持つ。
 // 以前は日本語だけの表で、引くときに tr(THRONE_LABEL[b], THRONE_LABEL[b]) と
 // 第2引数にも同じ日本語を渡していたため、英語表示でもここだけ日本語のまま出ていた。
@@ -919,6 +1290,7 @@ let invTab = 'gear';
 
 export async function openInventory(tab = invTab) {
   showScreen('inventory');
+  ensureInvDexTab();
   invTab = tab;
   $$('[data-inv]').forEach(t => t.classList.toggle('active', t.dataset.inv === tab));
   const body = $('#invBody');
@@ -929,6 +1301,9 @@ export async function openInventory(tab = invTab) {
       shopItems = data.items;
       shopBoosters = data.boosters || [];
       shopRole = session.user ? session.user.role : 'guest';
+      shopFetchedAt = Date.now();
+      shopDeals = normalizeDeals(data.deals);
+      shopGift = normalizeGift(data.gift || data.freeGift);
     }
   } catch (err) {
     body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
@@ -938,7 +1313,23 @@ export async function openInventory(tab = invTab) {
   if (tab === 'gear') renderInvGear();
   else if (tab === 'item') renderInvItems();
   else if (tab === 'title') await renderInvTitles();
+  else if (tab === 'dex') await renderInvDex();
   else renderInvBadges();
+}
+
+// 📚 図鑑タブのボタンは index.html 側にはまだ無い（担当が別）。無ければここで
+// 足し、あればそれを使う ── 後から index.html に生えても二重にならない。
+function ensureInvDexTab() {
+  try {
+    const tabs = $('#screen-inventory .tabs');
+    if (!tabs || tabs.querySelector('[data-inv="dex"]')) return;
+    const b = document.createElement('button');
+    b.className = 'tab';
+    b.dataset.inv = 'dex';
+    b.textContent = tr('📚 図鑑', '📚 Collection');
+    b.onclick = () => { audio.click(); openInventory('dex'); };
+    tabs.appendChild(b);
+  } catch { /* タブ列の形が変わっても他のタブは死なせない */ }
 }
 
 // 管理者は「全ショップ所持・通貨無限」という表示上の嘘を持つので、
@@ -1145,7 +1536,228 @@ function renderInvBadges() {
           </span>
         </div>`;
       }).join('')}
+      ${[...have].filter(b => seasonBadgeNo(b)).sort((a, b) => seasonBadgeNo(b) - seasonBadgeNo(a)).map(id => {
+        // 🏛 シーズン刻印は BADGE_ORDER に固定では並べられない（シーズンごとに
+        // 増える）。持っているぶんだけ、名前を動的に組み立てて末尾に足す。
+        const b = seasonBadgeInfo(seasonBadgeNo(id));
+        return `<div class="inv-badge">
+          <span class="inv-badge-icon">${b.icon}</span>
+          <span class="inv-badge-body">
+            <b>${tr(b.ja, b.en)}</b>
+            <small>✅ ${tr('獲得済み', 'Earned')}</small>
+          </span>
+        </div>`;
+      }).join('')}
     </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// 📚 コレクション図鑑（I10）
+//
+// カテゴリごとの収集率と、セットコンプ報酬の受取口。未所持はシルエットで
+// 「あるのは分かるが正体は分からない」状態にし、どこで手に入るかだけ明記する。
+//
+// /api/collection がまだ無いサーバーでは、すでに手元にある /api/shop の品目から
+// 同じ形を組み立てて表示する（セット報酬だけが出ない）。画面が空にならない。
+// ---------------------------------------------------------------------------
+
+const DEX_SOURCE = {
+  shop:       ['🛍️ ショップで購入', '🛍️ Buy in the shop'],
+  gacha:      ['🎰 ガチャ（SSR以上）', '🎰 Gacha (SSR+)'],
+  throne:     ['👑 王座の欠片と交換', '👑 Trade throne shards'],
+  battlepass: ['🎫 バトルパスの報酬', '🎫 Battle pass reward'],
+  event:      ['🎪 イベント報酬', '🎪 Event reward'],
+};
+function dexSourceLabel(src) {
+  const L = DEX_SOURCE[src];
+  return Array.isArray(L) ? tr(L[0], L[1]) : tr('🛍️ ショップで購入', '🛍️ Buy in the shop');
+}
+
+// 図鑑1マスぶんの情報。セットの kind で引き先が変わる:
+//   item  … ショップの装備（プレビューも流用できる）
+//   boost … ブースター（ショップの「アイテム」タブ）
+//   badge … BADGE_INFO（解除条件をそのまま入手経路として出す）
+//   title … /api/titles のカタログ（loadTitles が入れている）
+function dexEntryInfo(kind, id) {
+  if (kind === 'badge') {
+    const b = badgeInfoOf(id);
+    return { name: b ? tr(b.ja, b.en) : id, icon: b ? b.icon : '🎖️',
+      how: b ? tr(b.cja, b.cen) : tr('プレイして獲得', 'Earn it in-game'), item: null, go: null };
+  }
+  if (kind === 'title') {
+    const t = titlesCatalog && titlesCatalog.find(x => x.id === id);
+    return { name: t ? catName(t) : id, icon: '👑',
+      how: t ? catDesc(t) : tr('条件を満たすと獲得', 'Unlocked by meeting its condition'), item: null, go: null };
+  }
+  if (kind === 'boost') {
+    const it = (shopBoosters || []).find(x => x.id === id);
+    return { name: it ? catName(it) : id, icon: it ? it.icon : '🧪',
+      how: tr('🛍️ ショップの「アイテム」で購入', '🛍️ Buy from the shop’s Items tab'),
+      item: null, go: () => openShop('item') };
+  }
+  const it = (shopItems || []).find(x => x.id === id);
+  const src = it ? (it.throneOnly ? 'throne' : it.gachaOnly ? 'gacha' : 'shop') : 'shop';
+  return {
+    name: it ? catName(it) : id, icon: null, how: dexSourceLabel(src), item: it || null,
+    // 👑王座の宝物庫は管理者イベント中しか開かないので、飛ばす先を作らない。
+    go: src === 'gacha' ? () => openGacha() : src === 'throne' ? null : (it ? () => openShop(it.cat) : null),
+  };
+}
+
+// /api/collection（catalog.js の collectionView）を画面用にならす。
+function normalizeDexSets(data) {
+  const raw = data && (data.sets || data.cats || data.collection);
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const out = raw.map(s => {
+    const ids = Array.isArray(s.ids) ? s.ids : [];
+    const ownedIds = new Set(Array.isArray(s.ownedIds) ? s.ownedIds : []);
+    return {
+      id: String(s.id || ''),
+      icon: s.icon || '📦',
+      kind: s.kind || 'item',
+      name: (LANG === 'en' && s.nameEn ? s.nameEn : s.name) || String(s.id || ''),
+      desc: (LANG === 'en' && s.descEn ? s.descEn : s.desc) || '',
+      ids, ownedIds,
+      owned: Number.isFinite(s.owned) ? s.owned : ownedIds.size,
+      total: Number.isFinite(s.total) ? s.total : ids.length,
+      done: !!s.done,
+      claimed: !!s.claimed,
+      coins: Number(s.coins) || 0,
+      gems: Number(s.gems) || 0,
+      titleName: s.titleName || '',
+    };
+  }).filter(s => s.ids.length);
+  return out.length ? out : null;
+}
+
+// /api/collection がまだ無いサーバー用の代替。手元の /api/shop から
+// カテゴリ別の収集率だけを組み立てる（セット報酬は出さない）。
+function dexFallbackSets() {
+  if (!shopItems) return null;
+  const u = session.user;
+  const has = i => i.default || invIsStaff() || (u ? (u.owned || []).includes(i.id) : false);
+  return ['skin', 'board', 'fx', 'ult'].map(cat => {
+    const list = shopItems.filter(i => i.cat === cat && !i.adminOnly);
+    const ownedIds = new Set(list.filter(has).map(i => i.id));
+    return {
+      id: `set_${cat}`, icon: '📦', kind: 'item',
+      name: tr(CAT_TITLE[cat].ja, CAT_TITLE[cat].en), desc: '',
+      ids: list.map(i => i.id), ownedIds,
+      owned: ownedIds.size, total: list.length,
+      done: false, claimed: false, coins: 0, gems: 0, titleName: '',
+    };
+  }).filter(s => s.ids.length);
+}
+
+async function renderInvDex() {
+  const body = $('#invBody');
+  // タブ連打のレース対策は既存の renderInvTitles と同じ作法。
+  const gen = ++viewGen;
+  let data = null;
+  try { data = await api('/api/collection'); } catch { data = null; }
+  if (gen !== viewGen) return;
+  const sets = normalizeDexSets(data) || dexFallbackSets();
+  if (!sets || !sets.length) {
+    body.innerHTML = `<p class="muted center">${tr('図鑑はまだありません', 'Nothing in the collection yet')}</p>`;
+    return;
+  }
+  const hasReward = s => !!(s.coins || s.gems || s.titleName);
+  const got = sets.reduce((a, s) => a + s.owned, 0);
+  const slots = sets.reduce((a, s) => a + s.total, 0);
+  const rate = slots ? Math.round((got / slots) * 100) : 0;
+  const claimable = sets.filter(s => s.done && !s.claimed && hasReward(s)).length;
+
+  const cell = (kind, id, owned) => {
+    const info = dexEntryInfo(kind, id);
+    const pv = info.item
+      ? `<div class="inv-pv" data-dexpv="${escapeHtml(id)}"${owned ? '' : ' style="filter:grayscale(1) brightness(.25) contrast(.6)"'}></div>`
+      : `<div class="inv-pv" style="display:flex;align-items:center;justify-content:center;font-size:26px${owned ? '' : ';filter:grayscale(1) brightness(.25) contrast(.6)'}">${escapeHtml(info.icon || '❓')}</div>`;
+    return `<div class="inv-card"${owned ? ' style="cursor:default"' : ` style="opacity:.75" data-dexgo="${escapeHtml(kind)}|${escapeHtml(id)}"`}>
+      ${pv}
+      <div class="inv-name"${owned ? '' : ' style="color:var(--dim)"'}>${owned ? escapeHtml(info.name) : '？？？'}</div>
+      <div class="inv-eq"${owned ? '' : ' style="background:none;color:var(--muted);font-size:10px;font-weight:600"'}>${
+        owned ? `✅ ${tr('所持', 'Owned')}` : escapeHtml(info.how)}</div>
+    </div>`;
+  };
+
+  body.innerHTML = `
+    <div class="inv-sec-head">
+      <span>📚 ${tr('コレクション図鑑', 'Collection')}</span>
+      <span class="muted">${fmt(got)} / ${fmt(slots)}（${rate}%）</span>
+    </div>
+    <span class="inv-bar"><span style="width:${rate}%"></span></span>
+    <p class="muted center inv-note">${tr('灰色はまだ持っていない品です。入手できる場所を各マスに書いています',
+      'Greyed-out entries are still missing — each one lists where to get it')}</p>
+    ${claimable && session.user
+      ? `<button class="btn btn-gold" id="dexClaimAll" style="width:100%;margin-bottom:10px">🎁 ${tr(`受け取れるセット報酬が${claimable}件あります`, `${claimable} set reward${claimable > 1 ? 's' : ''} ready to claim`)}</button>`
+      : ''}
+    ${sets.map(s => {
+      const pct = Math.round((s.owned / Math.max(1, s.total)) * 100);
+      return `
+      <div class="inv-sec">
+        <div class="inv-sec-head">
+          <span>${escapeHtml(s.icon)} ${escapeHtml(s.name)}</span>
+          <span class="muted">${fmt(s.owned)} / ${fmt(s.total)}（${pct}%）</span>
+        </div>
+        ${s.desc ? `<p class="muted inv-note" style="margin:0">${escapeHtml(s.desc)}</p>` : ''}
+        <span class="inv-bar"><span style="width:${pct}%"></span></span>
+        <div class="inv-grid">
+          ${s.ids.map(id => cell(s.kind, id, s.ownedIds.has(id))).join('')}
+        </div>
+        ${hasReward(s) ? `
+          <div class="ms-row ${s.claimed ? 'claimed' : s.done ? 'done' : ''}">
+            <div class="ms-info">
+              <div class="ms-name">🎁 ${tr('セットコンプ報酬', 'Set completion reward')}</div>
+              <div class="ms-prog">${s.titleName
+                ? tr(`全部そろえると受け取れます ・ 称号《${s.titleName}》つき`, `Claimable once the set is complete — includes the title 《${s.titleName}》`)
+                : tr('全部そろえると受け取れます', 'Claimable once the set is complete')}</div>
+            </div>
+            ${rewardChip(s.coins, s.gems)}
+            ${s.claimed
+              ? '<span class="ms-check">✓</span>'
+              : `<button class="btn btn-sm ${s.done ? 'btn-gold' : 'btn-ghost'}" data-dexclaim="${escapeHtml(s.id)}" ${s.done ? '' : 'disabled'}>${s.done ? tr('受取', 'Claim') : tr('未達成', 'Locked')}</button>`}
+          </div>` : ''}
+      </div>`;
+    }).join('')}`;
+
+  // プレビューはショップ用の描画を流用する（未所持は上のフィルタで黒く潰れてシルエットになる）。
+  body.querySelectorAll('[data-dexpv]').forEach(el => {
+    const item = (shopItems || []).find(i => i.id === el.dataset.dexpv);
+    if (item) renderPreview(el, item);
+  });
+
+  // 未所持のマスは入手先へ送る（ショップの該当タブ／ガチャ）。
+  body.querySelectorAll('[data-dexgo]').forEach(card => {
+    const [kind, id] = String(card.dataset.dexgo).split('|');
+    const go = dexEntryInfo(kind, id).go;
+    if (go) { card.style.cursor = 'pointer'; card.onclick = () => { audio.click(); go(); }; }
+    else card.style.cursor = 'default';
+  });
+
+  const claim = async (id, btn) => {
+    if (!session.user) { showAuthModal(); return; }
+    if (btn) btn.disabled = true;
+    try {
+      // 金額はサーバーが COLLECTION_SETS から再計算する。ここは id を渡すだけ。
+      const res = await api('/api/collection/claim', { method: 'POST', body: { id } });
+      const r = (res && res.reward) || res || {};
+      audio.coin();
+      confettiBurst(r.ids && r.ids.length > 1 ? 60 : 30);
+      updateTopbar();
+      toast(tr(`🎁 セットコンプ報酬を受け取りました！${r.coins ? ` 🪙${fmt(r.coins)}` : ''}${r.gems ? ` 💎${fmt(r.gems)}` : ''}${r.titles && r.titles.length ? ' ＋👑称号' : ''}`,
+        `🎁 Set reward claimed!${r.coins ? ` 🪙${fmt(r.coins)}` : ''}${r.gems ? ` 💎${fmt(r.gems)}` : ''}${r.titles && r.titles.length ? ' + 👑 title' : ''}`), 'ok', 3500);
+      renderInvDex();
+    } catch (err) {
+      audio.error();
+      toast(err.message, 'err');
+      if (btn) btn.disabled = false;
+    }
+  };
+  body.querySelectorAll('[data-dexclaim]:not([disabled])').forEach(btn => {
+    btn.onclick = () => claim(btn.dataset.dexclaim, btn);
+  });
+  const all = body.querySelector('#dexClaimAll');
+  if (all) all.onclick = () => claim('*', all);
 }
 
 function renderPreview(el, item) {
@@ -1199,8 +1811,10 @@ function renderBoosterShop() {
   note.style.gridColumn = '1 / -1';
   note.textContent = tr('消費アイテム。ゲーム中のHUDから発動！'+JA, 'Consumables. Activate them from the in-game HUD. '+EN);
   grid.appendChild(note);
+  appendGiftBanner(grid);
   shopBoosters.forEach((item, idx) => {
     const count = u ? (u.items && u.items[item.id]) || 0 : null;
+    const deal = item.adminOnly ? null : dealFor(item);
     const el = document.createElement('div');
     el.className = 'shop-item';
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
@@ -1208,7 +1822,8 @@ function renderBoosterShop() {
       <div class="shop-preview booster-preview">${item.icon}</div>
       <div class="shop-name">${catName(item)}${count !== null ? ` <span class="muted">×${fmt(count)}</span>` : ''}</div>
       <div class="shop-desc">${catDesc(item)}</div>
-      <button class="btn btn-sm btn-gold" data-act="buy">🪙 ${fmt(item.price)}</button>
+      ${saleBadge(deal)}
+      <button class="btn btn-sm btn-gold" data-act="buy">${priceLabel('🪙', item, deal)}</button>
     `;
     grid.appendChild(el);
     el.querySelector('[data-act]').onclick = async () => {
@@ -1226,6 +1841,7 @@ function renderBoosterShop() {
       }
     };
   });
+  startDealTimer();
 }
 
 // ---------------------------------------------------------------------------
@@ -1451,6 +2067,22 @@ function renderMissions() {
   const bonusClaimed = daily ? data.dailyBonusClaimed : data.weeklyBonusClaimed;
   const allClaimed = rows.every(r => r.claimed);
   const doneCount = rows.filter(r => r.claimed).length;
+  // 🔁 リロール（I12）。回数と次の値段はサーバーが missions.rerolls で教えてくる
+  // （デイリー／ウィークリーは別枠。1回目が0＝1日1回無料）。返してこない旧版では
+  // 「1日1回無料」の既定表示で出し、可否と金額の判定はサーバーに任せる。
+  const rr = (data.rerolls && data.rerolls[daily ? 'daily' : 'weekly']) || null;
+  const rrCost = rr && Number.isFinite(Number(rr.cost)) ? Number(rr.cost) : 500;
+  const rrFree = rr ? !!rr.free : true;
+  const rrLeft = rr && Number.isFinite(Number(rr.left)) ? Number(rr.left) : null;
+  const rrOut = rrLeft !== null && rrLeft <= 0;
+  const rrLeftJa = rrLeft === null ? '' : `（あと${rrLeft}回）`;
+  const rrLeftEn = rrLeft === null ? '' : ` (${rrLeft} left)`;
+  const rrLabel = rrFree ? tr('無料', 'Free') : `🪙${fmt(rrCost)}`;
+  const rrHint = rrOut
+    ? tr('🔁 引き直しは本日ぶんを使い切りました', '🔁 No rerolls left today')
+    : rrFree
+      ? tr(`🔁 引き直し 本日1回無料${rrLeftJa}`, `🔁 Reroll: free today${rrLeftEn}`)
+      : tr(`🔁 引き直し 1回 🪙${fmt(rrCost)}${rrLeftJa}`, `🔁 Reroll: 🪙${fmt(rrCost)} each${rrLeftEn}`);
   // 受け取りそびれたランキング報酬の入口（起動時のダイアログを閉じてもここから受け取れる）
   const rankPending = session.user && Array.isArray(session.user.rankRewards) ? session.user.rankRewards.length : 0;
 
@@ -1464,6 +2096,7 @@ function renderMissions() {
           ・ ${daily
             ? tr(`リセットまで ${fmtResetIn(data.dailyResetIn)}`, `Resets in ${fmtResetIn(data.dailyResetIn)}`)
             : tr('毎週月曜リセット', 'Resets every Monday')}
+          <br>${rrHint}
         </div>
       </div>
       <div class="ms-progress-ring">${Math.round((doneCount / Math.max(1, rows.length)) * 100)}%</div>
@@ -1481,7 +2114,11 @@ function renderMissions() {
           ${rewardChip(r.coins, r.gems)}
           ${r.claimed
             ? `<span class="ms-check">✓</span>`
-            : `<button class="btn btn-sm ${r.done ? 'btn-gold' : 'btn-ghost'}" data-claim="${r.id}" ${r.done ? '' : 'disabled'}>${r.done ? tr('受取', 'Claim') : tr('未達成', 'Locked')}</button>`}
+            : `${rrOut ? '' : `<button class="btn btn-sm btn-ghost" data-reroll="${escapeHtml(String(r.id))}"${r.done ? ' data-reroll-done="1"' : ''} title="${rrFree
+                  ? tr('別のミッションに引き直す（本日1回無料）', 'Swap for another mission (free today)')
+                  : tr(`別のミッションに引き直す（🪙${fmt(rrCost)}）`, `Swap for another mission (🪙${fmt(rrCost)})`)}"
+                style="padding:4px 8px;line-height:1.1">🔁<small style="display:block;font-size:9px">${rrLabel}</small></button>`}
+              <button class="btn btn-sm ${r.done ? 'btn-gold' : 'btn-ghost'}" data-claim="${r.id}" ${r.done ? '' : 'disabled'}>${r.done ? tr('受取', 'Claim') : tr('未達成', 'Locked')}</button>`}
         </div>`;
       }).join('')}
       <div class="ms-row bonus ${bonusClaimed ? 'claimed' : allClaimed ? 'done' : ''}">
@@ -1498,6 +2135,36 @@ function renderMissions() {
 
   const rk = body.querySelector('#msRankRewards');
   if (rk) rk.onclick = () => showRankRewardsModal(true);
+
+  body.querySelectorAll('[data-reroll]').forEach(btn => {
+    btn.onclick = async () => {
+      // 達成済み（未受取）を引き直すと報酬ごと消える。ここだけは無料でも確認する。
+      if (btn.dataset.rerollDone && !confirm(tr(
+        'このミッションはもう達成しています。引き直すと報酬を受け取れなくなります。よろしいですか？',
+        'This mission is already complete — rerolling forfeits its reward. Continue?'))) return;
+      if (!rrFree && !confirm(tr(
+        `このミッションを別のものに引き直します。コイン${fmt(rrCost)}を消費します。よろしいですか？`,
+        `Reroll this mission for ${fmt(rrCost)} coins?`))) return;
+      btn.disabled = true;
+      try {
+        // 消費と抽選はサーバー側。ここは id を渡すだけで、金額は一切申告しない。
+        // 返ってくる user は api() が session に反映するので refreshMe は要らない。
+        const res = await api('/api/missions/reroll', { method: 'POST', body: { id: btn.dataset.reroll } });
+        missionsCache = (res && res.missions) || (await api('/api/missions')).missions;
+        audio.click();
+        updateTopbar();
+        const paid = res && res.reroll ? Number(res.reroll.cost) || 0 : 0;
+        toast(tr(`🔁 ミッションを引き直しました！${paid ? `（-🪙${fmt(paid)}）` : ''}`,
+          `🔁 Mission rerolled!${paid ? ` (-🪙${fmt(paid)})` : ''}`), 'ok');
+        renderMissions();
+        refreshMissionDot();
+      } catch (err) {
+        audio.error();
+        toast(err.message, 'err');
+        btn.disabled = false;
+      }
+    };
+  });
 
   body.querySelectorAll('[data-claim]:not([disabled])').forEach(btn => {
     btn.onclick = async () => {
@@ -1606,7 +2273,7 @@ export function showRankRewardsModal(force = false) {
       ${pending.map(r => `
         <div class="rank-reward-row">
           <span><b>${medal(r)} ${tr(`${r.rank}位`, `#${r.rank}`)}</b> <small class="muted">/ ${r.of}${tr('人中', ' players')} ・ ${escapeHtml(r.week)} ・ ${fmt(r.best)}${tr('点', ' pts')}</small></span>
-          <b>+${fmt(r.coins)}🪙 +${fmt(r.gems)}💎${r.badge ? ' +🏅' : ''}</b>
+          <b>+${fmt(r.coins)}🪙 +${fmt(r.gems)}💎${r.badge ? ` +${(badgeInfoOf(r.badge) || { icon: '🏅' }).icon}` : ''}</b>
         </div>`).join('')}
     </div>
     <div class="modal-buttons">
@@ -1623,8 +2290,11 @@ export function showRankRewardsModal(force = false) {
       audio.coin();
       confettiBurst(50);
       updateTopbar();
-      toast(tr(`🏆 ランキング報酬を受け取りました！ +${fmt(res.reward.coins)}🪙 +${fmt(res.reward.gems)}💎${res.reward.badges.length ? '（🏅週間チャンピオン獲得！）' : ''}`,
-        `🏆 Rewards claimed! +${fmt(res.reward.coins)}🪙 +${fmt(res.reward.gems)}💎${res.reward.badges.length ? ' (🏅 Weekly Champion!)' : ''}`), 'ok', 4500);
+      // 貰えるバッジは週間チャンピオン🏅だけではない（🏛シーズン刻印など）ので、
+      // 表示定義から名前を引く。未知のidは黙って伏せる（生のidは出さない）。
+      const got = (res.reward.badges || []).map(b => badgeInfoOf(b)).filter(Boolean);
+      toast(tr(`🏆 ランキング報酬を受け取りました！ +${fmt(res.reward.coins)}🪙 +${fmt(res.reward.gems)}💎${got.length ? `（${got.map(b => `${b.icon}${b.ja}`).join('・')}獲得！）` : ''}`,
+        `🏆 Rewards claimed! +${fmt(res.reward.coins)}🪙 +${fmt(res.reward.gems)}💎${got.length ? ` (${got.map(b => `${b.icon} ${b.en}`).join(', ')}!)` : ''}`), 'ok', 4500);
       const banner = $('#msRankRewards');
       if (banner) banner.remove();
       refreshMissionDot();
@@ -1863,12 +2533,42 @@ export async function openAdmin() {
       <div class="stat-card"><b>S${stats.season.number}</b><span>${escapeHtml(stats.season.name)}</span></div>
       <div class="stat-card" style="${stats.maintenance ? 'border-color:var(--red)' : ''}"><b>${stats.maintenance ? '🛠' : '✅'}</b><span>${stats.maintenance ? 'メンテナンス中' : '稼働中'}</span></div>
       <div class="stat-card" style="${stats.sessionsPersist ? '' : 'border-color:var(--yellow)'}" title="SESSION_SECRET 環境変数が設定されているとON。更新してもログイン状態が維持されます"><b>${stats.sessionsPersist ? '🔐' : '⚠️'}</b><span>${stats.sessionsPersist ? 'セッション維持 ON' : 'セッション維持 OFF（SESSION_SECRET未設定）'}</span></div>
-      <div class="stat-card"><b>¥${fmt(txData.totalJpy)}</b><span>売上(デモ) ${fmt(txData.totalCount)}件</span></div>`;
+      <div class="stat-card"><b>¥${fmt(txData.totalJpy)}</b><span>売上(デモ) ${fmt(txData.totalCount)}件</span></div>
+      ${statCard(stats.dbBytes == null ? null : fmtBytes(stats.dbBytes), 'DBサイズ')}
+      ${statCard(stats.saveMs == null ? null : `${Math.round(Number(stats.saveMs))}ms`, '保存にかかる時間')}
+      ${statCard(stats.txLive == null ? null : fmt(stats.txLive), '取引ログ（現行）')}
+      ${statCard(stats.txArchived == null ? null : fmt(stats.txArchived), '取引ログ（保管済）')}
+      ${statCard(eventLoopText(stats), 'イベントループ遅延(P99)')}
+      ${statCard(perfRssText(stats), 'メモリ(RSS)')}
+      ${statCard(stats.persistError ? '⚠️' : null, `保存エラー: ${String(stats.persistError || '').slice(0, 60)}`, 'border-color:var(--red)')}
+      ${statCard(stats.clientErrors && stats.clientErrors.open != null ? fmt(stats.clientErrors.open) : null, 'クライアントエラー(未解決)')}`;
     $('#btnMaintenance').textContent = stats.maintenance ? '✅ メンテ解除' : '🛠 メンテナンス開始';
     renderAdminUsers(usersData.users);
   } catch (err) {
     statsEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
+}
+
+// 値が無い（null / undefined）指標はカードごと出さない。「—」のカードを並べると
+// 「0 件」なのか「まだ測っていない」のか区別できなくなる。
+function statCard(value, label, style = '') {
+  if (value === null || value === undefined || value === '') return '';
+  return `<div class="stat-card"${style ? ` style="${style}"` : ''}><b>${value}</b><span>${escapeHtml(label)}</span></div>`;
+}
+
+// イベントループ遅延は stats.perf.lagP99（まだ1回も測っていなければ null）。
+// 素の数値／別名で来ても読めるようにしてある。
+function eventLoopText(stats) {
+  const p = stats.perf || {};
+  const v = p.lagP99 ?? p.lagP50 ?? stats.eventLoop ?? stats.eventLoopLag ?? stats.eventLoopMs;
+  if (v === null || v === undefined) return null;
+  const n = typeof v === 'object' ? (v.p99 ?? v.lagMs ?? v.mean ?? v.p50) : v;
+  return (n === null || n === undefined || !Number.isFinite(Number(n))) ? null : `${Number(n).toFixed(1)}ms`;
+}
+
+function perfRssText(stats) {
+  const rss = stats.perf && stats.perf.rss;
+  return rss === null || rss === undefined || !Number.isFinite(Number(rss)) ? null : fmtBytes(Number(rss));
 }
 
 function showSeasonModal() {
@@ -2290,6 +2990,87 @@ async function showBugReportsAdminModal() {
   });
 }
 
+// ⚠️ 管理者用クライアントエラービューア（I27）— ブラウザ側で起きた例外の集計。
+// 🐛バグ報告と同じ形（一覧＋✅で処理済み）。API がまだ無いサーバーでは
+// 「まだありません」と出るだけで、パネルは壊れない。
+function normalizeClientErrors(data) {
+  const raw = (data && (data.errors || data.rows || data.reports || data.list)) || [];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(Boolean).map((e, i) => ({
+    id: String(e.hash ?? e.id ?? e.key ?? i),
+    message: String(e.message || e.msg || e.text || e.error || '(メッセージなし)'),
+    where: String(e.where || e.url || e.page || ''),
+    stack: String(e.stack || ''),
+    count: Number(e.count ?? e.n) || 1,
+    lastAt: Number(e.lastAt ?? e.at ?? e.last ?? e.updatedAt) || 0,
+    ua: String(e.ua || e.userAgent || ''),
+    lang: String(e.lang || ''),
+    screen: String(e.screen || ''),
+    by: String(e.by || ''),
+    resolved: !!(e.resolved ?? (e.status === 'done')),
+  }));
+}
+
+async function showClientErrorsAdminModal() {
+  let rows = [];
+  let errMsg = '';
+  try {
+    rows = normalizeClientErrors(await api('/api/admin/clienterrors'));
+  } catch (err) {
+    // 404（＝サーバー側がまだ無い）は「報告ゼロ」と同じ扱いにする。
+    if (err.status !== 404) errMsg = err.message;
+  }
+  const row = e => `
+    <div class="feed-row ${e.resolved ? '' : 'real'}" style="align-items:flex-start">
+      <span class="feed-icon">${e.resolved ? '✅' : '⚠️'}</span>
+      <span class="feed-text" style="white-space:pre-wrap;min-width:0;word-break:break-word">${escapeHtml(e.message)}
+        ${e.where ? `<small class="muted" style="display:block">📄 ${escapeHtml(e.where)}</small>` : ''}
+        ${e.stack ? `<small class="muted" style="display:block">${escapeHtml(e.stack)}</small>` : ''}
+        <small class="muted" style="display:block;margin-top:2px">×${fmt(e.count)} ・ 最終 ${e.lastAt ? new Date(e.lastAt).toLocaleString('ja-JP') : '—'}${e.by ? ` ・ ${escapeHtml(e.by)}` : ''}${e.screen ? ` ・ ${escapeHtml(e.screen)}` : ''}${e.lang ? ` ・ ${escapeHtml(e.lang)}` : ''}</small>
+        ${e.ua ? `<small class="muted" style="display:block">${escapeHtml(e.ua)}</small>` : ''}</span>
+      <span style="display:flex;flex-direction:column;gap:4px">
+        ${e.resolved ? '' : `<button class="btn btn-sm btn-ghost" data-ce-done="${escapeHtml(e.id)}" title="解決済みにする">✅</button>`}
+        <button class="btn btn-sm btn-ghost" data-ce-del="${escapeHtml(e.id)}" style="color:var(--red)" title="この記録を削除">🗑</button>
+      </span>
+    </div>`;
+  const open = rows.filter(e => !e.resolved).length;
+  const m = showModal(`
+    <h2>⚠️ クライアントエラー（未解決 ${open} / 全 ${rows.length}）</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:8px">プレイヤーのブラウザで起きた例外の集計です</p>
+    <div class="feed-list" style="max-height:52vh">
+      ${rows.length ? rows.map(row).join('') : `<p class="muted center">${escapeHtml(errMsg || 'クライアントエラーの報告はまだありません')}</p>`}
+    </div>
+    <div class="modal-buttons">
+      ${rows.length ? '<button class="btn btn-ghost" id="ceClear" style="color:var(--red)">🧹 全消去</button>' : ''}
+      <button class="btn btn-primary" id="ceClose">閉じる</button>
+    </div>`);
+  m.querySelector('#ceClose').onclick = closeModal;
+  const clr = m.querySelector('#ceClear');
+  if (clr) clr.onclick = async () => {
+    if (!confirm('クライアントエラーの記録をすべて消去します。よろしいですか？')) return;
+    try { await api('/api/admin/clienterrors/all', { method: 'DELETE' }); closeModal(); showClientErrorsAdminModal(); }
+    catch (err) { toast(err.message, 'err'); }
+  };
+  m.querySelectorAll('[data-ce-del]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try { await api(`/api/admin/clienterrors/${encodeURIComponent(b.dataset.ceDel)}`, { method: 'DELETE' }); closeModal(); showClientErrorsAdminModal(); }
+      catch (err) { toast(err.message, 'err'); b.disabled = false; }
+    };
+  });
+  m.querySelectorAll('[data-ce-done]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        // resolved / status のどちらを読むサーバーでも通るように両方送る。
+        await api(`/api/admin/clienterrors/${encodeURIComponent(b.dataset.ceDone)}`, { method: 'POST', body: { resolved: true, status: 'done' } });
+        closeModal();
+        showClientErrorsAdminModal();
+      } catch (err) { toast(err.message, 'err'); b.disabled = false; }
+    };
+  });
+}
+
 export async function showRestoreModal() {
   const isAdmin = !!session.user && session.user.role === 'admin';
 
@@ -2562,6 +3343,23 @@ export function bindAdminActions() {
 
   $('#btnRestore').onclick = () => showRestoreModal();
   $('#btnBugReports').onclick = () => { audio.click(); showBugReportsAdminModal(); };
+
+  // ⚠️ クライアントエラーのボタンは 🐛 の隣。index.html 側にまだ無いので
+  // 無ければここで足す（後から生えたら、それを拾うだけで二重にしない）。
+  try {
+    let ce = $('#btnClientErrors');
+    if (!ce) {
+      const bug = $('#btnBugReports');
+      if (bug && bug.parentNode) {
+        ce = document.createElement('button');
+        ce.className = 'btn btn-ghost btn-sm';
+        ce.id = 'btnClientErrors';
+        ce.textContent = '⚠️ クライアントエラー';
+        bug.parentNode.insertBefore(ce, bug.nextSibling);
+      }
+    }
+    if (ce) ce.onclick = () => { audio.click(); showClientErrorsAdminModal(); };
+  } catch { /* 管理パネルの形が変わっても他のボタンは死なせない */ }
   $('#btnPoll').onclick = () => { audio.click(); showPollAdminModal(); };
 
   const selfGrant = async (kind) => {

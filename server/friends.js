@@ -27,9 +27,19 @@ export const MAX_BLOCKED = 200;
 export const DECLINE_COOLDOWN_MS = 7 * 24 * 3600 * 1000;
 export const REQ_EXPIRE_MS = 14 * 24 * 3600 * 1000;
 
+// 🔔 挑戦状。申請と同じで、自由文は載せられない（定型のみ）。
+// 送れるのはフレンドだけ ── 見知らぬ相手に飛ばせると、
+// 「フレンド申請」を経由しない二本目の配達経路ができてしまう。
+export const MAX_CHALLENGE_IN = 20;                        // 受信上限。あふれたら送り主を断る
+export const CHALLENGE_COOLDOWN_MS = 20 * 3600 * 1000;     // 同じ相手へは実質1日1回
+export const CHALLENGE_EXPIRE_MS = 24 * 3600 * 1000;       // 「今日の記録」への挑戦なので1日で腐る
+export const MAX_CHALLENGE_MEMO = 200;                     // 送信控え（クールダウン用）の上限
+
 // どの理由で断っても同じ文言を返す。ここを理由ごとに分けると、
 // この窓口が「あの人にブロックされているか」を調べる道具になる。
 const REFUSED = '申請できませんでした';
+// 挑戦状も同じ考え方 ── 断る理由（ブロック／受け取り拒否／満杯）は出し分けない。
+const CH_REFUSED = '挑戦状を送れませんでした';
 
 // db.users を素の添字で引くと '__proto__' や 'constructor' が
 // Object.prototype 由来の値を返してしまう（実在しない相手が「いる」ことになる）。
@@ -53,6 +63,10 @@ export function ensureSocial(user) {
   if (!Array.isArray(user.friendReqOut)) user.friendReqOut = [];
   if (!Array.isArray(user.blocked)) user.blocked = [];
   if (!user.friendDeclines || typeof user.friendDeclines !== 'object') user.friendDeclines = {};
+  // 🔔 挑戦状も user レコードの上に置く（新しいトップレベルの入れ物を作らない ──
+  // 復元の merge が拾うのは users なので、ここに置けばただ乗りで生き残る）。
+  if (!Array.isArray(user.challengeIn)) user.challengeIn = [];
+  if (!user.challengeOut || typeof user.challengeOut !== 'object' || Array.isArray(user.challengeOut)) user.challengeOut = {};
   if (!user.social || typeof user.social !== 'object') user.social = socialDefaults();
   const s = user.social;
   if (!['all', 'none'].includes(s.requests)) s.requests = 'all';
@@ -181,8 +195,15 @@ export function unfriend(db, me, otherId) {
   if (!me) return { error: '相手が見つかりません' };
   ensureSocial(me);
   me.friends = me.friends.filter(id => id !== otherId);
+  // 挑戦状はフレンド同士でしか送れない。関係が切れたら両側の受信箱から消す ──
+  // 残すと「フレンドを外したのに 🔔 だけ届き続ける」経路になる。
+  me.challengeIn = me.challengeIn.filter(c => c && c.from !== otherId);
   const other = userOf(db, otherId);
-  if (other) { ensureSocial(other); other.friends = other.friends.filter(id => id !== me.id); }
+  if (other) {
+    ensureSocial(other);
+    other.friends = other.friends.filter(id => id !== me.id);
+    other.challengeIn = other.challengeIn.filter(c => c && c.from !== me.id);
+  }
   return { ok: true };
 }
 
@@ -235,6 +256,8 @@ export function unfriendAll(db, user) {
     if (Array.isArray(u.friendReqIn)) u.friendReqIn = u.friendReqIn.filter(r => r && r.from !== user.id);
     if (Array.isArray(u.blocked)) u.blocked = u.blocked.filter(id => id !== user.id);
     if (u.friendDeclines && typeof u.friendDeclines === 'object') delete u.friendDeclines[user.id];
+    if (Array.isArray(u.challengeIn)) u.challengeIn = u.challengeIn.filter(c => c && c.from !== user.id);
+    if (u.challengeOut && typeof u.challengeOut === 'object') delete u.challengeOut[user.id];
   }
   return n;
 }
@@ -252,7 +275,7 @@ export function healSocial(db) {
     ? Object.keys(db.deleted)
     : (Array.isArray(db.deleted) ? db.deleted.map(d => (d && d.id) || d).filter(Boolean) : []));
   const now = Date.now();
-  const fixed = { friends: 0, requests: 0, blocked: 0, declines: 0, oneWay: 0 };
+  const fixed = { friends: 0, requests: 0, blocked: 0, declines: 0, oneWay: 0, challenges: 0 };
 
   for (const u of Object.values(db.users || {})) {
     if (!u) continue;
@@ -275,6 +298,16 @@ export function healSocial(db) {
 
     for (const [id, at] of Object.entries(u.friendDeclines)) {
       if (!alive(id) || now - at > DECLINE_COOLDOWN_MS) { delete u.friendDeclines[id]; fixed.declines++; }
+    }
+
+    // 🔔 期限切れ・送り主が消えた挑戦状を落とす。フレンドかどうかの照合は
+    // 片側だけの関係が残っている段階だと誤爆するので、下の片側掃除のあとでやる。
+    const cb = u.challengeIn.length;
+    u.challengeIn = u.challengeIn.filter(c =>
+      c && alive(c.from) && !gone.has(c.from) && (now - (c.at || 0)) < CHALLENGE_EXPIRE_MS);
+    fixed.challenges += cb - u.challengeIn.length;
+    for (const [id, at] of Object.entries(u.challengeOut)) {
+      if (!alive(id) || gone.has(id) || !(now - at < CHALLENGE_COOLDOWN_MS)) delete u.challengeOut[id];
     }
   }
 
@@ -301,6 +334,15 @@ export function healSocial(db) {
       if (blocks(u, id) || blocks(o, u.id)) { fixed.oneWay++; return false; }
       return true;
     });
+  }
+
+  // フレンド関係が確定したあとで、フレンドでない相手からの挑戦状を落とす。
+  // （ブロック済み・関係が切れた相手が 🔔 だけ届け続けるのを防ぐ）
+  for (const u of Object.values(db.users || {})) {
+    if (!u) continue;
+    const cb = u.challengeIn.length;
+    u.challengeIn = u.challengeIn.filter(c => c && u.friends.includes(c.from));
+    fixed.challenges += cb - u.challengeIn.length;
   }
   return fixed;
 }
@@ -337,6 +379,208 @@ export function friendsView(db, user, levelOf, statusOf) {
       return u ? { id: u.id, username: u.username } : null;
     }).filter(Boolean),
     social: { ...user.social },
-    limits: { friends: MAX_FRIENDS, requests: MAX_REQ_OUT },
+    // 🔔 届いている挑戦状。既存の画面が毎回叩く窓口に相乗りさせておくと、
+    // 新しいポーリングを増やさずに済む。
+    challenges: challengesView(db, user, levelOf, statusOf),
+    limits: { friends: MAX_FRIENDS, requests: MAX_REQ_OUT, challenges: MAX_CHALLENGE_IN },
   };
+}
+
+// ---------------------------------------------------------------------------
+// 🔔 挑戦状
+// ---------------------------------------------------------------------------
+// 「今日のデイリーの記録に挑戦してほしい」の定型だけ。自由文は載せられない
+// （載せられると、挑戦状そのものが嫌がらせの配達手段になる ── 申請と同じ理屈）。
+//
+// 送り主が申告した点数は一切信じない。挑戦状に載る点数は、送信の瞬間に
+// サーバーが送り主の stats.dailyc から読み直したものだけ。
+
+// 期限切れは「掃除が走ったかどうか」に頼らず、触った時点で必ず落とす
+// （healSocial は起動/復元時にしか走らない）。
+function liveChallenges(user, now = Date.now()) {
+  return (user.challengeIn || []).filter(c => c && (now - (c.at || 0)) < CHALLENGE_EXPIRE_MS);
+}
+
+// 送信控え（クールダウン用）。期限切れを落としつつ、上限を越えたら古い順に捨てる。
+function pruneChallengeOut(user, now = Date.now()) {
+  const out = user.challengeOut;
+  for (const [id, at] of Object.entries(out)) {
+    if (!Number.isFinite(at) || !(now - at < CHALLENGE_COOLDOWN_MS)) delete out[id];
+  }
+  const keys = Object.keys(out);
+  if (keys.length > MAX_CHALLENGE_MEMO) {
+    keys.sort((a, b) => out[a] - out[b]);
+    for (const id of keys.slice(0, keys.length - MAX_CHALLENGE_MEMO)) delete out[id];
+  }
+}
+
+// その日のデイリー記録（dayKey が一致するときだけ）。既存の stats を読むだけで、
+// 新しい保存は増やさない。
+export function dailyRecordOf(user, dayKey) {
+  const d = user && user.stats && user.stats.dailyc;
+  if (!d || !dayKey || d.day !== dayKey) return null;
+  return { score: Number(d.score) || 0, cleared: !!d.cleared, streak: Number(d.streak) || 0 };
+}
+
+// 今週のウィークリーのベスト（週が変わっていれば 0）。
+export function weeklyBestOf(user, weekId) {
+  const w = user && user.stats && user.stats.weekly;
+  if (!w || !weekId || w.week !== weekId) return 0;
+  return Number(w.best) || 0;
+}
+
+function ratingOf(user) {
+  const r = user && user.stats && user.stats.rating;
+  return Number.isFinite(r) ? r : 0;
+}
+
+// 挑戦状を送る。dayKey は index.js（jstDayKey）から渡してもらう ──
+// ここは時計の都合（JSTの日境界）を知らないままにしておきたい。
+export function sendChallenge(db, from, toId, dayKey) {
+  if (!from || !toId || !dayKey) return { error: CH_REFUSED };
+  if (toId === from.id) return { error: '自分には送れません' };
+  const to = userOf(db, toId);
+  if (!to) return { error: CH_REFUSED };
+  ensureSocial(from); ensureSocial(to);
+
+  // 送り主側の事情（記録がない・クールダウン）は先に見る。相手側の事情より
+  // 後ろに置くと、文言の違いから「ブロックされているか」を読み取れてしまう。
+  const mine = dailyRecordOf(from, dayKey);
+  if (!mine || mine.score <= 0) return { error: '今日のデイリーチャレンジの記録がまだありません' };
+
+  const now = Date.now();
+  pruneChallengeOut(from, now);
+  if (from.challengeOut[toId] && now - from.challengeOut[toId] < CHALLENGE_COOLDOWN_MS) {
+    return { error: 'この相手にはもう送っています' };
+  }
+
+  // 以下、断る理由はすべて同じ文言。
+  if (eitherBlocks(from, to)) return { error: CH_REFUSED };
+  if (!isFriend(from, toId) || !isFriend(to, from.id)) return { error: CH_REFUSED };
+  // 受け取りの設定に相乗りする（新しい設定は増やさない）。フレンド同士なので
+  // 'friends' は通り、'none' だけが断る。
+  if (to.social.invites === 'none') return { error: CH_REFUSED };
+
+  // 期限切れは受信枠に数えない（古い挑戦状で受信箱が塞がると、本物が届かない）。
+  to.challengeIn = liveChallenges(to, now);
+  // 同じ送り主の古いぶんは上書きする（列に二重で並ばせない）。
+  to.challengeIn = to.challengeIn.filter(c => c.from !== from.id);
+  // あふれている相手には送れない。古いものを押し出す作りにすると、
+  // 連投で本物の挑戦状を消せてしまう。
+  if (to.challengeIn.length >= MAX_CHALLENGE_IN) return { error: CH_REFUSED };
+
+  // 点数は必ずサーバーが読み直したものを載せる（申告は受け取らない）。
+  to.challengeIn.push({ from: from.id, at: now, day: dayKey, score: mine.score, cleared: mine.cleared });
+  from.challengeOut[toId] = now;
+  return { ok: true, to, day: dayKey, score: mine.score, cleared: mine.cleared };
+}
+
+// 見た／断った。どちらも送り主には何も伝えない（申請の断りと同じ作法）。
+export function dismissChallenge(db, me, fromId) {
+  if (!me) return { error: '相手が見つかりません' };
+  ensureSocial(me);
+  const now = Date.now();
+  const live = liveChallenges(me, now);
+  const had = live.some(c => c.from === fromId);
+  me.challengeIn = live.filter(c => c.from !== fromId);
+  if (!had) return { error: 'その挑戦状はありません' };
+  return { ok: true };
+}
+
+// 画面に渡す形。publicUser は使わない（財布も stats も丸ごと入っている）。
+export function challengesView(db, user, levelOf, statusOf) {
+  ensureSocial(user);
+  const now = Date.now();
+  user.challengeIn = liveChallenges(user, now);
+  return user.challengeIn.map(c => {
+    const row = friendRow(db, c.from, levelOf, statusOf);
+    return row ? { ...row, at: c.at, day: c.day || '', score: Number(c.score) || 0, cleared: !!c.cleared } : null;
+  }).filter(Boolean);
+}
+
+// ---------------------------------------------------------------------------
+// 🏁 ライバルボード
+// ---------------------------------------------------------------------------
+// フレンド＋自分の「今日のデイリー」「今週のウィークリーのbest」「レート」を
+// 並べるだけ。読むのは既存の stats（dailyc / weekly / rating）で、
+// 新しい保存はひとつも増やさない。
+//
+// opts: { dayKey, weekId, levelOf, statusOf }
+export function rivalBoard(db, user, opts = {}) {
+  ensureSocial(user);
+  const dayKey = String(opts.dayKey || '');
+  const weekId = String(opts.weekId || '');
+  const { levelOf, statusOf } = opts;
+  const now = Date.now();
+  pruneChallengeOut(user, now);
+
+  const rows = [];
+  const seen = new Set();
+  for (const id of [user.id, ...user.friends]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const row = friendRow(db, id, levelOf, statusOf);
+    if (!row) continue;
+    const u = userOf(db, id);
+    const d = dailyRecordOf(u, dayKey);
+    rows.push({
+      ...row,
+      me: id === user.id,
+      daily: d ? d.score : 0,
+      dailyPlayed: !!d,
+      dailyCleared: d ? d.cleared : false,
+      dailyStreak: d ? d.streak : 0,
+      weeklyBest: weeklyBestOf(u, weekId),
+      rating: ratingOf(u),
+      // 🔔 を出してよい相手か（自分・すでに送った相手には出さない）。
+      challengedAt: id === user.id ? 0 : (user.challengeOut[id] || 0),
+    });
+  }
+
+  // 同点は同順位（競技順位）。0点の人は順位を付けない ── 未挑戦の人が
+  // 「最下位」として並ぶと、遊んでいないことが晒される形になる。
+  for (const [key, rankKey] of [['daily', 'rankDaily'], ['weeklyBest', 'rankWeekly'], ['rating', 'rankRating']]) {
+    const ranked = rows.filter(r => (r[key] || 0) > 0).sort((a, b) => (b[key] || 0) - (a[key] || 0));
+    let last = null, lastRank = 0;
+    ranked.forEach((r, i) => {
+      if (last !== null && r[key] === last) r[rankKey] = lastRank;
+      else { r[rankKey] = i + 1; lastRank = i + 1; last = r[key]; }
+    });
+    for (const r of rows) if (r[rankKey] == null) r[rankKey] = null;
+  }
+
+  const me = rows.find(r => r.me) || null;
+  return {
+    day: dayKey,
+    week: weekId,
+    rows,
+    me,
+    canChallenge: !!(me && me.daily > 0),   // 自分の記録が無いと挑戦状は送れない
+    limits: { friends: MAX_FRIENDS, challenges: MAX_CHALLENGE_IN },
+  };
+}
+
+// 📅 デイリー提出で「フレンドを追い抜いた」相手を洗い出す。
+// 通知そのものは index.js が送る（ここは socket を触らない）。
+// prevScore は提出前の自分のその日の点数（未挑戦なら 0）。
+export function friendsOvertaken(db, user, dayKey, newScore, prevScore = 0) {
+  if (!user || !dayKey) return [];
+  ensureSocial(user);
+  const score = Number(newScore) || 0;
+  const prev = Number(prevScore) || 0;
+  if (score <= 0 || score <= prev) return [];
+  const out = [];
+  for (const id of user.friends) {
+    const u = userOf(db, id);
+    if (!u || eitherBlocks(user, u)) continue;
+    const d = dailyRecordOf(u, dayKey);
+    if (!d || d.score <= 0) continue;
+    // 今回の提出ではじめて追い越した相手だけ（前回すでに上だった相手は除く）。
+    if (d.score <= prev) continue;
+    if (d.score >= score) continue;
+    out.push({ user: u, score: d.score });
+  }
+  // 抜いた相手が多いときのために、僅差の順（すぐ下）から並べる。
+  out.sort((a, b) => b.score - a.score);
+  return out;
 }

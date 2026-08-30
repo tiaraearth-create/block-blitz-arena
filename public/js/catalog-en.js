@@ -55,6 +55,7 @@ export const CATALOG_EN = {
   // ultimate skills
   ult_blast: { name: 'Destruction Shockwave', desc: 'Force-clears the two fullest rows and columns' },
   ult_purify: { name: 'Purifying Wave', desc: 'Erases all garbage + the bottom two rows' },
+  ult_gravity: { name: 'Gravity Crush', desc: 'Compresses the board downward and clears any completed rows — tidying the mess is still on you' },
   ult_overdrive: { name: 'Overdrive', desc: 'Triple score for 15 seconds' },
   ult_meteor: { name: 'Meteor Strike', desc: 'Obliterates 14 random cells' },
   ult_rainbow: { name: 'Rainbow Hand', desc: 'Your hand becomes the best-fitting pieces' },
@@ -139,8 +140,27 @@ export const CATALOG_EN = {
   gachaprince: { name: 'Gacha Prodigy', desc: 'Pull the gacha 100 times' },
   lobbyface: { name: 'Lobby Regular', desc: 'Send 300 chat messages' },
   ghostmaster: { name: 'Ghost Whisperer', desc: 'Score 15,000 in the Haunted House' },
+  voidseeker: { name: 'Voidseeker', desc: 'Emptied the board enough times' },
+  // 📕 図鑑のセットコンプ称号
+  ultcollector: { name: 'Arts Collector', desc: 'Own every ultimate skill' },
+  rainbowtrio: { name: 'The Rainbow Three', desc: 'Own all gacha-exclusive gear' },
+  thronekeeper: { name: 'Keeper of the Vault', desc: 'Own every item from the 👑 vault' },
+  curator: { name: 'The Curator', desc: 'Fill in the whole catalog' },
   mecha: { name: 'Deus Ex Machina', desc: '' },
   frost: { name: 'Frost Queen Frione', desc: '' },
+  // 📕 コレクション図鑑のセット（server/catalog.js の COLLECTION_SETS）。
+  // セット側は nameEn / descEn も持っているが、画面が catName() / catDesc() で
+  // 引く経路もあるので、ほかのカタログと同じくここにも id で置いておく。
+  set_skin: { name: 'Skin Collection', desc: 'Own every block skin' },
+  set_board: { name: 'Board Collection', desc: 'Own every board theme' },
+  set_fx: { name: 'Effect Collection', desc: 'Own every clear effect' },
+  set_ult: { name: 'Arts Collection', desc: 'Own every ultimate skill' },
+  set_boost: { name: 'Booster Shelf', desc: 'Hold at least one of every booster' },
+  set_gacha: { name: 'Gacha Exclusives', desc: 'Own all gacha-exclusive gear' },
+  set_throne: { name: 'The Throne Vault', desc: 'Own every item from the 👑 vault' },
+  set_trial: { name: 'Marks of the Three Trials', desc: 'Earn the Oni, Kami and Creator God badges' },
+  set_slayer: { name: 'Slayer Titles', desc: 'Earn every boss-slaying title' },
+  set_master: { name: 'Full Catalog', desc: 'Own every item in the catalog' },
 };
 
 // id から英語名を引く。無ければ日本語名のまま（未翻訳のものは従来どおり）。

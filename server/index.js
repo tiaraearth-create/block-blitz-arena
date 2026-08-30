@@ -6,9 +6,15 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { monitorEventLoopDelay } from 'perf_hooks';
 import { fileURLToPath } from 'url';
 
 import { loadDb, saveDb, flushDb, lastPersistError, DATA_DIR } from './db.js';
+// 永続化の実測値（db.json のサイズ／直近保存の所要ms）は db.js 側のゲッターから
+// 取る。名前付き import にすると「まだ生えていない」時点で ES モジュールの
+// リンクが失敗してサーバーごと起動しなくなるので、名前空間で受けて実行時に
+// 有無を見る。無ければその項目だけ出さない。
+import * as dbModule from './db.js';
 import { initBattle } from './battle.js';
 import {
   hashPassword, verifyPassword, issueToken, revokeToken, revokeAllTokens,
@@ -18,10 +24,16 @@ import {
   SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED, BOOST_ITEMS, EQUIP_SLOTS,
   BP_TIERS, BP_XP_PER_TIER, BP_PREMIUM_PRICE_GEMS, BP_SEASON_DAYS,
   BOSSES, TITLES, earnedTitles, GEM_PACKS, THRONE_ITEMS,
+  COLLECTION_SETS, collectionView, claimCollection,
 } from './catalog.js';
 import {
   syncMissions, trackMissions, missionsView, claimMission, claimMissionBonus,
 } from './missions.js';
+// 🎲 ミッションのリロールは missions.js 側が `rerollMission` を生やしたときだけ
+// 動く。名前付き import にすると「まだ生えていない」時点で ES モジュールの
+// リンクが失敗し、サーバーごと起動しなくなる（db.js の実測値ゲッターと同じ話）。
+// 名前空間で受けて、実行時に有無を見る。
+import * as missionsModule from './missions.js';
 import { achievementsView, claimAchievement, ACHIEVEMENTS } from './achievements.js';
 import {
   ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider, setTakenNamesProvider,
@@ -34,17 +46,21 @@ import { enName } from '../public/js/catalog-en.js';   // 実況フィードの�
 import {
   GUILD_CREATE_COST, GUILD_ICONS, createGuild, findGuild, joinGuild, leaveGuild, kickMember,
   addGuildPoints, guildView, guildLevel, guildCoinBonus, ghostGuildViews, tagOfName, validateGuildInput,
-  ghostGuildOfResident,
+  ghostGuildOfResident, trackGuildQuests, claimGuildQuest,
 } from './guilds.js';
 import { TRANSLATE_ENGINE, translateChat } from './translate.js';
 import {
   validateBackup, applyRestore, snapshot, listSnapshots, readSnapshot, BACKUP_VERSION,
 } from './backup.js';
-import { EVENT_TYPES, makeEvent, eventBonus } from './events.js';
+import {
+  EVENT_TYPES, makeEvent, eventBonus,
+  scheduledEventFor, nextScheduledEvent, makeScheduledEvent, calendarView,
+} from './events.js';
 import {
   ensureSocial, healSocial, unfriendAll, friendsView, friendRow,
   sendRequest, acceptRequest, declineRequest, cancelRequest, unfriend,
   block as blockUser, unblock as unblockUser, socialDefaults,
+  rivalBoard, sendChallenge, friendsOvertaken, CHALLENGE_COOLDOWN_MS,
 } from './friends.js';
 import {
   createPoll, eventPollOptions, vote as castVote, pollView, tickPoll, winnerOf, isOpen as pollOpen,
@@ -267,6 +283,137 @@ app.use((req, res, next) => {
   }
   next();
 });
+// ---------------------------------------------------------------------------
+// 🗂 静的アセットのコンテンツハッシュ・キャッシュ
+//
+// これまで public/js は全部 no-cache だった（更新を即座に届けるため）。つまり
+// 起動のたびに 30本以上のモジュールを毎回取り直す。ETag の 304 で本文は返らない
+// にせよ、往復そのものは必ず走るので、海外や電波の悪い回線では体感で効く。
+//
+// 起動時に各ファイルの内容から版数を出し、import 指定子に `?v=<hash>` を付けた
+// 変換済みソースをメモリに持つ。`?v` が現行の版数と一致するリクエストだけを
+// immutable（1年）にし、それ以外は今までどおり no-cache に落ちる ── 版数が
+// 変わった瞬間にURLも変わるので、古いものを掴んだままにはならない。
+//
+// 版数は「自分の中身」だけでは足りない。依存先だけが変わった場合に自分のURLが
+// 変わらず、immutable で抱えた古い依存を読み続けてしまうため、依存の版数も
+// 混ぜて畳み込む（深さぶん回せば収束する）。
+//
+// ASSET_HASH=0 で丸ごと無効化できる（変換に不具合が出たときの逃げ道）。
+// 置換に失敗したファイルは元のソースをそのまま配る。壊れるくらいなら効かない
+// ほうがよい。
+// ---------------------------------------------------------------------------
+const ASSET_HASH_ENABLED = process.env.ASSET_HASH !== '0';
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const ASSET_JS_DIR = path.join(PUBLIC_DIR, 'js');
+const ASSET_INDEX_HTML = path.join(PUBLIC_DIR, 'index.html');
+// `from './x.js'` と `import('./x.js')` の両形式。
+const IMPORT_SPEC_RE = /(from\s*|import\s*\(\s*)(['"])(\.\/[\w.-]+\.js)(['"])/g;
+const ASSET_NAME_RE = /^\/js\/([\w.-]+\.js)$/;
+
+const assetVer = new Map();     // 'main.js' -> 版数
+const assetBody = new Map();    // 'main.js' -> 変換済みソース
+const assetMtime = new Map();   // 'main.js' -> 読んだ時点の mtimeMs
+let assetIndexHtml = null;      // 変換済み index.html（null = 素のまま配る）
+let assetIndexMtime = null;
+
+function assetHash(s) { return crypto.createHash('sha1').update(s).digest('hex').slice(0, 10); }
+
+function buildAssetHashes() {
+  if (!ASSET_HASH_ENABLED) return;
+  assetVer.clear(); assetBody.clear(); assetMtime.clear();
+  assetIndexHtml = null;
+  let names;
+  try { names = fs.readdirSync(ASSET_JS_DIR).filter(f => f.endsWith('.js')); }
+  catch { return; }
+  const raw = new Map();
+  for (const n of names) {
+    try {
+      const p = path.join(ASSET_JS_DIR, n);
+      raw.set(n, fs.readFileSync(p, 'utf8'));
+      assetMtime.set(n, fs.statSync(p).mtimeMs);
+    } catch { /* 読めないものは対象外（express.static に落ちる） */ }
+  }
+  if (!raw.size) return;
+  // 直接依存（同ディレクトリの相対 import だけ）
+  const deps = new Map();
+  for (const [n, text] of raw) {
+    const set = new Set();
+    for (const m of text.matchAll(IMPORT_SPEC_RE)) {
+      const base = m[3].slice(2);
+      if (raw.has(base) && base !== n) set.add(base);
+    }
+    deps.set(n, [...set].sort());
+  }
+  const own = new Map([...raw].map(([n, t]) => [n, assetHash(t)]));
+  let ver = new Map(own);
+  for (let pass = 0; pass < raw.size; pass++) {
+    const next = new Map();
+    for (const n of raw.keys()) {
+      next.set(n, assetHash(`${own.get(n)}|${deps.get(n).map(d => ver.get(d) || '').join(',')}`));
+    }
+    ver = next;
+  }
+  for (const [n, v] of ver) assetVer.set(n, v);
+  for (const [n, text] of raw) {
+    let ok = true;
+    const out = text.replace(IMPORT_SPEC_RE, (m, pre, q1, spec, q2) => {
+      const v = assetVer.get(spec.slice(2));
+      if (!v) { ok = false; return m; }
+      return `${pre}${q1}${spec}?v=${v}${q2}`;
+    });
+    assetBody.set(n, ok ? out : text);
+  }
+  try {
+    const html = fs.readFileSync(ASSET_INDEX_HTML, 'utf8');
+    assetIndexMtime = fs.statSync(ASSET_INDEX_HTML).mtimeMs;
+    const mv = assetVer.get('main.js');
+    if (mv) {
+      const out = html.replace(/(src=")(\.?\/?js\/main\.js)(")/, `$1$2?v=${mv}$3`);
+      assetIndexHtml = out === html ? null : out;   // 置換できなければ素のまま配る
+    }
+  } catch { assetIndexHtml = null; }
+}
+buildAssetHashes();
+
+// 手元での編集を握りつぶさないための一手間。起動時に読んだきりだと、
+// ファイルを直しても再起動するまで古い中身が配られる（no-cache でも
+// サーバーが起動時の写しを返すため）。mtime が動いていたら組み直す。
+function assetFresh(name) {
+  try {
+    const mt = fs.statSync(path.join(ASSET_JS_DIR, name)).mtimeMs;
+    if (assetMtime.get(name) !== mt) buildAssetHashes();
+  } catch { /* 消えていたら次の分岐で express.static に落ちる */ }
+}
+
+function sendAsset(req, res, body, type, version) {
+  res.setHeader('Content-Type', type);
+  res.setHeader('Cache-Control',
+    version && req.query && req.query.v === version
+      ? 'public, max-age=31536000, immutable'
+      : 'no-cache');
+  res.send(body);
+}
+
+app.use((req, res, next) => {
+  if (!ASSET_HASH_ENABLED) return next();
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  const m = ASSET_NAME_RE.exec(req.path);
+  if (m) {
+    assetFresh(m[1]);
+    const body = assetBody.get(m[1]);
+    if (body == null) return next();
+    return sendAsset(req, res, body, 'application/javascript; charset=utf-8', assetVer.get(m[1]));
+  }
+  if (req.path === '/' || req.path === '/index.html') {
+    try {
+      if (assetIndexMtime !== fs.statSync(ASSET_INDEX_HTML).mtimeMs) buildAssetHashes();
+    } catch { /* 読めなければ下の分岐で素のまま配られる */ }
+    if (assetIndexHtml) return sendAsset(req, res, assetIndexHtml, 'text/html; charset=utf-8', null);
+  }
+  next();
+});
+
 app.use(express.static(path.join(__dirname, '..', 'public'), {
   // Icons are immutable — cache a week. Everything else revalidates
   // (ETag 304) so client updates ship immediately.
@@ -527,7 +674,7 @@ const GEMDROP_DAILY_CAP = 120;
 const BUGREPORT_CAP = 300;
 const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']);
 
-function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, trusted, preClamped }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, trusted, preClamped }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   // mode はキー生成にも使う（下の `${mode}Prev`）。クライアント申告なので、
   // 長さを切っておかないと巨大文字列で stats を無限に太らせられる（実測で
@@ -555,6 +702,9 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   items = clamp(items, 200);
   pieces = clamp(pieces, 20000);
   floors = clamp(floors, 100);
+  // ✨全消し「昇華」の回数。1ランで現実的に出せるのはせいぜい数回なので、
+  // ults/items と同じ作法で上限を切っておく（実績→💎の原資になるため）。
+  perfectClears = clamp(perfectClears, 20);
   // 単数 floor（ダンジョン到達階）もクランプ。realm ブロックは別変数 fl で
   // クランプするが、到達フィード生成と `${mode}Prev` 書き込みは生 floor を
   // 使うため、ここで押さえないと F999999 の虚偽速報や dungeonPrev=Infinity
@@ -671,6 +821,29 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   if (guild) {
     const wk = weekIdOf(currentWeekNum());
     guildPts = addGuildPoints(db, user, Math.floor(score / 400) + (won ? 25 : 0) + Math.floor(lines / 2), wk);
+    // 🗡️ 週間クエストは addGuildPoints の「直後」でなければならない —— 'points'
+    // クエストは加算済みの週間ptをそのまま読む（自前で足し直さない）ので、
+    // 先に呼ぶと今回のぶんだけ1ゲーム遅れて達成することになる。
+    //
+    // ダンジョンの階数は、この地点ではまだ ownRealm(下で宣言) を使えないので
+    // 4つの世界を直に見る。他モードの stray な floors をクエストに足さないため。
+    const isDungeonMode = mode === 'dungeon' || mode === 'dungeon_under'
+      || mode === 'dungeon_heaven' || mode === 'dungeon_abyss';
+    const questsDone = trackGuildQuests(db, user, wk, {
+      mode, won: !!won, lines, perfectClears, ults,
+      floors: isDungeonMode ? floors : 0,
+    });
+    // 達成はギルド全体の手柄なので、ライブフィードで世界に知らせる（日英）。
+    // 1ゲームで2本以上ぶら下がることは滅多にないが、念のため頭を押さえる。
+    if (questsDone.length && battleReady) {
+      for (const q of questsDone.slice(0, 2)) {
+        battle.crowd.feed({
+          icon: '🗡️', real: true, who: user.username,
+          text: `ギルド「${guild.name}」が週間クエスト「${q.name}」を達成！ 金庫が開いた`,
+          textEn: `Guild "${guild.name}" cleared the weekly quest "${q.nameEn || q.name}" — the vault is open!`,
+        });
+      }
+    }
     guildBonus = Math.floor(coins * guildCoinBonus(guildLevel(guild.lifetime || 0)));
     coins += guildBonus;
     const mine = (guild.weekly[wk] && guild.weekly[wk].byMember[user.id]) || 0;
@@ -709,6 +882,9 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     s.ultsUsed = (s.ultsUsed || 0) + ults;
     s.itemsUsed = (s.itemsUsed || 0) + items;
     s.piecesPlaced = (s.piecesPlaced || 0) + pieces;
+    // ✨全消し「昇華」も同じ門をくぐらせる。ここも実績経由で💎が出るので、
+    // {perfectClears:20} だけを連投して実績を取れないようにする。
+    s.perfectClears = (s.perfectClears || 0) + perfectClears;
   }
   const newWaveBest = mode === 'survival' && realPlay && wave > (s.survivalWave || 0);
   if (newWaveBest) s.survivalWave = wave;
@@ -803,6 +979,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   //      スコアを確定できる — リロードで何度でもやり直す抜け道は、開始した
   //      瞬間に「0点で消費済み」になることで消える。
   let daily = null;
+  // 📅 この提出で追い抜いたフレンド（通知はこの関数の終わりでまとめて送る）。
+  let overtook = null;
   if (mode === 'daily') {
     s.dailycPlays = (s.dailycPlays || 0) + 1;
     const today = jstDayKey();
@@ -819,6 +997,9 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
       // 30ピースの理論値をはるかに越える申告は、その日のボードを永久占拠する
       // だけなので頭を押さえる（コイン等は共通経路の別クランプが既に見ている）。
       const recScore = Math.min(score, DAILYC_MAX_SCORE);
+      // 追い抜き判定は「書き換える前の自分の点数」が要る（/api/daily/start が
+      // 作る予約は score:0 なので、たいていは 0）。
+      const prevScore = cur && cur.day === recDay ? (Number(cur.score) || 0) : 0;
       const target = dailyTargetOf(recDay);
       const cleared = recScore >= target;
       const streak = cleared ? prevStreak + 1 : 0;
@@ -844,6 +1025,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
         user.gems += 300;
       }
       daily = { recorded: true, reason: 'recorded', cleared, streak, target, bonusCoins, bonusGems };
+      // 🏁 同じシード・同じピース順なので、追い抜きは純粋に腕の差。抜かれた側に
+      // だけ知らせる（抜いた側には出さない ── 煽りの配達経路にしない）。
+      const passed = friendsOvertaken(db, user, recDay, recScore, prevScore);
+      if (passed.length) overtook = { day: recDay, score: recScore, rows: passed };
     };
     const reservedHere = !!(recordDay && cur && cur.day === recordDay
       && cur.pending && claimedAttempt && claimedAttempt === cur.pending);
@@ -1050,6 +1235,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   }
   if (prevKey) s[prevKey] = Math.max(prevFloor, Math.floor(Number(floor) || 0));
   postRealFeed(user, feedNotes);
+  notifyDailyOvertaken(user, overtook);
 
   // Daily / weekly missions advance off the same event.
   const missionsCompleted = trackMissions(user, currentWeekNum(), {
@@ -1094,6 +1280,29 @@ function postRealFeed(user, notes) {
   }
 }
 
+// 📅 デイリーで追い抜かれた人にだけ、その場で知らせる。
+//
+// 送るのは既存の presence 経路（フレンド申請と同じ socket）で、文面は運営の
+// 'announce'（クライアントが日英を出し分ける唯一の共通型）。新しい保存も
+// 新しいポーリングも増やさない。
+//
+// フレンド上限は100人。全員を抜いた回に100通投げるのは通知としても処理としても
+// 過剰なので、僅差の相手（friendsOvertaken が点数の高い順に並べてくれている ＝
+// 「すぐ下にいた人」）から数人だけに絞る。
+const DAILY_OVERTAKE_NOTIFY_MAX = 5;
+function notifyDailyOvertaken(user, overtook) {
+  if (!overtook || !overtook.rows.length) return;
+  if (!battleReady || !battle.presence) return;
+  for (const row of overtook.rows.slice(0, DAILY_OVERTAKE_NOTIFY_MAX)) {
+    battle.presence.sendToUser(row.user.id, {
+      type: 'announce',
+      message: `🏁 ${user.username} が今日のデイリーであなたを抜きました（${fmtNum(overtook.score)}点）。同じ盤面・同じピース順です — 抜き返しますか？`,
+      messageEn: `🏁 ${user.username} passed you on today's Daily (${overtook.score.toLocaleString('en-US')} pts). Same board, same pieces — care to take it back?`,
+      from: '運営',
+    }, { primaryOnly: true });
+  }
+}
+
 // Simple in-memory rate limiter (per key, sliding window).
 // Keyed by IP (and by user for some routes), so on a long-lived instance this
 // grew for every address that ever touched the server and never shrank. Both
@@ -1117,6 +1326,10 @@ setInterval(() => {
   for (const [k, at] of feedAt) {
     if (now - at > 3600_000) feedAt.delete(k);
   }
+  // 📅 イベント自動運行。/api/status からも呼んでいるが、誰も画面を開いて
+  // いない時間帯に枠(18:00 JST)へ入る日のために、こちらでも点火を見る。
+  // 自動運行OFF（既定）なら比較1回で戻るだけ。
+  try { syncAutoEvent(); } catch (err) { console.error('[events] 自動開催に失敗:', err && err.message); }
 }, 600_000).unref?.();
 
 function inMaintenance() { return !!db.meta.maintenance; }
@@ -1299,6 +1512,94 @@ app.post('/api/me/rename', requireAuth, (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
+// ---------------------------------------------------------------------------
+// 📦 ゲスト時代の記録の引き継ぎ（1アカウント1回だけ）
+//
+// ゲストの記録はブラウザの localStorage にしか無いので、値は全部クライアント
+// 申告になる。だから引き継げるものは厳しく絞ってある:
+//
+//   ・通貨とジェムは引き継がない。引き継げるようにした瞬間、この口が
+//     「好きなだけ通貨を生む窓」になる。
+//   ・ハイスコアは **ランキングに載る stats キーには絶対に書かない**。
+//     ランキング／👑王座が読むのは bestScore・rating・dungeonMax・
+//     weekly.best・sprint.s60/s180・puzzleStage・digDepth・dailyc.score。
+//     引き継いだ値はこれらと混ぜず、stats.guestImport という別の入れ物に
+//     「表示用のベスト」として置くだけにする（各モードの画面が
+//     localStorage と同じ扱いで参照できる）。
+//   ・すべてクランプ。1回しか通らないとはいえ、桁の壊れた値を永久に
+//     持たせない。
+//   ・1アカウント1回。2回目は409（済みフラグは user.stats に残す）。
+// ---------------------------------------------------------------------------
+
+const GUEST_PUZZLE_MAX = 50;
+const GUEST_STARS_MAX = 150;
+const GUEST_ITEM_MAX = 9;
+// 引き継げる「自己ベスト」と、その上限。ここに無いキーは黙って捨てる。
+const GUEST_BEST_LIMITS = {
+  solo: 1_000_000, chaos: 1_000_000, meltdown: 1_000_000, chimera: 1_000_000,
+  ghost: 1_000_000, weekly: 1_000_000, daily: 200_000,
+  sprint60: 200_000, sprint180: 400_000,
+  survivalWave: 999, digDepth: 9999, dungeonMax: 100, rushDepth: 100, bossMax: 12,
+};
+const GUEST_UNLOCK_KEYS = ['kami', 'souzou', 'ghost'];
+
+app.post('/api/me/import-guest', requireAuth, maintenanceGuard, (req, res) => {
+  if (!rateLimit(`gimport:${req.user.id}`, 5, 60 * 60 * 1000)) {
+    return res.status(429).json({ error: '少し待ってください' });
+  }
+  migrateUser(req.user);
+  const user = req.user;
+  const s = user.stats;
+  if (s.guestImportedAt) {
+    return res.status(409).json({ error: 'ゲスト記録の引き継ぎは1アカウント1回だけです（すでに実行済み）', at: s.guestImportedAt });
+  }
+  const b = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
+  const int = (v, max) => Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
+
+  // 🧩 パズル遺跡の進行と★。進行は puzzleStage（ランキング＋王座の値）とは
+  // 別枠に置く ── 申告だけで王座が取れてはいけない。
+  const puzzleStage = int(b.puzzleStage, GUEST_PUZZLE_MAX);
+  const stars = int(b.stars, GUEST_STARS_MAX);
+
+  // 🎒 ブースター。運営専用は対象外、各9個まで。
+  const items = {};
+  const src = (b.items && typeof b.items === 'object' && !Array.isArray(b.items)) ? b.items : {};
+  for (const def of BOOST_ITEMS) {
+    if (def.adminOnly) continue;
+    const n = int(src[def.id], GUEST_ITEM_MAX);
+    if (n > 0) items[def.id] = n;
+  }
+
+  // 🔓 隠し難易度の解放フラグ（真偽値だけ）。
+  const unlocks = {};
+  const usrc = (b.unlocks && typeof b.unlocks === 'object' && !Array.isArray(b.unlocks)) ? b.unlocks : {};
+  for (const k of GUEST_UNLOCK_KEYS) if (usrc[k]) unlocks[k] = true;
+
+  // 🏅 各モードの自己ベスト（表示用）。
+  const bests = {};
+  const bsrc = (b.bests && typeof b.bests === 'object' && !Array.isArray(b.bests)) ? b.bests : {};
+  for (const [k, max] of Object.entries(GUEST_BEST_LIMITS)) {
+    const n = int(bsrc[k], k === 'bossMax' ? BOSSES.length : max);
+    if (n > 0) bests[k] = n;
+  }
+
+  // 実際に効く（＝プレイに反映される）のはブースターだけ。あとは表示用。
+  user.items = user.items || {};
+  let itemsGiven = 0;
+  for (const [id, n] of Object.entries(items)) {
+    user.items[id] = (user.items[id] || 0) + n;
+    itemsGiven += n;
+  }
+  s.guestImport = { at: Date.now(), puzzleStage, stars, unlocks, bests, items };
+  s.guestImportedAt = Date.now();
+  saveDb();
+  res.json({
+    ok: true,
+    imported: { puzzleStage, stars, unlocks, bests, items, itemsGiven },
+    user: publicUser(user),
+  });
+});
+
 // Delete own account (password confirmation required).
 app.delete('/api/me', requireAuth, (req, res) => {
   const user = req.user;
@@ -1393,11 +1694,57 @@ function currentEvent() {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// 📅 イベント自動運行（events.js のカレンダー）
+//
+// 既定は **OFF**。db.meta.autoEvents が明示的に true のときだけ点火する ——
+// 運営が管理画面で有効化するまで、これまでと挙動を1ミリも変えない
+// （events.js の autoEventsEnabled は「未設定＝有効」に倒しているが、既存の
+//  本番データを勝手にお祭りモードへ切り替えるわけにはいかないので、ここでは
+//  明示 true のみを有効とする）。
+//
+// 【割り込まない】点火するのは db.meta.event が空のときだけ。手動開催
+// （/api/admin/event）・投票で決まった開催（applyWinner）・👑管理者イベントが
+// 走っているあいだは何もしない。走っているものを上書き・差し替えすることは
+// 絶対にない。
+function autoEventsOn() { return db.meta.autoEvents === true; }
+
+function syncAutoEvent() {
+  if (!autoEventsOn()) return null;
+  // currentEvent() は期限切れを片づけて null を返す。走っているものがあるなら
+  // （手動でも投票でも自動でも）ここで手を引く。
+  if (currentEvent()) return null;
+  const ev = makeScheduledEvent(scheduledEventFor(Date.now(), true));
+  if (!ev) return null;
+  db.meta.event = ev;
+  saveDb();
+  if (battleReady) {
+    battle.broadcastAll({
+      type: 'announce',
+      message: `${ev.icon} 本日の定期イベント「${ev.name}」が始まりました！ ${ev.desc}`,
+      messageEn: `${ev.icon} Today's scheduled event "${ev.nameEn || ev.name}" has begun! ${ev.descEn || ''}`,
+      from: '運営',
+    });
+    battle.crowd.feed({ icon: ev.icon, real: true, who: '運営',
+      text: `定期イベント「${ev.name}」が開幕！ ${ev.desc}`,
+      textEn: `The scheduled event "${ev.nameEn || ev.name}" is live! ${ev.descEn || ev.desc}` });
+    battle.crowd.react('event_start');
+  }
+  console.log(`[events] 自動開催: ${ev.name} (${ev.type}) — ${new Date(ev.endsAt).toISOString()} まで`);
+  return ev;
+}
+
 // Public lightweight status (menu online counter + event).
 // The client sends its bearer token, so the admin-event block below can be
 // personalised (your slot, your countdown) without a second round trip.
 app.get('/api/status', (req, res) => {
   refreshThrones();   // polled every ~25s by clients — keeps 👑 takeovers timely
+  // 🏛 シーズン切替の検知もここに乗せる。25秒おきに必ず叩かれる口なので、
+  // 誰も遊んでいない時間帯に切り替わっても取りこぼさない（同じシーズンなら
+  // 比較1回で戻るだけ）。
+  settleSeasonHallOfFame();
+  // 📅 自動運行の点火もここに乗せる。自動運行OFF（既定）なら比較1回で戻る。
+  syncAutoEvent();
   res.json({
     adminEvent: adminEventView(req.user),
     online: battle.displayOnline(),
@@ -1421,6 +1768,9 @@ app.get('/api/status', (req, res) => {
       return (req.user && req.user.role === 'admin') ? e : 'サーバーの保存に問題が発生しています';
     })(),
     event: currentEvent(),
+    // 📅 次の自動開催の予告（種類と開始時刻）。自動運行OFFなら null ——
+    // 予告だけ出して何も始まらない、という嘘をつかないため。
+    nextEvent: autoEventsOn() ? nextScheduledEvent(Date.now(), true) : null,
     // Menu badge only — the full poll (and the caller's own vote) comes from
     // /api/poll, which needs auth to know who is asking.
     poll: db.meta.poll && pollOpen(db.meta.poll)
@@ -1710,6 +2060,36 @@ app.post('/api/guild/settings', requireAuth, (req, res) => {
   res.json({ guild: guildView(db, guild, curWeek(), { detailed: true, viewerId: req.user.id, levelOf }) });
 });
 
+// 🗡️ ギルド金庫 — 達成した週間クエストの宝箱を、メンバーが1人1回ずつ開ける。
+//
+// 報酬額はクライアントの申告を一切見ない。guilds.js が QUEST_POOL から
+// 引き直したものだけを渡す（こちらは questId を取り次ぐだけ）。二重受取は
+// guilds.js 側の user.guildQuests.claimed が止める。
+// クエストの状態は guildView(detailed) の `quests` に載るので、専用のGETは要らない。
+app.post('/api/guild/quest/claim', requireAuth, maintenanceGuard, (req, res) => {
+  migrateUser(req.user);
+  if (!rateLimit('gquest:' + req.user.id, 20, 60_000)) {
+    return res.status(429).json({ error: 'すこし待ってからお試しください' });
+  }
+  const guild = req.user.guildId ? db.guilds[req.user.guildId] : null;
+  if (!guild) return res.status(404).json({ error: 'ギルドに所属していません' });
+  const week = curWeek();
+  const out = claimGuildQuest(db, req.user, week, String((req.body || {}).questId || (req.body || {}).id || ''));
+  if (out.error) return res.status(409).json({ error: out.error });
+  saveDb();
+  // 3本すべて開けた人だけが手にする「ギルドの誉れ」。めったに出ないので告知する。
+  if (out.badge) {
+    battle.crowd.feed({ icon: '🎖️', real: true, who: req.user.username,
+      text: `${req.user.username} がギルド週間クエストを完全制覇し「ギルドの誉れ」を獲得！`,
+      textEn: `${req.user.username} cleared every weekly guild quest and earned Guild Honors!` });
+  }
+  res.json({
+    reward: out,
+    user: publicUser(req.user),
+    guild: guildView(db, guild, week, { detailed: true, viewerId: req.user.id, levelOf }),
+  });
+});
+
 app.delete('/api/admin/guilds/:id', requireAuth, requireAdmin, (req, res) => {
   // `__proto__` や `constructor` を渡されると Object.prototype が返ってきて
   // truthy 判定を通り、そのあと g.members で落ちて 500 になっていた。
@@ -1994,6 +2374,104 @@ app.delete('/api/admin/bugreports/:id', requireAuth, requireAdmin, (req, res) =>
   res.json({ ok: true });
 });
 
+// ---------------------------------------------------------------------------
+// 💥 クライアントJSエラーの受け口
+//
+// これまで、プレイヤーの端末で例外が出ても運営には何も届かなかった（本人も
+// 気づかないまま画面が固まるだけ）。バグ報告と違って、これは人が書いて送る
+// ものではないので、同じ不具合が何百件も積み上がる。だから件数で束ねる:
+//   メッセージ＋発生位置のハッシュを鍵にして、同じものは1行のカウントを増やす。
+// 保持は上限200件のリング。捨てるのは解決済みからで、それが無ければ最古の行。
+// 受け口は未認証でも通す（ログイン画面で落ちたら送れないと意味がない）。
+// ---------------------------------------------------------------------------
+const CLIENT_ERROR_CAP = 200;
+
+app.post('/api/clienterror', (req, res) => {
+  if (!rateLimit(`cerr:${req.ip}`, 5, 10 * 60 * 1000)) {
+    return res.status(429).json({ error: '送信が多すぎます' });
+  }
+  const b = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
+  const cut = v => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 500);
+  const message = cut(b.message).trim();
+  if (!message) return res.status(400).json({ error: 'message が必要です' });
+  // スタックは先頭だけ（1行目＝発生箇所が分かれば足りる。全文は500字でも
+  // 溢れるうえ、200件ぶん抱えると db.json が無視できない大きさになる）。
+  const stack = cut(String(b.stack || '').split('\n')[0]).trim();
+  const line = Math.max(0, Math.min(9_999_999, Math.floor(Number(b.line) || 0)));
+  const col = Math.max(0, Math.min(9_999_999, Math.floor(Number(b.col) || 0)));
+  const file = cut(b.file).trim();
+  const where = file ? `${file}:${line}${col ? `:${col}` : ''}` : '';
+  const ua = cut(b.ua || req.headers['user-agent']);
+  const lang = cut(b.lang).slice(0, 40);
+  const screen = cut(b.screen).slice(0, 40);
+
+  const hash = crypto.createHash('sha1').update(`${message}|${where}`).digest('hex').slice(0, 12);
+  if (!Array.isArray(db.meta.clientErrors)) db.meta.clientErrors = [];
+  const list = db.meta.clientErrors;
+  const found = list.find(e => e && e.hash === hash);
+  if (found) {
+    found.count = (found.count || 1) + 1;
+    found.lastAt = Date.now();
+    // 直近の環境で上書きする（同じ不具合でも端末が分かると当たりが付く）。
+    if (ua) found.ua = ua;
+    if (lang) found.lang = lang;
+    if (screen) found.screen = screen;
+    if (!found.stack && stack) found.stack = stack;
+    saveDb();
+    return res.json({ ok: true, hash, count: found.count });
+  }
+  list.push({
+    hash, message, stack, where, ua, lang, screen,
+    by: req.user ? req.user.username : 'ゲスト',
+    role: req.user ? req.user.role : 'guest',
+    count: 1, at: Date.now(), lastAt: Date.now(), status: 'open',
+  });
+  if (list.length > CLIENT_ERROR_CAP) {
+    // 解決済みを先に捨てる。無ければ最も古い行（未解決）を捨てる ──
+    // ここはバグ報告と違い「人が書いた文」ではないので、押し出されても
+    // 失われるのは重複しうる自動収集の1件だけ。受けた顔をして黙って消す
+    // ほうが、送信側を壊すより害が小さい。
+    const doneIdx = list.findIndex(e => e && e.status === 'done');
+    if (doneIdx !== -1) list.splice(doneIdx, 1);
+    else {
+      let oldest = 0;
+      for (let i = 1; i < list.length - 1; i++) {
+        if ((list[i].lastAt || 0) < (list[oldest].lastAt || 0)) oldest = i;
+      }
+      list.splice(oldest, 1);
+    }
+  }
+  saveDb();
+  res.json({ ok: true, hash, count: 1 });
+});
+
+app.get('/api/admin/clienterrors', requireAuth, requireAdmin, (_req, res) => {
+  const list = (Array.isArray(db.meta.clientErrors) ? db.meta.clientErrors : []).slice();
+  list.sort((a, b) => (b.lastAt || b.at || 0) - (a.lastAt || a.at || 0));
+  res.json({
+    errors: list,
+    open: list.filter(e => e && e.status !== 'done').length,
+    total: list.reduce((a, e) => a + (e && e.count ? e.count : 0), 0),
+    cap: CLIENT_ERROR_CAP,
+  });
+});
+
+app.post('/api/admin/clienterrors/:hash', requireAuth, requireAdmin, (req, res) => {
+  const e = (Array.isArray(db.meta.clientErrors) ? db.meta.clientErrors : []).find(x => x && x.hash === req.params.hash);
+  if (!e) return res.status(404).json({ error: 'その記録が見つかりません' });
+  e.status = req.body && req.body.status === 'open' ? 'open' : 'done';
+  saveDb();
+  res.json({ ok: true, status: e.status });
+});
+
+app.delete('/api/admin/clienterrors/:hash', requireAuth, requireAdmin, (req, res) => {
+  const list = Array.isArray(db.meta.clientErrors) ? db.meta.clientErrors : [];
+  // :hash に 'all' を渡すと全消し（解決済みが溜まったときの掃除用）。
+  db.meta.clientErrors = req.params.hash === 'all' ? [] : list.filter(x => x && x.hash !== req.params.hash);
+  saveDb();
+  res.json({ ok: true, remaining: db.meta.clientErrors.length });
+});
+
 function newsView() {
   return db.news
     .slice()
@@ -2065,7 +2543,31 @@ app.delete('/api/admin/news/:id', requireAuth, requireAdmin, (req, res) => {
 
 // Catalogue of event types (admin picker).
 app.get('/api/admin/event/types', requireAuth, requireAdmin, (_req, res) => {
-  res.json({ types: EVENT_TYPES, event: currentEvent() });
+  res.json({
+    types: EVENT_TYPES, event: currentEvent(),
+    // 📅 自動運行の状態も同じ口で返す（管理画面のポーリングを増やさない）。
+    autoEvents: autoEventsOn(),
+    calendar: calendarView(),
+    nextEvent: autoEventsOn() ? nextScheduledEvent(Date.now(), true) : null,
+  });
+});
+
+// 📅 イベント自動運行の ON/OFF。既定は OFF ── 運営が明示的に有効化するまで、
+// カレンダーは1件も点火しない。ONにしても、走っているイベント（手動・投票・
+// 👑管理者イベント）には一切割り込まない。
+app.post('/api/admin/event/auto', requireAuth, requireAdmin, (req, res) => {
+  const on = !!req.body.on;
+  db.meta.autoEvents = on;
+  adminLog(req, 'event_auto', on ? 'on' : 'off');   // adminLog が saveDb もする
+  // ONにした瞬間が枠の中なら、次のtickを待たずに点ける。
+  const started = on ? syncAutoEvent() : null;
+  res.json({
+    autoEvents: on,
+    calendar: calendarView(),
+    event: currentEvent(),
+    started: !!started,
+    nextEvent: on ? nextScheduledEvent(Date.now(), true) : null,
+  });
 });
 
 // Start / extend / stop a limited-time event.
@@ -2285,6 +2787,164 @@ function finalizeWeeklyRankings() {
 }
 
 // ---------------------------------------------------------------------------
+// 🏛 シーズン殿堂 (Hall of Fame)
+//
+// シーズンが切り替わったら、切替前シーズンの TOP3 を db.meta.hallOfFame に
+// 永久保存する。週間精算（finalizeWeeklyRankings）とまったく同じ作法:
+//   ・遅延実行（無料枠のサーバーは切替の瞬間に寝ている）
+//   ・「済んだ」印を db.meta に持ち、二度払いしない
+//   ・実プレイヤーが1人もいない機体では印を進めない（復元待ちを焼かない）
+// 報酬は新しい配布経路を作らず、既存の rankRewards インボックスに積む
+// （/api/rank/claim がまとめて受け取る）。
+//
+// 住人（ゴースト）も殿堂には載る ── ランキングと同じ合成を使うので、
+// 「あのシーズンはあの人が強かった」という記憶がボードと食い違わない。
+// ただし報酬はアカウントを持つ実プレイヤーにしか出ない。
+// ---------------------------------------------------------------------------
+
+const HOF_BOARDS = [
+  { id: 'rating', name: 'レート',             nameEn: 'Rating' },
+  { id: 'score',  name: 'ハイスコア',         nameEn: 'High Score' },
+  { id: 'wins',   name: '週間チャレンジ優勝', nameEn: 'Weekly Challenge wins' },
+];
+const HOF_GEMS = [400, 200, 100];       // 1位 / 2位 / 3位
+const HOF_MAX_SEASONS = 100;            // これを越えたら古い順に落とす（実質8年ぶん）
+// シーズン刻印バッジ。ADMIN_KNOWN_BADGES に固定では書けない（シーズンごとに
+// 増える）ので、形で許可する。
+const SEASON_BADGE_RE = /^s\d{1,4}champ$/;
+
+function seasonMarkOf(s) {
+  return { id: s.id, number: s.number, name: s.name, nameEn: s.nameEn, startedAt: s.startedAt, endsAt: s.endsAt };
+}
+
+function hofValueOf(board, u) {
+  const s = u.stats || {};
+  return board === 'rating' ? (s.rating || 0)
+    : board === 'score' ? (s.bestScore || 0)
+    : (s.weeklyWins || 0);
+}
+
+// そのボードの上位3人（実プレイヤー＋住人）。
+function hofTopOf(board) {
+  const rows = [];
+  for (const u of Object.values(db.users)) {
+    if (u.banned || u.role === 'admin' || !u.stats || !(u.stats.gamesPlayed > 0)) continue;
+    const value = hofValueOf(board, u);
+    if (value > 0) rows.push({ username: u.username, value, resident: false, userId: u.id });
+  }
+  // 週間チャレンジの優勝回数は住人が持たない値なので、そこだけ実プレイヤーのみ。
+  if (board !== 'wins') {
+    const taken = new Set(Object.values(db.users).map(u => u.username));
+    const week = weekIdOf(currentWeekNum());
+    try {
+      for (const r of ghostRows(board === 'score' ? 'score' : 'rating', week, taken)) {
+        const value = board === 'score' ? (r.bestScore || 0) : (r.rating || 0);
+        if (value > 0) rows.push({ username: r.username, value, resident: true, userId: null });
+      }
+    } catch (err) {
+      console.warn('[halloffame] 住人の合成に失敗:', err && err.message);
+    }
+  }
+  rows.sort((a, b) => b.value - a.value);
+  return { entrants: rows.length, top: rows.slice(0, 3).map((r, i) => ({ rank: i + 1, ...r })) };
+}
+
+function settleSeasonHallOfFame() {
+  const cur = currentSeason();
+  const prev = db.meta.seasonMark;
+  if (prev && prev.id === cur.id) return;
+  // 初回（この機能が入る前からある機体・復元直後）は刻印を置くだけ。
+  // 直前のシーズンがどうだったかを知らないまま表彰しても嘘になる。
+  if (!prev || !prev.id) { db.meta.seasonMark = seasonMarkOf(cur); saveDb(); return; }
+  // 再デプロイ直後の空DB（復元待ち）では進めない。ここで印だけ進めると、
+  // 復元されてくる人たちのシーズンが1回ぶん無言で飛ぶ。
+  if (!Object.values(db.users).some(u => u.role !== 'admin' && !u.banned)) return;
+
+  if (!Array.isArray(db.meta.hallOfFame)) db.meta.hallOfFame = [];
+  if (db.meta.hallOfFame.some(e => e && e.season === prev.id)) {
+    db.meta.seasonMark = seasonMarkOf(cur);
+    saveDb();
+    return;
+  }
+
+  const badge = `s${prev.number}champ`;
+  const boards = [];
+  const winners = [];
+  for (const b of HOF_BOARDS) {
+    const { entrants, top } = hofTopOf(b.id);
+    if (!top.length) continue;
+    boards.push({ id: b.id, name: b.name, nameEn: b.nameEn, entrants, top: top.map(t => ({ rank: t.rank, username: t.username, value: t.value, resident: t.resident })) });
+    for (const t of top) {
+      if (!t.userId) continue;                       // 住人には配らない
+      const u = db.users[t.userId];
+      if (!u) continue;
+      migrateUser(u);
+      const gems = HOF_GEMS[t.rank - 1] || HOF_GEMS[HOF_GEMS.length - 1];
+      u.rankRewards.push({
+        id: crypto.randomUUID(),
+        board: `hof_${b.id}`,
+        season: prev.id, seasonNumber: prev.number,
+        seasonName: prev.name, seasonNameEn: prev.nameEn,
+        boardName: b.name, boardNameEn: b.nameEn,
+        rank: t.rank, of: entrants, best: t.value,
+        coins: 0, gems, badge: t.rank === 1 ? badge : null,
+        at: Date.now(),
+      });
+      if (t.rank === 1) winners.push({ username: u.username, board: b.name, boardEn: b.nameEn });
+    }
+  }
+
+  const entry = {
+    season: prev.id, number: prev.number,
+    name: prev.name, nameEn: prev.nameEn,
+    startedAt: prev.startedAt || null, endsAt: prev.endsAt || Date.now(),
+    at: Date.now(), badge, boards,
+  };
+  db.meta.hallOfFame.push(entry);
+  if (db.meta.hallOfFame.length > HOF_MAX_SEASONS) {
+    db.meta.hallOfFame.splice(0, db.meta.hallOfFame.length - HOF_MAX_SEASONS);
+  }
+  db.meta.seasonMark = seasonMarkOf(cur);
+
+  if (boards.length) {
+    const medals = ['🥇', '🥈', '🥉'];
+    const lineJa = boards.map(b => `【${b.name}】\n${b.top.map(t => `${medals[t.rank - 1]} ${t.username}（${fmtNum(t.value)}）`).join('\n')}`).join('\n\n');
+    const lineEn = boards.map(b => `[${b.nameEn}]\n${b.top.map(t => `${medals[t.rank - 1]} ${t.username} (${fmtNum(t.value)})`).join('\n')}`).join('\n\n');
+    db.news.push({
+      id: crypto.randomUUID(),
+      title: `🏛 ${prev.name} 殿堂入り発表`,
+      titleEn: `🏛 ${prev.nameEn} Hall of Fame`,
+      body: `${prev.name}が終了しました。歴代の記録として殿堂に刻まれた顔ぶれです。\n\n${lineJa}\n\n各ボードの上位3名にはジェムを、1位にはシーズン刻印バッジをお届けしました（ゲームを開くと受け取れます）。新シーズンもよろしくお願いします！`,
+      bodyEn: `${prev.nameEn} has ended — here are the names carved into the Hall of Fame.\n\n${lineEn}\n\nThe top 3 of each board received gems, and each #1 earned the season champion badge — open the game to claim. See you in the new season!`,
+      pinned: false, by: '運営', at: Date.now(),
+    });
+    if (db.news.length > 200) db.news.shift();
+    if (battleReady) {
+      const head = winners[0];
+      battle.crowd.feed({
+        icon: '🏛', real: true, who: '運営',
+        text: `${prev.name}が閉幕。殿堂入りが決まりました${head ? `（${head.board}の1位は ${head.username}）` : ''}`,
+        textEn: `${prev.nameEn} has closed — the Hall of Fame is set${head ? ` (${head.boardEn} #1: ${head.username})` : ''}.`,
+      });
+      if (head) battle.crowd.react('champion', { you: head.username });
+    }
+  }
+  saveDb();
+  console.log(`[halloffame] ${prev.name}(${prev.id}) を殿堂に記録しました（${boards.length}ボード）`);
+}
+
+// 歴代の殿堂。未認証でも読める（ランキングと同じIPレート制限）。
+app.get('/api/halloffame', (req, res) => {
+  if (!rateLimit(`hof:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください' });
+  settleSeasonHallOfFame();
+  const list = (Array.isArray(db.meta.hallOfFame) ? db.meta.hallOfFame : [])
+    .slice()
+    .sort((a, b) => (b.number || 0) - (a.number || 0))
+    .slice(0, 50);
+  res.json({ seasons: list, current: currentSeason() });
+});
+
+// ---------------------------------------------------------------------------
 // 👑 王座 (Thrones) — the CURRENT #1 real player of each leaderboard.
 // Derived from stats on demand (memoized); db.meta.thrones only snapshots the
 // holders so takeovers can be detected and announced. Holding a throne shows a
@@ -2495,6 +3155,9 @@ const RESULT_FIELDS = [
   'mode', 'score', 'lines', 'maxCombo', 'duration', 'won', 'drew',
   'bossId', 'floor', 'wave', 'ults', 'items', 'pieces', 'floors',
   'sprintDur', 'rank', 'depth', 'stage',
+  // ✨全消し「昇華」の回数。他のテレメトリと同じく実プレイ判定を通った回だけ
+  // 累積される（applyGameResult 側）ので、名乗らせてよい。
+  'perfectClears',
   // 📅 デイリー: 走った盤面の日と、開始時に発行した挑戦の証。どちらも
   // 「報酬を増やせる申告」ではなく、サーバーが持っている予約と突き合わせる
   // ための識別子なので、名乗らせてよい（day は形式を、attemptId は保存済みの
@@ -2899,6 +3562,54 @@ app.post('/api/titles/equip', requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// 📕 コレクション図鑑（catalog.js の COLLECTION_SETS）
+//
+// セットごとの所持数/総数・未所持の id・入手経路・コンプ報酬の受取状態。
+// 対象アイテムはカタログから導出されているので、新しいスキンを1つ足した日に
+// 「全種コンプ」が静かに嘘になることはない。
+// ---------------------------------------------------------------------------
+
+// 未所持の品がどこで手に入るか。図鑑のマスに出すラベルの材料
+// （文言そのものはクライアントが日英で持っている）。
+function collectionSourceOf(kind, id) {
+  if (kind === 'badge') return 'badge';
+  if (kind === 'title') return 'title';
+  if (kind === 'boost') return 'shop';
+  const it = SHOP_ITEMS.find(i => i.id === id);
+  if (!it) return 'shop';
+  return it.throneOnly ? 'throne' : it.gachaOnly ? 'gacha' : 'shop';
+}
+
+app.get('/api/collection', requireAuth, (req, res) => {
+  migrateUser(req.user);
+  const view = collectionView(req.user);
+  res.json({
+    ...view,
+    sets: view.sets.map(s => ({
+      ...s,
+      // 未所持ぶんだけ「どこで手に入るか」を添える（所持済みには要らない）。
+      sources: s.missing.map(id => ({ id, source: collectionSourceOf(s.kind, id) })),
+    })),
+  });
+});
+
+// セットコンプ報酬の受け取り。id:'*' で受け取れるものをまとめて。
+// 条件は必ずサーバー側で再判定し（claimCollection が collectionProgress を
+// 引き直す）、報酬額も COLLECTION_SETS から計算する ── 申告は一切見ない。
+// 二重受取を止めるフラグは **user.collections**（受け取り済みセットidの配列）。
+app.post('/api/collection/claim', requireAuth, maintenanceGuard, (req, res) => {
+  migrateUser(req.user);
+  const id = String((req.body || {}).id || (req.body || {}).setId || '*');
+  if (id !== '*' && !COLLECTION_SETS.some(s => s.id === id)) {
+    return res.status(404).json({ error: 'そのセットはありません' });
+  }
+  const out = claimCollection(req.user, id);
+  if (out.error) return res.status(409).json({ error: out.error });
+  saveDb();
+  res.json({ reward: out, user: publicUser(req.user), collection: collectionView(req.user) });
+});
+
+// ---------------------------------------------------------------------------
 // Boss battles
 // ---------------------------------------------------------------------------
 
@@ -2925,6 +3636,60 @@ app.get('/api/gempacks', (_req, res) => {
   res.json({ packs: GEM_PACKS, mode: stripeEnabled() ? 'stripe' : 'coming_soon' });
 });
 
+// db.transactions は無上限に伸びる唯一の配列。db.json は保存のたびに丸ごと
+// 書き直すので、放っておくと1件買われるたびに全履歴を JSON 化するコストが
+// 増え続ける（そして保存が遅くなるほど、書いている途中で落ちる窓が広がる）。
+// 一定数を超えたら古い分を DATA_DIR/transactions-YYYY.jsonl へ追記し、
+// db の中には直近 TX_KEEP 件だけ残す。
+const TX_KEEP = 200;
+// ローテーションで db から外した extId の控え。Stripe の webhook 重複判定は
+// db.transactions を見ているので、これが無いと「古い取引が書庫に移ったあとに
+// 同じ webhook が再送されると二重に付与される」穴が開く。
+const TX_EXTID_KEEP = 500;
+
+function rotateTransactions() {
+  try {
+    if (!Array.isArray(db.transactions) || db.transactions.length <= TX_KEEP) return;
+    db.meta = db.meta || {};
+    const old = db.transactions.slice(0, db.transactions.length - TX_KEEP);
+    // 取引は時系列で積まれるので、年ごとの塊は必ず連続する。先頭から順に
+    // 書き、書けたぶんだけ db から外す ── 途中で失敗しても、二重に書庫入り
+    // する取引は出ない（次回そこから再開する）。
+    const groups = [];
+    for (const t of old) {
+      const y = new Date(Number(t && t.at) || Date.now()).getFullYear();
+      const last = groups[groups.length - 1];
+      if (last && last.year === y) last.rows.push(t);
+      else groups.push({ year: y, rows: [t] });
+    }
+    let moved = 0;
+    for (const g of groups) {
+      const file = path.join(DATA_DIR, `transactions-${g.year}.jsonl`);
+      const text = g.rows.map(t => JSON.stringify(t)).join('\n') + '\n';
+      try {
+        fs.appendFileSync(file, text);
+      } catch (err) {
+        console.error(`[tx] ${path.basename(file)} に書けません:`, err.message);
+        break;   // ここから先は db に残したまま、次の機会に再挑戦する
+      }
+      moved += g.rows.length;
+    }
+    if (moved <= 0) return;
+    const archived = old.slice(0, moved);
+    // 売上は db から消えるので meta に移す。ここを忘れると管理画面の売上が
+    // ローテーションのたびに減って見える。
+    db.meta.revenueTotal = (db.meta.revenueTotal || 0) + archived.reduce((a, t) => a + (Number(t && t.jpy) || 0), 0);
+    db.meta.revenueCount = (db.meta.revenueCount || 0) + archived.length;
+    const ext = (db.meta.txExtIds || []).concat(archived.map(t => t && t.extId).filter(Boolean));
+    db.meta.txExtIds = ext.slice(-TX_EXTID_KEEP);
+    db.transactions = db.transactions.slice(moved);
+    console.log(`[tx] 取引 ${moved} 件を書庫に移しました（残り ${db.transactions.length} 件）`);
+  } catch (err) {
+    // ここで投げると購入処理そのものが 500 になる。書庫は補助なので握りつぶす。
+    console.error('[tx] ローテーションに失敗:', err.message);
+  }
+}
+
 function grantPack(user, pack, status, extId = null) {
   const total = pack.gems + pack.bonus;
   user.gems += total;
@@ -2939,6 +3704,7 @@ function grantPack(user, pack, status, extId = null) {
     extId,
     at: Date.now(),
   });
+  rotateTransactions();
   saveDb();
   return total;
 }
@@ -3011,7 +3777,10 @@ app.post('/api/stripe/webhook', (req, res) => {
       if (session.payment_status === 'paid' && session.metadata) {
         const user = db.users[session.metadata.userId];
         const pack = GEM_PACKS.find(p => p.id === session.metadata.packId);
-        const already = db.transactions.some(t => t.extId === session.id);
+        // 書庫に移った取引も見る。db.transactions だけだと、ローテーション後に
+        // 同じイベントが再送されたときに二重付与になる。
+        const already = db.transactions.some(t => t.extId === session.id)
+          || (db.meta.txExtIds || []).includes(session.id);
         if (user && pack && !already) {
           grantPack(user, pack, 'stripe_completed', session.id);
           console.log(`[stripe] granted ${pack.id} to ${user.username}`);
@@ -3027,16 +3796,103 @@ app.post('/api/stripe/webhook', (req, res) => {
 
 app.get('/api/admin/transactions', requireAuth, requireAdmin, (_req, res) => {
   const tx = db.transactions.slice(-100).reverse();
+  // 合計は「書庫に移したぶん(db.meta) ＋ db に残っているぶん」。ローテーションで
+  // 売上と件数が減って見えないように、必ず両方を足す。
+  const archivedJpy = Number(db.meta.revenueTotal) || 0;
+  const archivedCount = Number(db.meta.revenueCount) || 0;
+  const liveJpy = db.transactions.reduce((a, t) => a + (Number(t && t.jpy) || 0), 0);
   res.json({
     transactions: tx,
-    totalCount: db.transactions.length,
-    totalJpy: db.transactions.reduce((a, t) => a + t.jpy, 0),
+    totalCount: archivedCount + db.transactions.length,
+    totalJpy: archivedJpy + liveJpy,
+    // 内訳（一覧に出ているのは直近ぶんだけ、と管理者が分かるように）。
+    liveCount: db.transactions.length,
+    archivedCount,
+    archivedJpy,
   });
 });
 
 // ---------------------------------------------------------------------------
 // Shop
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 🏷 日替わりピックアップ（セール）＋ 🎁 本日の無料ギフト
+//
+// セールは全員共通・日付だけで決まる。抽選は missions.js と同じ mulberry32 の
+// シード式で、db に何も持たない（＝復元でズレない、再起動で変わらない）。
+// 割引率も同じ乱数列から出すので、誰がいつ叩いても同じ答えになる。
+//
+// いちばん大事なのは「割引後の価格は購入APIが自分で計算し直す」こと。
+// クライアントが割引価格を申告できる形にすると、90%引きの申告で何でも買える。
+// ---------------------------------------------------------------------------
+
+function strHash32(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const DEAL_COUNT = 2;
+const DEAL_OFF_MIN = 20;
+const DEAL_OFF_MAX = 30;
+// 抽選の対象外: 管理者専用・👑王座専用・🎰ガチャ限定・既定所持品（価格0）。
+function dealEligible(i) {
+  return !i.adminOnly && !i.throneOnly && !i.gachaOnly && !i.default && i.price > 0;
+}
+
+let dealsMemo = { day: null, list: null };
+function dailyDeals(dayKey = jstDayKey()) {
+  if (dealsMemo.day === dayKey && dealsMemo.list) return dealsMemo.list;
+  const pool = SHOP_ITEMS.filter(dealEligible);
+  const rnd = mulberry32(strHash32(`bba-deal-${dayKey}`));
+  const arr = pool.slice();
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  const endsAt = nextJstMidnight();
+  const list = arr.slice(0, Math.min(DEAL_COUNT, arr.length)).map(it => {
+    const off = DEAL_OFF_MIN + Math.floor(rnd() * (DEAL_OFF_MAX - DEAL_OFF_MIN + 1));
+    return {
+      id: it.id, cat: it.cat, name: it.name, currency: it.currency,
+      basePrice: it.price,
+      off,
+      price: Math.max(1, Math.round(it.price * (100 - off) / 100)),
+      endsAt,
+    };
+  });
+  dealsMemo = { day: dayKey, list };
+  return list;
+}
+
+// 今この瞬間のこの品の実売価格。購入APIはここしか見ない。
+function priceOf(item) {
+  const d = dailyDeals().find(x => x.id === item.id);
+  return d ? d.price : item.price;
+}
+
+// 🎁 本日の無料ギフト。1日1回。少額コイン／ブースター1個／低確率でジェム少量。
+const GIFT_COINS_MIN = 300;
+const GIFT_COINS_MAX = 600;
+const GIFT_GEMS_MIN = 8;
+const GIFT_GEMS_MAX = 20;
+const GIFT_GEM_CHANCE = 0.08;    // 低確率
+const GIFT_ITEM_CHANCE = 0.35;
+
+function giftClaimedDay(user) {
+  return (user.stats && user.stats.shopGiftDay) || null;
+}
 
 app.get('/api/shop', (req, res) => {
   // Admin-exclusive cosmetics are invisible to everyone else. Gacha-exclusive
@@ -3045,10 +3901,56 @@ app.get('/api/shop', (req, res) => {
   // throneOnly（👑専用ショップの品）もここには載せる ── 在庫画面が読むのが
   // このAPI なので、外すと買った本人が装備できなくなる。買えないことは
   // /api/shop/buy 側で弾いていて、画面もガチャ限定と同じ扱いで出す。
+  const day = jstDayKey();
   res.json({
     items: SHOP_ITEMS.filter(i => !i.adminOnly || isAdmin),
     boosters: BOOST_ITEMS.filter(i => !i.adminOnly || isAdmin),
+    // 🏷 本日のピックアップ（全員共通）。endsAt は各行にも入っている。
+    deals: dailyDeals(day),
+    dealsEndAt: nextJstMidnight(),
+    // 🎁 本日の無料ギフトの受取状態。未ログインは常に false（受け取りは要ログイン）。
+    gift: {
+      day,
+      available: !!req.user && giftClaimedDay(req.user) !== day,
+      claimed: !!req.user && giftClaimedDay(req.user) === day,
+      nextAt: nextJstMidnight(),
+    },
   });
+});
+
+// 🎁 受け取りは1日1回。受取日は user.stats に dayKey で残すので、
+// 連打しても2回目からは409になる。
+app.post('/api/shop/gift', requireAuth, maintenanceGuard, (req, res) => {
+  if (!rateLimit(`gift:${req.user.id}`, 10, 60 * 1000)) {
+    return res.status(429).json({ error: '少し待ってください' });
+  }
+  migrateUser(req.user);
+  const user = req.user;
+  const today = jstDayKey();
+  if (giftClaimedDay(user) === today) {
+    return res.status(409).json({ error: '本日の無料ギフトは受け取り済みです', nextAt: nextJstMidnight() });
+  }
+  // 中身はサーバーで抽選する（クライアントの申告は一切見ない）。
+  const roll = Math.random();
+  let gift;
+  if (roll < GIFT_GEM_CHANCE) {
+    const amount = GIFT_GEMS_MIN + Math.floor(Math.random() * (GIFT_GEMS_MAX - GIFT_GEMS_MIN + 1));
+    user.gems += amount;
+    gift = { type: 'gems', amount, icon: '💎', name: 'ジェム', nameEn: 'Gems' };
+  } else if (roll < GIFT_GEM_CHANCE + GIFT_ITEM_CHANCE) {
+    const pool = BOOST_ITEMS.filter(i => !i.adminOnly);
+    const it = pool[Math.floor(Math.random() * pool.length)];
+    user.items = user.items || {};
+    user.items[it.id] = (user.items[it.id] || 0) + 1;
+    gift = { type: 'item', id: it.id, amount: 1, icon: it.icon, name: it.name, nameEn: enName(it) };
+  } else {
+    const amount = GIFT_COINS_MIN + Math.floor(Math.random() * (GIFT_COINS_MAX - GIFT_COINS_MIN + 1));
+    user.coins += amount;
+    gift = { type: 'coins', amount, icon: '🪙', name: 'コイン', nameEn: 'Coins' };
+  }
+  user.stats.shopGiftDay = today;
+  saveDb();
+  res.json({ gift, user: publicUser(user), nextAt: nextJstMidnight() });
 });
 
 // ---- Booster items (consumables) ----
@@ -3200,13 +4102,16 @@ app.post('/api/shop/buy', requireAuth, maintenanceGuard, (req, res) => {
   if (item.gachaOnly) return res.status(403).json({ error: '🎰 ガチャ限定の装備です（SSRで入手）' });
   const user = req.user;
   if (user.owned.includes(item.id)) return res.status(409).json({ error: 'すでに所持しています' });
-  if (user[item.currency] < item.price) {
+  // 🏷 セール価格は必ずここで引き直す。クライアントが送ってきた金額は見ない
+  //（見た瞬間に「1コインで買った」と申告できる口ができる）。
+  const price = priceOf(item);
+  if (user[item.currency] < price) {
     return res.status(402).json({ error: item.currency === 'coins' ? 'コインが足りません' : 'ジェムが足りません' });
   }
-  user[item.currency] -= item.price;
+  user[item.currency] -= price;
   user.owned.push(item.id);
   saveDb();
-  res.json({ user: publicUser(user) });
+  res.json({ user: publicUser(user), paid: price, basePrice: item.price, discounted: price !== item.price });
 });
 
 // ---------------------------------------------------------------------------
@@ -3354,6 +4259,72 @@ app.post('/api/friends/settings', requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// 🏁 ライバルボード / 🔔 挑戦状
+// ---------------------------------------------------------------------------
+// デイリーもウィークリーも全員が同じシード（同じピース順）なので、ここに出る
+// 差はそのまま腕の差になる。読むのは既存の stats だけで、新しい保存は増やさない。
+
+// rivalBoard の行を部門ごとの順位表にほどく。0点の人は載せない ──
+// 未挑戦が「最下位」として並ぶと、遊んでいないことが晒される形になる。
+function rivalSection(rows, valueOf) {
+  return rows
+    .filter(r => valueOf(r) > 0)
+    .sort((a, b) => valueOf(b) - valueOf(a))
+    .map(r => ({
+      id: r.id, username: r.username, level: r.level, badges: r.badges, title: r.title,
+      status: r.status, lastSeen: r.lastSeen, me: r.me,
+      value: valueOf(r), score: valueOf(r), rating: r.rating,
+      // 🔔 を出してよくなる時刻（送った直後は出さない）。
+      cooldownUntil: r.challengedAt ? r.challengedAt + CHALLENGE_COOLDOWN_MS : 0,
+    }));
+}
+
+app.get('/api/friends/board', requireAuth, (req, res) => {
+  migrateUser(req.user);
+  const board = rivalBoard(db, req.user, {
+    dayKey: jstDayKey(), weekId: curWeek(), levelOf, statusOf: friendStatus(),
+  });
+  // rivalBoard は challengeOut の期限切れを掃除する（＝db を触る）ので書き戻す。
+  saveDb();
+  res.json({
+    ...board,
+    daily: rivalSection(board.rows, r => r.daily || 0),
+    weekly: rivalSection(board.rows, r => r.weeklyBest || 0),
+    rating: rivalSection(board.rows, r => r.rating || 0),
+  });
+});
+
+// 🔔 挑戦状。定型のみで自由文は載らない（載せられると、挑戦状そのものが
+// 嫌がらせの配達手段になる ── フレンド申請と同じ理屈）。
+// クールダウン・上限・ブロック・フレンド判定は **すべて friends.js 側**が持つ。
+// ここは日付キーを渡して、断られたらそのまま返すだけ。
+app.post('/api/friends/challenge', requireAuth, maintenanceGuard, (req, res) => {
+  migrateUser(req.user);
+  if (!rateLimit('fchal:' + req.user.id, 10, 60_000)) {
+    return res.status(429).json({ error: 'すこし待ってからお試しください' });
+  }
+  const target = userById(String((req.body || {}).userId || ''));
+  if (!target) return res.status(404).json({ error: '挑戦状を送れませんでした' });
+  migrateUser(target);
+  const r = sendChallenge(db, req.user, target.id, jstDayKey());
+  if (r.error) return res.status(409).json({ error: r.error });
+  saveDb();
+  // 相手が今いるなら、その場で知らせる。
+  if (battleReady && battle.presence) {
+    battle.presence.sendToUser(target.id, {
+      type: 'announce',
+      message: `🔔 ${req.user.username} から挑戦状が届きました — 今日のデイリーは ${fmtNum(r.score)}点。同じ盤面・同じピース順です`,
+      messageEn: `🔔 ${req.user.username} challenged you — ${r.score.toLocaleString('en-US')} pts on today's Daily. Same board, same pieces.`,
+      from: '運営',
+    }, { primaryOnly: true });
+  }
+  res.json({
+    ok: true, day: r.day, score: r.score, cleared: r.cleared,
+    cooldownUntil: Date.now() + CHALLENGE_COOLDOWN_MS,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 👥 パーティーの通報と、運営の確認
 // ---------------------------------------------------------------------------
 // 新しい入れ物は作らず、既存の bugreports に kind:'party' で落とす。
@@ -3474,7 +4445,12 @@ app.get('/api/missions', requireAuth, (req, res) => {
   migrateUser(req.user);
   syncMissions(req.user, currentWeekNum());
   saveDb();
-  res.json({ missions: missionsView(req.user, currentWeekNum()) });
+  res.json({
+    missions: missionsView(req.user, currentWeekNum()),
+    // 🎲 引き直しの残り回数と次の値段。missions.js に rerollMission が
+    // 無い間は available:false を返し、クライアントはボタンごと隠せる。
+    reroll: rerollViewOf(req.user, currentWeekNum()),
+  });
 });
 
 app.post('/api/missions/claim', requireAuth, maintenanceGuard, (req, res) => {
@@ -3489,6 +4465,82 @@ app.post('/api/missions/claim', requireAuth, maintenanceGuard, (req, res) => {
     reward: out,
     missions: missionsView(req.user, currentWeekNum()),
     user: publicUser(req.user),
+  });
+});
+
+// 🎲 ミッションのリロール（引き直し）。1日の1回目は無料、以降は有料。
+//
+// 引き直しそのものは missions.js の rerollMission が行う ── お題のプールも、
+// その日に何回使ったか（ms.rerolls[dayKey]）も、値段表も向こうが持っている。
+// ここは薄い口:
+//   ・呼ぶ前に何も減らさない（向こうが残高不足を見て断ってくれる）
+//   ・**引き落とすのはサーバー。金額は向こうが返した cost しか信じない**
+//     （クライアントの申告する値段は一切見ない）
+//   ・回数の加算も向こうが済ませているので、ここでは触らない
+// 保存は引き直しが成った後に1回。失敗した経路では db に触れていない。
+//
+// 予備の値段。rerollMission が cost を返さない実装だった場合だけ使う。
+const MISSION_REROLL_COST = 500;
+const MISSION_REROLL_FREE = 1;
+
+// 画面向けの残り回数と次の値段。missions.js が rerollInfo を持っていれば
+// そちらが正（値段表を知っているのは向こうなので）。無ければ簡易版で答える。
+function rerollViewOf(user, weekNum) {
+  const available = typeof missionsModule.rerollMission === 'function';
+  if (!available) return { available: false };
+  if (typeof missionsModule.rerollInfo === 'function') {
+    try { return { available: true, ...missionsModule.rerollInfo(user, weekNum) }; }
+    catch { /* 落ちても画面は出す */ }
+  }
+  return { available: true, freePerDay: MISSION_REROLL_FREE, price: MISSION_REROLL_COST };
+}
+
+app.post('/api/missions/reroll', requireAuth, maintenanceGuard, (req, res) => {
+  if (!rateLimit(`reroll:${req.user.id}`, 20, 10 * 60 * 1000)) {
+    return res.status(429).json({ error: '引き直しが多すぎます。少し待ってください' });
+  }
+  const fn = missionsModule.rerollMission;
+  if (typeof fn !== 'function') {
+    return res.status(501).json({ error: 'ミッションの引き直しはまだ使えません' });
+  }
+  migrateUser(req.user);
+  const weekNum = currentWeekNum();
+  syncMissions(req.user, weekNum);
+  const id = String((req.body || {}).id || '').slice(0, 40);
+  if (!id) return res.status(400).json({ error: 'ミッションを選んでください' });
+
+  let out;
+  try {
+    out = fn(req.user, weekNum, id);
+  } catch (err) {
+    console.error('[missions] rerollMission が失敗:', err && err.message);
+    return res.status(500).json({ error: '引き直しに失敗しました' });
+  }
+  if (!out || out.error) {
+    const msg = (out && out.error) || 'このミッションは引き直せません';
+    // 残高不足は 400（画面が「コインが足りない」を出し分けられるように）。
+    return res.status(/コインが足りません/.test(msg) ? 400 : 409).json({ error: msg });
+  }
+
+  // 💰 引き落としはここでだけ行う。金額はサーバー（missions.js）が決めた値。
+  // 管理者は無料（ショップ・ガチャと同じ扱い）。
+  let cost = Math.max(0, Math.floor(Number(out.cost) || 0));
+  if (req.user.role === 'admin') cost = 0;
+  if (cost > 0) {
+    if ((req.user.coins || 0) < cost) {
+      // ここに来るのは、向こうの残高確認と食い違ったときだけ（本来起きない）。
+      // 盤面は書き換わってしまっているので、引き直し自体は成立させ、
+      // 取れるぶんだけ取る（マイナス残高は作らない）。
+      console.warn(`[missions] ${req.user.username}: 引き直しの残高が不足（cost=${cost} coins=${req.user.coins}）`);
+      cost = Math.max(0, req.user.coins || 0);
+    }
+    req.user.coins -= cost;
+  }
+  saveDb();
+  res.json({
+    missions: out.missions || missionsView(req.user, weekNum),
+    user: publicUser(req.user),
+    reroll: { cost, scope: out.scope || null, from: out.from || id, to: out.to || null, ...rerollViewOf(req.user, weekNum) },
   });
 });
 
@@ -3523,6 +4575,7 @@ app.post('/api/achievements/claim', requireAuth, maintenanceGuard, (req, res) =>
 // ---------------------------------------------------------------------------
 
 app.get('/api/battlepass', (req, res) => {
+  settleSeasonHallOfFame();   // 🏛 シーズンの切替はここでも拾う
   res.json({
     season: currentSeason(),
     tiers: BP_TIERS,
@@ -3649,7 +4702,7 @@ const EDITABLE_STATS = [
   { key: 'royaleKills', label: 'ロイヤル通算KO', max: 1_000_000 },
 ];
 
-const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7'];
+const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7', 'guildquest'];
 
 app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   const target = userById(req.params.id);
@@ -3844,7 +4897,12 @@ app.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     if (b.setBadges !== undefined) {
       if (!Array.isArray(b.setBadges)) bad('バッジの指定が不正です');
       for (const id of b.setBadges) {
-        if (!ADMIN_KNOWN_BADGES.includes(id)) bad(`不明なバッジです: ${String(id).slice(0, 32)}`);
+        // 🏛 シーズン刻印バッジ（s3champ 等）はシーズンごとに増えるので、
+        // 固定の一覧ではなく形で許可する。ここで弾いていると、殿堂入りした
+        // アカウントを編集した瞬間に「不明なバッジです」で保存できなくなる。
+        if (!ADMIN_KNOWN_BADGES.includes(id) && !SEASON_BADGE_RE.test(String(id))) {
+          bad(`不明なバッジです: ${String(id).slice(0, 32)}`);
+        }
       }
       patch.badges = [...new Set(b.setBadges)];
     }
@@ -4524,8 +5582,118 @@ app.post('/api/admin/achievements/reset', requireAuth, requireAdmin, (req, res) 
   res.json({ achievements: achievementsView(req.user), user: publicUser(req.user) });
 });
 
+// 永続化の健康診断。db.js がゲッターを出していればそれを使い、
+// サイズだけは出ていなくても自前で stat して必ず見えるようにする
+// （「db.json が肥大していないか」は管理者がいちばん先に知りたい値なので）。
+function persistMetrics() {
+  const out = { dbBytes: null, saveMs: null };
+  const call = (names) => {
+    for (const n of names) {
+      const f = dbModule[n];
+      if (typeof f !== 'function') continue;
+      try {
+        const v = Number(f());
+        if (Number.isFinite(v)) return v;
+      } catch { /* ゲッターが投げても管理画面は落とさない */ }
+    }
+    return null;
+  };
+  try {
+    // db.js が {bytes, ms} のような1つの口でまとめて出す場合。
+    for (const n of ['persistStats', 'dbStats', 'saveStats']) {
+      if (typeof dbModule[n] !== 'function') continue;
+      try {
+        const o = dbModule[n]() || {};
+        const b = Number(o.bytes ?? o.size ?? o.dbBytes);
+        const m = Number(o.ms ?? o.saveMs ?? o.lastSaveMs);
+        if (Number.isFinite(b)) out.dbBytes = b;
+        if (Number.isFinite(m)) out.saveMs = m;
+      } catch { /* 同上 */ }
+      break;
+    }
+    if (out.dbBytes == null) out.dbBytes = call(['lastDbBytes', 'dbFileSize', 'dbSizeBytes', 'dbBytes', 'lastDbSize']);
+    if (out.saveMs == null) out.saveMs = call(['lastSaveMs', 'lastSaveDuration', 'lastSaveDurationMs', 'lastWriteMs', 'lastPersistMs', 'saveDurationMs']);
+    // ゲッターがまだ無いときの保険。DATA_DIR/db.json は db.js と同じ場所。
+    if (out.dbBytes == null) {
+      try { out.dbBytes = fs.statSync(path.join(DATA_DIR, 'db.json')).size; }
+      catch { /* まだ1度も書かれていない */ }
+    }
+  } catch { /* ここで落ちても統計以外は返す */ }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// 📈 イベントループ遅延とメモリの計測（計器だけ。自動退避はしない）
+//
+// Node は1本の処理列で動くので、「重い処理が何ms列を止めたか」がそのまま
+// 全員の体感になる。db.json の同期保存（fsync まで待つ）やランキングの
+// 全走査は、育つほど確実にここへ出る。RSS は無料枠の上限（512MB）に対する
+// 余裕を見るため。
+//
+// 閾値を越えても、ここでは負荷退避（住人を減らす・対戦を絞る等）はしない。
+// 挙動を勝手に変えるほうが事故として大きいので、まず console と管理ログに
+// 残すだけにして、実際に何が起きているかを見てから決める。
+// ---------------------------------------------------------------------------
+// 注意: monitorEventLoopDelay の値には、OS のタイマー粒度ぶんの下駄が必ず乗る
+// （Windows の既定は約15.6ms なので、無風でも p50 が 30ms 前後に出る）。
+// 見るべきは絶対値ではなく「普段との差」。閾値はその下駄よりずっと上に置く。
+const PERF_SAMPLE_MS = 30_000;
+const PERF_LAG_WARN_MS = 200;     // p99 がこれを越えたら記録
+const PERF_RSS_WARN_MB = 420;     // Render starter(512MB) に対する余裕
+const PERF_WARN_COOLDOWN_MS = 10 * 60 * 1000;
+
+let perfHist = null;
+try {
+  perfHist = monitorEventLoopDelay({ resolution: 20 });
+  perfHist.enable();
+} catch (err) {
+  console.warn('[perf] イベントループ計測を開始できませんでした:', err && err.message);
+  perfHist = null;
+}
+
+let perfSample = { at: 0, windowSec: PERF_SAMPLE_MS / 1000, lagP50: null, lagP99: null, lagMax: null, rss: null, heapUsed: null, heapTotal: null, external: null };
+let perfLastWarnAt = 0;
+
+// adminLog は req を要る（誰がやったか）ので、サーバー自身の記録は
+// battle.js に渡しているのと同じ軽い形で積む。
+function systemLog(action, detail) {
+  try {
+    db.meta.adminLog = db.meta.adminLog || [];
+    db.meta.adminLog.push({ at: Date.now(), by: '(サーバー)', action, detail: detail || null });
+    if (db.meta.adminLog.length > ADMIN_LOG_MAX) {
+      db.meta.adminLog.splice(0, db.meta.adminLog.length - ADMIN_LOG_MAX);
+    }
+    saveDb();
+  } catch { /* 記録できなくても計測は続ける */ }
+}
+
+setInterval(() => {
+  const mem = process.memoryUsage();
+  const ms = v => Math.round(v / 1e5) / 10;   // ns -> ms（小数第1位）
+  const next = {
+    at: Date.now(),
+    windowSec: PERF_SAMPLE_MS / 1000,
+    lagP50: perfHist ? ms(perfHist.percentile(50)) : null,
+    lagP99: perfHist ? ms(perfHist.percentile(99)) : null,
+    lagMax: perfHist ? ms(perfHist.max) : null,
+    rss: mem.rss, heapUsed: mem.heapUsed, heapTotal: mem.heapTotal, external: mem.external,
+  };
+  if (perfHist) perfHist.reset();
+  perfSample = next;
+  const rssMb = Math.round(next.rss / 1048576);
+  const lagBad = next.lagP99 != null && next.lagP99 > PERF_LAG_WARN_MS;
+  const memBad = rssMb > PERF_RSS_WARN_MB;
+  if ((lagBad || memBad) && Date.now() - perfLastWarnAt > PERF_WARN_COOLDOWN_MS) {
+    perfLastWarnAt = Date.now();
+    const line = `[perf] 遅延 p50=${next.lagP50}ms p99=${next.lagP99}ms max=${next.lagMax}ms / RSS=${rssMb}MB / 接続${battleReady ? battle.clients.size : 0}`;
+    console.log(line);
+    systemLog('perf-warn', line);
+  }
+}, PERF_SAMPLE_MS).unref?.();
+
 app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
   const users = Object.values(db.users);
+  const persist = persistMetrics();
   res.json({
     totalUsers: users.length,
     bannedUsers: users.filter(u => u.banned).length,
@@ -4547,6 +5715,30 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     maintenance: inMaintenance(),
     season: currentSeason(),
     sessionsPersist: SESSIONS_PERSIST,
+    // 💾 永続化の状態。dbBytes は db.json の大きさ、saveMs は直近保存の所要ms
+    // （db.js に計測の口が無ければ null）。txLive/txArchived は取引ログの
+    // ローテーション具合。
+    dbBytes: persist.dbBytes,
+    saveMs: persist.saveMs,
+    persistError: lastPersistError(),
+    txLive: Array.isArray(db.transactions) ? db.transactions.length : 0,
+    txArchived: Number(db.meta.revenueCount) || 0,
+    // 📈 直近30秒のイベントループ遅延（ms）とメモリ。閾値超過は console と
+    // 管理ログにも残している（自動退避はしていない）。
+    perf: {
+      ...perfSample,
+      uptimeSec: Math.round(process.uptime()),
+      lagWarnMs: PERF_LAG_WARN_MS,
+      rssWarnMb: PERF_RSS_WARN_MB,
+    },
+    // 💥 クライアント側のJSエラー（未処理の件数だけ。中身は /api/admin/clienterrors）
+    clientErrors: {
+      rows: Array.isArray(db.meta.clientErrors) ? db.meta.clientErrors.length : 0,
+      open: (Array.isArray(db.meta.clientErrors) ? db.meta.clientErrors : []).filter(e => e && e.status !== 'done').length,
+    },
+    // 🏛 殿堂に記録済みのシーズン数
+    hallOfFame: Array.isArray(db.meta.hallOfFame) ? db.meta.hallOfFame.length : 0,
+    assetHash: ASSET_HASH_ENABLED ? assetVer.size : 0,
   });
 });
 
@@ -4820,6 +6012,7 @@ pinAdminPassword();
 unlockEverythingForStaff();
 seedNews();
 finalizeWeeklyRankings();   // pay out any week that ended while we were down
+settleSeasonHallOfFame();   // 🏛 寝ているあいだに終わったシーズンを殿堂へ
 // 👑 Thrones exist from second zero (silent first computation), and the seeded
 // chat history — built before the restore above — gets its crowns stamped.
 refreshThrones();
@@ -4832,6 +6025,14 @@ if (Object.keys(db.users).length > 0) snapshot(db, 'boot');
 // Unknown paths (shared links, typos) land on the game instead of an error.
 app.use((req, res) => {
   if (req.method === 'GET' && !req.path.startsWith('/api/')) {
+    // 変換済みの index.html があるならそちらを返す。ここだけ素の HTML を配ると
+    // 共有リンク経由（/xxxx）で開いた人にだけ `?v` の付かない main.js が渡り、
+    // トップから開いた人と別のURLを掴むことになる。
+    if (assetIndexHtml) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+      return res.send(assetIndexHtml);
+    }
     return res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
   }
   res.status(404).json({ error: 'Not found' });

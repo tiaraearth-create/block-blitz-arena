@@ -221,6 +221,28 @@ export class Engine {
     return { fullRows, fullCols, clearedCells, lineCount: fullRows.length + fullCols.length };
   }
 
+  // 全列を下詰めして、ブロックを下端へ落とす（🧲 重力圧縮）。
+  // 消去も加点もここではしない ── 呼び出し側が resolveLines() を回して
+  // 通常の消去・加点経路にそのまま乗せられるようにするため。
+  // 戻り値は実際に動いたマス数。0 なら盤面は1マスも変わっていない。
+  compactDown() {
+    let moved = 0;
+    for (let c = 0; c < SIZE; c++) {
+      let write = SIZE - 1;                       // 次にブロックを置く行（下から詰める）
+      for (let r = SIZE - 1; r >= 0; r--) {
+        const v = this.grid[r * SIZE + c];
+        if (v === 0) continue;
+        if (write !== r) {
+          this.grid[write * SIZE + c] = v;
+          this.grid[r * SIZE + c] = 0;
+          moved++;
+        }
+        write--;
+      }
+    }
+    return moved;
+  }
+
   // Place hand[index] at (row, col). Returns a result object for rendering/audio,
   // or null if the move is illegal.
   place(index, row, col) {
@@ -237,6 +259,9 @@ export class Engine {
     this.piecesPlaced++;
 
     const { fullRows, fullCols, clearedCells, lineCount } = this.resolveLines();
+    // 全消し「昇華」: この1手でラインを消し、その結果 盤面が完全に空になった。
+    // 消去直後に見るのがポイント（このあと refillHand() が走っても grid は動かない）。
+    const perfect = lineCount > 0 && this.grid.every(v => v === 0);
     let gained = placedCells.length;               // 1 point per placed cell
     if (lineCount > 0) {
       this.streak++;
@@ -260,6 +285,7 @@ export class Engine {
       placedCells, color: piece.color,
       fullRows, fullCols, clearedCells,
       lineCount, gained, streak: this.streak,
+      perfect,
       over: this.over,
     };
   }

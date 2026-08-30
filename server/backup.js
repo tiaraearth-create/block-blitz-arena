@@ -61,6 +61,10 @@ export function validateBackup(data) {
 // 素通しで innerHTML に入るため、細工したアイコンを仕込んだデータを流し込むと、
 // ギルドランキング（ログイン不要で誰でも開ける）を見た全員に影響しえた。
 // 表示側も直したが、そもそも入れさせない。
+// 直すのはアイコンだけで、他の欄は **わざと** そのまま通す（spread）。
+// ここを「通してよい欄の一覧」にしてはいけない ── db.meta で一度やらかした
+// のと同じ形で、後から増えた欄（guild.quests＝週ごとのギルドクエストの進行と
+// 達成時刻）が復元のたびに黙って消える。
 function sanitizeGuilds(guilds) {
   const out = {};
   for (const [id, g] of Object.entries(guilds)) {
@@ -107,7 +111,10 @@ function mergeEarned(winner, loser) {
   // 🤝 フレンドとブロックも合流させる。とくに blocked は本人が身を守るために
   // 付けたもので、進行度で負けたほうのコピーに入っていても落としてはいけない
   // （BAN/ミュートを union しているのと同じ理由）。
-  for (const k of ['achievements', 'badges', 'owned', 'friends', 'blocked']) {
+  // 📚 collections は「図鑑のセットコンプ報酬を受け取った印」で、二重受取を
+  // 止めているのはこの配列だけ（catalog.js の claimCollection）。落とすと
+  // 復元のたびに同じセットの報酬をもう一度受け取れる。
+  for (const k of ['achievements', 'badges', 'owned', 'friends', 'blocked', 'collections']) {
     const a = Array.isArray(winner[k]) ? winner[k] : (winner[k] = []);
     for (const v of (Array.isArray(loser[k]) ? loser[k] : [])) if (!a.includes(v)) a.push(v);
   }
@@ -183,6 +190,58 @@ function mergeEarned(winner, loser) {
     const seenRR = new Set(wrr.map(r => r && r.id));
     for (const r of loser.rankRewards) {
       if (r && r.id && !seenRR.has(r.id)) { wrr.push(r); seenRR.add(r.id); }
+    }
+  }
+
+  // 🏰 ギルド金庫の受取記録（guilds.js の user.guildQuests）。
+  // { week, gid, claimed:[questId], badge } を今週ぶんだけ持つ入れ物で、
+  // 二重受取を止めているのは claimed の中身だけ。落とすと復元後に同じ週の
+  // 金庫をもう一度開けられる（コインとジェムが二重に出る）。
+  //   ・同じ週・同じギルドなら claimed は和集合、badge は OR
+  //   ・勝った側に記録が無ければ、負けた側のものをそのまま引き継ぐ
+  //   ・同じ週で別ギルドなら「印のあるほう」を残す。claimGuildQuest は
+  //     「今週は別のギルドで開けた」を rec の中身で判定するので、空のほうを
+  //     残すと gid が付け替わって二度目が通ってしまう（迷ったら閉じる側）。
+  //   ・週が違うときは新しい週のほうを残す。古い週の記録は memberQuestRec が
+  //     次の受け取りで作り直す＝止め金にならないので、残しても意味がない。
+  const lgq = loser.guildQuests;
+  if (lgq && typeof lgq === 'object' && !Array.isArray(lgq)) {
+    const wgq = winner.guildQuests;
+    // 週の比較は weekly と同じく数値部で（'W9999' → 'W10000' の桁またぎ）。
+    // ただしここは「読めない週」を Infinity に倒すと壊れた値が正しい記録を
+    // 押し出してしまうので、逆（いちばん古い）に倒す。
+    const qWk = w => { const n = parseInt(String(w).replace(/^\D+/, ''), 10); return Number.isFinite(n) ? n : -Infinity; };
+    const marked = r => !!(r && ((Array.isArray(r.claimed) && r.claimed.length) || r.badge));
+    const copyRec = r => ({ ...r, claimed: [...new Set(Array.isArray(r.claimed) ? r.claimed : [])] });
+    if (!wgq || typeof wgq !== 'object' || Array.isArray(wgq)) {
+      winner.guildQuests = copyRec(lgq);
+    } else if (wgq.week === lgq.week && wgq.gid === lgq.gid) {
+      wgq.claimed = [...new Set([
+        ...(Array.isArray(wgq.claimed) ? wgq.claimed : []),
+        ...(Array.isArray(lgq.claimed) ? lgq.claimed : []),
+      ])];
+      wgq.badge = !!(wgq.badge || lgq.badge);
+    } else if (wgq.week === lgq.week) {
+      if (!marked(wgq) && marked(lgq)) winner.guildQuests = copyRec(lgq);
+    } else if (qWk(lgq.week) > qWk(wgq.week)) {
+      winner.guildQuests = copyRec(lgq);
+    }
+  }
+
+  // 📦 ゲスト記録の引き継ぎ（index.js の /api/me/import-guest は1アカウント
+  // 1回だけ）。止め金は stats.guestImportedAt だけなので、進行度で負けた
+  // コピーがそれを握っていると、復元後にもう一度取り込める＝ブースターを
+  // 何度でも増やせる。中身（stats.guestImport＝表示用のベスト）も一緒に運ぶ。
+  // 印だけ残って中身が消えると、二度と取り込めないのに画面が空のままになる。
+  const lst = loser.stats;
+  if (lst && typeof lst === 'object' && (lst.guestImportedAt || lst.guestImport)) {
+    const wst = winner.stats || (winner.stats = {});
+    // 実際に取り込んだのは最初の1回。両方に印があるときは古いほうを正とする。
+    if (lst.guestImportedAt && (!wst.guestImportedAt || lst.guestImportedAt < wst.guestImportedAt)) {
+      wst.guestImportedAt = lst.guestImportedAt;
+      if (lst.guestImport) wst.guestImport = lst.guestImport;
+    } else if (!wst.guestImport && lst.guestImport) {
+      wst.guestImport = lst.guestImport;
     }
   }
 }
@@ -440,6 +499,16 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     //                           値で巻き戻すと次の起動で古い seed が再適用される
     //   lastRankRewardWeek    … 復元後に消すのが目的（すぐ下でそうしている）
     //   backupAt/backupVersion … バックアップファイル自身の情報で、世界の状態ではない
+    //
+    // 🏛 hallOfFame（歴代シーズンの永久記録）と seasonMark（シーズン切替の検知印）は
+    // **わざとここに入れない**。hallOfFame が落ちれば、この機構が存在する理由その
+    // ものである再デプロイのたびに歴代の記録が消える。seasonMark が落ちると
+    // settleSeasonHallOfFame が「印が無い＝初回」と見なして、直前に終わった
+    // シーズンを表彰しないまま印だけ進めるので、1シーズンぶんが無言で飛ぶ。
+    // 古い seasonMark が入って「シーズンが巻き戻った」ように見えても二重に
+    // 殿堂入りはしない ── index.js 側に
+    // `hallOfFame.some(e => e.season === prev.id)` の重複チェックがあり、
+    // 記録済みのシーズンなら印を進めるだけで戻る（報酬もそこで止まる）。
     const META_NOT_RESTORED = new Set(['seedHash', 'lastRankRewardWeek', 'backupAt', 'backupVersion']);
     for (const k of Object.keys(data.meta)) {
       if (META_NOT_RESTORED.has(k)) continue;

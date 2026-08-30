@@ -30,6 +30,7 @@ function getView() {
   if (!view) {
     view = new GameView($('#gameCanvas'), { interactive: true });
     view.onRescue = () => autoRescue();   // autopilot 5.0 guard (checks its own eligibility)
+    installPerfectHook(view);             // 全消し「昇華」を全モード共通で拾う
     window.__bbaView = view;   // debug/testing hook
   }
   view.setTheme(view.modeTheme || equippedTheme());
@@ -91,7 +92,8 @@ async function submitResult(payload) {
   // every mode reports it without repeating itself.
   const e = currentMode && currentMode.engine;
   const body = e
-    ? { ults: e.ultUses || 0, items: e.itemUses || 0, pieces: e.piecesPlaced || 0, ...payload }
+    // perfectClears は全消し「昇華」の回数（celebratePerfect() が数えている）。
+    ? { ults: e.ultUses || 0, items: e.itemUses || 0, pieces: e.piecesPlaced || 0, perfectClears: e.perfectClears || 0, ...payload }
     : payload;
   try {
     const data = await api('/api/game/result', { method: 'POST', body });
@@ -148,6 +150,79 @@ function rewardsRows(rewards) {
 
 export function quitCurrent() {
   if (currentMode) currentMode.quit();
+}
+
+// ---------------------------------------------------------------------------
+// 全消し「昇華」
+//
+// engine.place() が返す result.perfect ＝「その1手でラインを消し、その結果
+// 盤面が完全に空になった」。狙って出せるものではないので、ゲーム内のどこにも
+// 説明を置かない隠し要素にしてある（気づいた人だけのごほうび）。
+//
+// 拾う場所: 配置結果の共通路は game.js の applyResult() → view.onPlace(result)
+// ひとつだけで、その onPlace は十数個のモードがそれぞれ自前の関数で上書きして
+// いく。全モードの代入箇所を書き換えると差分も事故も増えるので、代入そのものを
+// 横取りして「昇華の演出 → モード本来の onPlace」の順に走らせる。モード側の
+// 書き味（v.onPlace = r => this.onPlace(r) / v.onPlace = null）は変わらない。
+// ---------------------------------------------------------------------------
+
+const PERFECT_ULT_CHARGE = 35;   // 昇華ぶんの奥義ゲージ（通常の1ライン消しの約2倍）
+
+function installPerfectHook(v) {
+  let inner = null;
+  const wrapped = result => {
+    if (result && result.perfect) celebratePerfect(result);
+    if (inner) inner(result);
+  };
+  try {
+    Object.defineProperty(v, 'onPlace', {
+      configurable: true,
+      get() { return wrapped; },
+      set(fn) { inner = typeof fn === 'function' ? fn : null; },
+    });
+  } catch { /* 定義できない環境では演出だけ諦める（進行には影響しない） */ }
+}
+
+function celebratePerfect(result) {
+  const m = currentMode;
+  const e = m && m.engine;
+  if (!e) return;
+
+  // 通算回数。submitResult() がここから拾ってサーバーへ送る（stats.perfectClears）。
+  e.perfectClears = (e.perfectClears || 0) + 1;
+
+  // ボーナスは「その手の消去点と同額」＝実質2倍。engine の加点経路には触らず、
+  // アイテムと同じくモード側で score に足すだけにする。result.gained 自体は
+  // 書き換えない ── ボス系がそのままダメージ量として使っているため。
+  const bonus = Math.max(0, Math.round(result.gained || 0));
+  if (bonus) e.score += bonus;
+  e.chargeUlt(PERFECT_ULT_CHARGE);
+
+  const v = view;
+  if (v && v.boardSize) {
+    const cx = v.boardX + v.boardSize / 2;
+    const cy = v.boardY + v.boardSize * 0.45;
+    v.screenFlash = Math.max(v.screenFlash || 0, 0.8);
+    v.shake = Math.max(v.shake || 0, 16);
+    if (v.particles) {
+      v.particles.confetti(cx, cy, v.cell, 80);
+      v.particles.stars(cx, cy, v.cell);
+      v.particles.ring(cx, cy, v.boardSize * 0.95, '#ffe14d');
+      v.particles.ring(cx, cy, v.boardSize * 0.7, '#ffffff');
+    }
+    v.addFloatText(cx, cy - v.cell, t('✨ 昇華！', '✨ ASCENSION!'), '#ffe14d', 2.2);
+    if (bonus) v.addFloatText(cx, cy + v.cell * 0.9, `+${fmt(bonus)}`, '#ffffff', 1.5);
+  }
+  confettiBurst(70);
+
+  // 昇華ジングル（audio.js の完全合成）。古い名前でも拾えるようにしてあるが、
+  // 無い環境では既存の派手な音で代用する（勝利ファンファーレ＋高コンボ音）。
+  if (typeof audio.ascend === 'function') audio.ascend();
+  else if (typeof audio.ascension === 'function') audio.ascension();
+  else { audio.victory(); audio.combo(9); }
+
+  toast(t('✨ 昇華！', '✨ ASCENSION!'), 'announce', 2200);
+  updateUltHud();
 }
 
 // ---------------------------------------------------------------------------
@@ -843,7 +918,7 @@ class SoloMode {
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
@@ -1025,7 +1100,7 @@ class MeltdownMode {
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
@@ -1223,7 +1298,7 @@ class ChimeraMode {
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
@@ -1418,7 +1493,7 @@ class PuzzleMode {
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn btn-primary" id="rAgain">${won ? t('▶ 次のステージ', '▶ Next stage') : t('リトライ', 'Retry')}</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => {
       closeModal();
@@ -1663,7 +1738,7 @@ class DigMode {
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
@@ -1790,7 +1865,7 @@ class GhostMode {
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.ended = false; this.start(); };
   }
@@ -2538,7 +2613,7 @@ class BossMode {
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${hasNext ? t('次のボスへ', 'Next boss') : won ? t('もう一度', 'Play again') : this.aborted ? t('もう一度', 'Play again') : t('リベンジ', 'Revenge!')}</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, peekable: true });
     if (won) setTimeout(() => { const el = m.querySelector('.boss-rank'); if (el) { el.classList.add('show'); audio.victory(); } }, 500);
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => {
@@ -2878,7 +2953,7 @@ class BossRushMode {
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn btn-ai" id="rAgain">${t('もう一度潜る', 'Dive again')}</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startBossRush(this.bosses); };
   }
@@ -3807,7 +3882,7 @@ class DungeonMode {
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn btn-dungeon" id="rAgain">${won ? t('もう一周', 'Run it again') : t(`${P}${cp}から再挑戦`, `Retry from ${P}${cp}`)}</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startDungeon(won ? 1 : cp, R.id); };
   }
@@ -5506,7 +5581,7 @@ class SurvivalMode {
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn btn-oni" id="rAgain">${t('もう一度生き残る', 'Survive again')}</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startSurvival(); };
   }

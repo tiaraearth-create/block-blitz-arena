@@ -129,7 +129,7 @@ export function toast(message, kind = '', ms = 2600) {
   }, ms);
 }
 
-export function showModal(html, { dismissable = true } = {}) {
+export function showModal(html, { dismissable = true, peekable = false } = {}) {
   closeModal();
   const root = $('#modal-root');
   const backdrop = document.createElement('div');
@@ -145,11 +145,72 @@ export function showModal(html, { dismissable = true } = {}) {
     });
   }
   root.appendChild(backdrop);
-  return backdrop.querySelector('.modal');
+  const modal = backdrop.querySelector('.modal');
+  if (peekable) attachPeekButton(root, backdrop, modal);
+  return modal;
+}
+
+// 結果モーダルの「👁」。押しているあいだだけ #modal-root（とその中の
+// .modal-backdrop）に `.peeking` が付き、モーダルが透けて後ろの盤面
+// ＝どう詰んだのかが見える。見た目は CSS 側（`.peeking` / `.modal-peek-btn`）。
+//
+// 「押している間だけ」なので pointerup を取り逃すと透けたまま固まる。
+// ボタン自身の pointerup/pointercancel だけでなく、ポインタ捕捉と window の
+// 保険、キーボード操作（Space / Enter を押しっぱなし）、フォーカス外れまで
+// すべて解除に繋いである。
+function attachPeekButton(root, backdrop, modal) {
+  if (!modal) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'modal-peek-btn';
+  btn.textContent = '👁';
+  const label = t('押している間だけ盤面を見る', 'Hold to peek at the board');
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+
+  let peeking = false;
+  const end = () => {
+    if (!peeking) return;
+    peeking = false;
+    window.removeEventListener('pointerup', end);
+    window.removeEventListener('pointercancel', end);
+    root.classList.remove('peeking');
+    backdrop.classList.remove('peeking');
+  };
+  const start = e => {
+    // タッチの長押しメニューやスクロールに持っていかれないようにする。
+    if (e && e.cancelable) e.preventDefault();
+    if (e && e.pointerId != null) {
+      try { btn.setPointerCapture(e.pointerId); } catch { /* 非対応環境 */ }
+    }
+    if (peeking) return;
+    peeking = true;
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    root.classList.add('peeking');
+    backdrop.classList.add('peeking');
+  };
+
+  btn.addEventListener('pointerdown', start);
+  btn.addEventListener('pointerup', end);
+  btn.addEventListener('pointercancel', end);
+  btn.addEventListener('lostpointercapture', end);
+  btn.addEventListener('contextmenu', e => e.preventDefault());
+  btn.addEventListener('keydown', e => {
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); start(); }
+  });
+  btn.addEventListener('keyup', e => {
+    if (e.key === ' ' || e.key === 'Enter') end();
+  });
+  btn.addEventListener('blur', end);
+  modal.appendChild(btn);
 }
 
 export function closeModal() {
-  $('#modal-root').innerHTML = '';
+  const root = $('#modal-root');
+  // 覗き見中に閉じた場合の保険（透けたままの印を残さない）。
+  root.classList.remove('peeking');
+  root.innerHTML = '';
 }
 
 export function countdownOverlay(n, onDone, audio) {

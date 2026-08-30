@@ -299,6 +299,12 @@ class AudioEngine {
     // 先読み秒数。通常0.35秒。YouTubeスタジオが録画中にタブが隠れたとき、
     // タイマーが1秒間隔に制限されても音が途切れないよう一時的に増やす。
     this.lookahead = 0.35;
+    // 🔇 タブが隠れている間の自動停止まわりの状態
+    this.hiddenTimer = null;      // 「隠れた」→ 実際に止めるまでの猶予タイマー
+    this.pausedHidden = false;    // 自動停止で止めた（＝復帰時に戻す責任がある）
+    this.wasScheduling = false;   // 止めた時点でBGMが鳴っていたか
+    // 録画など「隠れても鳴らし続けたい」処理はこれを true にする（外部から設定可）。
+    this.keepAliveWhileHidden = false;
   }
 
   // 再生中の曲を1小節目から流し直す（録画の頭出し用）。
@@ -403,6 +409,65 @@ class AudioEngine {
   stopScheduler() {
     if (this.scheduler) { clearInterval(this.scheduler); this.scheduler = null; }
     this.playing = null;
+  }
+
+  // -------------------------------------------------------------------------
+  // 🔇 バックグラウンド時の自動停止（タブ/アプリが隠れたら鳴らさない）
+  // -------------------------------------------------------------------------
+  // 隠れても鳴らし続けたい場面（YouTubeスタジオの録画中）は先読みが広げられる。
+  // その間は絶対に止めない ── 止めると録画に無音が焼き込まれてしまう。
+  keepSoundWhileHidden() {
+    return this.keepAliveWhileHidden === true || (this.lookahead || 0.35) > 0.4;
+  }
+
+  onVisibilityChange() {
+    if (typeof document === 'undefined') return;
+    if (document.hidden) {
+      // すぐには止めない。同じイベントで先読みを広げる処理（録画）が走るので、
+      // 少し待ってから「本当に止めてよいか」を判断する。一瞬の切り替えでも
+      // 音が途切れないという副作用つき。
+      if (this.hiddenTimer) return;
+      this.hiddenTimer = setTimeout(() => {
+        this.hiddenTimer = null;
+        if (document.hidden) this.pauseForHidden();
+      }, 300);
+    } else {
+      if (this.hiddenTimer) { clearTimeout(this.hiddenTimer); this.hiddenTimer = null; }
+      this.resumeFromHidden();
+    }
+  }
+
+  pauseForHidden() {
+    // ctx 未生成（ユーザー操作前）や録画中は何もしない。
+    if (!this.ctx || this.pausedHidden || this.keepSoundWhileHidden()) return;
+    this.wasScheduling = !!this.scheduler;
+    this.stopScheduler();
+    this.pausedHidden = true;
+    try {
+      const p = this.ctx.suspend();
+      if (p && p.catch) p.catch(() => { /* すでに閉じている等 */ });
+    } catch { /* 古い実装 */ }
+  }
+
+  resumeFromHidden() {
+    // 自分で止めたときだけ戻す（止めていないのに曲を貼り直すと、タブを
+    // 切り替えるたびに1小節目に巻き戻ってしまう）。
+    if (!this.pausedHidden || !this.ctx) return;
+    this.pausedHidden = false;
+    // 隠れている間に別の曲が予約されていた場合、その nextTime は止まった時計を
+    // 基準にしていて過去になっている。どちらの場合も貼り直しが必要。
+    const wanted = this.wasScheduling || !!this.scheduler;
+    this.wasScheduling = false;
+    const back = () => {
+      if (!this.ctx || (typeof document !== 'undefined' && document.hidden)) return;
+      // syncTrack(force) が nextTime を ctx.currentTime 基準に引き直すので、
+      // 溜まった音が復帰直後に一斉に鳴ることはない。
+      if (wanted) this.syncTrack(true);
+    };
+    try {
+      const p = this.ctx.resume();
+      if (p && p.then) p.then(back, back); else back();
+    } catch { back(); }
   }
 
   scheduleAhead() {
@@ -700,8 +765,29 @@ class AudioEngine {
     this.noise({ dur: 1.2, vol: 0.08, freq: 6000, delay: 0.2 });
   }
 
+  // ✨ 全消し「昇華」— 盤面が完全に空になった瞬間の短いジングル（1秒以内）。
+  // 上昇アルペジオ（Cメジャー）＋到達点のきらめき。
+  ascend() {
+    [523.25, 659.25, 783.99, 1046.5, 1318.51].forEach((f, i) => {
+      this.tone({ freq: f, dur: 0.26, type: 'triangle', vol: 0.2, delay: i * 0.07 });
+      this.tone({ freq: f * 2, dur: 0.16, type: 'sine', vol: 0.06, delay: i * 0.07 });
+    });
+    // きらめき: 高いベル2発＋空気感のノイズ
+    this.tone({ freq: 1567.98, dur: 0.45, type: 'sine', vol: 0.15, delay: 0.36 });
+    this.tone({ freq: 2093, dur: 0.4, type: 'sine', vol: 0.09, delay: 0.44 });
+    this.noise({ dur: 0.45, vol: 0.07, freq: 7000, delay: 0.3 });
+  }
+
   // legacy alias — some code paths call startMusic() without a track
   startMusic() { this.playTrack(this.trackName || 'solo'); }
 }
 
 export const audio = new AudioEngine();
+
+// 全消しジングル: audio.ascend() でも、この関数でも呼べる（modes.js 用）。
+export function sfxAscend() { audio.ascend(); }
+
+// タブ/アプリが隠れたらBGMを止め、戻ったら再開する。
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('visibilitychange', () => audio.onVisibilityChange());
+}

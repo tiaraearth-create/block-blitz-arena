@@ -23,6 +23,7 @@ export const ULT_META = {
   ult_timestop:  { icon: '⏳', color: '#b06bff' },
   ult_judgement: { icon: '⚡', color: '#fff3b0' },
   ult_condemn:   { icon: '👁️', color: '#e03546' },
+  ult_gravity:   { icon: '🧲', color: '#8fb6ff' },
   ult_admin:     { icon: '👑', color: '#ffd75e' },
 };
 
@@ -388,6 +389,51 @@ const EFFECTS = {
     view.particles.ring(cx, cy, view.boardSize * 0.7, '#e03546');
     emit(ctx, { ...res, rows: row ? [row.i] : [], cols: col ? [col.i] : [] });
     return { msg: t('👁️ 断罪の一撃！ 縦横を斬り抜いた！', '👁️ Condemnation — cut clean through!') };
+  },
+
+  // 🧲 重力圧縮。盤面のブロックを全部そのまま下端へ落として詰め、
+  // 落ちた結果そろった行だけを「通常どおり」消す。派手さは無いが、
+  // 穴だらけの盤面を一気に畳んで空きを作り直せるのが値打ち。
+  ult_gravity(ctx) {
+    const { engine, view } = ctx;
+    const filled = cellsOf(engine, v => v !== 0);
+    if (!filled.length) return { error: t('盤面が空です！', 'The board is empty!') };
+    const moved = engine.compactDown();
+    // 既に全部が下端に詰まっている（＝1マスも動かない）なら何も起きていない。
+    // 他の盤面系奥義と同じく、ゲージを消費させずに温存する。
+    if (!moved) return { error: t('これ以上は圧縮できません！', 'The board is already compressed!') };
+
+    // 落下でそろった行は engine.resolveLines() で通常経路のまま消す。
+    const res = engine.resolveLines();
+    let gained;
+    if (res.lineCount > 0) {
+      engine.streak += 1;
+      if (engine.streak > engine.maxCombo) engine.maxCombo = engine.streak;
+      engine.linesCleared += res.lineCount;
+      const comboMult = 1 + 0.5 * (engine.streak - 1);
+      gained = applyMultipliers(engine, Math.round(res.lineCount * res.lineCount * 100 * comboMult));
+      engine.score += gained;
+    } else {
+      // そろわなくても「詰めた」ぶんの小さな報酬は出す（コンボには触れない）。
+      gained = awardPoints(engine, moved * 20);
+    }
+
+    view.shake = 16;
+    view.screenFlash = 0.35;
+    audio.bossAttack();
+    const [cx] = boardCenter(view);
+    // 演出は既存のものを流用：盤面下端から広がるリング1つだけ。
+    view.particles.ring(cx, view.boardY + view.boardSize * 0.95, view.boardSize * 0.8, '#8fb6ff');
+    emit(ctx, {
+      clearedCells: res.clearedCells, rows: res.fullRows, cols: res.fullCols,
+      lineCount: res.lineCount, gained,
+      anchor: res.clearedCells.length ? [res.clearedCells[0][0], res.clearedCells[0][1]] : [SIZE - 1, 0],
+    });
+    return {
+      msg: res.lineCount > 0
+        ? t(`🧲 重力圧縮！盤面が崩れ落ち、${res.lineCount}ライン消えた！`, `🧲 Gravity Crush — the board collapses, ${res.lineCount} lines gone!`)
+        : t('🧲 重力圧縮！盤面を下へ押し固めた！', '🧲 Gravity Crush — the board is packed down!'),
+    };
   },
 
   // 👑 Staff-only: judgement, and the gauge refills instantly.

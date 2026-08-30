@@ -52,6 +52,32 @@ function seatPlan(botSeats) {
 // セッション
 // ---------------------------------------------------------------------------
 
+// 開幕の宣言を読み上げてよい間隔。
+//
+// なぜ「セッションに1回」ではないか: クライアントの1走行は120秒で、走行ごとに
+// zero_leave → zero_join が飛んでセッションが作り直される。セッション側の
+// フラグでは、ソロの人が枠の間ずっと2分おきに開幕宣言を浴びることになる。
+// 世界で1本の run に「最後に読み上げた時刻」を持ち、この時間だけは黙る。
+// （枠は既定30分。部屋が枠ごとに1つなら、実際に流れるのは枠の頭の1回だけ）
+export const OPEN_COOLDOWN_MS = 15 * 60 * 1000;
+
+// 開幕（複数人）と solo（実プレイヤーが1人）の宣言。
+// ZERO_LINES には日英4行×3態度で用意されていたのに、どの kind からも
+// 呼ばれておらず、管理者の動作確認API以外では一度も表に出ていなかった。
+// open と solo で別のガードを持つ（片方が鳴っても、もう片方は鳴れる）。
+function sayOpening(s, run, deps, t) {
+  const { say } = deps;
+  if (!say || !run) return null;
+  const humans = seatedHumans(s).length;
+  const kind = humans <= 1 ? 'solo' : 'open';
+  const key = kind === 'solo' ? 'soloSaidAt' : 'openSaidAt';
+  if (t - (run[key] || 0) < OPEN_COOLDOWN_MS) return null;
+  run[key] = t;
+  // {n} は「ここまでに返した王座の数」＝割れた段の数。
+  say(kind, Math.min(DAN.length - 1, run.dan | 0), { n: run.dan | 0, seed: t });
+  return kind;
+}
+
 export function createSession(deps, humanSocks, run = null) {
   const {
     Engine, chooseMove, pickResidentBot, pickPersona, sockName,
@@ -93,13 +119,15 @@ export function createSession(deps, humanSocks, run = null) {
   // ゼロ自身も盤面を持って本当に打つ。HPバーではないことの実体。
   const zeroEngine = new Engine((seed + 104729) >>> 0);
 
-  return {
+  const s = {
     id: uuid(),
     overflow: humanSocks.slice(seated.length),
     entrants,
     startedAt: now(),
     ended: false,
     seed,
+    // 人数。あとから合流した人のぶんは addHuman が足す。**抜けても下げない**
+    // （理由は addHuman / zeroSeatOut の注記）。
     humans,
     zero: { engine: zeroEngine, nextMoveAt: now() + COUNTDOWN * 1000, score: 0, lines: 0 },
     verdicts: [],          // 進行中の断罪
@@ -108,6 +136,82 @@ export function createSession(deps, humanSocks, run = null) {
     targetCol: Math.floor(random() * SIZE),
     stakes: [],            // このセッションで割れた段（枠の終わりに精算）
   };
+  // 部屋ができた＝枠が開いた。ここが open / solo の唯一の発火点。
+  sayOpening(s, run, deps, now());
+  return s;
+}
+
+// 席の再計算。人が増えたぶんだけ住人の席を減らす（**増やしはしない**）。
+// 処刑済みの住人は席に残す ── 「その日はもう戻ってきません」を画面で見せる
+// のがこのモードの見せ場なので、ここで消してはいけない。
+function rebalanceBots(s) {
+  const humans = Math.max(1, seatedHumans(s).length);
+  const want = Math.max(MIN_BOT_SEATS, seatsFor(humans) - humans);
+  let drop = liveBots(s).length - want;
+  if (drop <= 0) return 0;
+  let removed = 0;
+  // あとから座った住人（配列の後ろ）から退席させる。
+  for (let i = s.entrants.length - 1; i >= 0 && drop > 0; i--) {
+    const e = s.entrants[i];
+    if (e.human || e.executed) continue;
+    s.entrants.splice(i, 1);
+    drop--; removed++;
+  }
+  return removed;
+}
+
+// 途中合流。
+//
+// createSession は最初から複数人を受け取れる設計（seated / seats / botSeats を
+// humanSocks.length から計算している）だったのに、あとから席を1つ増やす道が
+// 無かった。そのため呼び出し側は毎回 1 ソケットで新しい部屋を作るしかなく、
+// s.humans が恒久的に 1 になっていた ── 人数ぶんHPを重くする補正も、
+// 回復量を断罪の本数で割る補正も、満席案内も、全部死んでいた。
+//
+// 返り値: 座れた席（entrant）／満席なら false（呼び出し側が案内を出す）
+export function addHuman(s, ws, deps, run = null) {
+  const { sockName, now = () => Date.now() } = deps;
+  if (!s || s.ended || !ws) return false;
+  const name = sockName(ws);
+
+  // 同じソケット、または同じ名前の席が既にあるなら座り直す。走行のたびに
+  // zero_leave → zero_join が来るので、実際にはこれが通常の経路になる。
+  const seat = s.entrants.find(e => e.human && (e.ws === ws || e.name === name));
+  if (seat) {
+    seat.ws = ws;
+    seat.left = false;
+    // トップアウトで落ちている最中の人はそのまま（60秒の上限を回避させない）。
+    // 復帰は tick が downUntil を見て面倒をみる。
+    if (!seat.downUntil) seat.alive = true;
+    seat.lastSeen = now();
+    s.lastState = 0;
+    return seat;
+  }
+
+  // 抜けたきり戻ってこない席（ソケットも閉じている）は片付ける。走行の合間に
+  // いる人はソケットが生きているので消えない。
+  for (let i = s.entrants.length - 1; i >= 0; i--) {
+    const e = s.entrants[i];
+    if (e.human && e.left && (!e.ws || e.ws.readyState !== e.ws.OPEN)) s.entrants.splice(i, 1);
+  }
+
+  // 席は人間も含めて上限24。住人の席も必ず MIN_BOT_SEATS 残す。
+  const before = seatedHumans(s).length;
+  if (before >= SEATS_MAX - MIN_BOT_SEATS) return false;
+
+  const e = {
+    ws, human: true, name, score: 0, cuts: 0, missed: 0,
+    alive: true, downUntil: 0, lastSeen: now(),
+  };
+  s.entrants.push(e);
+  // 一度上がった人数は下げない。抜けたぶんHPを下げるのは、与えたダメージを
+  // 巻き戻すのと同じこと（既存方針と整合）。zeroSeatOut 側にも同じ注記がある。
+  s.humans = Math.max(s.humans | 0, before + 1);
+  rebalanceBots(s);
+  // 席が変わったので、次の tick で全員へ状態を配り直す（既存の1秒配信に乗せる）。
+  s.lastState = 0;
+  sayOpening(s, run, deps, now());
+  return e;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,7 +219,15 @@ export function createSession(deps, humanSocks, run = null) {
 // ---------------------------------------------------------------------------
 
 export function aliveHumans(s) {
-  return s.entrants.filter(e => e.human && e.alive);
+  // 席を外した人(e.left)は名指ししない。zeroSeatOut は alive も false にするが、
+  // 断罪の的になるかどうかは席の有無で決まるべきなので、両方を見る。
+  return s.entrants.filter(e => e.human && e.alive && !e.left);
+}
+// 「いま席に座っている」人間。走行を終えて席を外した人(e.left)は数えないし、
+// 配信もしない ── 部屋が枠ごとに1つになったことで、抜けた人の席は次の走行まで
+// 残る。ここを見ないと、結果画面にいる人へ zero_state を送り続けてしまう。
+export function seatedHumans(s) {
+  return s.entrants.filter(e => e.human && !e.left);
 }
 export function liveBots(s) {
   return s.entrants.filter(e => !e.human && !e.executed);
@@ -135,11 +247,13 @@ export function tick(s, run, deps) {
     if (!run.allBroken) {
       run.allBroken = Date.now();
       if (deps.say) deps.say('wrap', DAN.length - 1, { n: DAN.length });
-      if (deps.emit) for (const x of s.entrants) if (x.human) {
+      // 部屋は枠ごとに1つなので、完全勝利の演出は「その枠にいる全員」に届く。
+      // 1ソケット1部屋だった頃は、最初に条件を満たした部屋の人しか見られなかった。
+      if (deps.emit) for (const x of seatedHumans(s)) {
         deps.emit(x, { type: 'zero_complete', dan: DAN.length });
       }
       // 👑 称号「七冠奪還」── 七段すべてが陥落したその場に居合わせた人にバッジ 'zero7'。
-      if (deps.onZeroSevenBadge) deps.onZeroSevenBadge(s.entrants.filter(x => x.human).map(x => x.name));
+      if (deps.onZeroSevenBadge) deps.onZeroSevenBadge(seatedHumans(s).map(x => x.name));
     }
     return;
   }
@@ -193,8 +307,11 @@ export function tick(s, run, deps) {
   }
 
   // --- トップアウトからの復帰 ---
+  // 席を外した人(e.left)は復帰させない。復帰させると aliveHumans に混ざり、
+  // 画面を見ていない人へ断罪が飛んで、必ず落ちて（＝ゼロが回復して住人が処刑
+  // される）しまう。次に座り直したとき addHuman が起こす。
   for (const e of s.entrants) {
-    if (e.human && !e.alive && e.downUntil && t >= e.downUntil) {
+    if (e.human && !e.left && !e.alive && e.downUntil && t >= e.downUntil) {
       e.alive = true; e.downUntil = 0;
       if (emit) emit(e, { type: 'zero_revive' });
     }
@@ -216,7 +333,7 @@ export function tick(s, run, deps) {
       const view = stateView(s, run);
       // canWill は視聴者ごとに違う（とどめを刺して未記入の段があるか）。共有 view の
       // ハードコード null を上書きして配る ── 再接続後も伝言を書く権利を復元できる。
-      for (const e of s.entrants) if (e.human) {
+      for (const e of seatedHumans(s)) {
         const canWill = (run.broken || []).some(b => b.by === e.name && !b.will);
         emit(e, { ...view, canWill, you: youView(e) });
       }
@@ -241,7 +358,7 @@ function resolveExpiredVerdicts(s, run, danIndex, deps) {
     chronicle(run, 'missed', { by: v.target, victim: victim ? victim.name : null });
     if (say) say('missed', danIndex, { you: v.target, name: victim ? victim.name : undefined, seed: v.at });
     if (emit) {
-      for (const x of s.entrants) if (x.human) {
+      for (const x of seatedHumans(s)) {
         // 落とした本人には赤マス座標も送る ── モード説明「時間内に斬れないと
         // 赤マスがそのままお邪魔になる」を満たすため、クライアントは自分が target の
         // ときこの cells を盤面へお邪魔として書き込む。他人には座標は送らない。
@@ -309,7 +426,7 @@ export function submitStake(s, run, name, cols, deps) {
   const ready = s.stakes2 >= need;
   if (ready) { s.stakes2 = 0; s.warnBonus = 1500; }
   if (emit) {
-    for (const x of s.entrants) if (x.human) {
+    for (const x of seatedHumans(s)) {
       emit(x, { type: 'zero_stake', by: name, have: s.stakes2, need, ready });
     }
   }
@@ -337,7 +454,7 @@ export function submitCut(s, run, name, verdictId, clearedCells, deps) {
   chronicle(run, 'cut', { by: name, keystone: !!r.keystone, dan: danIndex + 1 });
   if (say) say('cut', danIndex, { you: name, seed: t });
   if (emit) {
-    for (const x of s.entrants) if (x.human) {
+    for (const x of seatedHumans(s)) {
       emit(x, { type: 'zero_cut', by: name, keystone: !!r.keystone, damage: dmg });
     }
   }
@@ -401,18 +518,17 @@ function breakDan(s, run, danIndex, deps) {
   s.stakes.push(rec);
   if (say) say('danBroken', danIndex, { dan: danIndex + 1, seed: rec.at });
   if (emit) {
-    for (const x of s.entrants) if (x.human) {
+    for (const x of seatedHumans(s)) {
       emit(x, { type: 'zero_dan', dan: danIndex + 1, by: rec.by, next: run.dan < DAN.length ? run.dan + 1 : null });
     }
   }
   // 段が割れた瞬間そこに居た人だけにバッジ。あとから点を足しても手に入らない。
-  if (deps.onDanBadge) deps.onDanBadge(s.entrants.filter(x => x.human).map(x => x.name));
+  if (deps.onDanBadge) deps.onDanBadge(seatedHumans(s).map(x => x.name));
   // 欠片も同じ扱い ── 居合わせた人だけ。とどめを刺した人はさらに上乗せ。
   if (deps.shard) {
     const P = deps.SHARD ? deps.SHARD.danPresent : 40;
     const F = deps.SHARD ? deps.SHARD.danFinish : 80;
-    for (const x of s.entrants) {
-      if (!x.human) continue;
+    for (const x of seatedHumans(s)) {
       deps.shard(x.name, P + (rec.by === x.name ? F : 0));
     }
   }
@@ -476,7 +592,7 @@ function runDeal(s, run, danIndex, deps, elapsed, t) {
   if (!run.deal && slotElapsed >= DEAL_AT_SEC && run.dealDoneFor !== danIndex) {
     run.deal = makeDeal(run.dayKey || 'x', danIndex, t);
     if (say) say('deal', danIndex, { seed: t });
-    if (emit) for (const x of s.entrants) if (x.human) emit(x, { type: 'zero_deal', deal: dealView(run.deal) });
+    if (emit) for (const x of seatedHumans(s)) emit(x, { type: 'zero_deal', deal: dealView(run.deal) });
     return;
   }
   if (!run.deal || run.deal.settled) return;
@@ -495,7 +611,7 @@ function runDeal(s, run, danIndex, deps, elapsed, t) {
       run.deal.residentVoted[r.id] = true;
       const o = run.deal.options.find(x => x.id === pick);
       if (o) o.votes++;
-      if (emit) for (const x of s.entrants) if (x.human) {
+      if (emit) for (const x of seatedHumans(s)) {
         emit(x, { type: 'zero_deal_vote', by: r.name, pick, tally: dealTally(run.deal) });
       }
     }
@@ -515,7 +631,7 @@ function runDeal(s, run, danIndex, deps, elapsed, t) {
         s.executed = 0;
       }
     }
-    if (emit) for (const x of s.entrants) if (x.human) {
+    if (emit) for (const x of seatedHumans(s)) {
       emit(x, { type: 'zero_deal_done', win, tally: dealTally(run.deal) });
     }
     chronicle(run, 'deal', { win, tally: dealTally(run.deal), q: run.deal.q });

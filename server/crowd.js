@@ -60,6 +60,9 @@ export function buildCtx(base) {
     mondayish: (wd === 1 && hour < 12) || (wd === 0 && hour >= 21),
     event: base.event || null,
     poll: base.poll || null,
+    // 🏷️ 日替わりピックアップショップのセール情報（index.js → ambient.js 経由）。
+    // 未供給なら null のまま = セール系のセリフは一切出ない（安全側に倒す）。
+    sale: base.sale || null,
     thrones: base.thrones || [],   // 👑 王座保持者の名前（住人含む）
     active: base.active || [],
     humans: base.humans || [],
@@ -83,6 +86,26 @@ const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 function cosmeticItem() {
   const pool = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly && !i.gachaOnly && i.cat !== 'ult');
   return pick(pool);
+}
+
+// 🏷️ セール対象の品を {saleitem} に流し込む。ctx.sale は
+//   [id, ...] / { items: [id|item, ...] } / { item: id|item } のどれでも受ける。
+// 文字列 id は SHOP_ITEMS から引き直し、throneOnly / gachaOnly / adminOnly は
+// cosmeticItem と同じ理由で除外する（買えない品を「買った」と言わせない）。
+// セール情報がまだ供給されていない環境では通常のショップ品にフォールバックする
+// ので、文面が壊れることはない。
+function saleItem(ctx) {
+  const sale = ctx && ctx.sale;
+  const raw = !sale ? []
+    : Array.isArray(sale) ? sale
+    : Array.isArray(sale.items) ? sale.items
+    : sale.item ? [sale.item] : [];
+  const items = raw
+    .map(x => (x && typeof x === 'object')
+      ? (x.id ? (SHOP_ITEMS.find(i => i.id === x.id) || x) : x)
+      : SHOP_ITEMS.find(i => i.id === x))
+    .filter(i => i && i.name && !i.throneOnly && !i.gachaOnly && !i.adminOnly);
+  return items.length ? pick(items) : cosmeticItem();
 }
 
 // 住人が正当に持ちうる称号だけを {title} スロットに使う。residentStats(r).title と
@@ -134,6 +157,7 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'opt': v = ctx.poll && ctx.poll.options && ctx.poll.options.length ? pick(ctx.poll.options) : ''; break;   // オブジェクトごと保持し言語別に描画
     case 'winner': v = ''; break;
     case 'item': v = cosmeticItem(); break;      // オブジェクトごと保持し言語別に描画
+    case 'saleitem': v = saleItem(ctx); break;   // 同上（セール対象があればそれ）
     case 'boss': v = pick(BOSSES); break;         // 同上
     // プロフィールの称号を優先し、無ければ住人が正当に持ちうる称号だけから引く。
     // TITLES 全体から引くと towerlord「百塔の覇者」等をフィードで名乗り、プロフィール
@@ -172,7 +196,7 @@ function renderSlot(key, v, lang) {
     // 文字列で渡された場合は従来どおり — 呼び出し側の移行を壊さない。
     // ショップ品・ボス・称号。BOSSES は nameEn を持ち、ショップ/称号は
     // catalog-en.js が id で英語名を持つ。どちらも無ければ日本語のまま。
-    case 'item': case 'boss': case 'title':
+    case 'item': case 'saleitem': case 'boss': case 'title':
       if (!v || typeof v !== 'object') return String(v == null ? '' : v);
       return L ? String(v.nameEn || enName(v)) : String(v.name || '');
     case 'board': case 'badge':
@@ -378,6 +402,7 @@ const CTX_OK = (line, ctx) => {
   switch (line.ctx) {
     case 'event': return !!ctx.event;
     case 'noevent': return !ctx.event;
+    case 'sale': return !!ctx.sale;
     case 'poll': return !!ctx.poll;
     case 'weekend': return ctx.weekend;
     case 'friday': return ctx.friday;
@@ -1422,5 +1447,58 @@ REACTIONS.rankup = {
     'wait {you} hit {tier}?! huge',
     'welcome to the {tier} bracket {you}… now I gotta lock in',
     'my promotion is next, calling it',
+  ],
+};
+
+// ===========================================================================
+// 🏷️ 日替わりピックアップショップ（セール）への住人の反応
+// ---------------------------------------------------------------------------
+// ctx: 'sale' の行は ctx.sale が入っているときだけ出る（CTX_OK）。セール情報が
+// まだ供給されていない間はこのグループ全体が沈黙するので、開催していないのに
+// 「安くなってる」と言い出す事故は起きない。
+// {saleitem} は saleItem() が解決する — セール対象があればその品、無ければ
+// 通常のショップ品にフォールバック（throneOnly / gachaOnly は常に除外）。
+// ===========================================================================
+
+LINES.push(
+  { ja: '今日のセール見た？', en: "did you see today's sale?", ctx: 'sale', w: 2 },
+  { ja: '{saleitem}安くなってる、買っちゃおうかな', en: '{saleitem} is on sale… I might just buy it', ctx: 'sale', w: 2 },
+  { ja: 'セール品もう買った人いる？', en: 'anyone picked up the sale item yet?', ctx: 'sale' },
+  { ja: '{saleitem}この値段なら買いでしょ', en: '{saleitem} at that price is a steal', ctx: 'sale', arch: ['gacha', 'casual', 'streamer'] },
+  { ja: 'セール狙いでコイン貯めといてよかった', en: 'so glad I saved my coins for a sale', ctx: 'sale', arch: ['gacha', 'tryhard', 'lurker'] },
+  { ja: 'ショップ覗くのが日課になってる', en: 'checking the shop has become a daily ritual', ctx: 'sale', arch: ['morning', 'casual', 'lurker'] },
+  { ja: 'セール、明日には変わっちゃうんだよね？急がなきゃ', en: "the sale changes tomorrow right? gotta hurry", ctx: 'sale', arch: ['newbie', 'kid', 'casual'] },
+  { ja: '{saleitem}買った！セールありがとう運営', en: 'bought {saleitem}! thanks for the sale 🙏', ctx: 'sale', arch: ['casual', 'gacha', 'kid'] },
+  { ja: 'コインが足りない…セールなのに…', en: 'not enough coins… during a sale… pain', ctx: 'sale', arch: ['newbie', 'casual', 'kid', 'gacha'] },
+  { ja: '欲しいやつがセールに来るまで粘る', en: "i'm holding out until the one I want goes on sale", ctx: 'sale', arch: ['lurker', 'senpai', 'tryhard'] },
+  { ja: 'セールの日はショップ見てるだけで楽しい', en: 'window shopping on sale day is a whole activity', ctx: 'sale', arch: ['casual', 'morning', 'global'] },
+  { ja: '割引ぶんでもう1個いけるな…って考えてる時点で負け', en: 'thinking "the discount pays for a second one" is how they get you', ctx: 'sale', arch: ['gacha', 'nightowl', 'streamer'] },
+  { ja: 'the daily sale is dangerous for my coin stash', en: 'the daily sale is dangerous for my coin stash', ctx: 'sale', arch: ['global'] },
+
+  // セール情報が無くても成立する汎用のショップ話題（常時候補）。
+  { ja: 'ショップ覗いてたら時間溶けた', en: 'lost half an hour just browsing the shop' },
+  { ja: 'コイン貯まったのに何買うか決まらない', en: "finally saved up and now I can't decide what to buy", arch: ['casual', 'gacha', 'newbie'] },
+  { ja: '欲しいスキンがあると急にコイン稼ぎ頑張れる', en: 'nothing motivates coin farming like wanting a skin', arch: ['casual', 'gacha', 'kid', 'global'] },
+);
+
+// セール切り替わり時の速報リアクション用。index.js から
+// `battle.crowd.react('shop_sale')` で呼べる。対象品を明示したいときは
+// `battle.crowd.react('shop_sale', { saleitem: { name, nameEn } })`。
+REACTIONS.shop_sale = {
+  ja: [
+    'セール更新きてる！',
+    '{saleitem}がセール対象じゃん！',
+    '今日のセールは当たりだ',
+    'セール見てきた、{saleitem}安い',
+    'ショップ更新の時間だ〜',
+    '今日のセール、狙ってたやつ来るかな',
+    'セール品チェックした？',
+  ],
+  en: [
+    'new sale is up!',
+    '{saleitem} is on sale today!',
+    "today's sale is actually good",
+    'shop just rotated, go look',
+    'checked the sale — {saleitem} is cheap right now',
   ],
 };

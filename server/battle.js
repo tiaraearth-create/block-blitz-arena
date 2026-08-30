@@ -14,8 +14,9 @@ import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
 import { zeroSay, moodFor } from './zero.js';
 import { createSession as createZeroSession, tick as tickZero, submitCut as zeroCut,
   submitStake as zeroStake, submitDealVote as zeroDealVote,
-  submitWill as zeroWill, latestWill as zeroLatestWill,
+  submitWill as zeroWill, latestWill as zeroLatestWill, addHuman as zeroAddHuman,
   topOut as zeroTopOut, stateView as zeroStateView, ZERO_TICK } from './zero-session.js';
+import { eventBonus } from './events.js';
 import { danAt, DAN as ZERO_DAN } from './zero.js';
 import { createParties } from './party.js';
 import { getSchedule as getAeSchedule, liveSlotFor as aeLiveSlotFor,
@@ -54,6 +55,18 @@ export function initBattle(server, deps) {
   // index.js から渡らない環境（テストの部分起動など）では素通しにする。
   const userRate = (key, limit, windowMs) =>
     (deps.rateLimit ? deps.rateLimit(key, limit, windowMs) : true);
+
+  // 開催中の期間限定イベントの bonus ブロック。
+  // index.js の currentEvent() は同ファイル内のクロージャ（期限切れの後片付けと
+  // 終了アナウンスも兼ねている）なので import できない。読むだけならここでも
+  // 同じ判定ができるので、db.meta.event を直接見て、倍率の取り出しだけを
+  // events.js の eventBonus に任せる（index.js:/api/bosses と同じ作法）。
+  // index.js が deps.currentEvent を渡してくれるならそちらを優先する。
+  const liveEventBonus = () => {
+    if (deps.currentEvent) return eventBonus(deps.currentEvent());
+    const ev = db.meta && db.meta.event;
+    return ev && ev.endsAt > Date.now() ? eventBonus(ev) : {};
+  };
 
   // maxPayload: the default is 100 MiB per frame, which on a single free-tier
   // instance is a cheap way to exhaust memory. The largest legitimate message
@@ -348,36 +361,75 @@ export function initBattle(server, deps) {
     };
   }
 
+  // 席に着いた人へ、いまの状態を1通で渡す。新しく部屋を作ったときも、
+  // 生きている部屋へ途中合流したときも、作法は同じ。
+  function zeroSeatIn(e, sess, run) {
+    e.ws.zeroId = sess.id;
+    // 状態を展開すると type:'zero_state' が入っているので、
+    // 後に置かないと zero_found が上書きされて消える（実際に消えた）。
+    // 前の枠の誰かが残した伝言があれば、ゼロが読み上げて茶々を入れる。
+    // 会ったことのない18時の人からの言伝が、21時の人に届く。
+    // 伝言の読み上げガードは run 側に持つ（セッションは120秒ごとに作り直され、
+    // sess.willRead では同じ伝言が本人の再入場のたびに全体チャットへ再放送された）。
+    // 同じ伝言（will.at で識別）は世界で一度だけ読む。
+    const will = zeroLatestWill(run);
+    if (will && run.willReadAt !== will.at) {
+      run.willReadAt = will.at;
+      zeroChat(`……前の方が言伝を残しています。「${will.text}」 ── ${will.by} より`,
+        `…The last one left you a message. "${will.text}" — from ${will.by}`);
+    }
+    send(e.ws, {
+      ...zeroStateView(sess, run),
+      type: 'zero_found',
+      id: sess.id, seed: sess.seed, countdown: 3,
+      // 再接続（新セッション）でも、とどめを刺して未記入の段があれば伝言を書ける。
+      canWill: (run.broken || []).some(b => b.by === e.name && !b.will),
+    });
+  }
+
+  // 枠(スロット)ごとに1部屋。run は世界で1本なので、同じ run で生きている
+  // セッションがあれば、それがその枠の部屋。
+  // 再読み込みなどで run オブジェクトが差し替わっても、同じ日の同じモードなら
+  // 同じ枠として扱う（dayKey + modeId で識別）。
+  function zeroLiveSessionFor(run) {
+    if (!run) return null;
+    for (const sess of zeroSessions.values()) {
+      if (sess.ended || !sess.run) continue;
+      if (sess.run === run) return sess;
+      if (sess.run.dayKey === run.dayKey && sess.run.modeId === run.modeId) return sess;
+    }
+    return null;
+  }
+
   function startZeroSession(humanSocks, run) {
     if (!run) return null;
     if (!run.dayKey) run.dayKey = String(run.dayKey || '');
+    // 枠(スロット)ごとに1部屋。生きている部屋があれば作り直さず**合流**する。
+    //
+    // ここで毎回 createSession していたせいで、同じ枠にN人いるとN個の別部屋が
+    // でき、各部屋が11体の住人を抱えて同じ共有HPを削っていた（火力はほぼN倍
+    // なのにHPは1人ぶん）。s.humans が恒久的に 1 だったので、人数ぶんHPを重く
+    // する補正も、回復量を断罪の本数で割る補正も、満席案内も、完全勝利の演出も、
+    // 全部そこで死んでいた。
+    const live = zeroLiveSessionFor(run);
+    if (live) {
+      for (const ws of humanSocks) {
+        const seat = zeroAddHuman(live, ws, zeroDeps(live), run);
+        // 入れなかった人には正直に伝える（黙って落とさない）
+        if (!seat) { send(ws, { type: 'error', error: 'アリーナが満席です。次の枠でお待ちしています' }); continue; }
+        zeroSeatIn(seat, live, run);
+      }
+      return live;
+    }
     // run を渡すと、処刑済みの住人（run.fallen）が同じ日のうちに再着席しないよう
     // 抽選から除外できる（説明文「その日はもう戻ってきません」との整合）。
     const sess = createZeroSession(zeroDeps(null), humanSocks, run);
+    // どの枠の部屋かを覚えておく（zeroLiveSessionFor が合流先を探すのに使う）
+    sess.run = run;
     zeroSessions.set(sess.id, sess);
     for (const e of sess.entrants) {
       if (!e.human) continue;
-      e.ws.zeroId = sess.id;
-      // 状態を展開すると type:'zero_state' が入っているので、
-      // 後に置かないと zero_found が上書きされて消える（実際に消えた）。
-      // 前の枠の誰かが残した伝言があれば、ゼロが読み上げて茶々を入れる。
-      // 会ったことのない18時の人からの言伝が、21時の人に届く。
-      // 伝言の読み上げガードは run 側に持つ（セッションは120秒ごとに作り直され、
-      // sess.willRead では同じ伝言が本人の再入場のたびに全体チャットへ再放送された）。
-      // 同じ伝言（will.at で識別）は世界で一度だけ読む。
-      const will = zeroLatestWill(run);
-      if (will && run.willReadAt !== will.at) {
-        run.willReadAt = will.at;
-        zeroChat(`……前の方が言伝を残しています。「${will.text}」 ── ${will.by} より`,
-          `…The last one left you a message. "${will.text}" — from ${will.by}`);
-      }
-      send(e.ws, {
-        ...zeroStateView(sess, run),
-        type: 'zero_found',
-        id: sess.id, seed: sess.seed, countdown: 3,
-        // 再接続（新セッション）でも、とどめを刺して未記入の段があれば伝言を書ける。
-        canWill: (run.broken || []).some(b => b.by === e.name && !b.will),
-      });
+      zeroSeatIn(e, sess, run);
     }
     // 入れなかった人には正直に伝える（黙って落とさない）
     for (const ws of sess.overflow || []) {
@@ -386,6 +438,14 @@ export function initBattle(server, deps) {
     sess.tick = setInterval(() => {
       const r = db.meta.adminEventRun;
       if (!r || sess.ended) { endZeroSession(sess); return; }
+      // run が差し替わった（日が変わった／別モードの回になった）ら、この部屋は
+      // もう別の枠のもの。畳んで新しい部屋に譲る ── 残しておくと、この tick が
+      // 新しい run を削り始めて、2部屋が同じ共有HPを叩く状態（C4 で直したもの）に
+      // 戻ってしまう。zeroLiveSessionFor の「生きている部屋＝同じ枠」も
+      // この後始末があって初めて成り立つ。
+      if (sess.run && (sess.run.dayKey !== r.dayKey || sess.run.modeId !== r.modeId)) {
+        endZeroSession(sess); return;
+      }
       // 誰も見ていない部屋は畳む（住人だけの部屋を回し続けない）
       // 抜けた人(e.left)は「見ている」に数えない。数えていたので、
       // 席に印が付いただけの部屋が永久に回り続けていた。
@@ -406,6 +466,12 @@ export function initBattle(server, deps) {
     if (!sess) return;
     const e = sess.entrants.find(x => x.ws === ws);
     if (e) { e.alive = false; e.left = true; }
+    // 1人抜けても、まだ誰かが見ているなら部屋は畳まない（枠ごとに1部屋）。
+    // sess.humans は**下げない** ── 段のHPは人数ぶん重くなっており、抜けた
+    // ぶんだけHPを下げると、すでに与えたダメージを巻き戻すのと同じことになる。
+    // 「一度与えたダメージは巻き戻さない」という既存方針（adminevent の侵攻ボス
+    // ・共闘の閾値と同じ）に合わせて据え置く。
+    //
     // 生身が誰も居なくなったら、その場で畳む（次の tick を待たない）
     if (!sess.entrants.some(x => x.human && !x.left && x.ws && x.ws.readyState === x.ws.OPEN)) {
       endZeroSession(sess);
@@ -936,7 +1002,14 @@ export function initBattle(server, deps) {
     // Raid: everyone fights one shared boss whose HP scales with party size.
     if (mode === 'raid') {
       const def = RAID_BOSSES[crypto.randomInt(RAID_BOSSES.length)];
-      match.boss = { ...def, hp: def.hp * match.players.length };
+      // 🐲 ボス襲来（期間限定イベント）の「ボスHP-20%」はレイドにも効かせる。
+      // 同じイベントのもう一方の効果（コイン2倍）は applyGameResult の
+      // isBossMode が 'raid' を含むのでレイドにも効いていたのに、HP のほうは
+      // ソロのボス一覧（index.js の /api/bosses）にしか掛かっておらず、
+      // 「同じイベントなのにレイドは半分だけ対象」という状態だった。
+      // レイドは協力プレイでレート競技ではないので、公平性の問題も起きない。
+      const hpMult = liveEventBonus().bossHp || 1;
+      match.boss = { ...def, hp: Math.max(1, Math.round(def.hp * match.players.length * hpMult)) };
       match.bossDead = false;
     }
     matches.set(id, match);
@@ -2568,10 +2641,11 @@ export function initBattle(server, deps) {
           if (ws.zeroId || ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId || ws.zeroId) return;
           const zu = zeroUserOf(ws);
           if (!zu) { send(ws, { type: 'error', error: 'ログインが必要です' }); return; }
-          if (!zeroRun(zu)) { send(ws, { type: 'error', error: 'いまはあなたの枠の時間ではありません' }); return; }
+          const zrun = zeroRun(zu);
+          if (!zrun) { send(ws, { type: 'error', error: 'いまはあなたの枠の時間ではありません' }); return; }
           if (!sockRate(ws, 'zeroJoinTimes', 5, 30_000)) return;
           zeroSeatOut(ws);                 // 念のため。前の部屋を残さない
-          startZeroSession([ws], zeroRun(zu));
+          startZeroSession([ws], zrun);    // 枠ごとに1部屋（生きた部屋があれば合流）
           return;
         }
         // 断罪を斬った申告

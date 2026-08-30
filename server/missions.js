@@ -132,6 +132,7 @@ export function syncMissions(user, weekNum) {
     ms.day = day;
     ms.daily = buildSet(DAILY_POOL, DAILY_COUNT, `${user.id}:${day}`);
     ms.dailyBonusClaimed = false;
+    ms.rerolls = {};   // 引き直しの使用回数も日付で戻る
   }
   if (ms.week !== week) {
     ms.week = week;
@@ -190,6 +191,94 @@ export function trackMissions(user, weekNum, event) {
   return completed;
 }
 
+// --- reroll (お題の引き直し) ----------------------------------------------
+
+// 1日に引き直せる回数と、その n 回目の値段（🪙コイン）。先頭が 0 なので
+// 「1日1回は無料」。デイリーとウィークリーは別枠で数える。
+// 実際の引き落としは呼び出し側（server/index.js）が行う。
+export const REROLL_COSTS = {
+  daily: [0, 400, 800],
+  weekly: [0, 1500, 3000],
+};
+
+function rerollScopes() { return ['daily', 'weekly']; }
+
+// ms.rerolls = { '<dayKey>': { daily: n, weekly: n } }
+// 当日ぶんだけ残す（古い日付が溜まっても誰も読まず db.json が太るだけ）。
+function rerollCounts(ms) {
+  const day = ms.day;
+  if (!ms.rerolls || typeof ms.rerolls !== 'object') ms.rerolls = {};
+  for (const k of Object.keys(ms.rerolls)) if (k !== day) delete ms.rerolls[k];
+  let c = ms.rerolls[day];
+  if (!c || typeof c !== 'object') c = ms.rerolls[day] = { daily: 0, weekly: 0 };
+  for (const s of rerollScopes()) {
+    const n = Number(c[s]);
+    c[s] = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  }
+  return c;
+}
+
+// 画面向けの残り回数と次の値段。
+function rerollInfoFrom(ms) {
+  const c = rerollCounts(ms);
+  const out = {};
+  for (const s of rerollScopes()) {
+    const costs = REROLL_COSTS[s];
+    const used = Math.min(c[s], costs.length);
+    out[s] = {
+      used, max: costs.length, left: costs.length - used,
+      cost: used < costs.length ? costs[used] : null,
+      free: used < costs.length && costs[used] === 0,
+    };
+  }
+  return out;
+}
+
+export function rerollInfo(user, weekNum) {
+  return rerollInfoFrom(syncMissions(user, weekNum));
+}
+
+// お題を1件引き直す。コインは引き落とさず「いくら要るか」を返すだけ
+// （引き落としは index.js 側）。成功: { ok:true, cost, scope, from, to, missions }
+export function rerollMission(user, weekNum, id) {
+  const ms = syncMissions(user, weekNum);
+  const scope = ms.daily.some(r => r.id === id) ? 'daily'
+    : ms.weekly.some(r => r.id === id) ? 'weekly' : null;
+  if (!scope) return { error: 'ミッションが見つかりません' };
+  const set = scope === 'daily' ? ms.daily : ms.weekly;
+  const idx = set.findIndex(r => r.id === id);
+  const row = set[idx];
+  if (row.claimed) return { error: '受け取り済みのミッションは引き直せません' };
+
+  const counts = rerollCounts(ms);
+  const costs = REROLL_COSTS[scope];
+  const used = counts[scope];
+  if (used >= costs.length) return { error: 'きょうの引き直しは使い切りました' };
+  const cost = costs[used];
+  // 引き落とすのは index.js だが、払えないのに差し替えると巻き戻せない。
+  // ここでも残高を見て、足りなければ盤面に触らず断る。
+  if (cost > 0 && (Number(user.coins) || 0) < cost) {
+    return { error: `コインが足りません（${cost.toLocaleString('en-US')}必要）` };
+  }
+
+  // 「いま出ていないお題」から抽選する。defOf が引けない孤児行（プールから
+  // 消えた id）もここでは普通に引き直せる ── むしろ掃除できて都合がよい。
+  const pool = scope === 'daily' ? DAILY_POOL : WEEKLY_POOL;
+  const taken = new Set(set.map(r => r.id));
+  const cands = pool.filter(d => !taken.has(d.id));
+  if (!cands.length) return { error: '引き直せるお題がもうありません' };
+
+  // 同じ日に何度引いても同じ物が出ないよう、使用回数と対象行もシードに混ぜる。
+  const next = pickN(cands, 1, hashStr(`${user.id}:${ms.day}:reroll:${scope}:${used}:${id}`))[0];
+  set[idx] = { id: next.id, p: 0, claimed: false };
+  counts[scope] = used + 1;
+
+  return {
+    ok: true, cost, scope, from: id, to: next.id,
+    missions: missionsView(user, weekNum),
+  };
+}
+
 // Serialisable view for the client.
 export function missionsView(user, weekNum) {
   const ms = syncMissions(user, weekNum);
@@ -214,6 +303,8 @@ export function missionsView(user, weekNum) {
     weeklyBonusClaimed: !!ms.weeklyBonusClaimed,
     dailyBonus: DAILY_ALL_BONUS,
     weeklyBonus: WEEKLY_ALL_BONUS,
+    // 引き直しの残り回数と次の値段（デイリー/ウィークリー別）。
+    rerolls: rerollInfoFrom(ms),
     // Milliseconds until each set regenerates.
     dailyResetIn: msUntilDailyReset(),
   };

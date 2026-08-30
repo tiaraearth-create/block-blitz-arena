@@ -1,0 +1,88 @@
+# 毎日1回、本番のプレイヤーデータを取ってきて server/seed-backup.json に
+# 焼き直し、変わっていればコミットする。
+#
+# なぜ要るか: このゲームのデータは本番サーバーのディスクの上にしか無い。
+# ホスティング側の都合でインスタンスが作り直されると、そこで全部消える。
+# seed-backup.json をリポジトリに置いておけば、次のデプロイで起動時に
+# 自動マージ復元されるので、消えても直前の状態まで戻せる。
+#
+# 手で回したいときは Actions タブから「Run workflow」。
+#
+# 必要な Secrets（Settings → Secrets and variables → Actions）:
+#   ADMIN_PASSWORD … 管理者パスワード。本番の環境変数と同じもの。必須。
+#   PROD_URL       … 本番のURL。未設定なら scripts/pull-backup.mjs の既定値。
+#
+# ※ seed-backup.json は ADMIN_PASSWORD で暗号化されて保存される
+#   （scripts/pull-backup.mjs / scrypt → AES-256-GCM）。リポジトリが公開でも
+#   中身は読めない。
+name: backup
+
+on:
+  schedule:
+    # 毎日 18:10 UTC（日本時間の翌 03:10）。人の少ない時間に寄せてある。
+    # ちょうどの時刻は混むので少しずらす。
+    - cron: '10 18 * * *'
+  workflow_dispatch:
+
+# 取れたバックアップを push する。
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: バックアップを取得
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          PROD_URL: ${{ secrets.PROD_URL }}
+        run: |
+          set -e
+          # パスワードが無いまま走らせると、スクリプトが標準入力から
+          # パスワードを待ち続けて、実行が時間切れまで固まる。先に止める。
+          if [ -z "$ADMIN_PASSWORD" ]; then
+            echo "::error::secrets.ADMIN_PASSWORD が設定されていません（Settings → Secrets and variables → Actions）"
+            exit 1
+          fi
+          # 前回の取得時刻を控えておく（後で「本当に新しいか」を見る）。
+          if [ -f server/seed-backup.json ]; then
+            grep -o '"backupAt":[0-9]*' server/seed-backup.json | head -1 > "$RUNNER_TEMP/backup-before.txt" || true
+          fi
+          if [ -n "$PROD_URL" ]; then
+            node scripts/pull-backup.mjs --url "$PROD_URL"
+          else
+            node scripts/pull-backup.mjs
+          fi
+
+      - name: 中身が新しければコミットする
+        run: |
+          set -e
+          # 中身が同じでも、暗号化のたびに salt と iv を引き直すのでファイルの
+          # バイト列は毎回変わる。git diff で見ると「毎日必ず差分あり」になり、
+          # 意味のないコミットが積み上がる。平文で入っている backupAt
+          # （サーバー側が付けた取得時刻）で新しさを判断する。
+          NOW=$(grep -o '"backupAt":[0-9]*' server/seed-backup.json | head -1)
+          BEFORE=""
+          if [ -f "$RUNNER_TEMP/backup-before.txt" ]; then BEFORE=$(cat "$RUNNER_TEMP/backup-before.txt"); fi
+          if [ -n "$BEFORE" ] && [ "$NOW" = "$BEFORE" ]; then
+            echo "前回から中身が変わっていません（$NOW）。コミットしません。"
+            git checkout -- server/seed-backup.json
+            exit 0
+          fi
+          if git diff --quiet -- server/seed-backup.json; then
+            echo "差分がありません。コミットしません。"
+            exit 0
+          fi
+          USERS=$(grep -o '"users":[0-9]*' server/seed-backup.json | head -1 | tr -d '"users:')
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/seed-backup.json
+          git commit -m "chore(backup): 本番データの自動バックアップ（${USERS}人 / $(date -u '+%Y-%m-%d %H:%M UTC')）"
+          git push

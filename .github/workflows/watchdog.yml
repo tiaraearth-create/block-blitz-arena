@@ -1,0 +1,71 @@
+# 30分おきに本番の生死を見る外形監視。
+#
+# 見ているのは2つだけ:
+#   ① /api/status が返ってくるか（落ちている・再デプロイで固まっている）
+#   ② persistError が null か（保存に失敗している）
+#
+# ②が大事。保存の失敗は完全に無音で、遊べてしまうぶんだけ気づけない。
+# メモリ上は正常なので、次の再起動で初めて「全部消えた」と分かる。
+# ここで落としておけば、GitHub が失敗をメールで知らせてくれる。
+#
+# 任意の Secrets:
+#   PROD_URL … 本番のURL。未設定なら下の既定値を見る。
+name: watchdog
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: /api/status を叩く
+        env:
+          PROD_URL: ${{ secrets.PROD_URL }}
+        run: |
+          set -e
+          URL="${PROD_URL:-https://block-blitz-arena.onrender.com}"
+          URL="${URL%/}"
+          echo "対象: $URL"
+
+          # 無料プランはアクセスが無いと眠る。起こすのに数十秒かかることが
+          # あるので、一度で諦めずに間をあけて数回試す。ここで粘らないと
+          # 「毎朝かならず失敗する監視」になって、誰も見なくなる。
+          BODY=""
+          for i in 1 2 3 4; do
+            if BODY=$(curl -sS --max-time 90 -f "$URL/api/status"); then
+              echo "応答あり（${i}回目）"
+              break
+            fi
+            BODY=""
+            echo "応答がありません。30秒待って再試行します（${i}/4）"
+            sleep 30
+          done
+          if [ -z "$BODY" ]; then
+            echo "::error::$URL/api/status が応答しません（サーバーが落ちているか、再デプロイ中です）"
+            exit 1
+          fi
+
+          # 本文は環境変数で node に渡す。一時ファイルを挟まないぶん、
+          # 置き場所の違いで壊れる余地が無い。
+          STATUS_JSON="$BODY" node -e '
+            let s;
+            try {
+              s = JSON.parse(process.env.STATUS_JSON);
+            } catch (e) {
+              // JSON で返ってこない = ホスティング側のエラーページを掴んでいる。
+              console.log("::error::/api/status が JSON を返しませんでした（" + e.message + "）");
+              process.exit(1);
+            }
+            console.log("オンライン:", s.online, "/ 試合:", s.activeMatches, "/ DBサイズ:", s.dbBytes, "bytes");
+            if (s.maintenance) console.log("::notice::メンテナンス中です");
+            if (s.persistError) {
+              // 無認証の口なので中身は伏せられている。生の理由は管理画面で見る。
+              console.log("::error::サーバーがデータを保存できていません: " + s.persistError);
+              process.exit(1);
+            }
+            console.log("保存は正常です（persistError は null）");
+          '

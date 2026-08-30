@@ -34,6 +34,9 @@ export const SHOP_ITEMS = [
   // ゲージが満タンになると発動できる必殺技。1つだけ装備できる。
   { id: 'ult_blast',     cat: 'ult', icon: '💥', name: '破壊の衝撃波',   desc: 'いちばん埋まった2行2列を強制消去', price: 0,    currency: 'coins', default: true },
   { id: 'ult_purify',    cat: 'ult', icon: '🌊', name: '浄化の波動',     desc: 'お邪魔ブロック全消し＋下2行を消去', price: 2500, currency: 'coins' },
+  // 2,500 と 3,500 のあいだが空いていた中価格帯。派手に消す奥義ではなく
+  // 「散らかった盤面を整える」性格なので、この位置がちょうどいい。
+  { id: 'ult_gravity',   cat: 'ult', icon: '🧲', name: '重力圧縮',       desc: '盤面を下へ圧縮し、そろった行を消す。散らかった盤面を片づけるのは自分の腕', price: 3000, currency: 'coins' },
   { id: 'ult_overdrive', cat: 'ult', icon: '🔥', name: 'オーバードライブ', desc: '15秒間スコア3倍！',              price: 3500, currency: 'coins' },
   { id: 'ult_meteor',    cat: 'ult', icon: '☄️', name: 'メテオストライク', desc: 'ランダムな14マスを大爆発で粉砕',  price: 4200, currency: 'coins' },
   { id: 'ult_rainbow',   cat: 'ult', icon: '🌈', name: 'レインボーハンド', desc: '手持ちが必ず置ける最適ピースに変化', price: 150, currency: 'gems' },
@@ -179,7 +182,143 @@ export const TITLES = [
   { id: 'gachaprince', name: 'ガチャの申し子', color: '#ff6bd4', desc: 'ガチャを100回引く' },
   { id: 'lobbyface', name: 'ロビーの顔',      color: '#43d9e8', desc: 'チャットで300回発言する' },
   { id: 'ghostmaster', name: '幽霊使い',      color: '#a78bfa', desc: '幽霊屋敷で15,000点（見えない何かと心を通わせた）' },
+  // 🕳️ 隠し称号。条件はあえてぼかしてある（何回で取れるかは書かない）。
+  // 全消し「昇華」を50回。ghostmaster と同じく、説明が達成のヒントを兼ねる。
+  { id: 'voidseeker', name: '無の求道者',     color: '#7c3aed', desc: '盤面を空にした回数が一定に達した' },
+  // 📕 コレクション図鑑のセットコンプ報酬（COLLECTION_SETS 参照）
+  { id: 'ultcollector', name: '奥義蒐集家',   color: '#43d9e8', desc: '奥義をすべて集める' },
+  { id: 'rainbowtrio',  name: '虹の三種',     color: '#ff6bd4', desc: 'ガチャ限定の装備をすべて集める' },
+  { id: 'thronekeeper', name: '宝物庫の主',   color: '#ffd75e', desc: '👑王座の宝物庫の品をすべて集める' },
+  { id: 'curator',      name: '図鑑の完成者', color: '#fff3b0', desc: '図鑑をすべて埋める' },
 ];
+
+// ---- 📕 コレクション図鑑（セットコンプ報酬） ----
+// 対象アイテムは必ずカタログから導出する。id を直書きすると、新しいスキンを
+// 1つ足した日に「全種コンプ」が静かに嘘になり、しかも誰も気づけない
+// （achievements.js の COLLECTIBLE_MAX が同じ理由で導出になっている）。
+//
+// kind でどこを見るかが決まる:
+//   item  … user.owned      （買った装備。減らない）
+//   boost … user.items[id]>0（消費品。使うと在庫が0になりうる）
+//   badge … user.badges
+//   title … earnedTitles(user)
+
+// 一般プレイヤーが普通に買える装備（管理者専用・ガチャ限定・王座限定を除く）。
+const normalGear = cat => SHOP_ITEMS
+  .filter(i => i.cat === cat && !i.adminOnly && !i.gachaOnly && !i.throneOnly)
+  .map(i => i.id);
+
+const cset = (id, icon, kind, ids, name, nameEn, desc, descEn, coins, gems, title = null) =>
+  ({ id, icon, kind, ids, name, nameEn, desc, descEn, coins, gems, title });
+
+export const COLLECTION_SETS = [
+  cset('set_skin',  '🎨', 'item', normalGear('skin'),
+    'スキン全種', 'Skin Collection', 'ブロックスキンをすべて集める', 'Own every block skin', 6000, 50),
+  cset('set_board', '🖼️', 'item', normalGear('board'),
+    'ボード全種', 'Board Collection', 'ボードテーマをすべて集める', 'Own every board theme', 6000, 50),
+  cset('set_fx',    '✨', 'item', normalGear('fx'),
+    'エフェクト全種', 'Effect Collection', '消去エフェクトをすべて集める', 'Own every clear effect', 5000, 40),
+  cset('set_ult',   '⚡', 'item', normalGear('ult'),
+    '奥義全種', 'Arts Collection', 'アルティメットをすべて集める', 'Own every ultimate skill', 8000, 70, 'ultcollector'),
+  cset('set_boost', '🎒', 'boost', BOOST_ITEMS.filter(i => !i.adminOnly).map(i => i.id),
+    '道具棚コンプ', 'Booster Shelf', 'ブースターを1個以上ずつ持つ', 'Hold at least one of every booster', 1500, 12),
+  cset('set_gacha', '🎰', 'item', SHOP_ITEMS.filter(i => i.gachaOnly).map(i => i.id),
+    'ガチャ限定コンプ', 'Gacha Exclusives', 'ガチャ限定の装備をすべて集める', 'Own all gacha-exclusive gear', 10000, 90, 'rainbowtrio'),
+  cset('set_throne', '👑', 'item', THRONE_ITEMS.map(i => i.id),
+    '王座の宝物庫コンプ', 'The Throne Vault', '👑王座の欠片で交換できる品をすべて集める', 'Own every item from the 👑 vault', 15000, 150, 'thronekeeper'),
+  cset('set_trial', '⚔️', 'badge', ['oni', 'kami', 'souzou'],
+    '三難関の証', 'Marks of the Three Trials', '鬼・神・創造神のバッジを集める', 'Earn the Oni, Kami and Creator God badges', 5000, 40),
+  cset('set_slayer', '🗡️', 'title', ['bosshunt', 'maoslayer', 'rushhero'],
+    '討伐者の称号', 'Slayer Titles', 'ボス討伐の称号をすべて得る', 'Earn every boss-slaying title', 4000, 30),
+  // 図鑑そのもの。管理者専用だけを除いた全装備（ガチャ限定・王座限定も含む）。
+  cset('set_master', '📕', 'item', SHOP_ITEMS.filter(i => !i.adminOnly).map(i => i.id),
+    '図鑑コンプリート', 'Full Catalog', 'カタログの装備をすべて集める', 'Own every item in the catalog', 30000, 300, 'curator'),
+];
+
+// セットのうち、いま所持している id。純粋関数。
+function collectionOwnedIds(user, set) {
+  if (!user) return [];
+  if (set.kind === 'boost') {
+    const stock = user.items || {};
+    return set.ids.filter(id => (Number(stock[id]) || 0) > 0);
+  }
+  if (set.kind === 'badge') {
+    const badges = user.badges || [];
+    return set.ids.filter(id => badges.includes(id));
+  }
+  if (set.kind === 'title') {
+    const earned = earnedTitles(user);
+    return set.ids.filter(id => earned.includes(id));
+  }
+  const owned = user.owned || [];
+  return set.ids.filter(id => owned.includes(id));
+}
+
+function collectionSetDone(user, set) {
+  return set.ids.length > 0 && collectionOwnedIds(user, set).length >= set.ids.length;
+}
+
+// 図鑑の中身。各セットの所持数/総数と、まだ足りない id を返す純粋関数
+// （user は一切書き換えない）。API も画面もここを読めば足りる。
+export function collectionProgress(user) {
+  const claimed = new Set((user && user.collections) || []);
+  return COLLECTION_SETS.map(set => {
+    const ownedIds = collectionOwnedIds(user, set);
+    const title = set.title ? TITLES.find(t => t.id === set.title) : null;
+    return {
+      id: set.id, icon: set.icon, kind: set.kind,
+      name: set.name, nameEn: set.nameEn, desc: set.desc, descEn: set.descEn,
+      ids: set.ids, ownedIds,
+      missing: set.ids.filter(id => !ownedIds.includes(id)),
+      owned: ownedIds.length, total: set.ids.length,
+      done: ownedIds.length >= set.ids.length && set.ids.length > 0,
+      claimed: claimed.has(set.id),
+      coins: set.coins, gems: set.gems,
+      title: set.title, titleName: title ? title.name : null,
+    };
+  });
+}
+
+// 図鑑タブ1画面ぶんのまとめ。GET /api/collection はこれをそのまま返せばよい。
+export function collectionView(user) {
+  const sets = collectionProgress(user);
+  const owned = sets.reduce((n, s) => n + s.owned, 0);
+  const total = sets.reduce((n, s) => n + s.total, 0);
+  return {
+    sets,
+    done: sets.filter(s => s.done).length,
+    claimable: sets.filter(s => s.done && !s.claimed).length,
+    claimed: sets.filter(s => s.claimed).length,
+    total: sets.length,
+    // 収集率（全セットの合計。図鑑の見出しに出す用）
+    owned, slots: total,
+    rate: total ? Math.round((owned / total) * 100) : 0,
+  };
+}
+
+// セットコンプ報酬の受け取り（id が '*' なら受け取れるものを全部）。
+// 報酬額は必ずここで COLLECTION_SETS から計算する ── クライアントの申告は
+// 一切見ない。user.collections が二重受取を止める唯一のフラグ。
+export function claimCollection(user, id) {
+  if (!Array.isArray(user.collections)) user.collections = [];
+  const claimed = new Set(user.collections);
+  const ready = collectionProgress(user)
+    .filter(r => (id === '*' || r.id === id) && r.done && !claimed.has(r.id));
+  if (!ready.length) {
+    return { error: id === '*' ? '受け取れるセットがありません' : 'まだコンプしていないか、受け取り済みです' };
+  }
+  let coins = 0, gems = 0;
+  const titles = [];
+  for (const r of ready) {
+    user.collections.push(r.id);
+    coins += r.coins;
+    gems += r.gems;
+    if (r.title) titles.push(r.title);
+  }
+  user.coins = (user.coins || 0) + coins;
+  user.gems = (user.gems || 0) + gems;
+  return { coins, gems, titles, ids: ready.map(r => r.id) };
+}
 
 export function earnedTitles(user) {
   const s = user.stats;
@@ -250,6 +389,20 @@ export function earnedTitles(user) {
   if ((s.gachaPulls || 0) >= 100) out.push('gachaprince');
   if ((s.chatMessages || 0) >= 300) out.push('lobbyface');
   if ((s.ghostBest || 0) >= 15000) out.push('ghostmaster');
+  // 全消し「昇華」の通算回数。統計は減らないので、一度取れば剥がれない。
+  if ((s.perfectClears || 0) >= 50) out.push('voidseeker');
+  // 📕 図鑑のセットコンプ称号。所持装備は減らないのでコンプ自体が剥がれることは
+  // ないが、受け取り済み（user.collections）も無条件に認める ── 消費できる
+  // ブースターを含むセットに将来称号を付けても、在庫を使い切った瞬間に
+  // 獲得済みの称号が未獲得へ戻る（そして 403 で二度と装備できなくなる）
+  // 事故が起きないように。streak5 で実際に踏んだのと同じ穴。
+  // kind:'title' のセットはここから外す。判定に earnedTitles を使うので、
+  // 称号報酬を付けると自分自身を呼び戻して無限再帰になる。
+  const claimedSets = new Set(user.collections || []);
+  for (const set of COLLECTION_SETS) {
+    if (!set.title || set.kind === 'title') continue;
+    if (claimedSets.has(set.id) || collectionSetDone(user, set)) out.push(set.title);
+  }
   return out;
 }
 

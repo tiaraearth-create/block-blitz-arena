@@ -170,6 +170,13 @@ export const ACHIEVEMENTS = [
   // ---- 👻 隠しモードのティーザー（実績欄そのものがヒントになる） ----
   a('ach_ghost1',   '👻', 'explore', 1,     666,  6,  'ソレは存在する',   'It Exists',       '「幽霊屋敷」を見つけて1回遊ぶ', 'Find and play the "Haunted House"', u => S(u).ghostPlays || 0),
   a('ach_ghost15k', '🕯️', 'explore', 15000, 3000, 25, '見えないものが見える', 'Sixth Sense', '幽霊屋敷で15,000点',          'Score 15,000 in the Haunted House', u => S(u).ghostBest || 0),
+
+  // ---- ✨ 全消し「昇華」 ----
+  // 盤面を空にした通算回数（stats.perfectClears）。ほかの実績と同じく
+  // 保存済み統計から毎回計算されるので、過去に空にした分もさかのぼって解除される。
+  a('ach_pclear1',  '✨', 'legend', 1,  600,  5,  '昇華のはじまり', 'First Sublimation', '盤面を初めて空にする',  'Empty the board for the first time', u => S(u).perfectClears || 0),
+  a('ach_pclear10', '✨', 'legend', 10, 2800, 22, '無へ還す者',     'Into the Void',     '盤面を10回空にする',    'Empty the board 10 times',           u => S(u).perfectClears || 0),
+  a('ach_pclear50', '🕳️', 'legend', 50, 9000, 80, '無の求道者',     'Voidseeker',        '盤面を50回空にする',    'Empty the board 50 times',           u => S(u).perfectClears || 0),
 ];
 
 export function achievementsView(user) {

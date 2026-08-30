@@ -14,6 +14,87 @@ import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
 import { openFriends } from './friends.js';
 import { initParty } from './party.js';
 
+// ---------------------------------------------------------------------------
+// 🧯 クライアントJSエラーの自動報告（POST /api/clienterror）
+//
+// index.html には CSP（script-src 'self'）が効いているのでインライン script は
+// 置けない。ES Modules は import が先に評価される仕様上、main.js の本体で
+// これより早くは走れない ── ここが「このファイルで可能なかぎり最速」の位置。
+// import 中に落ちた分だけは拾えないが、それ以降の実行時エラーは全部ここに来る。
+//
+// 大原則: 報告が新しいエラーを生んではいけない。すべて try/catch で握りつぶす。
+// ---------------------------------------------------------------------------
+{
+  const seen = new Set();          // 同じエラーはセッション中1回だけ
+  const MAX_REPORTS = 20;          // 別種のエラーでも送り過ぎない上限
+  let sentCount = 0;
+
+  const post = (payload) => {
+    try {
+      const json = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        // Blob で type を付けないと text/plain になり、express.json() が読めない。
+        const blob = new Blob([json], { type: 'application/json' });
+        if (navigator.sendBeacon('/api/clienterror', blob)) return;
+      }
+      fetch('/api/clienterror', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: json,
+        keepalive: true,
+      }).catch(() => { /* 報告が届かなくても遊びは続く */ });
+    } catch { /* sendBeacon も fetch も無い環境。何もしない */ }
+  };
+
+  const report = (kind, message, stack, where) => {
+    try {
+      const msg = String(message == null ? '' : message).slice(0, 400);
+      if (!msg) return;
+      const key = `${kind}|${msg}|${where || ''}`;
+      if (seen.has(key)) return;
+      if (sentCount >= MAX_REPORTS) return;
+      seen.add(key);
+      sentCount++;
+      post({
+        kind,                                     // 'error' | 'unhandledrejection'
+        message: msg,
+        // スタックは先頭数行だけ（全部送ると1件が数KBになる）
+        stack: String(stack == null ? '' : stack).split('\n').slice(0, 5).join('\n').slice(0, 1200),
+        where: String(where == null ? '' : where).slice(0, 300),   // file:line:col
+        url: String(location.pathname + location.search).slice(0, 300),
+        ua: String(navigator.userAgent || '').slice(0, 300),
+        lang: String(navigator.language || ''),
+        screen: `${window.innerWidth}x${window.innerHeight}@${window.devicePixelRatio || 1}`,
+        at: Date.now(),
+      });
+    } catch { /* 絶対に投げ返さない */ }
+  };
+
+  window.addEventListener('error', (e) => {
+    try {
+      if (!e) return;
+      const err = e.error;
+      // <img>/<script> の読み込み失敗も同じ 'error' で上がってくるが、
+      // message も error も無い。JSエラーではないので送らない。
+      const message = e.message || (err && err.message);
+      if (!message) return;
+      const where = e.filename ? `${e.filename}:${e.lineno || 0}:${e.colno || 0}` : '';
+      report('error', message, err && err.stack, where);
+    } catch { /* ignore */ }
+  });
+
+  window.addEventListener('unhandledrejection', (e) => {
+    try {
+      if (!e) return;
+      const r = e.reason;
+      const message = (r && r.message) ? r.message : (typeof r === 'string' ? r : (() => {
+        try { return JSON.stringify(r); } catch { return String(r); }
+      })());
+      report('unhandledrejection', message, r && r.stack, '');
+    } catch { /* ignore */ }
+  });
+}
+
 applyStaticI18n();
 
 // Admins have every unlockable open from the start.
@@ -401,6 +482,9 @@ function dismissSplash(e) {
 
 // live online counter + limited-time event on the menu
 window.__bbaEvent = null;
+// 次の自動開催イベント（/api/status の nextEvent）。旧サーバー・自動開催OFFでは
+// このキー自体が来ないので、null のまま＝予告バナーは一切出ない。
+window.__bbaNextEvent = null;
 
 function fmtRemain(ms) {
   const s = Math.max(0, Math.ceil(ms / 1000));
@@ -432,6 +516,59 @@ function updateEventBanner() {
     btn.classList.toggle('hidden', !staffExtras());
     btn.classList.toggle('staff-only', true);
   }
+  updateNextEventBanner();
+}
+
+// ---- 📣 「明日は◯◯開催！」予告バナー ----
+//
+// 開催中バナー(#eventBanner)のすぐ下に、同じ .event-banner の見た目で並べる。
+// index.html は担当外なので器はここで作る ── 出すものが無い間は作りもしない
+// （nextEvent を返さないサーバーでは DOM が1つも増えない）。
+function nextEventBannerEl(create) {
+  let el = document.getElementById('nextEventBanner');
+  if (el || !create) return el;
+  const host = $('#eventBanner');
+  if (!host || !host.parentNode) return null;
+  el = document.createElement('div');
+  el.id = 'nextEventBanner';
+  el.className = 'event-banner';
+  // 開催中バナーより一段控えめに（予告が本番より目立たないように）
+  el.style.cssText = 'margin-top:6px;opacity:.82;font-weight:700';
+  host.insertAdjacentElement('afterend', el);
+  return el;
+}
+
+// 「今日 / 明日 / N日後」— 時計ではなくカレンダー上の日付で数える。
+function whenWord(startsAt) {
+  const now = new Date();
+  const then = new Date(startsAt);
+  const d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const d1 = new Date(then.getFullYear(), then.getMonth(), then.getDate()).getTime();
+  const days = Math.round((d1 - d0) / 86400000);
+  if (days <= 0) return t('今日', 'today');
+  if (days === 1) return t('明日', 'tomorrow');
+  return t(`${days}日後`, `in ${days} days`);
+}
+
+function updateNextEventBanner() {
+  const ne = window.__bbaNextEvent;
+  const startsAt = ne ? Number(ne.startsAt || ne.startAt) : 0;
+  const live = window.__bbaEvent && window.__bbaEvent.endsAt > Date.now();
+  // 開催中は予告を出さない。まだ予告が無い／もう始まっている場合も同じ。
+  if (live || !ne || !startsAt || !isFinite(startsAt) || startsAt <= Date.now()) {
+    const cur = nextEventBannerEl(false);
+    if (cur) cur.classList.add('hidden');
+    return;
+  }
+  const el = nextEventBannerEl(true);
+  if (!el) return;
+  const icon = ne.icon || '📣';
+  const name = t(ne.name || 'お楽しみイベント', ne.nameEn || ne.name || 'a special event');
+  const clock = new Date(startsAt).toLocaleTimeString(t('ja-JP', 'en-US'), { hour: '2-digit', minute: '2-digit' });
+  const remain = fmtRemain(startsAt - Date.now());
+  el.textContent = t(`${icon} ${whenWord(startsAt)}は「${name}」開催！ ${clock}スタート（あと${remain}）`,
+    `${icon} "${name}" starts ${whenWord(startsAt)} at ${clock}! (in ${remain})`);
+  el.classList.remove('hidden');
 }
 
 async function pollStatus() {
@@ -445,6 +582,8 @@ async function pollStatus() {
     $('#onlineBadge').classList.remove('hidden');
     setMood(data.mood);
     window.__bbaEvent = data.event || null;
+    // nextEvent を返さないサーバー（自動開催OFF・旧版）では undefined → null。
+    window.__bbaNextEvent = data.nextEvent || null;
     updateEventBanner();
     setAdminEvent(data.adminEvent || null);
     const prevPoll = window.__bbaPoll && window.__bbaPoll.id;
@@ -603,7 +742,24 @@ function showDungeonSelect(realmId = 'tower') {
 $('#btnDungeon').onclick = () => { audio.click(); showDungeonSelect(); };
 
 // ---- survival ----
-$('#btnSurvival').onclick = () => { audio.click(); startSurvival(); };
+$('#btnSurvival').onclick = () => {
+  audio.click();
+  const best = Math.max(Number(localStorage.getItem('bba_survival_wave') || 0),
+    session.user ? (session.user.stats.survivalWave || 0) : 0);
+  const m = showModal(`
+    <h2>💀 ${t('サバイバル', 'Survival')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('<b>ウェーブごとにお邪魔ブロックが降ってくる</b>耐久モード。最初は15秒おき、ウェーブが進むほど<b>間隔はどんどん短く</b>（最短5秒）、降ってくる量も増えていく。<br><small>置ける場所が無くなったら終了 — ラインを消して盤面を空け、1ウェーブでも深く生き延びろ！</small>',
+          '<b>Garbage blocks rain down wave after wave</b> — an endurance run. It starts every 15s, but <b>the interval keeps shrinking</b> (down to 5s) and each wave dumps more.<br><small>It ends the moment nothing fits — keep clearing lines to make room and survive one more wave!</small>')}
+    </p>
+    ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`最高ウェーブ W${fmt(best)}`, `Best wave W${fmt(best)}`)}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="svCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-oni" id="svStart">💀 ${t('生き延びる', 'Survive')}</button>
+    </div>`);
+  m.querySelector('#svCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#svStart').onclick = () => { audio.click(); closeModal(); startSurvival(); };
+};
 
 // ---- meltdown (炉心スコアアタック) ----
 $('#btnMeltdown').onclick = () => {
