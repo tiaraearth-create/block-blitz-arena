@@ -183,7 +183,12 @@ _resetForTest();
   const uniq = new Set(texts).size;
   // The gg pool has ~9 ja lines — full rotation + stylize variation should
   // land well past half distinct even when answers outnumber the pool.
-  check(`reply variety: 20×"gg" → ${texts.length} answers mostly distinct`, texts.length >= 10 && uniq >= Math.min(texts.length * 0.55, 14), `unique=${uniq}/${texts.length}`);
+  // しきい値が 0.55（25件なら14件必要）だと、返答が乱数で選ばれるぶん
+  // ちょうど13件になる回が現実に出て、CIがランダムに赤くなる（実測で発生）。
+  // ここで守りたいのは「同じ返事ばかりを返す」退行の検出であって、
+  // 分布の細かい上振れ下振れではないので、境界から離す。
+  // 例: 25件中5件しかない、のような本物の退行はこの緩さでも確実に落ちる。
+  check(`reply variety: 20×"gg" → ${texts.length} answers mostly distinct`, texts.length >= 10 && uniq >= Math.min(texts.length * 0.45, 11), `unique=${uniq}/${texts.length}`);
 }
 
 // リアクションの繰り返し: greet を大量に浴びても文面が回る。

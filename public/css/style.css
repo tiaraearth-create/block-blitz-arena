@@ -181,6 +181,23 @@ body {
   background: linear-gradient(135deg, #4f8cff, #2f5fd0);
   box-shadow: 0 5px 0 #1f3f8f; color: #fff;
 }
+
+/* 🎬 録画中の帯。モーダルにすると盤面（＝録りたいもの）が隠れるので、
+   画面の下にだけ出す。iPhone のホームバーを避けて safe-area を足す。 */
+#clipBar {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  z-index: 60; display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; border-radius: 999px;
+  background: rgba(18, 22, 36, 0.92); border: 1px solid #3a4568;
+}
+#clipBar #clipLeft {
+  color: #ff6b6b; font-weight: 700; font-size: 13px;
+  font-variant-numeric: tabular-nums; letter-spacing: 0.5px;
+  animation: clipPulse 1.4s ease-in-out infinite;
+}
+@keyframes clipPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { #clipBar #clipLeft { animation: none; } }
 .btn:disabled { opacity: 0.45; pointer-events: none; }
 /* 小さいボタンも指で押す（実測32px）。<button> は中身を縦中央に置くので、
    min-height を足すだけで見た目の重心は変わらない。 */

@@ -266,6 +266,12 @@ const shareModeName = id => {
   const p = SHARE_MODE_NAME[id];
   return p ? t(p[0], p[1]) : t('プレイ', 'a run');
 };
+// クリップの焼き込みでも同じ名前を使う（表が2つに割れると必ず片方が古くなる）。
+// 見出しに出すので、未知のモードは「プレイ」より無難な「ゲーム」に寄せる。
+export function modeDisplayName(id) {
+  const p = SHARE_MODE_NAME[id];
+  return p ? t(p[0], p[1]) : t('ゲーム', 'Gameplay');
+}
 
 // シェアに使う「いまの成績」。currentMode から読むので引数が要らない。
 function shareSnapshot() {

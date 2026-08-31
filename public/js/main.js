@@ -4,6 +4,7 @@ import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, sta
 import { audio } from './audio.js';
 import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
+import { initClipHud } from './clipexport.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openInventory, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
@@ -394,6 +395,8 @@ window.addEventListener('keydown', e => {
   auto.oncontextmenu = e => { e.preventDefault(); showAutopilotPanel(); };
 }
 $('#btnAdminCmd').onclick = () => showAdminPalette();
+// 🎬 プレイクリップ。録れない端末ではボタンごと隠れる（clipexport 側で判定）。
+initClipHud();
 startGodLoop();
 
 // ---------------------------------------------------------------------------

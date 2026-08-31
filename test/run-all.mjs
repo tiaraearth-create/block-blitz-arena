@@ -62,6 +62,7 @@ const TESTS = [
   'persist-registry.test.mjs',
   'api-contract.test.mjs',
   'ytexport.test.mjs',
+  'clip.test.mjs',
   'resultclamp.test.mjs',
   'zero.test.mjs',
   'zero-session.test.mjs',
