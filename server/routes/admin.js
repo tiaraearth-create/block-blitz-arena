@@ -1051,6 +1051,21 @@ const CROWD_PRESETS = {
   // 表示人数だけが落ちて「表示12人／住人13人オンライン」という
   // ありえない並びになる。住人が最少になる範囲でいちばん高い倍率を選ぶ。
   debug:    { scale: 0.2, chatPace: 8,    toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+
+  // --- 拡張した範囲を使うプリセット（v2.29 追加） -----------------------------
+  // 人口倍率は 0.1〜500、チャット頻度は 0.1〜16 まで刻めるようになったので、
+  // これまで「最大」と「最小」で頭打ちだった両端に段を足す。
+
+  // 🫧 いるのは分かるが誰も喋らない。深夜の作業通話のような距離感。
+  ghosttown: { scale: 0.1,  chatPace: 0.1,  toggles: { ...DEFAULT_TOGGLES, dialogues: false, greetings: false }, quiet: null },
+  // 🐣 開店直後。人はまばらだが、来た人には必ず挨拶が飛ぶ。
+  cozy:      { scale: 0.75, chatPace: 1.5,  toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  // 🏙️ 平日夕方の駅前。人は多いが1人あたりは静か。
+  rushhour:  { scale: 20,   chatPace: 0.75, toggles: { ...DEFAULT_TOGGLES, dialogues: false }, quiet: null },
+  // 🎊 全部を最大に振り切る。動作確認と「見せる」用。
+  carnival:  { scale: 120,  chatPace: 12,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  // 💥 上限の上限。負荷の当たりを見るための極端値（常用しないこと）。
+  overload:  { scale: 500,  chatPace: 16,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
 };
 
 function crowdStatus() {

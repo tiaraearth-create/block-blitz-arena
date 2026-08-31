@@ -2652,6 +2652,7 @@ export async function openAdmin() {
       ${statCard(perfRssText(stats), 'メモリ(RSS)')}
       ${statCard(stats.persistError ? '⚠️' : null, `保存エラー: ${String(stats.persistError || '').slice(0, 60)}`, 'border-color:var(--red)')}
       ${statCard(stats.clientErrors && stats.clientErrors.open != null ? fmt(stats.clientErrors.open) : null, 'クライアントエラー(未解決)')}`;
+    renderLivePlayers(stats.livePlayers || []);
     $('#btnMaintenance').textContent = stats.maintenance ? '✅ メンテ解除' : '🛠 メンテナンス開始';
     renderAdminUsers(usersData.users);
   } catch (err) {
@@ -2759,6 +2760,48 @@ async function countWorkshopStagesBy(uid) {
     const r = await api('/api/admin/workshop/stages');
     return (r.stages || []).filter(s => s && s.by === uid).length;
   } catch { return null; }
+}
+
+// 👥 いま本当につないでいる人の一覧。
+//
+// 管理画面の「実オンライン」は数字だけで、誰が遊んでいるのかは分からなかった。
+// 表示人数には住人（にぎわい）が混ざるので、実態を知るにはこれを見る。
+// 1人が対戦画面に入ると2本つなぐので、サーバー側で人単位にまとめてある。
+function renderLivePlayers(list) {
+  const el = $('#adminLive');
+  if (!el) return;
+  if (!list.length) {
+    el.innerHTML = `<p class="live-head">👥 実プレイヤー <b>0</b></p>
+      <p class="muted" style="font-size:12px">いま本当につないでいる人はいません（表示人数の中身は住人です）</p>`;
+    return;
+  }
+  const WHERE = {
+    playing: ['⚔️', '対戦中'],
+    queue: ['⏳', 'マッチング待ち'],
+    menu: ['🏠', 'メニュー'],
+  };
+  const rows = list.map(p => {
+    const [icon, label] = WHERE[p.where] || WHERE.menu;
+    const badge = p.admin ? '<span class="live-tag admin">運営</span>'
+      : p.guest ? '<span class="live-tag guest">ゲスト</span>'
+      : '<span class="live-tag user">登録</span>';
+    const sub = [
+      p.level != null ? `Lv.${p.level}` : null,
+      p.rating != null ? `R${fmt(p.rating)}` : null,
+      p.games != null ? `${fmt(p.games)}戦` : null,
+      `${p.minutes}分`,
+      p.conns > 1 ? `${p.conns}接続` : null,
+    ].filter(Boolean).join(' ・ ');
+    return `<div class="live-row">
+      <span class="live-where" title="${label}">${icon}</span>
+      <span class="live-name">${escapeHtml(p.name)}${badge}</span>
+      <span class="live-sub">${escapeHtml(sub)}</span>
+    </div>`;
+  }).join('');
+  const real = list.filter(p => !p.guest).length;
+  el.innerHTML = `<p class="live-head">👥 実プレイヤー <b>${list.length}</b>
+    <span class="muted" style="font-weight:400;font-size:11px">（登録 ${real} ・ ゲスト ${list.length - real}）</span></p>
+    <div class="live-list">${rows}</div>`;
 }
 
 function renderAdminUsers(users) {
@@ -4313,6 +4356,11 @@ const PRESET_GROUPS = [
     ['ultra', '🌠 祭りの極み', '人口×500・表示30万人'],
     ['quiet', '🤫 しずか', '人口×0.5・会話と挨拶なし'], ['night', '🌙 深夜の秘密基地', '人口×0.7・ゆったり'],
     ['silent', '🔇 人口だけ', '人数は出るが誰も喋らない'], ['off', '⚫ 完全オフ', 'AIプレイヤーを全停止'],
+    ['ghosttown', '🫧 ゴーストタウン', '人口×0.1・ほぼ無言'],
+    ['cozy', '🐣 開店直後', '人口×0.75・挨拶は多め'],
+    ['rushhour', '🏙️ 夕方の駅前', '人口×20・1人あたりは静か'],
+    ['carnival', '🎊 カーニバル', '人口×120・会話×12'],
+    ['overload', '💥 限界試験', '人口×500・会話×16（常用しない）'],
   ]],
   ['時間帯と空気', [
     ['commute', '🌅 朝の通勤帯', '人口×1.5・会話×0.5・挨拶多め'],
@@ -4383,10 +4431,10 @@ async function showCrowdModal(tab = 'basic') {
       <div class="settings-row" style="margin-top:12px"><label>👥 人口倍率 <b>×${st.scale}</b></label></div>
       <p class="muted" style="font-size:11px;margin:-4px 0 6px">住人の実数は ×88 で上限（600人）。それより上は表示人数だけが増えます</p>
       <div class="seg seg-wrap" id="popSeg" style="justify-content:center">
-        ${[0, 0.5, 1, 1.5, 2, 3, 5, 10, 25, 50, 88, 150, 300, 500].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
+        ${[0, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7, 10, 15, 20, 25, 35, 50, 65, 88, 120, 150, 200, 300, 400, 500].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
       </div>
       <div class="settings-row" style="margin-top:10px"><label>💬 チャット頻度<br><span class="muted" style="font-size:10px">住人の発言とライブフィードの速さ</span></label><div class="seg" id="paceSeg">
-        ${[[0.25, 'しずか'], [0.5, 'ひかえめ'], [1, '標準'], [2, 'おしゃべり'], [4, '大騒ぎ'], [6, '爆速'], [8, '限界']].map(([v, l]) =>
+        ${[[0.1, 'ほぼ無言'], [0.25, 'しずか'], [0.5, 'ひかえめ'], [0.75, 'ゆるめ'], [1, '標準'], [1.5, '活発'], [2, 'おしゃべり'], [3, '賑やか'], [4, '大騒ぎ'], [6, '爆速'], [8, '限界'], [12, '祭り'], [16, '過密']].map(([v, l]) =>
           `<button data-v="${v}" ${Number(amb.chatPace) === v ? 'class="active"' : ''}>${l}</button>`).join('')}
       </div></div>
       <p class="muted" style="font-size:12px;margin:12px 0 6px">機能のON/OFF</p>

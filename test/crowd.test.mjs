@@ -2,10 +2,10 @@
 // Fuzz the crowd content tables (lines / dialogues / feed / replies /
 // reactions) across every archetype, period and world state — catches broken
 // slots, bad archetype filters and crashes from newly added content.
-import { buildRoster, ARCHETYPES } from '../server/residents.js';
+import { buildRoster, ARCHETYPES, CHAMPION, residentRating } from '../server/residents.js';
 import { composeLine, composeDialogue, composeFeed, composeReaction, chooseReplies, buildCtx, fill } from '../server/crowd.js';
 import { _resetForTest } from '../server/chatgen.js';
-import { setWorldProvider, activeResidents, setCustom, chatPaceFactor, chatFloorMs, residentByName, clashingResidentIds, getCustom } from '../server/ambient.js';
+import { setWorldProvider, activeResidents, setCustom, chatPaceFactor, chatFloorMs, residentByName, clashingResidentIds, getCustom, MAX_CHAT_PACE } from '../server/ambient.js';
 
 const results = [];
 const check = (name, ok, detail = '') => { results.push([ok ? '✅' : '❌', name, detail]); if (!ok) process.exitCode = 1; };
@@ -275,9 +275,12 @@ _resetForTest();
   check('速い側では下限も下がる', (setCustom({ chatPace: 8 }), chatFloorMs(2500)) === 1000, '');
   check('下限は1000ms未満にならない（安全弁）', (setCustom({ chatPace: 999 }), chatFloorMs(2500)) >= 1000, '');
   setCustom({ chatPace: 999 });
-  check('チャット頻度は上限8でクランプされる', chatPaceFactor() === 8, `pace=${chatPaceFactor()}`);
+  // 数字を直書きすると、範囲を広げるたびにここだけ古くなる（実際そうなった）。
+  // 定数から読んで「クランプが効いていること」だけを見る。
+  check('チャット頻度は上限でクランプされる', chatPaceFactor() === MAX_CHAT_PACE, `pace=${chatPaceFactor()} / 上限 ${MAX_CHAT_PACE}`);
   setCustom({ chatPace: 0 });
-  check('チャット頻度は下限0.25でクランプされる', chatPaceFactor() === 0.25, `pace=${chatPaceFactor()}`);
+  check('チャット頻度は下限でクランプされる（0にはならない）',
+    chatPaceFactor() > 0 && chatPaceFactor() < 1, `pace=${chatPaceFactor()}`);
   setCustom({ chatPace: 1 });
 }
 
@@ -322,6 +325,30 @@ _resetForTest();
   check('実プレイヤーと同名の住人を id で拾える', ids.includes(late.id), JSON.stringify(ids));
   check('ぶつからない名前は拾わない', ids.length === 1, `${ids.length}件`);
   check('誰とも衝突しなければ空', clashingResidentIds('v1', []).length === 0);
+}
+
+
+// ---- 👑 住人の頂点は「ちゃちゃまる」で固定（運営の指名） --------------------
+// 強さは skill から一本道で導かれるので、ここが最上位でありさえすれば
+// レート・勝率・適性のすべてで頂点になる。引きに左右されると「今日はいるが
+// 明日はいない」「2位に落ちている」が起きるので、機械で固定する。
+{
+  for (const size of [64, 240, 600]) {
+    const rs = buildRoster('v1', size);
+    const champ = rs.find(r => r.name === CHAMPION.name);
+    check(`ロースター${size}人に${CHAMPION.name}がいる`, !!champ, champ ? `skill=${champ.skill}` : '見つからない');
+    if (!champ) continue;
+    const stronger = rs.filter(r => r.skill > champ.skill);
+    check(`${size}人中で${CHAMPION.name}より強い住人がいない`, stronger.length === 0,
+      stronger.map(r => `${r.name}(${r.skill})`).join(', '));
+    const top = rs.map(r => ({ n: r.name, rt: residentRating(r) })).sort((a, b) => b.rt - a.rt)[0];
+    check(`${size}人のレート1位が${CHAMPION.name}`, top.n === CHAMPION.name, `${top.n} R${top.rt}`);
+    check(`${CHAMPION.name}は1人だけ`, rs.filter(r => r.name === CHAMPION.name).length === 1, '');
+  }
+  // 名前が名簿から消えても保険（差し替え経路）が働くこと。
+  const rs = buildRoster('champ-test-seed', 64);
+  check('別のシードでも頂点は動かない',
+    rs.filter(r => r.skill > CHAMPION.skill).length === 0 && rs.some(r => r.name === CHAMPION.name), '');
 }
 
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

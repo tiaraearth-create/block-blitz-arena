@@ -2436,6 +2436,24 @@ const SEED_NEWS = [
       '[🎲 A rule of the day] The rules change daily — 🧱 Giant Day (only big pieces), 🐜 Tiny Day, 🔥 Combo Day (double combo bonuses), 🌈 Rainbow Day (3 rerolls), 🧊 Rubble Day (the board starts littered), 💰 Golden Day (double coins on clear). The modifier is the same worldwide: everyone shares today\'s fate.\n' +
       '[🔥 Streaks pay up to 3×] Reach the day\'s <b>target score</b> and the day counts as CLEARED. The target shifts with the rule of the day (lower on Tiny Day, higher on Combo Day) — it is always shown before you start. Clear day after day and the reward multiplies (up to 3×). Clear 7 days in a row for the new 📅 Daily Devotee badge + 300💎! Miss a single day and the streak resets — make today\'s attempt count.\n' +
       '[🏆 A leaderboard that lives for one day] The ranking screen gains a 📅 Daily board, wiped clean at midnight JST. Who takes today\'s summit?' },
+  // 📌 アップデートのたびに、ここへ1件足すこと（運営の決めごと）。
+  //
+  // 遊んでいる人から見ると、更新は「知らないうちに何かが変わった」でしかない。
+  // 何が増えたのかをゲーム内で伝えないと、せっかく作った機能が気づかれずに
+  // 終わる。書き方は3つだけ守る:
+  //   ・バージョン番号ではなく「何ができるようになったか」を主語にする
+  //   ・内部の事情（リファクタ・テスト・監査）は書かない ── 直したことは
+  //     「〜が直りました」だけでよく、原因の説明は要らない
+  //   ・日本語と英語の両方を書く（bodyEn を空にすると英語圏には無言の更新になる）
+  { id: 'seed-v228', pinned: true,
+    title: '🎬 プレイ動画の書き出し＆スコアのシェアができるようになりました',
+    titleEn: '🎬 Record your clips and share your score',
+    body: '【🎬 プレイ動画をその場で書き出せます】ゲーム中のHUDに <b>🎬</b> ボタンが増えました。押すと30秒、長押しで15秒／30秒／60秒を選んでプレイ映像を録画できます。書き出されるのは<b>そのままSNSに上げられる縦型の動画</b>で、スコア・モード名・あなたの名前が焼き込まれます。全消しの瞬間や、詰みかけからの逆転をぜひ残してみてください。\n' +
+      '【📣 結果画面からスコアをシェア】ゲームが終わったあとの画面に「📣 スコアをシェアする」が出ます。スコアカードの画像が自動で作られるので、そのまま友達に見せられます。<b>アカウントが無くても使えます</b>。\n' +
+      '【✨ そのほか】新しく参加した方が入りづらくなっていた不具合を直しました。ほかにも、全体チャットがまれに止まる問題や、イベントの進行がおかしくなる問題など、いくつかの不具合を修正しています。',
+    bodyEn: '[🎬 Export your gameplay as a video] A new <b>🎬</b> button appears in the in-game HUD. Tap it for a 30-second clip, or long-press to choose 15 / 30 / 60 seconds. What you get is a <b>vertical video ready to post</b>, with your score, the mode and your name burned in. Perfect for that all-clear moment or a last-second comeback.\n' +
+      '[📣 Share your score from the results screen] After a run you will see "📣 Share your score". A score card image is generated for you, ready to send to friends. <b>You do not need an account.</b>\n' +
+      '[✨ Also in this update] Fixed an issue that could stop new players from connecting. Also fixed a rare problem where global chat could go silent, an event progression bug, and several smaller issues.' },
 ];
 
 // ニュース本文の改訂番号。SEED_NEWS の文面を書き直したら1つ増やすと、
@@ -2444,7 +2462,7 @@ const SEED_NEWS = [
 // これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
 // 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
 // v2.11.1 の本文を差し替えるのに必要になった。
-const NEWS_BODY_REV = 8;   // v2.15: 英語面だけの改訂が公開されていなかったので出し直し
+const NEWS_BODY_REV = 9;   // v2.28: プレイ動画とシェアのお知らせを追加
 
 // id で引いたユーザー。`__proto__` や `constructor` を渡されると
 // Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
@@ -3654,6 +3672,9 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     // 🔌 接続上限と、そこで断った回数。rejectedPerIp が増えているのに人数が
     // 少ないときは、IPの見え方（前段プロキシ・trust proxy 設定）を疑うこと。
     conn: battle.connStats ? battle.connStats() : null,
+    // 👥 いま本当につないでいる人の一覧（住人・ボットを除いた実クライアント）。
+    // displayOnline は住人を足した表示用の数なので、実態はこちらを見る。
+    livePlayers: battle.livePlayers ? battle.livePlayers() : [],
     popScale: getLiveScale(),
     ambient: getCustom(),
     crowd: {

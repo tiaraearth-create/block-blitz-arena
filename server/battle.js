@@ -2630,6 +2630,7 @@ export function initBattle(server, deps) {
     ws.on('error', err => console.error('[ws] socket error:', err && err.code ? err.code : '', err && err.message));
     const ip = ipOf(req);
     ws._ip = ip;
+    ws._since = Date.now();   // 管理画面の「実プレイヤー一覧」で滞在時間を出す
     if (clients.size >= MAX_SOCKETS) {
       noteReject('max');
       try { send(ws, { type: 'error', error: '接続数が上限に達しています。しばらくしてからお試しください' }); ws.close(); } catch { /* ignore */ }
@@ -3432,6 +3433,57 @@ export function initBattle(server, deps) {
     endAllForShutdown,
     queueSize: queueSizeAll,   // all seven queues — duel+team alone under-reported
     displayOnline, displayMatches,
+    // 👥 いま本当につないでいる人。
+    //
+    // 「オンライン人数」は住人（にぎわい）を足した表示用の数なので、実際に誰が
+    // 遊んでいるのかは今までどこからも見えなかった。ここは**実クライアントだけ**を
+    // 返す（isBot と、名乗っていない接続は除く）。
+    //
+    // 1人が対戦画面に入るとチャット用と対戦用で2本つなぐので、素直に socket を
+    // 並べると同じ人が2行出る。人単位にまとめ、本数は conns として持たせる。
+    // IPは出さない（運営に必要なのは「誰が」であって「どこから」ではない。
+    // 必要になったら別途 addr を足す判断をすること）。
+    livePlayers: () => {
+      const byKey = new Map();
+      for (const c of clients) {
+        if (c.isBot) continue;
+        const name = sockName(c);
+        if (!name) continue;                      // まだ名乗っていない接続
+        const key = c.user ? 'u:' + c.user.id : 'g:' + name;
+        const cur = byKey.get(key);
+        const since = c._since || Date.now();
+        if (cur) {
+          cur.conns++;
+          if (since < cur.since) cur.since = since;
+          if (!cur.playing) cur.playing = !!(c.matchId || c.royaleId || c.zeroId || c.tourneyId || c.roomCode);
+          continue;
+        }
+        byKey.set(key, {
+          name,
+          userId: c.user ? c.user.id : null,
+          guest: !c.user,
+          conns: 1,
+          since,
+          playing: !!(c.matchId || c.royaleId || c.zeroId || c.tourneyId || c.roomCode),
+          queueing: [...Object.values(queues)].some(q => q.some(e => e.ws === c)),
+        });
+      }
+      const now = Date.now();
+      return [...byKey.values()]
+        .map(p => {
+          const u = p.userId ? db.users[p.userId] : null;
+          return {
+            ...p,
+            minutes: Math.max(0, Math.round((now - p.since) / 60000)),
+            level: u ? levelOf(u).level : null,
+            rating: u && u.stats ? (u.stats.rating || null) : null,
+            games: u && u.stats ? (u.stats.gamesPlayed || 0) : null,
+            admin: !!(u && u.role === 'admin'),
+            where: p.playing ? 'playing' : (p.queueing ? 'queue' : 'menu'),
+          };
+        })
+        .sort((a, b) => a.since - b.since);
+    },
     // 🔌 接続の上限まわり。断った回数が増え始めたら、上限そのものを見直す合図。
     connStats: () => ({
       max: MAX_SOCKETS, perIp: MAX_SOCKETS_PER_IP, perUser: MAX_SOCKETS_PER_USER,

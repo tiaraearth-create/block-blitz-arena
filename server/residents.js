@@ -131,6 +131,23 @@ export function archetype(id) {
 // ---------------------------------------------------------------------------
 
 export const ROSTER_SIZE = 64;
+
+// 👑 アリーナの頂点。運営が名指しで決めた「住人の中でいちばん強い人」。
+//
+// 住人の強さは makeResident の skill（0〜1）で決まり、レートも勝率も適性も
+// すべてそこから導かれる。だから最強を作るには skill を最上位に固定すればよく、
+// レート式（ratingFor）や勝率式に例外を足す必要はない ── 式を触ると
+// 「住人の変装レートとランキング表示がズレる」というこのコードベースが最も
+// 嫌う穴を開けることになる。
+//
+// 名前は JA_NAMES にも入っているので、ロースターの引きによっては普通の住人
+// としても選ばれうる。makeResident 側でこの名前を見たら必ず王者の値に
+// 差し替えるので、どちらの経路でも「ちゃちゃまるは最強」が保たれる。
+export const CHAMPION = {
+  name: 'ちゃちゃまる',
+  arch: 'tryhard',      // ガチ勢（PvP・大会・タイムアタックに出る）
+  skill: 0.995,         // どのアーキタイプの上限(0.98)よりも高い＝常に最上位
+};
 // Day index (JST) of the arena's launch — resident "join dates" hang off it.
 const LAUNCH_DAY = jstDay(Date.UTC(2026, 6, 20, 15));
 
@@ -150,7 +167,9 @@ function makeResident(i, rng, forced = {}) {
     name = pool[Math.floor(rng() * pool.length)];
     if (rng() < 0.22) name += String(10 + Math.floor(rng() * 90));
   }
-  const skill = arch.skill[0] + (arch.skill[1] - arch.skill[0]) * rng();
+  let skill = arch.skill[0] + (arch.skill[1] - arch.skill[0]) * rng();
+  // 王者は引きに関係なく最上位。名前が一致した時点で強さを固定する。
+  if (name === CHAMPION.name) skill = CHAMPION.skill;
   const len = arch.hours[1] - arch.hours[0];
   // Jitter the window a little so two residents of one archetype differ.
   const start = (arch.hours[0] + Math.floor(rng() * 3) - 1 + 24) % 24;
@@ -186,6 +205,25 @@ export function buildRoster(seed = 'v1', size = ROSTER_SIZE) {
     }
     used.add(r.name);
     roster.push(r);
+  }
+  // 王者が引かれなかった回でも必ず1人置く。
+  // 差し替えるのは「いま最も強い住人」── 弱い住人を王者にすると、その人の
+  // 元の強さぶんの席（初心者の層）が消えて分布が歪む。最強を最強で置き換える
+  // なら層は動かない。決定論も保たれる（roster の中身は seed で決まるため）。
+  if (!roster.some(r => r.name === CHAMPION.name)) {
+    let top = 0;
+    for (let i = 1; i < roster.length; i++) if (roster[i].skill > roster[top].skill) top = i;
+    const base = roster[top];
+    roster[top] = {
+      ...base,
+      name: CHAMPION.name,
+      arch: CHAMPION.arch,
+      skill: CHAMPION.skill,
+      modes: archetype(CHAMPION.arch).modes,
+      favMode: 'pvp',
+      lang: 'ja',
+      registered: true,
+    };
   }
   return roster;
 }

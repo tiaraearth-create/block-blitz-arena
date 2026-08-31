@@ -41,7 +41,7 @@ export const DEFAULT_TOGGLES = { chat: true, dialogues: true, feed: true, greeti
 const custom = {
   names: [],            // extra persona names mixed into guests/bots
   lines: [],            // custom chat lines mixed into the crowd
-  chatPace: 1,          // 0.25 しずか … 1 標準 … 8 限界
+  chatPace: 1,          // 0.1 ほぼ無言 … 1 標準 … 16 過密
   toggles: { ...DEFAULT_TOGGLES },
   quiet: null,          // { from, to } JST hours during which the crowd is silent
   removed: [],          // resident ids the admin retired
@@ -57,7 +57,7 @@ export function setCustom(c = {}) {
     custom.lines = c.lines.map(s => String(s).trim().slice(0, 100)).filter(Boolean).slice(0, 200);
   }
   if (c.chatPace !== undefined && Number.isFinite(Number(c.chatPace))) {
-    custom.chatPace = Math.max(0.25, Math.min(MAX_CHAT_PACE, Number(c.chatPace)));
+    custom.chatPace = Math.max(0.1, Math.min(MAX_CHAT_PACE, Number(c.chatPace)));
   }
   if (c.toggles && typeof c.toggles === 'object') {
     for (const k of Object.keys(DEFAULT_TOGGLES)) {
@@ -89,7 +89,11 @@ export function getCustom() {
     removed: [...custom.removed], extra: custom.extra.map(x => ({ ...x })), rosterSeed: custom.rosterSeed,
   };
 }
-export const MAX_CHAT_PACE = 8;
+// 上限を 8 から広げた。運営から「種類を増やしたい」という要望があり、
+// 8 が既に選択肢の最後だったので、上を作らないと段階を足せなかった。
+// 実際の間隔には chatFloorMs の絶対下限（2.5s / 6s）が別途かかるので、
+// ここを上げても発言が無限に速くなるわけではない（頭打ちに近づくだけ）。
+export const MAX_CHAT_PACE = 16;
 export function chatPaceFactor() { return custom.chatPace; }
 
 // 発言間隔の下限（ms）。以前は 2500ms 固定だったので、チャット頻度を

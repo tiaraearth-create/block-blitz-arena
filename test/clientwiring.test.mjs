@@ -200,4 +200,45 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
   check('許可先は frame-ancestors に載る', /frame-ancestors 'self'\$\{FRAME_ANCESTORS/.test(src), '');
 }
 
+
+// --- 11. にぎわいプリセットがサーバーとUIで一致しているか ---
+// 片方にしか無いプリセットは「ボタンはあるのに押しても何も起きない」か
+// 「設定はあるのに誰も選べない」になる。どちらも例外は出ない。
+{
+  const srv = read('server/routes/admin.js');
+  const blk = (srv.match(/const CROWD_PRESETS = \{[\s\S]*?\n\};/) || [''])[0];
+  const ids = [...blk.matchAll(/^  (\w+):/gm)].map(m => m[1]);
+  const ui = read('public/js/screens.js');
+  const grp = (ui.match(/const PRESET_GROUPS = \[[\s\S]*?\n\];/) || [''])[0];
+  const uids = [...grp.matchAll(/\['(\w+)',/g)].map(m => m[1]);
+  const onlySrv = ids.filter(i => !uids.includes(i));
+  const onlyUi = uids.filter(i => !ids.includes(i));
+  check('プリセットがサーバーとUIで一致している', onlySrv.length === 0 && onlyUi.length === 0,
+    onlySrv.length ? `UIに無い: ${onlySrv.join(', ')}` : onlyUi.length ? `サーバーに無い: ${onlyUi.join(', ')}` : `${ids.length}種`);
+
+  // 選択肢の値が、サーバー側のクランプ範囲に収まっているか。
+  // 範囲外の値は黙って丸められるので、押しても「効かないボタン」に見える。
+  const amb = read('server/ambient.js');
+  const maxScale = Number((amb.match(/MAX_LIVE_SCALE = (\d+)/) || [])[1]);
+  const maxPace = Number((amb.match(/MAX_CHAT_PACE = (\d+)/) || [])[1]);
+  const minPace = Number((amb.match(/Math\.max\(([\d.]+), Math\.min\(MAX_CHAT_PACE/) || [])[1]);
+  const scales = (ui.match(/\$\{\[0, [\d., ]+\]\.map\(v => `<button data-v/) || [''])[0]
+    .replace(/[^\d., ]/g, '').split(',').map(Number).filter(n => !Number.isNaN(n));
+  const paces = [...grp ? [] : []].concat(
+    [...ui.matchAll(/\[\[([\d.]+), 'ほぼ無言'\][\s\S]{0,400}?\]\]/g)].map(m => m[0])
+  ).join('');
+  const paceVals = [...paces.matchAll(/\[([\d.]+), '/g)].map(m => Number(m[1]));
+  check('人口倍率の選択肢が上限を超えていない', scales.length > 0 && Math.max(...scales) <= maxScale,
+    `最大 ×${Math.max(...scales)} / 上限 ×${maxScale}`);
+  check('チャット頻度の選択肢が範囲に収まっている',
+    paceVals.length > 0 && Math.max(...paceVals) <= maxPace && Math.min(...paceVals) >= minPace,
+    `${Math.min(...paceVals)}〜${Math.max(...paceVals)} / 範囲 ${minPace}〜${maxPace}`);
+
+  // プリセットの値も同じ範囲に収まっていること。
+  const pScales = [...blk.matchAll(/scale: ([\d.]+)/g)].map(m => Number(m[1]));
+  const pPaces = [...blk.matchAll(/chatPace: ([\d.]+)/g)].map(m => Number(m[1]));
+  check('プリセットの人口倍率が上限を超えていない', Math.max(...pScales) <= maxScale, `最大 ×${Math.max(...pScales)}`);
+  check('プリセットのチャット頻度が上限を超えていない', Math.max(...pPaces) <= maxPace, `最大 ×${Math.max(...pPaces)}`);
+}
+
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

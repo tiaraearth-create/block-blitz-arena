@@ -2819,3 +2819,29 @@ body:has(#replayBar) #partyDock { display: none; }
   /* 🎉 紙吹雪は降らせない（画面外の初期位置のまま留まる） */
   .dom-confetti span { animation: none; }
 }
+/* 👥 管理画面の実プレイヤー一覧。数字だけでは「誰が」が分からないので、
+   住人を除いた本物の接続だけを並べる。 */
+#adminLive { margin: 10px 0 4px; }
+.live-head { font-size: 13px; font-weight: 700; margin: 0 0 6px; }
+.live-head b { color: var(--accent, #5b8bff); }
+.live-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.live-row {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.live-where { text-align: center; }
+.live-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-sub { font-size: 11px; opacity: 0.65; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.live-tag {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; vertical-align: middle;
+}
+.live-tag.admin { background: #6b4bd6; color: #fff; }
+.live-tag.user  { background: #2f6f4f; color: #fff; }
+.live-tag.guest { background: #4a5268; color: #d7dcea; }
+@media (max-width: 520px) {
+  .live-row { grid-template-columns: 20px minmax(0, 1fr); }
+  .live-sub { grid-column: 2; }
+}
