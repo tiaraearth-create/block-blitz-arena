@@ -198,7 +198,10 @@ body {
 }
 
 /* ============ Game ============ */
-#screen-game { padding: 0 8px 8px; }
+/* 画面は inset:0 でステータスバーの裏まで届く（viewport-fit=cover）。
+   メニューは #topbar が押し下げるが、ゲーム画面は .game-hud（✕・スコア）が
+   最上端に直接並ぶので、iPhone では時計・電池表示と重なっていた。 */
+#screen-game { padding: env(safe-area-inset-top, 0px) 8px 8px; }
 .game-hud {
   display: flex; align-items: center; justify-content: space-between;
   padding: 4px 6px 8px; gap: 10px; min-height: 56px;
@@ -314,7 +317,10 @@ body {
 
 /* ============ Sub screens ============ */
 .sub-screen { padding: 0 14px 14px; overflow-y: auto; }
-.sub-header { display: flex; align-items: center; gap: 12px; padding: 8px 0 14px; position: sticky; top: 0; z-index: 3; background: linear-gradient(var(--bg0) 75%, transparent); }
+/* padding-top にセーフエリアを足す（top をずらすのではなく）── sticky で
+   貼り付いたときもヘッダー自身の背景がステータスバーの裏まで伸び、
+   スクロールしたコンテンツが時計の下に透けて見えない。 */
+.sub-header { display: flex; align-items: center; gap: 12px; padding: calc(8px + env(safe-area-inset-top, 0px)) 0 14px; position: sticky; top: 0; z-index: 3; background: linear-gradient(var(--bg0) 75%, transparent); }
 .sub-header h2 { font-size: 21px; }
 .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
 .tab {
@@ -561,7 +567,9 @@ body {
   position: fixed; inset: 0; background: rgba(5,7,18,0.72);
   display: flex; align-items: center; justify-content: center;
   z-index: 50; animation: fadeIn .2s ease; backdrop-filter: blur(4px);
-  padding: 16px;
+  /* 背の高いモーダル（にぎわい設定など）はほぼ全高まで伸びるので、
+     外側余白にセーフエリアを足して時計/ホームバーと重ねない。 */
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px));
 }
 @keyframes fadeIn { from { opacity: 0; } }
 .modal {
@@ -624,7 +632,7 @@ body {
 /* 試合中だけ下寄せにする。上に出すとスコアの真上に重なって、
    背の低い端末では通知が消えるまで点数が読めなかった。 */
 body[data-screen="game"] #toast-root { top: auto; bottom: 96px; }
-#toast-root { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+#toast-root { position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
 .toast {
   background: rgba(16,20,43,0.92); border: 1px solid var(--line);
   border-radius: 999px; padding: 10px 22px; font-weight: 700; font-size: 14px;
