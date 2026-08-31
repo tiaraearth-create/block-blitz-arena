@@ -1005,6 +1005,52 @@ const CROWD_PRESETS = {
   ultra:  { scale: 500, chatPace: 4,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
   night:  { scale: 0.7, chatPace: 0.75, toggles: { ...DEFAULT_TOGGLES }, quiet: null },
   silent: { scale: 1,   chatPace: 1,   toggles: { ...DEFAULT_TOGGLES, chat: false, dialogues: false, feed: false, greetings: false, reactions: false }, quiet: null },
+
+  // --- 性格プリセット（v2.16 追加） ------------------------------------------
+  // 上の9つは「どれだけ賑わっているか」を1本の軸で並べたもの。ここから下は
+  // **同じ人口でも空気が違う世界**をトグルの組み合わせで作る。倍率だけを
+  // 増やしても「同じ世界が濃くなる」だけで、雰囲気の作り分けはできなかった。
+  //
+  // toggles は9項目すべてを明示すること。1つでも欠けると setCustom が
+  // その項目を「現状維持」にするので、直前のプリセットの設定が残り、
+  // 同じボタンを押しても押す順番で結果が変わる（＝再現しない）。
+  // quiet の from/to は JST の「時」。null で静かな時間帯そのものを無効化する。
+
+  // 🌅 人の出入りは多いが誰も腰を据えない朝。挨拶だけが流れる。
+  commute:  { scale: 1.5, chatPace: 0.5,  toggles: { ...DEFAULT_TOGGLES, dialogues: false }, quiet: null },
+  // 🏆 主役はランキングとギルド。雑談は絞り、対戦とフィードで場を持たせる。
+  eve:      { scale: 8,   chatPace: 0.75, toggles: { ...DEFAULT_TOGGLES, dialogues: false, greetings: false }, quiet: null },
+  // 🌃 人数は少ないのに1人1人がよく喋る、明け方の濃い空気。
+  dawn:     { scale: 0.35, chatPace: 3,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  // 👀 人口は多いのに誰も対戦しない。フィードだけが流れる観戦者の街。
+  spectate: { scale: 12,  chatPace: 2,    toggles: { ...DEFAULT_TOGGLES, chat: false, dialogues: false, greetings: false, bots: false }, quiet: null },
+  // 🎆 賑わいの余韻。結果は流れ続けるが新しい会話は始まらない。
+  afterparty: { scale: 5, chatPace: 0.35, toggles: { ...DEFAULT_TOGGLES, chat: false, dialogues: false }, quiet: null },
+  // 🌍 日本の日中を静かな時間帯にして、夜型・海外時間の世界にする。
+  overseas: { scale: 2,   chatPace: 1.25, toggles: { ...DEFAULT_TOGGLES }, quiet: { from: 9, to: 18 } },
+  // 🤖 チャット系を全部落とし、対戦相手とランキングだけを生かす。
+  arena:    { scale: 4,   chatPace: 1,    toggles: { ...DEFAULT_TOGGLES, chat: false, dialogues: false, feed: false, greetings: false, reactions: false, votes: false }, quiet: null },
+  // 🏰 ギルドとランキングを前に出した週末の抗争ムード。
+  guildwar: { scale: 20,  chatPace: 1.5,  toggles: { ...DEFAULT_TOGGLES, dialogues: false, greetings: false }, quiet: null },
+  // 📺 配信映え。チャットは出るが被らず、フィードと反応で画面が動く。
+  stream:   { scale: 6,   chatPace: 1.5,  toggles: { ...DEFAULT_TOGGLES, dialogues: false }, quiet: null },
+  // 🌸 ゆっくりした会話と多めの挨拶。休日の昼下がり。
+  sunday:   { scale: 2,   chatPace: 0.5,  toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  // ⚡ 人口は普段どおりなのに会話だけが限界速度。瞬間最大風速。
+  gust:     { scale: 1,   chatPace: 8,    toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  // 🐣 開店直後。ロビーには人がいるが、ランキング・対戦・ギルドは実プレイヤーだけ。
+  opening:  { scale: 0.2, chatPace: 0.75, toggles: { ...DEFAULT_TOGGLES, ghosts: false, bots: false, votes: false, guilds: false }, quiet: null },
+  // 🧑 記録は人間だけのもの。ロビーは賑やかなまま、住人を成績から外す。
+  humanonly:{ scale: 1.5, chatPace: 1,    toggles: { ...DEFAULT_TOGGLES, ghosts: false, bots: false, votes: false, guilds: false }, quiet: null },
+  // 🏢 深夜〜朝は完全に静か。日中だけ動く「営業時間」の世界。
+  officehours: { scale: 3, chatPace: 1.25, toggles: { ...DEFAULT_TOGGLES }, quiet: { from: 0, to: 9 } },
+  // 🗳️ 投票と反応が主役の住民集会。対戦ボットは引っ込める。
+  townhall: { scale: 6,   chatPace: 2,    toggles: { ...DEFAULT_TOGGLES, greetings: false, bots: false }, quiet: null },
+  // 🔍 動作確認用。住人を最少にしたまま9機能すべてオン＋会話は最速。
+  // ×0.2 より下げても住人は減らない（popFactor の下限 0.3 で頭打ち）のに、
+  // 表示人数だけが落ちて「表示12人／住人13人オンライン」という
+  // ありえない並びになる。住人が最少になる範囲でいちばん高い倍率を選ぶ。
+  debug:    { scale: 0.2, chatPace: 8,    toggles: { ...DEFAULT_TOGGLES }, quiet: null },
 };
 
 function crowdStatus() {

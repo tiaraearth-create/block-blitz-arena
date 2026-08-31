@@ -4294,13 +4294,48 @@ const TOGGLE_LABELS = [
   ['chat', '💬 住人のチャット'], ['dialogues', '🗣️ 住人どうしの会話'], ['feed', '📡 ライブフィード'],
   ['greetings', '👋 入室した人への挨拶'], ['reactions', '⚡ 返事・イベント/投票/対戦への反応'],
   ['ghosts', '🏆 ランキングの住人'], ['bots', '🤖 対戦ボットを住人に'], ['votes', '🗳️ AI住人の投票'],
+  // guilds だけ一覧から漏れていた。サーバー側のトグルは9つあり
+  // （server/ambient.js の DEFAULT_TOGGLES）、guilds はギルドランキングに
+  // 住人のギルドを並べるかを決める。ここに無いとチェックボックスが出ず、
+  // 一度オフにするプリセット（🐣 開店直後 / 🧑 人間だけの記録）を押したあと
+  // 画面から戻す手段が無くなる。
+  ['guilds', '🏰 ギルドランキングの住人'],
 ];
-const PRESETS = [
-  ['normal', '🙂 標準', '人口×1・ふつうのにぎわい'], ['party', '🎉 お祭り', '人口×3・おしゃべり×2.5'],
-  ['fever', '🔥 フィーバー', '人口×25・住人320人'], ['mega', '🌋 伝説の夜', '人口×88・住人600人(上限)'],
-  ['ultra', '🌠 祭りの極み', '人口×500・表示30万人'],
-  ['quiet', '🤫 しずか', '人口×0.5・会話と挨拶なし'], ['night', '🌙 深夜の秘密基地', '人口×0.7・ゆったり'],
-  ['silent', '🔇 人口だけ', '人数は出るが誰も喋らない'], ['off', '⚫ 完全オフ', 'AIプレイヤーを全停止'],
+// プリセットは「にぎわいの強さ」だけでなく「世界の性格」も切り替える。
+// 25個を1枚のグリッドに流すと目的のボタンを探せなくなるので、狙い別に
+// 4つの見出しで区切る（データの形は [見出し, [[id, ラベル, 説明], ...]]）。
+// 説明文は必ず「効果と数値」を書くこと — ラベルだけでは適用してみるまで
+// 何が変わるのか分からず、運営が本番でしか確かめられなくなる。
+const PRESET_GROUPS = [
+  ['にぎわいの強さ', [
+    ['normal', '🙂 標準', '人口×1・ふつうのにぎわい'], ['party', '🎉 お祭り', '人口×3・おしゃべり×2.5'],
+    ['fever', '🔥 フィーバー', '人口×25・住人320人'], ['mega', '🌋 伝説の夜', '人口×88・住人600人(上限)'],
+    ['ultra', '🌠 祭りの極み', '人口×500・表示30万人'],
+    ['quiet', '🤫 しずか', '人口×0.5・会話と挨拶なし'], ['night', '🌙 深夜の秘密基地', '人口×0.7・ゆったり'],
+    ['silent', '🔇 人口だけ', '人数は出るが誰も喋らない'], ['off', '⚫ 完全オフ', 'AIプレイヤーを全停止'],
+  ]],
+  ['時間帯と空気', [
+    ['commute', '🌅 朝の通勤帯', '人口×1.5・会話×0.5・挨拶多め'],
+    ['sunday', '🌸 のんびり日曜', '人口×2・会話×0.5でゆっくり'],
+    ['dawn', '🌃 過疎の夜明け', '人口×0.35・会話×3で濃い空気'],
+    ['afterparty', '🎆 祭りのあと', '人口×5・会話×0.35／余韻だけ'],
+    ['gust', '⚡ 瞬間最大風速', '人口×1のまま会話×8(限界)'],
+    ['stream', '📺 配信向け', '人口×6・会話×1.5／住人の会話オフ'],
+  ]],
+  ['競技とギルド', [
+    ['eve', '🏆 大会前夜', '人口×8・会話×0.75／順位と対戦が主役'],
+    ['guildwar', '🏰 ギルド戦争', '人口×20・会話×1.5・ギルド強調'],
+    ['arena', '🤖 対戦だけ', '人口×4・チャット全オフ／対戦と順位'],
+    ['townhall', '🗳️ 住民集会', '人口×6・会話×2／投票が主役'],
+  ]],
+  ['運営むけ', [
+    ['spectate', '👀 観戦者だらけ', '人口×12・対戦なし／フィードだけ'],
+    ['opening', '🐣 開店直後', '人口×0.2／順位も対戦も人間だけ'],
+    ['humanonly', '🧑 人間だけの記録', '人口×1.5・賑やか／成績は人間だけ'],
+    ['overseas', '🌍 海外時間', '人口×2・JST9〜18時は静か（夜型）'],
+    ['officehours', '🏢 営業時間だけ', '人口×3・JST0〜9時は静か'],
+    ['debug', '🔍 デバッグ用', '人口×0.2（最少）・全9機能オン＋会話×8'],
+  ]],
 ];
 
 async function showCrowdModal(tab = 'basic') {
@@ -4323,6 +4358,10 @@ async function showCrowdModal(tab = 'basic') {
     </div>
     <div id="crBody"></div>
     <div class="modal-buttons" style="margin-top:12px"><button class="btn btn-ghost" id="crClose">閉じる</button></div>`);
+  // プリセット25個・住人600人の一覧を出す画面なので、標準の400px幅では
+  // 縦に伸びすぎる。この画面だけ600pxに広げる（狭い端末では 94vw が効くので
+  // 見た目は変わらない）。style.css の .modal.crowd-modal を参照。
+  m.classList.add('crowd-modal');
   m.querySelector('#crClose').onclick = () => { closeModal(); openAdmin(); };
   m.querySelectorAll('[data-ct]').forEach(b => { b.onclick = () => { audio.click(); closeModal(); showCrowdModal(b.dataset.ct); }; });
 
@@ -4335,10 +4374,12 @@ async function showCrowdModal(tab = 'basic') {
   // ---- 基本 ----
   if (tab === 'basic') {
     body.innerHTML = `
-      <p class="muted" style="font-size:12px;margin-bottom:6px">プリセット</p>
-      <div class="preset-grid">
-        ${PRESETS.map(([id, l, d]) => `<button class="preset-btn" data-preset="${id}"><b>${l}</b><small>${d}</small></button>`).join('')}
-      </div>
+      <p class="muted" style="font-size:12px;margin-bottom:6px">プリセット（押すとすぐ反映されます）</p>
+      ${PRESET_GROUPS.map(([cat, items]) => `
+        <p class="preset-cat">${cat}</p>
+        <div class="preset-grid">
+          ${items.map(([id, l, d]) => `<button class="preset-btn" data-preset="${id}"><b>${l}</b><small>${d}</small></button>`).join('')}
+        </div>`).join('')}
       <div class="settings-row" style="margin-top:12px"><label>👥 人口倍率 <b>×${st.scale}</b></label></div>
       <p class="muted" style="font-size:11px;margin:-4px 0 6px">住人の実数は ×88 で上限（600人）。それより上は表示人数だけが増えます</p>
       <div class="seg seg-wrap" id="popSeg" style="justify-content:center">
