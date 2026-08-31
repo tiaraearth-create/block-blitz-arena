@@ -247,15 +247,20 @@ document.addEventListener('click', ev => {
 
 // シェア文に出すモード名。screens.js の MODE_LABEL を import すると
 // screens.js ⇄ modes.js の循環になるので、ここに短い対訳だけ持つ。
+// キーは各モードクラスの this.mode（'pvp' は kind で 1v1/2v2/カスタムに分かれるが、
+// シェア文では細かく分けても伝わらないので「オンライン対戦」にまとめる）。
+// ここに無いモードは「プレイ」に落ちるだけで壊れない（安全側）。
 const SHARE_MODE_NAME = {
   solo: ['ソロプレイ', 'Solo'], ai: ['AI対戦', 'vs AI'], boss: ['ボス戦', 'Boss'],
-  rush: ['地獄ラッシュ', 'Boss Rush'], dungeon: ['ダンジョン', 'Dungeon'],
-  survival: ['サバイバル', 'Survival'], sprint: ['タイムアタック', 'Time Attack'],
-  weekly: ['ウィークリー', 'Weekly'], daily: ['デイリー', 'Daily'],
-  chaos: ['カオスモード', 'Chaos'], meltdown: ['メルトダウン', 'Meltdown'],
-  chimera: ['キメラ工房', 'Chimera'], royale: ['バトルロイヤル', 'Battle Royale'],
-  duel: ['オンライン対戦', 'Online Duel'], attack: ['アタック戦', 'Attack'],
-  team: ['チーム戦', 'Team Battle'], coop: ['協力プレイ', 'Co-op'],
+  dungeon: ['ダンジョン', 'Dungeon'], survival: ['サバイバル', 'Survival'],
+  sprint: ['タイムアタック', 'Time Attack'], weekly: ['ウィークリー', 'Weekly'],
+  daily: ['デイリー', 'Daily'], chaos: ['カオスモード', 'Chaos'],
+  meltdown: ['メルトダウン', 'Meltdown'], chimera: ['キメラ工房', 'Chimera'],
+  chain: ['連鎖カスケード', 'Chain Cascade'], blueprint: ['ブループリント', 'Blueprint'],
+  puzzle: ['パズル遺跡', 'Puzzle Ruins'], dig: ['採掘場', 'Dig Site'],
+  ghost: ['幽霊屋敷', 'Ghost House'], workshop: ['パズル工房', 'Workshop'],
+  replay: ['リプレイ', 'Replay'], pvp: ['オンライン対戦', 'Online Battle'],
+  ae: ['管理者イベント', 'Live Event'], zero: ['断罪', 'Judgement'],
 };
 const shareModeName = id => {
   const p = SHARE_MODE_NAME[id];

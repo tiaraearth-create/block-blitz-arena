@@ -175,6 +175,18 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
   check('共有は画像つき・共有シート・コピーの3経路がある',
     /navigator\.canShare/.test(src) && /navigator\.share/.test(src) && /clipboard/.test(src), '');
   check('共有シートを閉じただけをエラー扱いしない', /AbortError/.test(src), '');
+  // シェア文のモード名は、モードが増えるたびに足し忘れる典型的な場所。
+  // 落ちても「プレイ」に化けるだけで誰も気づかないので、機械で対応を守る。
+  {
+    const tbl = (src.match(/const SHARE_MODE_NAME = \{[\s\S]*?\n\};/) || [''])[0];
+    const listed = [...tbl.matchAll(/(\w+): \[/g)].map(m => m[1]);
+    const real = [...new Set([...src.matchAll(/this\.mode = '([a-z]+)'/g)].map(m => m[1]))];
+    const missing = real.filter(id => !listed.includes(id));
+    const extra = listed.filter(id => !real.includes(id));
+    check('シェア文のモード名が全モードを網羅している', missing.length === 0,
+      missing.length ? `名前が無い: ${missing.join(', ')}` : `${real.length}モード`);
+    check('シェア文に実在しないモードが混ざっていない', extra.length === 0, extra.join(', '));
+  }
 }
 
 // --- 10. 外部サイトへの埋め込みは環境変数を入れたときだけ開く ---
