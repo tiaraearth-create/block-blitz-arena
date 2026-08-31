@@ -7,7 +7,7 @@
 // 断りの文言はサーバー側でどの理由でも同じにしてある ── 理由を出し分けると、
 // この窓口が「あの人にブロックされているか」を調べる道具になるので。
 
-import { $, showScreen, showModal, closeModal, toast } from './dom.js';
+import { $, showScreen, showModal, closeModal, toast, fmt } from './dom.js';
 import { t } from './i18n.js';
 import { audio } from './audio.js';
 import { session, api } from './net.js';
@@ -39,12 +39,198 @@ function ago(ts) {
   return t(`${Math.floor(h / 24)}日前`, `${Math.floor(h / 24)}d ago`);
 }
 
+// ---------------------------------------------------------------------------
+// 🏁 ライバルボード（GET /api/friends/board）
+//
+// タブの器は index.html 側（担当外）に無いので、ここで一度だけ差し込む。
+// 差し込みは createElement + textContent なので、既存タブの中身（#frReqDot）
+// には一切触らない ── 静的i18nの textContent 代入でドットが消えた件と同じ罠を
+// 踏まないための作法。
+// ---------------------------------------------------------------------------
+
+const BOARD_SECTIONS = [
+  { key: 'daily', icon: '📅', ja: '今日のデイリー', en: "Today's Daily" },
+  { key: 'weekly', icon: '🎯', ja: '今週のウィークリー', en: "This week's Weekly" },
+  { key: 'rating', icon: '⚔️', ja: 'レート', en: 'Rating' },
+];
+
+const CHALLENGE_COOLDOWN_MS = 60 * 60 * 1000;   // サーバーが返さなかったときの控えめな既定値
+const challengeCooldown = new Map();            // userId -> 送れるようになる時刻
+
+let boardData = null;
+let boardLoading = false;
+let boardError = null;    // 'na'（未実装） | 文字列（メッセージ） | null
+
+// 桁区切りは他の画面と同じ fmt()（dom.js）に寄せる。ここだけ引数なしの
+// toLocaleString() だったので、ブラウザの既定ロケールが de-DE などだと
+// ライバル表の数字だけ "1.000"、他の画面は "1,000" と割れて見えていた。
+function num(v) {
+  const n = Number(v);
+  return isFinite(n) ? fmt(n) : null;
+}
+
+function cdLabel(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s >= 3600) return t(`${Math.floor(s / 3600)}時間`, `${Math.floor(s / 3600)}h`);
+  if (s >= 60) return t(`${Math.floor(s / 60)}分`, `${Math.floor(s / 60)}m`);
+  return t(`${s}秒`, `${s}s`);
+}
+
+function cooldownUntil(e) {
+  const local = challengeCooldown.get(e.id) || 0;
+  // サーバーが期限を持っているならそちらが正。無くても壊れない。
+  const srv = Number(e.cooldownUntil || e.challengeUntil || e.nextChallengeAt || 0) || 0;
+  return Math.max(local, srv);
+}
+
+function ensureRivalTab() {
+  const tabs = document.querySelector('#screen-friends .tabs');
+  if (!tabs || tabs.querySelector('[data-fr="rival"]')) return;
+  const b = document.createElement('button');
+  b.className = 'tab';
+  b.dataset.fr = 'rival';
+  b.textContent = t('🏁 ライバル', '🏁 Rivals');
+  const settings = tabs.querySelector('[data-fr="settings"]');
+  if (settings) tabs.insertBefore(b, settings);
+  else tabs.appendChild(b);
+}
+
+async function loadBoard(force = false) {
+  if (boardLoading) return;
+  if (boardData && !force) return;
+  boardLoading = true;
+  boardError = null;
+  try {
+    const r = await api('/api/friends/board');
+    boardData = (r && typeof r === 'object') ? r : {};
+  } catch (err) {
+    boardData = null;
+    // 404 は「サーバーがまだこの口を持っていない」。荒らさず静かに案内する。
+    boardError = (err && err.status === 404) ? 'na' : ((err && err.message) || t('読み込めませんでした', 'Could not load'));
+  } finally {
+    boardLoading = false;
+    if (tab === 'rival') renderFriends();
+  }
+}
+
+// レスポンスの形が多少ぶれても落ちないように、部門ごとに拾い直す。
+function sectionRows(key) {
+  const b = boardData || {};
+  const raw = b[key] || (b.boards && b.boards[key]) || [];
+  return Array.isArray(raw) ? raw.filter(x => x && typeof x === 'object') : [];
+}
+
+function valueLabel(key, e) {
+  if (key === 'rating') {
+    const v = num(e.rating != null ? e.rating : e.value);
+    return v == null ? t('—', '—') : v;
+  }
+  const raw = [e.score, e.best, e.value, e.points].find(x => x != null);
+  const v = num(raw);
+  return v == null ? t('未挑戦', 'No run') : t(`${v}点`, `${v} pts`);
+}
+
+function challengeBtn(key, e) {
+  if (!e.id) return '';
+  if (session.user && e.id === session.user.id) return '';
+  const left = cooldownUntil(e) - Date.now();
+  if (left > 0) {
+    return `<button class="fr-b" disabled title="${t('しばらく送れません', 'On cooldown')}">🔔 ${esc(cdLabel(left))}</button>`;
+  }
+  return `<button class="fr-b" data-chal="${esc(e.id)}" data-chalboard="${esc(key)}">🔔 ${t('挑戦状', 'Challenge')}</button>`;
+}
+
+function boardRow(key, e, i) {
+  const me = !!(session.user && e.id === session.user.id);
+  const medal = ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
+  return [
+    `<div class="fr-row"${me ? ' style="border-color:rgba(255,255,255,0.28)"' : ''}>`,
+    `  <span class="fr-lvl" style="min-width:26px;text-align:center">${medal}</span>`,
+    `  <span class="fr-name">${esc(e.username || '???')}${me ? t('（あなた）', ' (you)') : ''}</span>`,
+    `  <span class="fr-status" style="font-weight:800;color:var(--yellow)">${esc(valueLabel(key, e))}</span>`,
+    `  <span class="fr-btns">${challengeBtn(key, e)}</span>`,
+    '</div>',
+  ].join('');
+}
+
+function viewRival() {
+  if (!boardData && !boardLoading && !boardError) loadBoard();
+  const head = [
+    `<p class="muted" style="font-size:11.5px;line-height:1.6">${t(
+      '🏁 デイリーもウィークリーも、<b>全員がまったく同じピース順</b>で挑んでいます。運の差はゼロ — ここに出ている差は、そのまま腕の差です。',
+      '🏁 Daily and Weekly hand <b>every player the exact same pieces</b>. No luck involved — the gap you see here is pure skill.')}</p>`,
+    `<div style="display:flex;justify-content:flex-end;margin:6px 0 2px">
+       <button class="fr-b" id="frBoardReload">${t('🔄 更新', '🔄 Refresh')}</button>
+     </div>`,
+  ].join('');
+
+  if (boardLoading && !boardData) return head + `<p class="muted center" style="margin-top:20px">${t('読み込んでいます…', 'Loading…')}</p>`;
+  if (boardError === 'na') {
+    return head + `<p class="muted center" style="margin-top:20px">${t(
+      'ライバルボードはまだ準備中です。もう少しお待ちください。',
+      'The rival board is not available yet — please check back soon.')}</p>`;
+  }
+  if (boardError) return head + `<p class="muted center" style="margin-top:20px">${esc(boardError)}</p>`;
+
+  const body = BOARD_SECTIONS.map(sec => {
+    const rows = sectionRows(sec.key);
+    const note = sec.key === 'rating'
+      ? t('オンライン対戦の実力値', 'Your online battle rating')
+      : t('全員共通のシード — 純粋な腕比べ', 'One shared seed — a pure test of skill');
+    return [
+      `<h3 class="fr-h">${sec.icon} ${t(sec.ja, sec.en)} <span style="font-weight:600;text-transform:none;letter-spacing:0">— ${note}</span></h3>`,
+      rows.length
+        ? '<div class="fr-list">' + rows.map((e, i) => boardRow(sec.key, e, i)).join('') + '</div>'
+        : `<p class="muted" style="font-size:11.5px">${t('まだ記録がありません。', 'No records yet.')}</p>`,
+    ].join('');
+  }).join('');
+
+  const anyRows = BOARD_SECTIONS.some(sec => sectionRows(sec.key).length);
+  if (!anyRows && !(data && data.friends && data.friends.length)) {
+    return head + `<p class="muted center" style="margin-top:20px">${t(
+      'フレンドがいると、ここで順位を競えます。「さがす」から申請してみましょう。',
+      'Add friends to race them here. Send a request from “Find”.')}</p>`;
+  }
+  return head + body + `<p class="muted" style="font-size:11px;margin-top:14px">${t(
+    '🔔 挑戦状は「今日は勝負しよう」という合図だけです。文章は付けられません。',
+    '🔔 A challenge is just a nudge saying “race me today”. No message can be attached.')}</p>`;
+}
+
+async function sendChallenge(b) {
+  if (!b || b.disabled) return;
+  const id = b.dataset.chal;
+  const key = b.dataset.chalboard || 'daily';
+  if (!id) return;
+  b.disabled = true;                       // 連打防止（レンダリングし直すまで戻さない）
+  b.textContent = t('送信中…', 'Sending…');
+  audio.click();
+  try {
+    const r = await api('/api/friends/challenge', { method: 'POST', body: { userId: id, board: key } });
+    const until = Number(r && (r.cooldownUntil || r.until)) || (Date.now() + CHALLENGE_COOLDOWN_MS);
+    challengeCooldown.set(id, until);
+    toast(t('🔔 挑戦状を送りました', '🔔 Challenge sent'), 'ok', 2400);
+  } catch (err) {
+    if (err && err.status === 404) {
+      toast(t('挑戦状はまだ準備中です', 'Challenges are not available yet'), 'err', 2600);
+      challengeCooldown.set(id, Date.now() + 60000);
+    } else {
+      toast((err && err.message) || t('送れませんでした', 'Could not send'), 'err', 3000);
+      // 断られた理由がクールダウンでも上限でも、こちら側でも少し間を空ける。
+      challengeCooldown.set(id, Date.now() + 60000);
+    }
+  }
+  if (tab === 'rival') renderFriends();
+}
+
 export async function openFriends(which = 'list') {
   if (!session.user) {
     toast(t('フレンド機能を使うにはアカウント登録が必要です', 'You need an account to use friends'), 'err', 3500);
     return;
   }
   tab = which;
+  // 画面を開き直したら順位は取り直す（前に見た並びのまま出さない）。
+  boardData = null;
+  boardError = null;
   showScreen('friends');
   try { data = await api('/api/friends'); }
   catch (err) { toast(err.message, 'err'); return; }
@@ -125,6 +311,7 @@ function setTab(x) {
 function renderFriends() {
   const body = $('#friendsBody');
   if (!body || !data) return;
+  ensureRivalTab();
   document.querySelectorAll('#screen-friends [data-fr]').forEach(b => {
     b.classList.toggle('active', b.dataset.fr === tab);
     b.onclick = () => { audio.click(); setTab(b.dataset.fr); };
@@ -139,6 +326,7 @@ function renderFriends() {
   if (tab === 'list') body.innerHTML = viewList();
   else if (tab === 'requests') body.innerHTML = viewRequests();
   else if (tab === 'find') body.innerHTML = viewFind();
+  else if (tab === 'rival') body.innerHTML = viewRival();
   else body.innerHTML = viewSettings();
   wire(body);
 }
@@ -286,6 +474,11 @@ function wire(body) {
     b.disabled = true;
     b.textContent = t('送りました', 'Sent');
   });
+
+  // 🏁 ライバルボード
+  on('[data-chal]', b => sendChallenge(b));
+  const reload = body.querySelector('#frBoardReload');
+  if (reload) reload.onclick = () => { audio.click(); loadBoard(true); renderFriends(); };
 
   const mk = body.querySelector('#frMakeParty');
   if (mk) mk.onclick = () => { audio.click(); createParty(); };

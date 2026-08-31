@@ -1,4 +1,5 @@
 // Visual definitions for block skins, board themes and clear effects.
+import { getSettings } from './settings.js';
 
 // Base palette: colorIndex 1..8
 export const PALETTE = [
@@ -491,5 +492,59 @@ export const SKINS = {
 // fx ids map to particle presets handled in particles.js
 export const FX_IDS = ['fx_default', 'fx_fireworks', 'fx_thunder', 'fx_sakura'];
 
-export function getSkin(id) { return SKINS[id] || SKINS.skin_default; }
+// ---------------------------------------------------------------------------
+// 色覚サポート: 色 index ごとの記号をブロック中央に薄く重ねる。
+// 設定 colorMarks が ON のときだけ、getSkin() が返す描画関数をラップして
+// 適用する。こうすると盤面・ゴースト・手札・ミニ盤面・ショップのプレビューまで
+// getSkin() 経由の描画すべてに自動で波及し、呼び出し側は一切触らずに済む。
+// ---------------------------------------------------------------------------
+
+// PALETTE と同じ添字（0 は未使用 / 9 は妨害ブロック）。
+const COLOR_MARKS = [null, '▲', '●', '■', '◆', '✚', '★', '▼', '◐', '✕'];
+
+// フォント文字列の組み立ては毎セル走るのでサイズ単位でキャッシュする。
+let _markPx = -1, _markFont = '';
+function markFont(s) {
+  const px = Math.max(6, Math.round(s * 0.46));
+  if (px !== _markPx) { _markPx = px; _markFont = `${px}px "Segoe UI Symbol", "Noto Sans Symbols 2", sans-serif`; }
+  return _markFont;
+}
+
+// 記号はテキスト描画1回だけ（影・縁取りなし）でコストを抑える。
+function drawColorMark(ctx, x, y, s, ci, alpha) {
+  const mark = COLOR_MARKS[ci];
+  if (!mark || !(s > 0)) return;
+  const a = Math.max(0, Math.min(1, Number(alpha) >= 0 ? Number(alpha) : 1));
+  if (a <= 0.02) return;
+  ctx.save();
+  ctx.shadowBlur = 0;                       // ライン消し前のグロー描画に巻き込まれないように
+  ctx.globalAlpha = a * 0.5;                // 「薄く重ねる」: 元の絵柄を潰さない濃さ
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.font = markFont(s);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(mark, x + s / 2, y + s / 2);
+  ctx.restore();
+}
+
+// 元の描画関数ごとにラッパを1つだけ作って使い回す（毎フレーム生成しない）。
+const _markedSkins = new Map();
+function withColorMarks(draw) {
+  let wrapped = _markedSkins.get(draw);
+  if (!wrapped) {
+    wrapped = function (ctx, x, y, s, ci, alpha = 1) {
+      draw(ctx, x, y, s, ci, alpha);
+      drawColorMark(ctx, x, y, s, ci, alpha);
+    };
+    _markedSkins.set(draw, wrapped);
+  }
+  return wrapped;
+}
+
+export function getSkin(id) {
+  const draw = SKINS[id] || SKINS.skin_default;
+  let on = false;
+  try { on = getSettings().colorMarks === true; } catch { /* 設定が読めなければ素のスキン */ }
+  return on ? withColorMarks(draw) : draw;
+}
 export function getBoard(id) { return BOARDS[id] || BOARDS.board_default; }

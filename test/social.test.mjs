@@ -30,7 +30,19 @@ const results = [];
 const check = (name, ok, detail = '') => { results.push([ok ? '✅' : '❌', name, detail]); if (!ok) process.exitCode = 1; };
 
 let proc = null;
+// サーバーの stderr は「その場で出す分」を絞りつつ、全文も溜めておく。
+// 絞ったままだと、サーバーが何も言わずに終わった回が `fetch failed` だけになり、
+// 何が壊れたのか分からない失敗になっていた（失敗時に下でまとめて出す）。
+let serverErr = '';
+let serverExit = null;
+function serverDiag() {
+  const parts = [];
+  if (serverExit !== null) parts.push(`[server] 終了コード ${serverExit}`);
+  if (serverErr.trim()) parts.push('[server stderr]\n' + serverErr.trim());
+  return parts.length ? '\n' + parts.join('\n') : '';
+}
 async function start() {
+  serverErr = ''; serverExit = null;
   proc = spawn(process.execPath, ['server/index.js'], {
     env: {
       ...process.env, PORT: String(PORT), DATA_DIR: DIR, POP_SCALE: '0',
@@ -39,11 +51,13 @@ async function start() {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   // サーバーが落ちたときに黙って `fetch failed` になるのを避ける。
-  // 起動時の案内は毎回出るので、本当の異常だけ通す。
+  // 起動時の案内は毎回出るので、その場に流すのは本当の異常だけ。
   proc.stderr.on('data', d => {
     const line = String(d);
+    serverErr = (serverErr + line).slice(-8000);   // 溜めすぎない
     if (/Error|error:|throw|at .*\.js:/.test(line)) process.stderr.write('[server] ' + line);
   });
+  proc.on('exit', code => { serverExit = code; });
   for (let i = 0; i < 60; i++) {
     await sleep(250);
     if (proc.exitCode !== null) throw new Error(`サーバーが起動直後に終了 (code=${proc.exitCode})`);
@@ -54,7 +68,22 @@ async function start() {
 async function stop() {
   if (!proc) return;
   const p = proc; proc = null;
-  await new Promise(res => { p.on('exit', res); p.kill(); });
+  if (p.exitCode !== null) return;   // もう終わっている（'exit' は二度と来ない）
+  await new Promise(res => {
+    let t = null;
+    const done = () => { if (t) clearTimeout(t); res(); };
+    p.on('exit', done);
+    p.kill();
+    // kill() が届かないことがある（Windows では SIGTERM ハンドラも走らない）。
+    // 待ちっぱなしにするとランナーの時間切れになるので、5秒で強制終了に切り替える。
+    t = setTimeout(() => {
+      if (process.platform === 'win32' && p.pid) {
+        try { spawn('taskkill', ['/pid', String(p.pid), '/t', '/f'], { stdio: 'ignore' }); } catch { /* 下の SIGKILL にまかせる */ }
+      }
+      try { p.kill('SIGKILL'); } catch { /* もう死んでいる */ }
+      res();
+    }, 5000);
+  });
   await sleep(300);
 }
 
@@ -367,7 +396,7 @@ try {
   await sleep(300);
 
 } catch (err) {
-  check('テストの土台', false, err.stack || String(err));
+  check('テストの土台', false, (err.stack || String(err)) + serverDiag());
 } finally {
   await stop();
   fs.rmSync(DIR, { recursive: true, force: true });

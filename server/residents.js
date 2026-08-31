@@ -263,6 +263,38 @@ function personalBest(r, age, key, base, span, apt) {
   return Math.floor(best);
 }
 
+// 調子（mood）: 3日ごとに切り替わるブロック。sin波と違って「連勝が続く」「急に
+// 落ちる」が起きるので、日々見ていると人間がプレイしているように見える。rating 専用の
+// 入力なので residentStats から切り出してある。
+function moodFor(r, day) {
+  const block = Math.floor(day / 3);
+  const form = (unit(r.id, `f${block}`) - 0.5) * 2;                     // -1..1
+  const formPrev = (unit(r.id, `f${block - 1}`) - 0.5) * 2;
+  const blend = (day % 3) / 3;                                          // ブロック境界をなめらかに
+  return formPrev * (1 - blend) + form * blend;
+}
+
+// レート式の唯一の実体。residentStats と residentsForLevel（軽量パス）の両方が
+// これを呼ぶ — 式をここ以外に複製すると、住人の変装レートとランキング表示が
+// ズレる（このコードベースが最も嫌う「数字から嘘がばれる」系の穴）。
+// v2.14: 住人は大幅強化。それでもレートは 2600 止まり（Eloに上限は無いので勝ち
+// 続ける人間は超えうる）— 頂は人間に残す。
+function ratingFor(r, s, age, mood) {
+  const climb = 1 - Math.exp(-age / (30 + (1 - s) * 60));
+  const aptPvp = aptitude(r, 'pvp');
+  return Math.min(2600, Math.round(850 + Math.pow(s, 1.3) * 1600 * aptPvp * (0.72 + 0.28 * climb) + mood * 70));
+}
+
+// rating だけを軽量に出す（personalBest の重いループを一切踏まない）。
+// residentsForLevel がバトロワの席数ぶん呼ぶので、ここが軽いことが効く。
+export function residentRating(r, now = Date.now()) {
+  const day = jstDay(now);
+  const seedN = strHash(r.id) % 1000;
+  const joined = r.joinedDay === null ? day - (seedN % 14) : r.joinedDay;
+  const age = Math.max(1, day - joined);
+  return ratingFor(r, r.skill, age, moodFor(r, day));
+}
+
 export function residentStats(r, now = Date.now(), weekId = 'W0') {
   const day = jstDay(now);
   const seedN = strHash(r.id) % 1000;
@@ -270,23 +302,18 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   const age = Math.max(1, day - joined);
   const s = r.skill;
 
-  // 調子: 3日ごとに切り替わるブロック。sin 波と違って「連勝が続く」「急に
-  // 落ちる」が起きるので、日々見ていると人間がプレイしているように見える。
-  const block = Math.floor(day / 3);
-  const form = (unit(r.id, `f${block}`) - 0.5) * 2;                     // -1..1
-  const formPrev = (unit(r.id, `f${block - 1}`) - 0.5) * 2;
-  const blend = (day % 3) / 3;                                          // ブロック境界をなめらかに
-  const mood = formPrev * (1 - blend) + form * blend;
-  // レートは実力に長期の伸びを足し、そこに調子が乗る形。
-  const climb = 1 - Math.exp(-age / (30 + (1 - s) * 60));
-  const aptPvp = aptitude(r, 'pvp');
+  // 調子（3日ブロック）と レート式は moodFor / ratingFor に集約してある
+  // （residentsForLevel の軽量パスと必ず同値にするため — 式が分岐すると住人の
+  // 変装レートとランキング表示がズレる）。上限や根拠は ratingFor 参照。
+  const mood = moodFor(r, day);
+  const aptPvp = aptitude(r, 'pvp');   // rating 以外（pvpWins）でも使う
   // v2.14: 住人は大幅強化 — ランキング上位は化け物級の記録になる。
   // それでも各ボードに絶対上限を残す。根拠は「人間の理論上限の内側」:
   //   ・スコアの不正対策クランプは 500点/秒 なので、長時間の本気の走りで
   //     100万点级に届きうる。住人は 900,000 で頭打ち。
   //   ・レートは 2600 止まり（Eloに上限は無いので、勝ち続ける人間は超えうる）
   //   ・王座は同値なら実プレイヤーが勝つ — どの王冠も理論上は奪還できる。
-  const rating = Math.min(2600, Math.round(850 + Math.pow(s, 1.3) * 1600 * aptPvp * (0.72 + 0.28 * climb) + mood * 70));
+  const rating = ratingFor(r, s, age, mood);
   const level = Math.max(1, Math.min(60, 1 + Math.floor(age * (0.10 + s * 0.45))));
   // ここから下は全部「自己ベスト」— 練習日に更新され、下がらず、住人ごとに
   // 更新日がずれる。得意ボードほど天井が高い。
@@ -399,7 +426,10 @@ export const BOT_RATING_BANDS = { easy: [700, 1020], normal: [980, 1300], hard: 
 export function residentsForLevel(roster, level, now = Date.now()) {
   const [lo, hi] = BOT_RATING_BANDS[level] || BOT_RATING_BANDS.normal;
   return roster.filter(r => {
-    const { rating } = residentStats(r, now);
+    // rating だけで足りるので軽量版を使う（residentStats の personalBest 60ステップ
+    // ×5ボードを席数ぶん回すと、最大倍率のバトロワ開始でイベントループが約140ms
+    // 詰まる）。residentRating と residentStats.rating は同じ ratingFor を通るので同値。
+    const rating = residentRating(r, now);
     return rating >= lo && rating <= hi;
   });
 }

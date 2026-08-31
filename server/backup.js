@@ -15,7 +15,18 @@ import { DATA_DIR } from './db.js';
 import { GUILD_ICONS } from './guilds.js';
 
 const SNAP_DIR = path.join(DATA_DIR, 'snapshots');
-const KEEP_SNAPSHOTS = 12;
+// 保持は「全体で12件」だけだった。ところが自動で撮られるのは起動時の1件で、
+// デプロイのたびに1枠を食う。実際、この機体の snapshots は12件すべてが _boot
+// （うち2件は90秒差）になっていて、復元前(pre-restore)・巻き戻し前(pre-rollback)・
+// 手動(manual) の退避は1件も残っていなかった ── いちばん要るときに戻れない。
+//
+// そこで「自動で増える種類」にだけ枠を切り、残りを退避のために空けておく。
+// 全体の枠も少し広げる（1件あたり db.json 1本ぶんなので、いまの規模で数百KB）。
+const KEEP_SNAPSHOTS = 16;
+// ラベルごとの上限。ここに載っているものだけが「自動で増える」種類で、
+// 全体の枠が足りなくなったときも先に捨てられる側。pre-restore / pre-rollback /
+// manual は載せない（＝押し出されるのは最後）。
+const LABEL_KEEP = { boot: 3, hourly: 6 };
 
 export const BACKUP_VERSION = 2;
 
@@ -23,7 +34,21 @@ export const BACKUP_VERSION = 2;
 
 // Returns { ok: true, stats } or { ok: false, error }.
 // 復元で受け付けるユーザー数の上限。
-export const MAX_RESTORE_USERS = 20_000;
+//
+// ここは 20,000 だった。だがこの門より手前に「本文のバイト数」の門があり
+// （index.js の RESTORE_LIMIT_MB）、1人あたりの実測は
+//   新規 1,351B / 遊び込み 2,403B / 全解放 6,152B
+// なので、20,000人ぶんは最も軽い見積りでも 27MB になる。つまり件数の上限には
+// 決して到達せず、『ユーザー数が多すぎます』という具体的な案内は一度も
+// 表示されなかった（必ず先に 413 のバイト数エラーで落ちる）。
+//
+// この上限が本来守っているのは**メモリではなく CPU** ── 復元の後段には
+// ユーザー1人あたり pbkdf2（1回13ms前後）が回り、Node は1本の処理列なので、
+// その間サーバー全体が何も応答できない。20,000件なら260秒。バイト数の門
+// （12MB ≒ 最も軽い見積りで約9,300人）より内側に置いて初めて意味を持つので、
+// 「実際に到達しうる件数」まで下げる。8,000件でも pbkdf2 だけで約100秒 ——
+// これ以上を1回で流し込ませない、が意図。
+export const MAX_RESTORE_USERS = 8_000;
 
 export function validateBackup(data) {
   if (!data || typeof data !== 'object') return { ok: false, error: 'バックアップの形式が不正です' };
@@ -61,6 +86,10 @@ export function validateBackup(data) {
 // 素通しで innerHTML に入るため、細工したアイコンを仕込んだデータを流し込むと、
 // ギルドランキング（ログイン不要で誰でも開ける）を見た全員に影響しえた。
 // 表示側も直したが、そもそも入れさせない。
+// 直すのはアイコンだけで、他の欄は **わざと** そのまま通す（spread）。
+// ここを「通してよい欄の一覧」にしてはいけない ── db.meta で一度やらかした
+// のと同じ形で、後から増えた欄（guild.quests＝週ごとのギルドクエストの進行と
+// 達成時刻）が復元のたびに黙って消える。
 function sanitizeGuilds(guilds) {
   const out = {};
   for (const [id, g] of Object.entries(guilds)) {
@@ -69,6 +98,192 @@ function sanitizeGuilds(guilds) {
     out[id] = { ...g, icon: GUILD_ICONS.includes(g.icon) ? g.icon : GUILD_ICONS[0] };
   }
   return out;
+}
+
+const isPlainObj = o => !!o && typeof o === 'object' && !Array.isArray(o);
+// JSON.parse は "__proto__" を素の own プロパティとして作る。ファイル由来の
+// キーで新しい入れ物を組み立てるときは必ずここを通す。
+const unsafeKey = k => k === '__proto__' || k === 'constructor' || k === 'prototype';
+
+// --- 🧩 パズル工房と 🎞 デイリーリプレイ（db.meta 配下）の合流 ----------------
+//
+// この2つは db.meta の他のキーと違って「片方だけを採る」では済まない。
+// db.meta の既定の規則は『生きている側がまだ値を持っていないキーだけ採用する』
+// なので、ディスクが飛んだあと復元するまでの窓で誰かが1つでもステージを
+// 投稿すると（＝live 側に db.meta.workshop ができると）、**バックアップに
+// 入っていた全ステージが丸ごと落ちる**。プレイヤーの作品が復元で消えるのは
+// このファイルが防ぐべき事故の中でも最悪の部類なので、中身を突き合わせて
+// 合流させる。
+//
+// 工房のデータは全部 db.meta.workshop の中にある（ユーザーのレコード側には
+// 投稿数もいいね履歴も還元記録も持っていない ── 投稿数は stages を by で
+// 数え、いいね済みは stage.likedBy、還元は payout.by で見ている）。
+// だから mergeEarned ではなくここが工房の保全の全てになる。
+const WS_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';  // index.js の WS_CODE_CHARS と同じ表
+const WS_CODE_LEN = 6;
+const WS_LIKE_MAX = 3000;                 // index.js の WS_LIKE_MAX
+const WS_AUTHOR_COIN_DAY_CAP = 300;       // index.js の WS_AUTHOR_COIN_DAY_CAP
+const DAILY_REPLAY_KEEP = 60;             // index.js の DAILY_REPLAY_KEEP
+const DAILY_REPLAY_DAYS = 2;              // index.js の DAILY_REPLAY_DAYS
+// 🧩 パズル遺跡の「その日その番号は勝利1回まで」の印が覚えるステージ数。
+// index.js の PUZ_WIN_DAY_KEEP と同じ意味。ここは合流時の頭押さえにしか
+// 使わないので、実装側と多少ずれても止め金としての性質は変わらない
+// （細工したファイルで配列を無限に伸ばさせない、が目的）。
+const PUZ_WIN_DAY_KEEP = 200;
+
+// 共有コードが空いているものを引く（衝突した作品の引っ越し先）。
+function freeWorkshopCode(stages) {
+  for (let tries = 0; tries < 200; tries++) {
+    let c = '';
+    for (let i = 0; i < WS_CODE_LEN; i++) c += WS_CODE_CHARS[Math.floor(Math.random() * WS_CODE_CHARS.length)];
+    if (!stages[c]) return c;
+  }
+  return null;
+}
+
+// 同じ作品か。共有コードは6文字のランダムなので、別々の機体で同じコードが
+// 振られる可能性はゼロではない。作者と投稿時刻で見分ける。
+const sameStage = (a, b) => a.by === b.by && a.at === b.at;
+
+// 同じ1作品の2つのコピーを1つにまとめる。
+function unionStage(cur, inc) {
+  // ❤️ いいね済みは **和集合**。ここが二重いいねを止めている唯一の記録なので、
+  // 片方に入っていた人を落とすと、復元後にその人がもう一度♡を押せてしまう。
+  const a = Array.isArray(cur.likedBy) ? cur.likedBy : (cur.likedBy = []);
+  const seen = new Set(a);
+  for (const id of (Array.isArray(inc.likedBy) ? inc.likedBy : [])) {
+    if (!id || seen.has(id) || a.length >= WS_LIKE_MAX) continue;
+    a.push(id); seen.add(id);
+  }
+  // likes は表示用の数。和集合の件数と、両側が申告している数の大きいほうを採る
+  // （古い記録が likedBy を持っていない場合に♡が減って見えないように）。
+  cur.likes = Math.max(a.length, Number(cur.likes) || 0, Number(inc.likes) || 0);
+  cur.plays = Math.max(Number(cur.plays) || 0, Number(inc.plays) || 0);
+  // 片方の作品データが欠けていたら補う。盤面が無いステージは遊べない＝
+  // 事実上失われたのと同じなので、拾えるものは拾う。
+  if (!Array.isArray(cur.board) && Array.isArray(inc.board)) cur.board = inc.board;
+  if (!Array.isArray(cur.pieces) && Array.isArray(inc.pieces)) cur.pieces = inc.pieces;
+  if (!Array.isArray(cur.solution) && Array.isArray(inc.solution)) cur.solution = inc.solution;
+  if (!cur.title && inc.title) cur.title = inc.title;
+  if (!cur.byName && inc.byName) cur.byName = inc.byName;
+}
+
+// db.meta.workshop の合流。live を書き換えて返す。
+function mergeWorkshop(live, inc) {
+  if (!isPlainObj(inc)) return isPlainObj(live) ? live : undefined;
+  if (!isPlainObj(live)) live = {};
+  const stages = isPlainObj(live.stages) ? live.stages : (live.stages = {});
+  for (const [code, s] of Object.entries(isPlainObj(inc.stages) ? inc.stages : {})) {
+    if (!isPlainObj(s) || unsafeKey(code)) continue;
+    const cur = stages[code];
+    if (!cur || !isPlainObj(cur)) { stages[code] = { ...s, code }; continue; }
+    if (sameStage(cur, s)) { unionStage(cur, s); continue; }
+    // 同じコードに別の作品が座っている。片方を捨てるのは「プレイヤーの作品を
+    // 失う」ことなので、空いているコードへ移して両方残す（共有された古い
+    // コードは live 側の作品を指したままになるが、作品自体は消えない）。
+    const moved = freeWorkshopCode(stages);
+    if (moved) stages[moved] = { ...s, code: moved };
+  }
+  // 🪙 作者への還元記録（その日いくら払ったか）。同じ日なら **足して** から
+  // 1日の上限で止める ── ディスクが飛んだあとに払った分とファイルに残って
+  // いる分は別の支払いなので、大きいほうを採ると上限をもう一周できてしまう。
+  // 迷ったら閉じる側。日が違うときは新しい日の記録を残す（古い日の記録は
+  // index.js の workshopPayoutDay が次の支払いで作り直すので止め金にならない）。
+  const lp = live.payout, ip = inc.payout;
+  if (isPlainObj(ip)) {
+    if (!isPlainObj(lp)) live.payout = ip;
+    else if (String(lp.day) === String(ip.day)) {
+      const by = isPlainObj(lp.by) ? lp.by : (lp.by = {});
+      for (const [uid, n] of Object.entries(isPlainObj(ip.by) ? ip.by : {})) {
+        if (unsafeKey(uid)) continue;
+        by[uid] = Math.min(WS_AUTHOR_COIN_DAY_CAP, (Number(by[uid]) || 0) + (Number(n) || 0));
+      }
+    } else if (String(ip.day) > String(lp.day)) {   // 'YYYY-MM-DD' は辞書順＝時系列順
+      live.payout = ip;
+    }
+  }
+  return live;
+}
+
+// db.meta.dailyReplays の合流。
+// 日替わりで捨てられる一時データなので「絶対に失ってはいけない」類ではないが、
+// 落とすと 👻ゴースト盤面がその日いっぱい空になる（＝復元直後にちょうど
+// 見に来た人にだけ機能が消えて見える）。突き合わせは1日ぶんを uid で束ねる
+// だけで済むので保全する。上限は index.js と同じ「新しい2日 × 60件」で
+// 押さえるので、細工したファイルで db.json を膨らませることはできない。
+function mergeDailyReplays(live, inc) {
+  if (!isPlainObj(inc)) return isPlainObj(live) ? live : undefined;
+  if (!isPlainObj(live)) live = {};
+  for (const [day, rows] of Object.entries(inc)) {
+    // 日付キーの形を必ず確かめる（"__proto__" もここで落ちる）。
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Array.isArray(rows)) continue;
+    const cur = Array.isArray(live[day]) ? live[day] : (live[day] = []);
+    const byUid = new Map();
+    for (const r of cur) if (r && r.uid) byUid.set(r.uid, r);
+    for (const r of rows) {
+      if (!r || !r.uid || !Array.isArray(r.moves)) continue;
+      const have = byUid.get(r.uid);
+      if (!have) { cur.push(r); byUid.set(r.uid, r); continue; }
+      // 1人1行。よいほうの回を残す（ボードに載るのはその人のベスト）。
+      if ((Number(r.score) || 0) > (Number(have.score) || 0)) Object.assign(have, r);
+    }
+    live[day] = cur
+      .sort((a, b) => ((b.score || 0) - (a.score || 0)) || ((a.at || 0) - (b.at || 0)))
+      .slice(0, DAILY_REPLAY_KEEP);
+  }
+  for (const d of Object.keys(live).sort().reverse().slice(DAILY_REPLAY_DAYS)) delete live[d];
+  return live;
+}
+
+// 名前で照合して id が入れ替わった人を、db.meta 側の記録でも読み替える。
+// 工房の作者(by)・いいね済み(likedBy)・還元記録(payout.by)と、リプレイの uid は
+// すべてユーザー id なので、やらないと「自分の作品なのに削除できない」
+// 「一度押した♡をもう一度押せる」「還元の1日上限がリセットされる」が起きる。
+function remapMetaIds(meta, idRemap) {
+  if (!isPlainObj(meta) || !idRemap || !idRemap.size) return;
+  const w = meta.workshop;
+  if (isPlainObj(w)) {
+    if (isPlainObj(w.stages)) {
+      for (const s of Object.values(w.stages)) {
+        if (!isPlainObj(s)) continue;
+        if (s.by && idRemap.has(s.by)) s.by = idRemap.get(s.by);
+        if (Array.isArray(s.likedBy)) {
+          const out = [];
+          for (const id of s.likedBy) {
+            const n = idRemap.get(id) || id;
+            if (n && !out.includes(n)) out.push(n);
+          }
+          s.likedBy = out;
+          s.likes = Math.max(Number(s.likes) || 0, out.length);
+        }
+      }
+    }
+    if (isPlainObj(w.payout) && isPlainObj(w.payout.by)) {
+      const by = {};
+      for (const [id, n] of Object.entries(w.payout.by)) {
+        const k = idRemap.get(id) || id;
+        if (unsafeKey(k)) continue;
+        // 同じ人の2つの id が1つに畳まれたら、払った額は足す（上限で止める）。
+        by[k] = Math.min(WS_AUTHOR_COIN_DAY_CAP, (Number(by[k]) || 0) + (Number(n) || 0));
+      }
+      w.payout.by = by;
+    }
+  }
+  const dr = meta.dailyReplays;
+  if (isPlainObj(dr)) {
+    for (const [day, rows] of Object.entries(dr)) {
+      if (!Array.isArray(rows)) continue;
+      const seen = new Map();
+      for (const r of rows) {
+        if (!r || !r.uid) continue;
+        r.uid = idRemap.get(r.uid) || r.uid;
+        const have = seen.get(r.uid);
+        // 付け替えで同じ人の行が2つになることがある。よいほうだけ残す。
+        if (!have || (Number(r.score) || 0) > (Number(have.score) || 0)) seen.set(r.uid, r);
+      }
+      dr[day] = rows.filter(r => r && r.uid && seen.get(r.uid) === r);
+    }
+  }
 }
 
 // How "far along" a user record is — used to pick a winner on username clashes.
@@ -107,7 +322,10 @@ function mergeEarned(winner, loser) {
   // 🤝 フレンドとブロックも合流させる。とくに blocked は本人が身を守るために
   // 付けたもので、進行度で負けたほうのコピーに入っていても落としてはいけない
   // （BAN/ミュートを union しているのと同じ理由）。
-  for (const k of ['achievements', 'badges', 'owned', 'friends', 'blocked']) {
+  // 📚 collections は「図鑑のセットコンプ報酬を受け取った印」で、二重受取を
+  // 止めているのはこの配列だけ（catalog.js の claimCollection）。落とすと
+  // 復元のたびに同じセットの報酬をもう一度受け取れる。
+  for (const k of ['achievements', 'badges', 'owned', 'friends', 'blocked', 'collections', 'wsLiked']) {
     const a = Array.isArray(winner[k]) ? winner[k] : (winner[k] = []);
     for (const v of (Array.isArray(loser[k]) ? loser[k] : [])) if (!a.includes(v)) a.push(v);
   }
@@ -165,6 +383,17 @@ function mergeEarned(winner, loser) {
     else if (lw.week === ww.week) {
       ww.rewarded = !!(ww.rewarded || lw.rewarded);
       ww.best = Math.max(ww.best || 0, lw.best || 0);
+    } else {
+      //   ・違う週どうしのときは stats.weekly が1週ぶんしか持てないので、まだ
+      //     支払っていない順位報酬（rewarded:false かつ best>0）を抱えたほうを残す。
+      //     落とせば finalizeWeeklyRankings も値が無く払えず、順位報酬が永久に消える。
+      //     両方が保留中なら「古い週」を優先する（そちらが今すぐ支払われる対象で、
+      //     新しい＝今週ぶんは生きている本人が遊べば作り直される）。
+      const pending = r => r && !r.rewarded && (r.best || 0) > 0;
+      const wkNum = w => { const n = parseInt(String(w).replace(/^\D+/, ''), 10); return Number.isFinite(n) ? n : Infinity; };
+      if (pending(lw) && (!pending(ww) || wkNum(lw.week) < wkNum(ww.week))) {
+        winner.stats.weekly = { ...lw };
+      }
     }
   }
   const wrr = Array.isArray(winner.rankRewards) ? winner.rankRewards : (winner.rankRewards = []);
@@ -174,6 +403,198 @@ function mergeEarned(winner, loser) {
       if (r && r.id && !seenRR.has(r.id)) { wrr.push(r); seenRR.add(r.id); }
     }
   }
+
+  // 🏰 ギルド金庫の受取記録（guilds.js の user.guildQuests）。
+  // { week, gid, claimed:[questId], badge } を今週ぶんだけ持つ入れ物で、
+  // 二重受取を止めているのは claimed の中身だけ。落とすと復元後に同じ週の
+  // 金庫をもう一度開けられる（コインとジェムが二重に出る）。
+  //   ・同じ週・同じギルドなら claimed は和集合、badge は OR
+  //   ・勝った側に記録が無ければ、負けた側のものをそのまま引き継ぐ
+  //   ・同じ週で別ギルドなら「印のあるほう」を残す。claimGuildQuest は
+  //     「今週は別のギルドで開けた」を rec の中身で判定するので、空のほうを
+  //     残すと gid が付け替わって二度目が通ってしまう（迷ったら閉じる側）。
+  //   ・週が違うときは新しい週のほうを残す。古い週の記録は memberQuestRec が
+  //     次の受け取りで作り直す＝止め金にならないので、残しても意味がない。
+  const lgq = loser.guildQuests;
+  if (lgq && typeof lgq === 'object' && !Array.isArray(lgq)) {
+    const wgq = winner.guildQuests;
+    // 週の比較は weekly と同じく数値部で（'W9999' → 'W10000' の桁またぎ）。
+    // ただしここは「読めない週」を Infinity に倒すと壊れた値が正しい記録を
+    // 押し出してしまうので、逆（いちばん古い）に倒す。
+    const qWk = w => { const n = parseInt(String(w).replace(/^\D+/, ''), 10); return Number.isFinite(n) ? n : -Infinity; };
+    const marked = r => !!(r && ((Array.isArray(r.claimed) && r.claimed.length) || r.badge));
+    const copyRec = r => ({ ...r, claimed: [...new Set(Array.isArray(r.claimed) ? r.claimed : [])] });
+    if (!wgq || typeof wgq !== 'object' || Array.isArray(wgq)) {
+      winner.guildQuests = copyRec(lgq);
+    } else if (wgq.week === lgq.week && wgq.gid === lgq.gid) {
+      wgq.claimed = [...new Set([
+        ...(Array.isArray(wgq.claimed) ? wgq.claimed : []),
+        ...(Array.isArray(lgq.claimed) ? lgq.claimed : []),
+      ])];
+      wgq.badge = !!(wgq.badge || lgq.badge);
+    } else if (wgq.week === lgq.week) {
+      if (!marked(wgq) && marked(lgq)) winner.guildQuests = copyRec(lgq);
+    } else if (qWk(lgq.week) > qWk(wgq.week)) {
+      winner.guildQuests = copyRec(lgq);
+    }
+  }
+
+  // 📦 ゲスト記録の引き継ぎ（index.js の /api/me/import-guest は1アカウント
+  // 1回だけ）。止め金は stats.guestImportedAt だけなので、進行度で負けた
+  // コピーがそれを握っていると、復元後にもう一度取り込める＝ブースターを
+  // 何度でも増やせる。中身（stats.guestImport＝表示用のベスト）も一緒に運ぶ。
+  // 印だけ残って中身が消えると、二度と取り込めないのに画面が空のままになる。
+  const lst = loser.stats;
+  if (lst && typeof lst === 'object' && (lst.guestImportedAt || lst.guestImport)) {
+    const wst = winner.stats || (winner.stats = {});
+    // 実際に取り込んだのは最初の1回。両方に印があるときは古いほうを正とする。
+    if (lst.guestImportedAt && (!wst.guestImportedAt || lst.guestImportedAt < wst.guestImportedAt)) {
+      wst.guestImportedAt = lst.guestImportedAt;
+      if (lst.guestImport) wst.guestImport = lst.guestImport;
+    } else if (!wst.guestImport && lst.guestImport) {
+      wst.guestImport = lst.guestImport;
+    }
+  }
+
+  // 📕 図鑑の「1日1セット受け取り枠」(catalog.js collectionQuota / claimCollection)。
+  // user.collectionClaims = { day:'YYYY-MM-DD', n } で、その日に何セット受け取った
+  // かを持つ。二重受取を止めているのは n だけなので、落とすと復元後にその日ぶんを
+  // もう一度受け取れる（collections と同じ性格の止め金）。
+  //   ・同じ日なら n の大きいほう（迷ったら閉じる）
+  //   ・勝った側に無ければ負けた側のものを引き継ぐ
+  //   ・日が違うときは新しい日のほう。古い日は collectionQuota が次の受け取りで
+  //     作り直す＝止め金にならないので残しても意味がない。
+  const okDay = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d));
+  const lcc = loser.collectionClaims;
+  if (isPlainObj(lcc) && okDay(lcc.day)) {
+    const wcc = winner.collectionClaims;
+    const ln = Math.max(0, Math.floor(Number(lcc.n) || 0));
+    if (!isPlainObj(wcc) || !okDay(wcc.day) || String(lcc.day) > String(wcc.day)) {
+      winner.collectionClaims = { day: String(lcc.day), n: ln };
+    } else if (String(wcc.day) === String(lcc.day)) {
+      wcc.n = Math.max(Math.floor(Number(wcc.n) || 0), ln);
+    }
+  }
+
+  // 🧩 パズル遺跡の「同じステージの勝利はJST1日1回まで」の印
+  // (index.js applyGameResult の puzWinDay = { day, stages:[番号] })。
+  // ステージは番号だけで決まる決定論的な盤面なので、手順を覚えれば何度でも
+  // won:true を送れる。それを止めているのはこの配列だけなので、落とすと
+  // 復元後に同じステージぶんの勝利報酬をもう一度受け取れる。
+  //   ・同じ日なら和集合（迷ったら閉じる）
+  //   ・勝った側に無ければ負けた側のものを引き継ぐ
+  //   ・日が違うときは新しい日のほう（古い日は次の勝利で作り直される＝止め金にならない）
+  const lpw = loser.stats && loser.stats.puzWinDay;
+  if (isPlainObj(lpw) && okDay(lpw.day)) {
+    const wst3 = winner.stats || (winner.stats = {});
+    const lstg = (Array.isArray(lpw.stages) ? lpw.stages : []).filter(n => Number.isFinite(n));
+    const wpw = wst3.puzWinDay;
+    if (!isPlainObj(wpw) || !okDay(wpw.day) || String(lpw.day) > String(wpw.day)) {
+      wst3.puzWinDay = { day: String(lpw.day), stages: [...new Set(lstg)].slice(-PUZ_WIN_DAY_KEEP) };
+    } else if (String(wpw.day) === String(lpw.day)) {
+      const cur = Array.isArray(wpw.stages) ? wpw.stages.filter(n => Number.isFinite(n)) : [];
+      wpw.stages = [...new Set([...cur, ...lstg])].slice(-PUZ_WIN_DAY_KEEP);
+    }
+  }
+
+  // 🎁 ショップの1日1回の無料ギフト受領印 (routes/shop.js giftClaimedDay)。
+  // user.stats.shopGiftDay = 'YYYY-MM-DD'。二重受取を止めているのはこの印だけ
+  // なので、落とすと同じ日にもう一度ギフトを受け取れる。新しい日付（＝いま
+  // 閉じている日）のほうを残す ── 古い日付は次の受け取りで上書きされるだけで
+  // 止め金にならない。
+  const lsg = loser.stats && loser.stats.shopGiftDay;
+  if (okDay(lsg)) {
+    const wst2 = winner.stats || (winner.stats = {});
+    if (!okDay(wst2.shopGiftDay) || String(lsg) > String(wst2.shopGiftDay)) {
+      wst2.shopGiftDay = String(lsg);
+    }
+  }
+
+  // 🎲 ミッションの引き直し使用回数 (missions.js rerollCounts)。
+  // user.missions.rerolls = { '<日付キー>':{daily,weekly}, '<週キー W35>':{daily,weekly} }
+  // の2階建てで、無料＋有料の引き直し回数を数える唯一の rate-limit 記録。落とすと
+  // 復元後に回数がリセットされ、余分に引き直せる。キーごと・スコープごとに多いほう
+  // （迷ったら閉じる）。古いキーは syncMissions / rerollCounts が当日・今週ぶん以外を
+  // 捨てるので溜まらない。勝った側に missions がまだ無いときは触らない ── day/week の
+  // 文脈が無いと syncMissions が次回に丸ごと作り直すので、片端の rerolls を足しても
+  // 意味がなく、壊れた missions を残す危険だけが増える（実害は次の期に0回に戻るだけ）。
+  const lms = loser.missions;
+  if (isPlainObj(lms) && isPlainObj(lms.rerolls) && isPlainObj(winner.missions)) {
+    const wm = winner.missions;
+    const wrr2 = isPlainObj(wm.rerolls) ? wm.rerolls : (wm.rerolls = {});
+    for (const [key, lc] of Object.entries(lms.rerolls)) {
+      if (unsafeKey(key) || !isPlainObj(lc)) continue;
+      // 日付キー（YYYY-MM-DD）か週キー（W＋数字）だけ通す。細工した巨大キーを弾く。
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(key) && !/^W\d+$/.test(key)) continue;
+      const wc = isPlainObj(wrr2[key]) ? wrr2[key] : (wrr2[key] = { daily: 0, weekly: 0 });
+      for (const s of ['daily', 'weekly']) {
+        wc[s] = Math.max(Math.floor(Number(wc[s]) || 0), Math.floor(Number(lc[s]) || 0), 0);
+      }
+    }
+  }
+}
+
+// --- 🏰 ギルド名簿の整合 -----------------------------------------------------
+//
+// user.guildId と guild.members は同じ事実の二重持ちで、これまで直していたのは
+// 片方向（users→guilds）だけだった。名簿に死んだ id が残っても誰も落とさない
+// のに、読み手は生の length を見ている:
+//   ・guilds.js の満員判定は `guild.members.length >= GUILD_MAX_MEMBERS`(=20)
+//     ── 幽霊がそのまま1枠を占め、「20/20 なのに誰も居ない」ギルドができる
+//   ・所有権の委譲は生存者が尽きると `|| guild.members[0]` に落ちる
+//     ── 死んだ id がオーナーになると、そのギルドは誰にも触れなくなる
+// これは index.js の DELETE /api/me のコメントが「一度やらかしている事故」と
+// して記録している形そのもの。削除の経路は塞がれたが、復元／マージ経路と、
+// すでに幽霊を抱えている本番の db は塞がれていなかった。
+//
+// db を書き換えて { ghosts, disbanded, owners, pointers } を返す。
+// 起動時にも呼べる（同じ関数を通せば、既存の壊れた名簿も次の再起動で直る）。
+export function healGuildRosters(db) {
+  const out = { ghosts: 0, disbanded: 0, owners: 0, pointers: 0 };
+  if (!db || !isPlainObj(db.guilds)) return out;
+  const users = isPlainObj(db.users) ? db.users : {};
+  for (const [gid, g] of Object.entries(db.guilds)) {
+    if (!isPlainObj(g)) { delete db.guilds[gid]; out.disbanded++; continue; }
+    const before = Array.isArray(g.members) ? g.members : [];
+    // 幽霊（db.users に居ない id）と重複を落とす。
+    const seen = new Set();
+    const members = [];
+    for (const id of before) {
+      if (!id || seen.has(id) || !users[id]) continue;
+      seen.add(id);
+      members.push(id);
+    }
+    out.ghosts += before.length - members.length;
+    g.members = members;
+    if (!members.length) {
+      // 名簿が空になったギルドは解散扱い（guilds.js の leaveGuild と同じ）。
+      delete db.guilds[gid];
+      out.disbanded++;
+      continue;
+    }
+    // オーナーが幽霊なら、いちばん古株の生存者に引き継ぐ（leaveGuild と同型）。
+    if (!g.ownerId || !users[g.ownerId] || !members.includes(g.ownerId)) {
+      g.ownerId = members
+        .map(id => users[id]).filter(Boolean)
+        .sort((a, b) => (a.guildJoinedAt || 0) - (b.guildJoinedAt || 0))[0]?.id || members[0];
+      out.owners++;
+    }
+    if (Array.isArray(g.applicants)) {
+      g.applicants = [...new Set(g.applicants.filter(id => id && users[id]))];
+    }
+  }
+  // ポインタ側（従来の処理）。名簿を掃除したあとにやる。
+  const memberOf = {};
+  for (const g of Object.values(db.guilds)) {
+    for (const id of (Array.isArray(g.members) ? g.members : [])) memberOf[id] = g.id;
+  }
+  for (const u of Object.values(users)) {
+    if (!u) continue;
+    const want = memberOf[u.id] || null;
+    if (u.guildId && !db.guilds[u.guildId]) { u.guildId = want; out.pointers++; }
+    else if (!u.guildId && want) { u.guildId = want; out.pointers++; }
+  }
+  return out;
 }
 
 // --- snapshots ------------------------------------------------------------
@@ -192,11 +613,34 @@ export function snapshot(db, label = 'auto') {
   }
 }
 
+// ファイル名は `${ISO時刻}_${label}.json`。ラベルは最後の '_' の後ろ
+//（'pre-restore' のように '-' を含むものがあるので '-' では割らない）。
+function labelOf(file) {
+  const m = /_([^_]+)\.json$/.exec(file);
+  return m ? m[1] : '';
+}
+
 function prune() {
   try {
+    // 名前の頭は ISO 時刻なので、辞書順＝時系列順（古い順）。
     const files = fs.readdirSync(SNAP_DIR).filter(f => f.endsWith('.json')).sort();
-    for (const f of files.slice(0, Math.max(0, files.length - KEEP_SNAPSHOTS))) {
-      fs.unlinkSync(path.join(SNAP_DIR, f));
+    const drop = new Set();
+    // ① 自動で増える種類は、種類ごとの枠を越えたぶんを古い順に落とす。
+    for (const [label, keep] of Object.entries(LABEL_KEEP)) {
+      const mine = files.filter(f => labelOf(f) === label);
+      for (const f of mine.slice(0, Math.max(0, mine.length - keep))) drop.add(f);
+    }
+    // ② それでも全体の枠を越えるなら、古いものから落とす。①で自動ぶんは
+    //    すでに頭を押さえてあるので、ここで消えるのは本当に古い退避だけ。
+    const left = files.filter(f => !drop.has(f));
+    let remaining = left.length;
+    for (const f of left) {
+      if (remaining <= KEEP_SNAPSHOTS) break;
+      drop.add(f);
+      remaining--;
+    }
+    for (const f of drop) {
+      try { fs.unlinkSync(path.join(SNAP_DIR, f)); } catch { /* best effort */ }
     }
   } catch { /* best effort */ }
 }
@@ -256,9 +700,16 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
       // すると次の起動で同梱 seed が「未適用」と判定されて再適用され、
       // 復元したばかりのデータの上に古い seed が被さる。
       const keepSeedHash = db.meta ? db.meta.seedHash : undefined;
+      // 🛠 メンテナンスも同じ理由でこの機体のもの。README の更新手順が
+      // 「🛠メンテナンス → 💾バックアップDL」の順なので、ファイル側はほぼ必ず
+      // true を持っている。それを被せると、復元は成功しているのに
+      // プレイヤーだけが締め出されたまま復帰する（merge 側も同じ扱い）。
+      const keepMaintenance = db.meta ? db.meta.maintenance : undefined;
       db.meta = { ...db.meta, ...data.meta };
       if (keepSeedHash === undefined) delete db.meta.seedHash;
       else db.meta.seedHash = keepSeedHash;
+      if (keepMaintenance === undefined) delete db.meta.maintenance;
+      else db.meta.maintenance = keepMaintenance;
     }
     report.added = Object.keys(db.users).length;
     report.tokens = Object.keys(db.tokens).length;
@@ -408,9 +859,9 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
   }
 
   // db.meta: a fresh post-deploy instance holds only trivial meta — adopt the
-  // backup's world state (event, poll+votes, crowd scale/config, maintenance,
-  // season override, throne progress) for every key the live side hasn't set
-  // since boot.
+  // backup's world state (event, poll+votes, crowd scale/config, season
+  // override, throne progress) for every key the live side hasn't set
+  // since boot. メンテナンススイッチだけは持ち込まない（下記）。
   if (data.meta && typeof data.meta === 'object') {
     db.meta = db.meta || {};
     // ここは以前「持ち込んでよいキーの一覧」だった。「新しい db.meta のキーを
@@ -429,12 +880,46 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     //                           値で巻き戻すと次の起動で古い seed が再適用される
     //   lastRankRewardWeek    … 復元後に消すのが目的（すぐ下でそうしている）
     //   backupAt/backupVersion … バックアップファイル自身の情報で、世界の状態ではない
-    const META_NOT_RESTORED = new Set(['seedHash', 'lastRankRewardWeek', 'backupAt', 'backupVersion']);
+    //   backupTrimmed         … 同上（4MB の復元上限に収めるために書き出し側が
+    //                           何を落としたかの記録。db に持ち込む意味は無い）
+    //   maintenance           … 「今この機体を止めているか」の運用スイッチで、世界の
+    //                           状態ではない。README が案内する更新手順が
+    //                           「🛠メンテナンス → 💾バックアップDL」の順なので、
+    //                           正規の手順で取ったファイルはほぼ必ず true を含む。
+    //                           持ち込むと、復元は成功して管理画面も正常に見えるのに
+    //                           プレイヤーだけがメンテナンス表示で入れなくなる
+    //                           （復元の応答にもログにも出ないので気づけない）。
+    //                           止めたいなら復元後に管理画面から入れ直す。
+    //
+    // 🏛 hallOfFame（歴代シーズンの永久記録）と seasonMark（シーズン切替の検知印）は
+    // **わざとここに入れない**。hallOfFame が落ちれば、この機構が存在する理由その
+    // ものである再デプロイのたびに歴代の記録が消える。seasonMark が落ちると
+    // settleSeasonHallOfFame が「印が無い＝初回」と見なして、直前に終わった
+    // シーズンを表彰しないまま印だけ進めるので、1シーズンぶんが無言で飛ぶ。
+    // 古い seasonMark が入って「シーズンが巻き戻った」ように見えても二重に
+    // 殿堂入りはしない ── index.js 側に
+    // `hallOfFame.some(e => e.season === prev.id)` の重複チェックがあり、
+    // 記録済みのシーズンなら印を進めるだけで戻る（報酬もそこで止まる）。
+    const META_NOT_RESTORED = new Set(['seedHash', 'lastRankRewardWeek', 'backupAt', 'backupVersion', 'backupTrimmed', 'maintenance']);
+    // 🧩 workshop と 🎞 dailyReplays は「片方だけを採る」では守れない。
+    // 既定の規則は『live 側がまだ値を持っていないキーだけ採用する』なので、
+    // 復元までの窓で誰か1人がステージを投稿しただけで、バックアップ側の
+    // 全ステージ（＝プレイヤーの作品）が丸ごと落ちる。中身を突き合わせる。
+    const META_MERGED = new Map([
+      ['workshop', mergeWorkshop],
+      ['dailyReplays', mergeDailyReplays],
+    ]);
     for (const k of Object.keys(data.meta)) {
       if (META_NOT_RESTORED.has(k)) continue;
       // ファイルの中身は外から来る。JSON.parse は "__proto__" を素の own プロパティ
       // として作るが、代入するとプロトタイプの setter が動いてしまうので通さない。
       if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+      const merge = META_MERGED.get(k);
+      if (merge && isPlainObj(data.meta[k])) {
+        const merged = merge(db.meta[k], data.meta[k]);
+        if (merged !== undefined) db.meta[k] = merged;
+        continue;
+      }
       if (db.meta[k] == null && data.meta[k] != null) db.meta[k] = data.meta[k];
     }
     // Weekly payouts: an empty post-deploy boot may have stamped the current
@@ -442,6 +927,10 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     // re-run for the restored users (per-record `rewarded` flags keep it safe).
     delete db.meta.lastRankRewardWeek;
   }
+  // 🧩🎞 db.meta の中にもユーザー id を持つ記録がある（工房の作者・いいね済み・
+  // 還元記録、リプレイの uid）。ここでやるのは、上の合流で両側の記録が
+  // db.meta に揃った直後だから。ギルド名簿の付け替えと同じ理由・同じ形。
+  remapMetaIds(db.meta, idRemap);
   // 🤝 ギルドの名簿にも同じ付け替えを効かせる。ここでやるのは、
   // ギルドが db.guilds に入るのがこの直前だから。
   // やらないと、id が入れ替わった人が名簿の中で存在しない id になり
@@ -465,15 +954,10 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     }
   }
 
-  // Members' guild pointers must agree with the guild roster after a merge.
-  if (db.guilds) {
-    const memberOf = {};
-    for (const g of Object.values(db.guilds)) for (const id of g.members || []) memberOf[id] = g.id;
-    for (const u of Object.values(db.users)) {
-      if (u.guildId && !db.guilds[u.guildId]) u.guildId = memberOf[u.id] || null;
-      else if (!u.guildId && memberOf[u.id]) u.guildId = memberOf[u.id];
-    }
-  }
+  // 🏰 ギルド名簿とメンバーのポインタを突き合わせる。以前はポインタ側
+  //（users→guilds）しか直しておらず、名簿に残った幽霊 id は誰も落とさなかった。
+  const guildFix = healGuildRosters(db);
+  if (guildFix.ghosts || guildFix.disbanded || guildFix.owners) report.guilds = guildFix;
 
   // Purchase history is append-only: union by transaction id.
   if (Array.isArray(data.transactions)) {

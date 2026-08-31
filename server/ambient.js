@@ -221,6 +221,13 @@ export function residentByName(name) {
 
 let worldProvider = () => ({ event: null, poll: null });
 export function setWorldProvider(fn) { worldProvider = fn; }
+
+// 実プレイヤーの登録名（db.users の username 小文字集合）を返す関数。index.js が
+// 注入する。ghostRows は taken 照合で衝突を防いでいるのに、Bot 変装やロビー発言の
+// pickPersona フォールバックは素通しで、同名の偽レート対戦相手/発言者が出て
+// なりすましが成立しうる（v2.15 で塞いだ住人名衝突と同型）。未設定時は素通し。
+let takenNamesProvider = null;
+export function setTakenNamesProvider(fn) { takenNamesProvider = fn; }
 export function worldCtx(extra = {}) {
   const w = worldProvider() || {};
   const now = extra.now || Date.now();
@@ -242,12 +249,16 @@ export function pickPersona({ used, guestChance = 0.3, rnd = Math.random } = {})
       if (!used || !used.has(name)) { if (used) used.add(name); return { name, registered: false }; }
     }
   }
+  // 実プレイヤーの登録名は避ける（同名の偽レート対戦相手/発言者＝なりすまし防止）。
+  // tries>=3 で必ず2桁サフィックスが付き名前空間が広がるので枯れない。比較は小文字。
+  const taken = takenNamesProvider ? takenNamesProvider() : null;
   for (let tries = 0; ; tries++) {
     const useCustom = custom.names.length > 0 && rnd() < 0.35;
     const pool = useCustom ? custom.names : NAMES;
     let name = pool[Math.floor(rnd() * pool.length)];
     if (tries >= 3 || (!useCustom && rnd() < 0.25)) name += String(Math.floor(rnd() * 90) + 10);
-    if (!used || !used.has(name)) { if (used) used.add(name); return { name, registered: true }; }
+    const free = (!used || !used.has(name)) && (!taken || !taken.has(name.toLowerCase()));
+    if (free) { if (used) used.add(name); return { name, registered: true }; }
   }
 }
 

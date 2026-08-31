@@ -7,12 +7,93 @@ import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } fr
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openInventory, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
-import { applySettings } from './settings.js';
+import { applySettings, getSettings } from './settings.js';
 import { initChat, reconnectChat, showFeedModal, setMood, updateNewsDot } from './chat.js';
 import { setAdminEvent } from './adminevent.js';
 import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
 import { openFriends } from './friends.js';
 import { initParty } from './party.js';
+
+// ---------------------------------------------------------------------------
+// 🧯 クライアントJSエラーの自動報告（POST /api/clienterror）
+//
+// index.html には CSP（script-src 'self'）が効いているのでインライン script は
+// 置けない。ES Modules は import が先に評価される仕様上、main.js の本体で
+// これより早くは走れない ── ここが「このファイルで可能なかぎり最速」の位置。
+// import 中に落ちた分だけは拾えないが、それ以降の実行時エラーは全部ここに来る。
+//
+// 大原則: 報告が新しいエラーを生んではいけない。すべて try/catch で握りつぶす。
+// ---------------------------------------------------------------------------
+{
+  const seen = new Set();          // 同じエラーはセッション中1回だけ
+  const MAX_REPORTS = 20;          // 別種のエラーでも送り過ぎない上限
+  let sentCount = 0;
+
+  const post = (payload) => {
+    try {
+      const json = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        // Blob で type を付けないと text/plain になり、express.json() が読めない。
+        const blob = new Blob([json], { type: 'application/json' });
+        if (navigator.sendBeacon('/api/clienterror', blob)) return;
+      }
+      fetch('/api/clienterror', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: json,
+        keepalive: true,
+      }).catch(() => { /* 報告が届かなくても遊びは続く */ });
+    } catch { /* sendBeacon も fetch も無い環境。何もしない */ }
+  };
+
+  const report = (kind, message, stack, where) => {
+    try {
+      const msg = String(message == null ? '' : message).slice(0, 400);
+      if (!msg) return;
+      const key = `${kind}|${msg}|${where || ''}`;
+      if (seen.has(key)) return;
+      if (sentCount >= MAX_REPORTS) return;
+      seen.add(key);
+      sentCount++;
+      post({
+        kind,                                     // 'error' | 'unhandledrejection'
+        message: msg,
+        // スタックは先頭数行だけ（全部送ると1件が数KBになる）
+        stack: String(stack == null ? '' : stack).split('\n').slice(0, 5).join('\n').slice(0, 1200),
+        where: String(where == null ? '' : where).slice(0, 300),   // file:line:col
+        url: String(location.pathname + location.search).slice(0, 300),
+        ua: String(navigator.userAgent || '').slice(0, 300),
+        lang: String(navigator.language || ''),
+        screen: `${window.innerWidth}x${window.innerHeight}@${window.devicePixelRatio || 1}`,
+        at: Date.now(),
+      });
+    } catch { /* 絶対に投げ返さない */ }
+  };
+
+  window.addEventListener('error', (e) => {
+    try {
+      if (!e) return;
+      const err = e.error;
+      // <img>/<script> の読み込み失敗も同じ 'error' で上がってくるが、
+      // message も error も無い。JSエラーではないので送らない。
+      const message = e.message || (err && err.message);
+      if (!message) return;
+      const where = e.filename ? `${e.filename}:${e.lineno || 0}:${e.colno || 0}` : '';
+      report('error', message, err && err.stack, where);
+    } catch { /* ignore */ }
+  });
+
+  window.addEventListener('unhandledrejection', (e) => {
+    try {
+      if (!e) return;
+      const r = e.reason;
+      const message = (r && r.message) ? r.message : (typeof r === 'string' ? r : (() => {
+        try { return JSON.stringify(r); } catch { return String(r); }
+      })());
+      report('unhandledrejection', message, r && r.stack, '');
+    } catch { /* ignore */ }
+  });
+}
 
 applyStaticI18n();
 
@@ -315,6 +396,60 @@ window.addEventListener('keydown', e => {
 $('#btnAdminCmd').onclick = () => showAdminPalette();
 startGodLoop();
 
+// ---------------------------------------------------------------------------
+// 📳 触覚フィードバック（navigator.vibrate）
+//
+// このゲームは縦固定の standalone PWA で、入力は canvas の上の指ドラッグひとつ。
+// なのに手応えは音と絵だけで、音は Web Audio の合成音のみ ── iPhone の
+// サイレントスイッチや音量0では「置いた／消えた／置けなかった」の確認が
+// 画面しか無かった。
+//
+// 鳴らし分けは効果音の呼び出し点とまったく同じなので、各所に手を入れるより
+// audio の該当メソッドに1枚かぶせるほうが漏れない（modes.js から鳴らす
+// ぶんも同じ経路を通る）。元の実装はそのまま呼ぶので音は1ミリも変わらない。
+//
+// iOS Safari は vibrate 非対応。存在チェックで丸ごと no-op に落ちる。
+// ---------------------------------------------------------------------------
+{
+  const canBuzz = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
+  let lastBuzz = 0;
+  const buzz = pattern => {
+    if (!canBuzz || !pattern) return;
+    if (!getSettings().haptics) return;
+    // 同じ瞬間に2つ鳴る場面（ライン消去＋コンボ）で後の1本が前を打ち消さない
+    // ように、ごく短い間隔は捨てる。先に来た＝強いほうが残る。
+    const now = Date.now();
+    if (now - lastBuzz < 30) return;
+    lastBuzz = now;
+    try { navigator.vibrate(pattern); } catch { /* 端末が拒んでも遊びは続く */ }
+  };
+  const withHaptic = (name, pattern) => {
+    const orig = audio[name];
+    if (typeof orig !== 'function') return;          // 名前が変わったら黙って何もしない
+    audio[name] = function (...args) {
+      try { buzz(typeof pattern === 'function' ? pattern(...args) : pattern); } catch { /* ignore */ }
+      return orig.apply(this, args);
+    };
+  };
+  if (canBuzz) {
+    withHaptic('pickup', 8);                          // つまむ
+    withHaptic('place', 12);                          // 置けた
+    withHaptic('putback', [10, 40, 10]);              // 置けずに戻った
+    withHaptic('invalid', [10, 40, 10]);              // そもそも触れない
+    // 消えた本数ぶんだけ強くする（1本=30ms 〜 4本=60ms）。
+    withHaptic('clearLines', count => Math.min(60, 18 + (Math.max(1, Number(count) || 1)) * 12));
+    // 連鎖は「本数」ではなく「回数」で返す。段が上がるほど刻みが増える。
+    withHaptic('combo', streak => {
+      const n = Math.max(1, Math.min(3, Math.ceil((Number(streak) || 1) / 3)));
+      const p = [];
+      for (let i = 0; i < n; i++) p.push(14, 50);
+      p.pop();                                        // 末尾の休みは要らない
+      return p;
+    });
+    withHaptic('gameOver', [60, 60, 120]);            // おしまい
+  }
+}
+
 // ---- audio boot: autoplay if allowed, otherwise tap-to-start splash ----
 function startAudioNow() {
   audio.ensure();
@@ -344,6 +479,13 @@ function dismissSplash(e) {
   // First launch: pick a language before anything else.
   if (!localStorage.getItem('bba_lang')) {
     splash.querySelector('.ts-tap').classList.add('hidden');
+    // ⚠️ この画面は「ここで」＝モジュール本体の同期実行中に出しきること。
+    // 下の async ブロックまで待つと sleep(250) ぶんの窓が空き、その間は
+    // メニューのボタンだけが生きている状態になる。そこでソロを押されると
+    // 試合が始まった上に全画面のピッカーが降ってきて、しかもこの画面は
+    // 言語を選ぶまでタップでは閉じない ── 唯一の脱出（英語を選ぶ）は
+    // location.reload() なので、始まったばかりの1戦目が消えてしまう。
+    // 同期のうちに出しておけば、ボタンが有効になる瞬間にはもう塞がっている。
     const pick = document.createElement('div');
     pick.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:22px;align-items:center';
     pick.innerHTML = `
@@ -362,13 +504,25 @@ function dismissSplash(e) {
         dismissSplash();
       });
     });
+    splash.classList.remove('hidden');
   }
   // Block every pointer/click event on the splash from bubbling through.
   splash.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); });
   splash.addEventListener('pointerup', e => { e.preventDefault(); e.stopPropagation(); });
   splash.addEventListener('click', dismissSplash);
   window.addEventListener('keydown', function onKey(e) {
-    if (!splash.classList.contains('hidden')) dismissSplash();
+    // スプラッシュが表示される前（起動直後の約250msの判定待ち）はまだ hidden。
+    // その間の打鍵でリスナーを消費してしまうと、表示後にキーボードで閉じられ
+    // なくなる。表示されている時だけ閉じ、閉じ終えたらリスナーを解除する。
+    if (splash.classList.contains('hidden')) {
+      // クリック／タップ等で既に閉じられていた場合はここで解除して漏らさない。
+      if (splash.classList.contains('ts-out')) window.removeEventListener('keydown', onKey);
+      return;
+    }
+    // 初回（言語未選択）は打鍵で閉じない ── ここでリスナーを外してしまうと、
+    // 言語を選んだあとキーボードで閉じられなくなる。
+    if (!localStorage.getItem('bba_lang')) return;
+    dismissSplash();
     window.removeEventListener('keydown', onKey);
   });
   // Fallback audio unlock for the no-splash (autoplay-allowed) case.
@@ -378,13 +532,13 @@ function dismissSplash(e) {
 (async () => {
   // Try silent autoplay first — succeeds on repeat visits where the browser
   // has granted audio permission; otherwise show the tap-to-start splash.
-  // First launch (no language chosen yet): ALWAYS show the splash — it
-  // doubles as the language picker.
+  // First launch (no language chosen yet) は上のブロックが既に出しているので、
+  // ここは 250ms の判定を待たずに何もしない（待つと、その間だけメニューが
+  // 生きた状態になってしまう）。
   audio.ensure();
+  if (!localStorage.getItem('bba_lang')) return;
   await new Promise(r => setTimeout(r, 250));
-  if (!localStorage.getItem('bba_lang')) {
-    $('#tapStart').classList.remove('hidden');
-  } else if (audio.ctx && audio.ctx.state === 'running') {
+  if (audio.ctx && audio.ctx.state === 'running') {
     startAudioNow();
   } else {
     $('#tapStart').classList.remove('hidden');
@@ -393,6 +547,9 @@ function dismissSplash(e) {
 
 // live online counter + limited-time event on the menu
 window.__bbaEvent = null;
+// 次の自動開催イベント（/api/status の nextEvent）。旧サーバー・自動開催OFFでは
+// このキー自体が来ないので、null のまま＝予告バナーは一切出ない。
+window.__bbaNextEvent = null;
 
 function fmtRemain(ms) {
   const s = Math.max(0, Math.ceil(ms / 1000));
@@ -424,6 +581,59 @@ function updateEventBanner() {
     btn.classList.toggle('hidden', !staffExtras());
     btn.classList.toggle('staff-only', true);
   }
+  updateNextEventBanner();
+}
+
+// ---- 📣 「明日は◯◯開催！」予告バナー ----
+//
+// 開催中バナー(#eventBanner)のすぐ下に、同じ .event-banner の見た目で並べる。
+// index.html は担当外なので器はここで作る ── 出すものが無い間は作りもしない
+// （nextEvent を返さないサーバーでは DOM が1つも増えない）。
+function nextEventBannerEl(create) {
+  let el = document.getElementById('nextEventBanner');
+  if (el || !create) return el;
+  const host = $('#eventBanner');
+  if (!host || !host.parentNode) return null;
+  el = document.createElement('div');
+  el.id = 'nextEventBanner';
+  el.className = 'event-banner';
+  // 開催中バナーより一段控えめに（予告が本番より目立たないように）
+  el.style.cssText = 'margin-top:6px;opacity:.82;font-weight:700';
+  host.insertAdjacentElement('afterend', el);
+  return el;
+}
+
+// 「今日 / 明日 / N日後」— 時計ではなくカレンダー上の日付で数える。
+function whenWord(startsAt) {
+  const now = new Date();
+  const then = new Date(startsAt);
+  const d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const d1 = new Date(then.getFullYear(), then.getMonth(), then.getDate()).getTime();
+  const days = Math.round((d1 - d0) / 86400000);
+  if (days <= 0) return t('今日', 'today');
+  if (days === 1) return t('明日', 'tomorrow');
+  return t(`${days}日後`, `in ${days} days`);
+}
+
+function updateNextEventBanner() {
+  const ne = window.__bbaNextEvent;
+  const startsAt = ne ? Number(ne.startsAt || ne.startAt) : 0;
+  const live = window.__bbaEvent && window.__bbaEvent.endsAt > Date.now();
+  // 開催中は予告を出さない。まだ予告が無い／もう始まっている場合も同じ。
+  if (live || !ne || !startsAt || !isFinite(startsAt) || startsAt <= Date.now()) {
+    const cur = nextEventBannerEl(false);
+    if (cur) cur.classList.add('hidden');
+    return;
+  }
+  const el = nextEventBannerEl(true);
+  if (!el) return;
+  const icon = ne.icon || '📣';
+  const name = t(ne.name || 'お楽しみイベント', ne.nameEn || ne.name || 'a special event');
+  const clock = new Date(startsAt).toLocaleTimeString(t('ja-JP', 'en-US'), { hour: '2-digit', minute: '2-digit' });
+  const remain = fmtRemain(startsAt - Date.now());
+  el.textContent = t(`${icon} ${whenWord(startsAt)}は「${name}」開催！ ${clock}スタート（あと${remain}）`,
+    `${icon} "${name}" starts ${whenWord(startsAt)} at ${clock}! (in ${remain})`);
+  el.classList.remove('hidden');
 }
 
 async function pollStatus() {
@@ -437,6 +647,8 @@ async function pollStatus() {
     $('#onlineBadge').classList.remove('hidden');
     setMood(data.mood);
     window.__bbaEvent = data.event || null;
+    // nextEvent を返さないサーバー（自動開催OFF・旧版）では undefined → null。
+    window.__bbaNextEvent = data.nextEvent || null;
     updateEventBanner();
     setAdminEvent(data.adminEvent || null);
     const prevPoll = window.__bbaPoll && window.__bbaPoll.id;
@@ -595,7 +807,24 @@ function showDungeonSelect(realmId = 'tower') {
 $('#btnDungeon').onclick = () => { audio.click(); showDungeonSelect(); };
 
 // ---- survival ----
-$('#btnSurvival').onclick = () => { audio.click(); startSurvival(); };
+$('#btnSurvival').onclick = () => {
+  audio.click();
+  const best = Math.max(Number(localStorage.getItem('bba_survival_wave') || 0),
+    session.user ? (session.user.stats.survivalWave || 0) : 0);
+  const m = showModal(`
+    <h2>💀 ${t('サバイバル', 'Survival')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('<b>ウェーブごとにお邪魔ブロックが降ってくる</b>耐久モード。最初は15秒おき、ウェーブが進むほど<b>間隔はどんどん短く</b>（最短5秒）、降ってくる量も増えていく。<br><small>置ける場所が無くなったら終了 — ラインを消して盤面を空け、1ウェーブでも深く生き延びろ！</small>',
+          '<b>Garbage blocks rain down wave after wave</b> — an endurance run. It starts every 15s, but <b>the interval keeps shrinking</b> (down to 5s) and each wave dumps more.<br><small>It ends the moment nothing fits — keep clearing lines to make room and survive one more wave!</small>')}
+    </p>
+    ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`最高ウェーブ W${fmt(best)}`, `Best wave W${fmt(best)}`)}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="svCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-oni" id="svStart">💀 ${t('生き延びる', 'Survive')}</button>
+    </div>`);
+  m.querySelector('#svCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#svStart').onclick = () => { audio.click(); closeModal(); startSurvival(); };
+};
 
 // ---- meltdown (炉心スコアアタック) ----
 $('#btnMeltdown').onclick = () => {
@@ -690,6 +919,158 @@ $('#btnDig').onclick = () => {
   m.querySelector('#dgCancel2').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#dgStart2').onclick = () => { audio.click(); closeModal(); startDig(); };
 };
+
+// ---------------------------------------------------------------------------
+// 第3波の新モード導線（⛓️ 連鎖カスケード / 🏗️ ブループリント / 🛠️ パズル工房）
+//
+// ボタン要素は index.html 側（#btnChain / #btnBlueprint / #btnWorkshop）にある
+// が、index.html は担当外なので「無ければ JS から足す」形にしてある（screens.js
+// の ensureHallOfFameNav / ensureWorkshopNav と同じ流儀）。既にあるものは拾う
+// だけなので二重には生えない。
+//
+// #btnWorkshop は screens.js の ensureWorkshopNav() も拾って openWorkshop() を
+// 直に割り当てる。main.js は import の評価が終わったあとに走る＝こちらの
+// onclick が後勝ちになるので、他モードと同じ「開始モーダル」を挟める。
+//
+// 起動関数は modes.js 側でまだ名前が固まっていないので import はせず、
+// window 経由で「あれば呼ぶ・無ければトーストで止める」形にしてある。
+// modes.js の実装が間に合わなくてもメニューは絶対に壊れない。
+// ---------------------------------------------------------------------------
+
+// 候補名を順に試して、最初に見つかった関数を呼ぶ。見つからなければトースト。
+function callModeEntry(names, args) {
+  for (const name of names) {
+    const fn = window[name];
+    if (typeof fn === 'function') {
+      try {
+        fn.apply(window, args || []);
+      } catch (err) {
+        // モード側が落ちてもメニューまで道連れにしない（自動報告には乗る）。
+        console.error(err);
+        toast(t('モードを開始できませんでした', 'Could not start this mode'), 'err');
+      }
+      return true;
+    }
+  }
+  toast(t('準備中です', 'Coming soon'));
+  return false;
+}
+
+// メニューのモード一覧にボタンを1つ確保する。戻り値は button（作れなければ null）。
+function ensureModeButton(id, cls, label, afterId) {
+  try {
+    let btn = $('#' + id);
+    if (!btn) {
+      const list = $('#screen-menu .menu-buttons');
+      if (!list) return null;
+      btn = document.createElement('button');
+      btn.id = id;
+      btn.className = `btn ${cls} btn-big`;
+      const after = afterId ? $('#' + afterId) : null;
+      if (after && after.parentNode === list) list.insertBefore(btn, after.nextSibling);
+      else list.appendChild(btn);
+    }
+    // index.html の文言は日本語固定で、i18n.js の applyStaticI18n() に対応する
+    // 行が入るまで英語面でも日本語のままになる。ここで毎回 t() の結果に揃えて
+    // おけば、i18n.js が追いついても同じ文言なので取り合いにならない。
+    btn.textContent = label;
+    return btn;
+  } catch {
+    return null;   // メニューの形が変わっても他の導線は死なせない
+  }
+}
+
+function modeLocalBest(key) {
+  const v = Number(localStorage.getItem(key) || 0);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+function modeStatBest(field) {
+  return (session.user && session.user.stats && Number(session.user.stats[field])) || 0;
+}
+
+// ---- ⛓️ chain cascade (連鎖カスケード) ----
+function showChainSetup() {
+  const best = Math.max(modeLocalBest('bba_chain_best'), modeStatBest('chainBest'));
+  const maxChain = Math.max(modeLocalBest('bba_chain_max'), modeStatBest('chainMax'));
+  const m = showModal(`
+    <h2>⛓️ ${t('連鎖カスケード', 'Chain Cascade')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('ラインを消すと<b>上のブロックが下に落ちてくる</b>！落ちた先でまたラインが揃えば<b>連鎖</b>し、連鎖が続くほど<b>スコア倍率が跳ね上がる</b>。<br><small>盤面を崩さず「あと1マス」を残して積み、一撃で雪崩を起こせ — 置ける場所が無くなったら終了。</small>',
+          'Clearing a line makes <b>everything above it fall</b> — and if the landing forms another line, it <b>chains</b>. The longer the chain, <b>the bigger the score multiplier</b>.<br><small>Stack with one gap left, then trigger the avalanche in a single move. It ends when nothing fits.</small>')}
+    </p>
+    ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}${maxChain ? t(` / 最大${maxChain}連鎖`, ` / longest ${maxChain}-chain`) : ''}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="cnCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-coop" id="cnStart">⛓️ ${t('連鎖を起こす', 'Start the cascade')}</button>
+    </div>`);
+  m.querySelector('#cnCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#cnStart').onclick = () => {
+    audio.click();
+    closeModal();
+    // modes.js 側の名前が確定していないので候補を順に試す。
+    callModeEntry(['startChainMode', 'startChain', 'startCascade']);
+  };
+}
+
+// ---- 🏗️ blueprint (日替わりの設計図) ----
+function showBlueprintSetup() {
+  const clears = Math.max(modeLocalBest('bba_blueprint_clears'), modeStatBest('blueprintClears'));
+  const m = showModal(`
+    <h2>🏗️ ${t('ブループリント', 'Blueprint')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('<b>日替わりの設計図どおりに</b>ピースを組み上げる、全員同じお題のパズル。<br><small>配られるピースは設計図をちょうど作れるぶんだけ。<b>ラインを揃えてしまうと作品が消えてしまう</b>ので、いつもと逆の頭で置き場所を考えろ！</small>',
+          'Build <b>today\'s blueprint</b> exactly as drawn — the same puzzle for everyone, every day.<br><small>You get precisely the pieces the drawing needs. <b>Complete a line and your artwork vanishes</b> — so think the opposite way round!</small>')}
+    </p>
+    ${clears ? `<p class="center" style="font-size:13px;font-weight:800">${t(`これまでに ${fmt(clears)}枚 完成`, `${fmt(clears)} blueprints completed`)}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="bpCancel">${t('やめる', 'Cancel')}</button>
+      <button class="btn btn-gold" id="bpStart">🏗️ ${t('今日の設計図に挑む', "Build today's blueprint")}</button>
+    </div>`);
+  m.querySelector('#bpCancel').onclick = () => { audio.click(); closeModal(); };
+  m.querySelector('#bpStart').onclick = () => {
+    audio.click();
+    closeModal();
+    callModeEntry(['startBlueprint', 'startBlueprintMode', 'startBlueprintDaily']);
+  };
+}
+
+// ---- 🛠️ puzzle workshop (自作ステージ) ----
+function showWorkshopSetup() {
+  const canEdit = typeof window.openWorkshopEditor === 'function';
+  const m = showModal(`
+    <h2>🛠️ ${t('パズル工房', 'Puzzle Workshop')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('みんなが作ったパズルで遊べる工房。<b>6文字の共有コード</b>で友達の作品にも飛べる。<br><small>自分で盤面を描いて投稿もできる — 自分でクリアできた図だけが公開されるので、解けない問題は出てこない。遊ばれるほど作者に🪙が入る！</small>',
+          'A workshop full of player-made puzzles — jump straight to a friend\'s stage with its <b>6-letter share code</b>.<br><small>You can build and publish your own, too: only stages you have solved yourself go live, so nothing is unsolvable. Authors earn 🪙 every time their stage is played!</small>')}
+    </p>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="wsCancel2">${t('やめる', 'Cancel')}</button>
+      ${canEdit ? `<button class="btn btn-ghost" id="wsMake2">🛠️ ${t('作る', 'Create')}</button>` : ''}
+      <button class="btn btn-puzzle" id="wsOpen2">🧩 ${t('ステージを探す', 'Browse stages')}</button>
+    </div>`);
+  m.querySelector('#wsCancel2').onclick = () => { audio.click(); closeModal(); };
+  const make = m.querySelector('#wsMake2');
+  if (make) make.onclick = () => { audio.click(); closeModal(); callModeEntry(['openWorkshopEditor']); };
+  m.querySelector('#wsOpen2').onclick = () => {
+    audio.click();
+    closeModal();
+    // 一覧は screens.js が window.openWorkshop として公開済み（audio.click は向こうで鳴る）。
+    callModeEntry(['openWorkshop']);
+  };
+}
+
+function ensureNewModeButtons() {
+  const chain = ensureModeButton('btnChain', 'btn-chain', `⛓️ ${t('連鎖カスケード', 'Chain Cascade')}`, 'btnChimera');
+  if (chain) chain.onclick = () => { audio.click(); showChainSetup(); };
+  const blueprint = ensureModeButton('btnBlueprint', 'btn-blueprint', `🏗️ ${t('ブループリント', 'Blueprint')}`, 'btnDaily');
+  if (blueprint) blueprint.onclick = () => { audio.click(); showBlueprintSetup(); };
+  // screens.js が先に onclick を入れているので、ここで上書きして開始モーダルを挟む。
+  const workshop = ensureModeButton('btnWorkshop', 'btn-workshop', `🛠️ ${t('パズル工房', 'Puzzle Workshop')}`, 'btnPuzzle');
+  if (workshop) workshop.onclick = () => { audio.click(); showWorkshopSetup(); };
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ensureNewModeButtons, { once: true });
+else ensureNewModeButtons();
 
 // ---- time attack ----
 $('#btnSprint').onclick = () => {
@@ -860,6 +1241,42 @@ if (location.search.includes('purchase=success')) {
   toast(t('購入をキャンセルしました', 'Purchase canceled'), '', 2500);
 }
 
+// ---------------------------------------------------------------------------
+// 📴 通信が切れたとき
+//
+// これまでは圏外になっても画面はまったく変わらず、次に何かを押したときに
+// はじめて失敗のトーストが出ていた（＝理由が分からない）。トップバーに
+// 小さな印を出して、押す前に気づけるようにする。
+// ---------------------------------------------------------------------------
+function updateOfflineTag(announce) {
+  const tag = $('#offlineTag');
+  if (!tag) return;
+  const off = navigator.onLine === false;
+  tag.textContent = t('📴 オフライン', '📴 Offline');
+  tag.classList.toggle('hidden', !off);
+  if (!announce) return;
+  if (off) toast(t('📴 通信が切れました。つながると自動で元に戻ります', '📴 You are offline — everything resumes once the connection is back'), 'err', 4000);
+  else toast(t('📶 通信が戻りました', '📶 Back online'), 'ok', 2200);
+}
+window.addEventListener('offline', () => updateOfflineTag(true));
+window.addEventListener('online', () => updateOfflineTag(true));
+updateOfflineTag(false);
+
+// ---- Service Worker ----
+// ホーム画面から起動するインストール型（manifest は display:standalone）なので、
+// 圏外で開くと「接続できません」というブラウザの既定画面がアプリの中に出ていた。
+// sw.js は常にネットワークを先に見て、失敗したときだけ控えを出す ──
+// つまり更新の届き方は今までと変わらない。
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  // 起動直後の通信と取り合わないよう、読み込みが済んでから登録する。
+  const registerSw = () => {
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+      .catch(() => { /* 未対応・非HTTPS なら今までどおり動くだけ */ });
+  };
+  if (document.readyState === 'complete') registerSw();
+  else window.addEventListener('load', registerSw, { once: true });
+}
+
 // ---- session restore ----
 document.body.dataset.screen = 'menu';
 initChat();
@@ -988,3 +1405,20 @@ function showRestoreFailedModal() {
     banner.classList.remove('hidden');
   }
 })();
+
+// ---------------------------------------------------------------------------
+// 🎬 起動中の目隠し(#bootVeil)を外す。
+//
+// ここはモジュール本体のいちばん最後 ── つまり、メニューの onclick が全部
+// 付き終わったあと。ここまで来てから外すので、「押せる見た目なのに無反応」な
+// 時間がプレイヤーの側には残らない（英語面の applyStaticI18n() も済んでいる
+// ので、日本語メニューが一瞬だけ見えることも無い）。
+// 万一ここに到達できなくても、CSS 側の 12 秒の保険が同じ目隠しを剥がす。
+// ---------------------------------------------------------------------------
+{
+  const veil = document.getElementById('bootVeil');
+  if (veil) {
+    veil.classList.add('bv-out');
+    setTimeout(() => veil.remove(), 320);   // フェードが終わってから DOM ごと捨てる
+  }
+}

@@ -302,6 +302,33 @@ export function reservationOf(user, dayKey) {
   return r;
 }
 
+// 予約が指している枠を引き当てる。
+//
+// slotId は slotsOf が振る **配列の添字** で、slots は保存のたび HH:MM 昇順に
+// 並べ直される。だから運営が枠を1つ足す／消すだけで、既存の予約がまるごと
+// 別の時刻へ黙ってずれていた（18:00 を取った人が 17:00 の枠に移り、18:00 に
+// 来ても「いまはあなたの枠の時間ではありません」で弾かれる）。
+//
+// そこで予約には時刻そのもの（slotTime）を持たせ、引き当てはこれを正とする。
+// 枠の並びが変わっても 18:00 は 18:00 のままで、その枠自体が消えたときだけ
+// 「枠なし」になる（消えた枠の人を勝手に別の時刻へ移さない）。
+//
+// 古い予約（slotTime を持たない）は従来どおり添字で引き、見つけた時刻を
+// 書き戻して以後ずれないようにする。逆に slotTime があって添字だけ古い場合は
+// 添字を貼り替える —— 運営画面の予約者一覧など、まだ slotId を見ている側も
+// これで正しい時刻を出せる。
+export function reservedSlot(occ, r) {
+  if (!r || !occ) return null;
+  if (r.slotTime) {
+    const byTime = occ.slots.find(s => s.time === r.slotTime) || null;
+    if (byTime && r.slotId !== byTime.id) r.slotId = byTime.id;
+    return byTime;
+  }
+  const byId = occ.slots.find(s => s.id === r.slotId) || null;
+  if (byId) r.slotTime = byId.time;
+  return byId;
+}
+
 export function reserve(user, occ, slotId, now = Date.now()) {
   const slot = occ.slots.find(s => s.id === slotId);
   if (!slot) return { error: 'その時間枠は存在しません' };
@@ -309,12 +336,13 @@ export function reserve(user, occ, slotId, now = Date.now()) {
   // 取り消し中でも、その日の実績（受取済みの段・欠片の支払い印）は控えに残る。
   const prev = reservationOf(user, occ.dayKey)
     || (user && user.adminEventDay && user.adminEventDay.dayKey === occ.dayKey ? user.adminEventDay : null);
-  // Changing your mind mid-session would hand you a second window.
-  if (prev && prev.slotId !== slotId && prev.playedAt) {
-    const prevSlot = occ.slots.find(s => s.id === prev.slotId);
-    if (prevSlot && now >= prevSlot.startsAt && now < prevSlot.endsAt) {
-      return { error: '開催中の枠からは変更できません' };
-    }
+  // いちど遊んだあとに別の枠へ移ると、お宝ラッシュの倍率つき枠を二重に消化できる。
+  // 移り先が開催中でも、前の枠が終わったあとでも同じ抜け道になるので、
+  // 「まだ遊んでいない同日内の乗り換え」だけを許し、プレイ済みなら一律に断る。
+  // 同じ枠かどうかは（添字ではなく）時刻で見る。添字は枠の編集でずれる。
+  const sameSlot = prev && (prev.slotTime ? prev.slotTime === slot.time : prev.slotId === slotId);
+  if (prev && !sameSlot && prev.playedAt) {
+    return { error: 'すでに参加した日は枠を変更できません' };
   }
   user.adminEvent = {
     // その日の実績は「まるごと」引き継ぐ。残す欄を1つずつ書き出していたころ、
@@ -324,6 +352,8 @@ export function reserve(user, occ, slotId, now = Date.now()) {
     ...(prev || {}),
     dayKey: occ.dayKey,
     slotId,
+    // 枠の同定はこちらが正（slotId は表示・並べ替え用の添字）。
+    slotTime: slot.time,
     modeId: occ.modeId,
     reservedAt: now,
     // Progress inside the slot survives a reslot within the same day.
@@ -355,21 +385,25 @@ export function cancelReservation(user, dayKey) {
 
 // The slot a user may PLAY in right now, or null. Admins are always let in —
 // they have to be able to test the thing they are hosting.
-export function liveSlotFor(schedule, user, now = Date.now()) {
+export function liveSlotFor(schedule, user, now = Date.now(), graceMs = 0) {
   // 試運転中は運営以外、枠が来ていても「あなたの時間ではない」と同じ扱い。
   if (schedule && schedule.staffOnly && !isStaff(user)) return null;
-  const occ = currentOccurrence(schedule, now);
+  // graceMs は「結果受付だけ」の猶予。枠終了の間際に始めた 120 秒ランの結果が
+  // 枠を数十秒はみ出しても没収しないために使う。終了判定だけ緩め、参加開始・
+  // 予約の判定は現行どおり厳格（graceMs 既定 0 なので他の呼び出しは無影響）。
+  // その日の最終枠のはみ出しも拾えるよう、日の同定も同じ猶予ぶんずらす。
+  const occ = currentOccurrence(schedule, now - graceMs);
   if (!occ) return null;
   const isAdmin = !!user && user.role === 'admin';
   if (isAdmin) {
-    const any = occ.slots.find(s => now >= s.startsAt && now < s.endsAt);
+    const any = occ.slots.find(s => now >= s.startsAt && now < s.endsAt + graceMs);
     if (any) return { occ, slot: any, viaAdmin: true };
   }
   const r = reservationOf(user, occ.dayKey);
   if (!r) return null;
-  const slot = occ.slots.find(s => s.id === r.slotId);
+  const slot = reservedSlot(occ, r);
   if (!slot) return null;
-  if (now < slot.startsAt || now >= slot.endsAt) return null;
+  if (now < slot.startsAt || now >= slot.endsAt + graceMs) return null;
   return { occ, slot, reservation: r };
 }
 
@@ -456,16 +490,30 @@ export function ensureRun(db, occ, entrants) {
         const maxHp = bossHpFor(entrants);
         if (maxHp > run.maxHp) { run.hp += maxHp - run.maxHp; run.maxHp = maxHp; }
       }
-      if (run.modeId === 'communal') run.tiers = communalTiers(entrants);
+      if (run.modeId === 'communal') {
+        // 侵攻ボスの「一度与えたダメージは巻き戻さない」と同じ方針を共闘にも。
+        // 閾値だけ上げて tiersReached を据え置くと、達成済みの段のラインが総計を
+        // 追い越し「目標 1/4 達成」の表示とゲージが食い違う。達成済みの段は元の
+        // ラインを保ち、未達の段だけ引き上げて整合させる。
+        const grown = communalTiers(entrants);
+        const reached = run.tiersReached || 0;
+        run.tiers = grown.map((t, i) =>
+          (i < reached && run.tiers[i]) ? run.tiers[i] : t);
+      }
     }
     return run;
   }
   const modeId = occ.modeId;
+  // この回が「どの枠で」始まったか（開始時刻ms）。battle-zero が取引の発火基準に読む。
+  // 作成時に生きている枠を採用し、なければその日の開場時刻にフォールバックする。
+  const nowMs = Date.now();
+  const curSlot = occ.slots.find(s => nowMs >= s.startsAt && nowMs < s.endsAt);
   run = {
     dayKey: occ.dayKey,
     modeId,
     entrants,
     startedAt: occ.opensAt,
+    slotStartsAt: curSlot ? curSlot.startsAt : occ.opensAt,
     total: 0,
     byUser: {},          // userId -> { name, score, runs }
     board: [],           // [{ name, score }] top of the day
@@ -560,6 +608,7 @@ export function playerView(db, user, now = Date.now(), counts = null) {
   if (!occ) return null;
   const mode = aeMode(occ.modeId) || AE_MODES[0];
   const r = reservationOf(user, occ.dayKey);
+  const mySlot = reservedSlot(occ, r);
   const live = liveSlotFor(schedule, user, now);
   // The stored run only appears once somebody FINISHES a play. Without a
   // fallback the very first player of the week saw no boss bar and no gauge —
@@ -585,7 +634,13 @@ export function playerView(db, user, now = Date.now(), counts = null) {
     slots: occ.slots.map(s => slotView(s, now, counts ? counts[s.id] : 0)),
     opensAt: occ.opensAt,
     closesAt: occ.closesAt,
-    mine: r ? { slotId: r.slotId, runs: r.runs || 0, best: r.best || 0, chests: r.chests || 0, claimedTiers: r.claimedTiers || [] } : null,
+    // 予約中の枠は時刻から引き直す。枠が編集で消えていたら slotId は null に
+    // なり、画面は「予約なし」として扱える（存在しない添字を返さない）。
+    mine: r ? {
+      slotId: mySlot ? mySlot.id : null,
+      slotTime: mySlot ? mySlot.time : (r.slotTime || null),
+      runs: r.runs || 0, best: r.best || 0, chests: r.chests || 0, claimedTiers: r.claimedTiers || [],
+    } : null,
     live: live ? { slotId: live.slot.id, endsAt: live.slot.endsAt, viaAdmin: !!live.viaAdmin } : null,
     world: run ? {
       total: run.total,
@@ -603,7 +658,11 @@ export function slotCounts(db, occ) {
   const counts = {};
   for (const u of Object.values(db.users || {})) {
     const r = u && u.adminEvent;
-    if (r && r.dayKey === occ.dayKey) counts[r.slotId] = (counts[r.slotId] || 0) + 1;
+    if (!r || r.dayKey !== occ.dayKey) continue;
+    // 時刻で引き直してから数える（添字のままだと枠を編集した週に、
+    // 誰もいない枠が「3人います」と出る）。消えた枠の予約はどこにも数えない。
+    const slot = reservedSlot(occ, r);
+    if (slot) counts[slot.id] = (counts[slot.id] || 0) + 1;
   }
   return counts;
 }

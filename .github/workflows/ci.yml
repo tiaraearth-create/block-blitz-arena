@@ -1,0 +1,55 @@
+# push / Pull Request のたびにテストを回す。
+#
+# 手元で回し忘れても、GitHub 側が必ず1回は回してくれる状態にしておくのが目的。
+# 落ちたら GitHub からメールが飛ぶ。
+name: test
+
+# このジョブは checkout したうえで npm ci / npm test を回す＝リポジトリの
+# 外から来たコードを実行する段。既定のトークン権限をそのまま継承させず、
+# 読み取りだけに絞っておく（ここでは何も書き込まないので read で足りる）。
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# 同じブランチに続けて push したとき、古い実行は打ち切る。
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      # package-lock.json があるので ci（lock どおりに入れる・再現性がある）。
+      - run: npm ci
+
+      - name: テスト
+        # GitHub の無料ランナーは2コアしかない。同時本数を上げるとサーバーの
+        # 起動待ち（15〜20秒）に間に合わないことがあるので、ランナーの既定
+        # （同時2本）をそのまま明示しておく。詰まるようなら TEST_JOBS: 1（＝直列）へ。
+        env:
+          TEST_JOBS: 2
+        run: npm test
+
+      # 依存に既知の脆弱性が出たことを知らせる唯一の口。
+      # インストールは3系統とも npm ci（＝package-lock.json のとおり）なので、
+      # 上流が直した版を出しても lock を更新するまで古いままになる。ここが
+      # 赤くなった日が「lock を引き直す合図」。
+      # テストのあとに置いてあるのは、audit が落ちてもテスト結果は先に
+      # 見えるようにするため。本番に入るのは dev 依存を除いたぶんだけなので
+      # --omit=dev、閾値は high 以上（moderate まで拾うと日常的に赤くなり、
+      # 誰も見なくなる）。
+      - name: 依存の脆弱性チェック
+        run: npm audit --omit=dev --audit-level=high

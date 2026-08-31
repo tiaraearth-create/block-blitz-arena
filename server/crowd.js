@@ -10,7 +10,7 @@
 // }
 
 import { residentStats, archetype, tierOf, jstHour, jstWeekday } from './residents.js';
-import { SHOP_ITEMS, BOSSES, TITLES } from './catalog.js';
+import { SHOP_ITEMS, BOSSES, RAID_BOSSES, TITLES } from './catalog.js';
 import { enName } from '../public/js/catalog-en.js';
 import { ACHIEVEMENTS } from './achievements.js';
 // チャット3.0 (v2.6): 再出防止メモリ + 話題スレッド + 生成合成エンジン
@@ -41,6 +41,11 @@ export const MODE_NAMES = {
   chimera:  ['キメラ工房', 'the chimera lab'],
   puzzle:   ['パズル遺跡', 'the puzzle ruins'],
   dig:      ['採掘場', 'the mines'],
+  // 第3波の3モード。👻幽霊屋敷は隠しモードなので、ここには意図的に載せない
+  // （住人が名前を口にした時点で「隠し」ではなくなる）。
+  chain:     ['連鎖カスケード', 'chain cascade'],
+  blueprint: ['ブループリント', 'the blueprint'],
+  workshop:  ['パズル工房', 'the workshop'],
 };
 
 const AI_LABELS = [['見習い', 'Apprentice'], ['戦士', 'Warrior'], ['達人', 'Master'], ['鬼', 'Oni']];
@@ -60,6 +65,9 @@ export function buildCtx(base) {
     mondayish: (wd === 1 && hour < 12) || (wd === 0 && hour >= 21),
     event: base.event || null,
     poll: base.poll || null,
+    // 🏷️ 日替わりピックアップショップのセール情報（index.js → ambient.js 経由）。
+    // 未供給なら null のまま = セール系のセリフは一切出ない（安全側に倒す）。
+    sale: base.sale || null,
     thrones: base.thrones || [],   // 👑 王座保持者の名前（住人含む）
     active: base.active || [],
     humans: base.humans || [],
@@ -76,10 +84,46 @@ const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
 // 名前ではなくカタログの項目そのものを返す。英語面の描画で id から英語名を
 // 引けるようにするため（以前は日本語名がそのまま英文に挿さっていた）。
+// throneOnly（王座の欠片専用）と gachaOnly（ガチャ限定）は除外する。前者は
+// コイン・ジェム・ガチャのどれでも手に入らない世界進捗報酬なので「買った/引いた」
+// と言わせると設定が壊れ、未解放段の品名ネタバレにもなる。後者は名前に【ガチャ限定】
+// が付くので「買った」系の文面と矛盾する。index.js のガチャ抽選フィルタと同型。
 function cosmeticItem() {
-  const pool = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && i.cat !== 'ult');
+  const pool = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly && !i.gachaOnly && i.cat !== 'ult');
   return pick(pool);
 }
+
+// 🏷️ セール対象の品を {saleitem} に流し込む。ctx.sale は
+//   [id, ...] / { items: [id|item, ...] } / { item: id|item } のどれでも受ける。
+// 文字列 id は SHOP_ITEMS から引き直し、throneOnly / gachaOnly / adminOnly は
+// cosmeticItem と同じ理由で除外する（買えない品を「買った」と言わせない）。
+// セール情報がまだ供給されていない環境では通常のショップ品にフォールバックする
+// ので、文面が壊れることはない。
+function saleItem(ctx) {
+  const sale = ctx && ctx.sale;
+  const raw = !sale ? []
+    : Array.isArray(sale) ? sale
+    : Array.isArray(sale.items) ? sale.items
+    : sale.item ? [sale.item] : [];
+  const items = raw
+    .map(x => (x && typeof x === 'object')
+      ? (x.id ? (SHOP_ITEMS.find(i => i.id === x.id) || x) : x)
+      : SHOP_ITEMS.find(i => i.id === x))
+    .filter(i => i && i.name && !i.throneOnly && !i.gachaOnly && !i.adminOnly);
+  return items.length ? pick(items) : cosmeticItem();
+}
+
+// 住人が正当に持ちうる称号だけを {title} スロットに使う。residentStats(r).title と
+// 同じ分岐（residents.js:317-326）に現れる id 群。towerlord「百塔の覇者」は
+// dungeonMax≤99 のクランプで到達不能なので入れない（「頂は人間に残す」不変条件）。
+const RESIDENT_TITLE_IDS = new Set(['kamislayer', 'tourneyking', 'onislayer', 'diamond', 'rate1200', 'score100k', 'veteran', 'addict', 'rookie']);
+const RESIDENT_TITLES = TITLES.filter(t => RESIDENT_TITLE_IDS.has(t.id));
+
+// 人間だけの頂点を主張する実績は {ach} スロットから除外する（F100制覇・深淵A100
+// 制覇・創造神撃破）。住人の dungeonMax は99止まりで、residentStats はこれらの
+// バッジを持たせない — 称号 towerlord を外したのと同じ不変条件。
+const ACH_HUMAN_ONLY = new Set(['ach_dun100', 'ach_abyss100', 'ach_souzou']);
+const RESIDENT_ACHIEVEMENTS = ACHIEVEMENTS.filter(a => !ACH_HUMAN_ONLY.has(a.id));
 
 // Slots resolve to a language-neutral value first, then render per language.
 // A shared `cache` keeps both translations of one line in agreement (the
@@ -93,12 +137,14 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'me': v = r ? r.name : ''; break;
     case 'mode': v = (r && r.favMode) || 'solo'; break;
     case 'mode2': v = r ? pick(r.modes) : 'solo'; break;
-    case 'floor': v = Math.max(2, Math.min(100, (st ? st.dungeonMax : 20) + rint(-6, 3))); break;
+    // 99止まり: 塔100F制覇は人間だけのもの（residents.js:296 の dungeonMax クランプに揃える）。
+    case 'floor': v = Math.max(2, Math.min(99, (st ? st.dungeonMax : 20) + rint(-6, 3))); break;
     case 'rating': v = st ? st.rating : 1000; break;
     case 'level': v = st ? st.level : 5; break;
     case 'tier': v = st ? st.tier : tierOf(1000); break;
     case 'n': v = rint(2, 9); break;
-    case 'wave': v = st ? Math.max(3, st.survivalWave + rint(-3, 2)) : 8; break;
+    // WAVE も99止まりに揃える（residents.js:347 の survivalWave クランプと同じ）。
+    case 'wave': v = st ? Math.max(3, Math.min(99, st.survivalWave + rint(-3, 2))) : 8; break;
     case 'combo': v = r ? Math.max(3, Math.round(3 + r.skill * 12 + rint(-1, 1))) : 6; break;
     // 自慢する点数はランキングの自己ベスト（residentStats）から出す。
     // skill から別式で作ると、住人強化のたびに「チャットでは6万点なのに
@@ -116,9 +162,13 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'opt': v = ctx.poll && ctx.poll.options && ctx.poll.options.length ? pick(ctx.poll.options) : ''; break;   // オブジェクトごと保持し言語別に描画
     case 'winner': v = ''; break;
     case 'item': v = cosmeticItem(); break;      // オブジェクトごと保持し言語別に描画
+    case 'saleitem': v = saleItem(ctx); break;   // 同上（セール対象があればそれ）
     case 'boss': v = pick(BOSSES); break;         // 同上
-    case 'title': v = pick(TITLES); break;        // 同上
-    case 'ach': v = pick(ACHIEVEMENTS); break;
+    // プロフィールの称号を優先し、無ければ住人が正当に持ちうる称号だけから引く。
+    // TITLES 全体から引くと towerlord「百塔の覇者」等をフィードで名乗り、プロフィール
+    // （residentStats）と食い違う（「頂は人間に残す」不変条件を破る）。
+    case 'title': v = (st && st.title) || pick(RESIDENT_TITLES); break;   // オブジェクトごと保持し言語別に描画
+    case 'ach': v = pick(RESIDENT_ACHIEVEMENTS); break;
     case 'question': v = ctx.poll || ''; break;   // pollオブジェクトごと保持し言語別に描画
     // v2.6 新モードの進行度 — 塔の進みからそれっぽい数字を出す
     case 'depth': v = Math.max(3, Math.round(((st ? st.dungeonMax : 20) || 8) * 0.75) + rint(-4, 3)); break;
@@ -151,7 +201,7 @@ function renderSlot(key, v, lang) {
     // 文字列で渡された場合は従来どおり — 呼び出し側の移行を壊さない。
     // ショップ品・ボス・称号。BOSSES は nameEn を持ち、ショップ/称号は
     // catalog-en.js が id で英語名を持つ。どちらも無ければ日本語のまま。
-    case 'item': case 'boss': case 'title':
+    case 'item': case 'saleitem': case 'boss': case 'title':
       if (!v || typeof v !== 'object') return String(v == null ? '' : v);
       return L ? String(v.nameEn || enName(v)) : String(v.name || '');
     case 'board': case 'badge':
@@ -198,27 +248,27 @@ const LINES = [
   // --- greetings / time of day ---
   { ja: 'おはようございます！', en: 'morning everyone!', ctx: 'morning', w: 3 },
   { ja: '朝からブロック積んでる', en: 'blocks before breakfast', ctx: 'morning' },
-  { ja: '通勤前に1戦だけ', ctx: 'morning', not: ['kid'] },
-  { ja: '朝ウィークリー消化した', ctx: 'morning' },
+  { ja: '通勤前に1戦だけ', en: 'one game before the commute', ctx: 'morning', not: ['kid'] },
+  { ja: '朝ウィークリー消化した', en: 'did the weekly first thing this morning', ctx: 'morning' },
   { ja: 'こんにちは〜', en: 'hi all', ctx: 'day', w: 2 },
-  { ja: '昼休みブロック', ctx: 'day', not: ['kid'] },
-  { ja: '学校終わった！やるぞ！', ctx: 'day', arch: ['kid'] },
+  { ja: '昼休みブロック', en: 'lunch break blocks', ctx: 'day', not: ['kid'] },
+  { ja: '学校終わった！やるぞ！', en: 'school\'s out! let\'s go!', ctx: 'day', arch: ['kid'] },
   { ja: 'こんばんは！', en: 'evening!', ctx: 'evening', w: 3 },
-  { ja: 'ただいま〜', ctx: 'evening' },
-  { ja: 'ごはん食べたら{mode}やる', ctx: 'evening' },
+  { ja: 'ただいま〜', en: 'I\'m home~', ctx: 'evening' },
+  { ja: 'ごはん食べたら{mode}やる', en: 'dinner first, then {mode}', ctx: 'evening' },
   { ja: '深夜組いる？', en: 'night crew here?', ctx: 'night', w: 2 },
   { ja: 'あと1戦だけ…', en: 'one more game…', ctx: 'night', w: 2 },
-  { ja: 'こんな時間まで誰がいるのw', ctx: 'late' },
+  { ja: 'こんな時間まで誰がいるのw', en: 'who else is still up at this hour lol', ctx: 'late' },
   { ja: '眠れないからブロック', en: "can't sleep so… blocks", ctx: 'late' },
-  { ja: '深夜テンションで{mode}', ctx: 'late', arch: ['nightowl', 'tryhard'] },
+  { ja: '深夜テンションで{mode}', en: '{mode} on pure 3am energy', ctx: 'late', arch: ['nightowl', 'tryhard'] },
   { ja: 'おやすみ〜', en: 'good night all', ctx: 'night', w: 2 },
-  { ja: '寝落ちしそう', ctx: 'late' },
-  { ja: '週末だ！ガチる！', ctx: 'weekend', arch: ['tryhard', 'casual', 'explorer'] },
-  { ja: '休日ブロック最高', ctx: 'weekend' },
-  { ja: '花金！今日は遅くまでやる', ctx: 'friday', not: ['kid'] },
-  { ja: 'ウィークリー更新きたね', ctx: 'mondayish', w: 2 },
-  { ja: '今週のウィークリーむずくない？', ctx: 'mondayish' },
-  { ja: '月曜つらい…ブロックで癒される', ctx: 'mondayish', not: ['kid'] },
+  { ja: '寝落ちしそう', en: 'about to fall asleep on the board', ctx: 'late' },
+  { ja: '週末だ！ガチる！', en: 'it\'s the weekend! time to lock in!', ctx: 'weekend', arch: ['tryhard', 'casual', 'explorer'] },
+  { ja: '休日ブロック最高', en: 'blocks on a day off, unbeatable', ctx: 'weekend' },
+  { ja: '花金！今日は遅くまでやる', en: 'friday night, staying up late for this', ctx: 'friday', not: ['kid'] },
+  { ja: 'ウィークリー更新きたね', en: 'the weekly just reset', ctx: 'mondayish', w: 2 },
+  { ja: '今週のウィークリーむずくない？', en: 'this week\'s weekly is rough, right?', ctx: 'mondayish' },
+  { ja: '月曜つらい…ブロックで癒される', en: 'mondays are rough… blocks are therapy', ctx: 'mondayish', not: ['kid'] },
 
   // --- generic play chatter ---
   { ja: '誰か対戦しよ！', en: 'anyone up for a match?', w: 2, arch: ['tryhard', 'casual', 'kid', 'senpai', 'global'] },
@@ -226,109 +276,109 @@ const LINES = [
   { ja: 'gg', en: 'gg', w: 3 },
   { ja: 'ggでした！', en: 'ggwp', w: 2 },
   { ja: 'さっきの人強かった…', en: 'that last opponent was cracked', w: 2 },
-  { ja: 'リベンジさせて！', arch: ['tryhard', 'kid', 'casual'] },
+  { ja: 'リベンジさせて！', en: 'give me a rematch!', arch: ['tryhard', 'kid', 'casual'] },
   { ja: '自己ベスト更新！{score}点！', en: 'new best score! {score}!', w: 2 },
   { ja: 'コンボ{combo}いった！', en: 'just hit a {combo} combo!', w: 2 },
   { ja: 'コンボ切れた瞬間の絶望感', en: 'nothing hurts like losing a combo' },
-  { ja: '2連続全消しキタ━━━', arch: ['casual', 'kid', 'gacha', 'streamer'] },
+  { ja: '2連続全消しキタ━━━', en: 'TWO full clears back to back!!!', arch: ['casual', 'kid', 'gacha', 'streamer'] },
   { ja: 'あと1マスで全消しだった…', en: 'ONE cell away from a full clear…' },
   { ja: '3x3ブロック来なさすぎ', en: 'where are my 3x3 blocks' },
-  { ja: '角を空けるの大事だね', arch: ['senpai', 'tryhard', 'explorer'] },
-  { ja: '縦消し派？横消し派？', arch: ['casual', 'senpai'] },
+  { ja: '角を空けるの大事だね', en: 'keeping the corners open really matters', arch: ['senpai', 'tryhard', 'explorer'] },
+  { ja: '縦消し派？横消し派？', en: 'team vertical clears or team horizontal?', arch: ['casual', 'senpai'] },
   { ja: 'ブロック綺麗に消えると気持ちいい', en: 'clean line clears are so satisfying' },
   { ja: '今日は{mode}やりこむ', en: 'grinding {mode} today', w: 2 },
-  { ja: '{mode}と{mode2}どっちやろ', arch: ['casual', 'explorer'] },
+  { ja: '{mode}と{mode2}どっちやろ', en: '{mode} or {mode2}, which one?', arch: ['casual', 'explorer'] },
   { ja: 'レート{rating}まで来た', en: 'up to {rating} rating', arch: ['tryhard', 'nightowl', 'senpai', 'global'] },
   { ja: '{tier}帯から抜け出せない…', en: 'stuck in {tier} forever', arch: ['casual', 'newbie', 'nightowl', 'global'] },
   { ja: '{tier}に上がった！', en: 'promoted to {tier}!', arch: ['tryhard', 'casual', 'nightowl'] },
   { ja: '連勝中🔥', en: 'on a win streak 🔥', arch: ['tryhard', 'streamer', 'nightowl'] },
   { ja: '5連敗つらい', en: 'lost 5 in a row… pain', arch: ['casual', 'newbie', 'kid'] },
-  { ja: 'レートまた溶けた', arch: ['tryhard', 'nightowl'] },
-  { ja: '連勝ボーナスおいしい', arch: ['tryhard', 'casual'] },
+  { ja: 'レートまた溶けた', en: 'watched my rating melt again', arch: ['tryhard', 'nightowl'] },
+  { ja: '連勝ボーナスおいしい', en: 'the win streak bonus is tasty', arch: ['tryhard', 'casual'] },
   { ja: 'ランキング入りたい', en: 'I want to make the leaderboard', arch: ['casual', 'newbie', 'kid'] },
-  { ja: '今週こそランキング入る', arch: ['casual', 'explorer'] },
+  { ja: '今週こそランキング入る', en: 'this is the week I make the leaderboard', arch: ['casual', 'explorer'] },
 
   // --- modes ---
   { ja: 'ダンジョン{floor}Fで全滅した…', en: 'wiped on dungeon F{floor}…', arch: ['explorer', 'casual', 'newbie', 'nightowl'], w: 2 },
   { ja: 'ダンジョンのボス強すぎw', en: 'the dungeon boss is brutal', arch: ['explorer', 'casual', 'kid'] },
   { ja: '{floor}F到達！', en: 'reached F{floor}!', arch: ['explorer', 'tryhard'] },
-  { ja: '地下ダンジョン怖すぎw', arch: ['explorer', 'casual', 'kid'] },
+  { ja: '地下ダンジョン怖すぎw', en: 'the basement dungeon is way too creepy lol', arch: ['explorer', 'casual', 'kid'] },
   { ja: '天界ダンジョン綺麗すぎて泣いた', en: 'the heaven dungeon is gorgeous', arch: ['explorer', 'casual'] },
-  { ja: 'シールドの強化ほんと強い', arch: ['explorer', 'senpai'] },
+  { ja: 'シールドの強化ほんと強い', en: 'the shield upgrade is genuinely strong', arch: ['explorer', 'senpai'] },
   { ja: 'サバイバルWAVE{wave}まで行った', en: 'made it to wave {wave} in survival', arch: ['explorer', 'nightowl', 'casual'] },
   { ja: 'サバイバルの加速えぐい', en: 'survival mode goes so fast', arch: ['casual', 'explorer'] },
-  { ja: 'ボスラッシュ2体目で死んだ', arch: ['explorer', 'casual'] },
+  { ja: 'ボスラッシュ2体目で死んだ', en: 'died to the second boss in boss rush', arch: ['explorer', 'casual'] },
   { ja: 'レイドボス硬すぎない？', en: 'the raid boss is a tank', arch: ['explorer', 'casual', 'senpai'] },
   { ja: 'レイド行く人いる？', en: 'anyone for a raid?', arch: ['explorer', 'senpai', 'casual'] },
-  { ja: '魔王まで倒した！', arch: ['explorer', 'tryhard', 'kid'] },
+  { ja: '魔王まで倒した！', en: 'took down the demon king!', arch: ['explorer', 'tryhard', 'kid'] },
   { ja: 'トーナメント優勝したった！！', en: 'won the tournament!!', arch: ['tryhard', 'streamer'], w: 0.6 },
   { ja: 'トーナメント決勝で負けた…悔しい', en: 'lost the tourney final… so close', arch: ['tryhard', 'nightowl'] },
   { ja: 'バトロワ上位入った！', en: 'top 5 in battle royale!', arch: ['streamer', 'tryhard', 'nightowl'] },
-  { ja: 'バトロワ最初の足切りで消えた', arch: ['casual', 'newbie', 'kid'] },
+  { ja: 'バトロワ最初の足切りで消えた', en: 'gone in the very first royale cut', arch: ['casual', 'newbie', 'kid'] },
   { ja: 'タイムアタック60秒で{sprint}点', en: '{sprint} in the 60s time attack', arch: ['tryhard', 'morning', 'lurker', 'global'] },
   { ja: 'タイムアタック中毒になりそう', en: 'time attack is too addicting', arch: ['morning', 'casual'] },
   { ja: '協力プレイたのしい！相棒ありがとう', en: 'co-op is so fun, ty partner', arch: ['casual', 'kid', 'senpai', 'global'] },
-  { ja: '協力で相棒が置いたピースで全消しした', arch: ['casual', 'senpai'] },
-  { ja: '協力プレイで相棒落ちたけどサーバーが代打してくれた', arch: ['casual', 'explorer'] },
+  { ja: '協力で相棒が置いたピースで全消しした', en: 'my co-op partner\'s piece set up my full clear', arch: ['casual', 'senpai'] },
+  { ja: '協力プレイで相棒落ちたけどサーバーが代打してくれた', en: 'my co-op partner dropped and the server subbed in for them', arch: ['casual', 'explorer'] },
   { ja: '2v2誰か組も！', en: '2v2 anyone?', arch: ['casual', 'tryhard', 'kid'] },
   { ja: 'チーム戦たのしい', en: 'team battles are fun', arch: ['casual', 'kid'] },
-  { ja: 'カオスモードまたやりたい', arch: ['casual', 'gacha', 'streamer'], ctx: 'noevent' },
-  { ja: 'ウィークリー3位まで来た！', arch: ['tryhard', 'morning'] },
-  { ja: 'ウィークリーはピース運ゲーすぎるw', arch: ['casual', 'morning', 'lurker'] },
+  { ja: 'カオスモードまたやりたい', en: 'I want chaos mode back already', arch: ['casual', 'gacha', 'streamer'], ctx: 'noevent' },
+  { ja: 'ウィークリー3位まで来た！', en: 'up to 3rd on the weekly!', arch: ['tryhard', 'morning'] },
+  { ja: 'ウィークリーはピース運ゲーすぎるw', en: 'the weekly is way too much piece luck lol', arch: ['casual', 'morning', 'lurker'] },
   { ja: '鬼AIに勝てた！', en: 'finally beat the Oni AI!', arch: ['tryhard', 'explorer', 'nightowl'] },
-  { ja: '{ai}AIとちょうどいい勝負になる', arch: ['casual', 'newbie'] },
-  { ja: '神って隠し難易度あるらしいよ', arch: ['streamer', 'casual', 'nightowl'], w: 0.6 },
+  { ja: '{ai}AIとちょうどいい勝負になる', en: 'the {ai} AI is exactly my level', arch: ['casual', 'newbie'] },
+  { ja: '神って隠し難易度あるらしいよ', en: 'word is there\'s a hidden God difficulty', arch: ['streamer', 'casual', 'nightowl'], w: 0.6 },
 
   // --- ultimates / items / shop / gacha ---
   { ja: '奥義ゲージ溜まった瞬間が一番楽しい', en: 'charging the ultimate gauge is the best part', w: 2 },
   { ja: '神の裁きで盤面消えるの爽快すぎ', en: 'divine judgement wiping the board is so satisfying', arch: ['tryhard', 'streamer', 'gacha'] },
-  { ja: 'オーバードライブ中にコンボつなぐと化ける', arch: ['tryhard', 'senpai'] },
-  { ja: 'レインボーハンド神', arch: ['casual', 'newbie', 'kid'] },
+  { ja: 'オーバードライブ中にコンボつなぐと化ける', en: 'chaining combos during overdrive is unreal', arch: ['tryhard', 'senpai'] },
+  { ja: 'レインボーハンド神', en: 'rainbow hand is goated', arch: ['casual', 'newbie', 'kid'] },
   { ja: '奥義どれ装備してる？', en: 'which ultimate are you running?', arch: ['casual', 'newbie', 'global'] },
-  { ja: '時間停止でボス封じるの強い', arch: ['explorer', 'senpai'] },
-  { ja: 'ミニブロック神アイテムすぎる', arch: ['casual', 'explorer'] },
-  { ja: 'フィーバー強すぎw', arch: ['casual', 'kid'] },
-  { ja: 'ボム使うタイミングむずい', arch: ['newbie', 'casual'] },
+  { ja: '時間停止でボス封じるの強い', en: 'freezing a boss with time stop is so strong', arch: ['explorer', 'senpai'] },
+  { ja: 'ミニブロック神アイテムすぎる', en: 'mini blocks are an absurdly good item', arch: ['casual', 'explorer'] },
+  { ja: 'フィーバー強すぎw', en: 'fever mode is too strong lol', arch: ['casual', 'kid'] },
+  { ja: 'ボム使うタイミングむずい', en: 'timing the bomb is the hard part', arch: ['newbie', 'casual'] },
   { ja: 'ガチャSSR出たあああ', en: 'SSR from the gacha!!!', arch: ['gacha', 'casual', 'kid'], w: 2 },
   { ja: 'ガチャ爆死した😭', en: 'gacha ate all my coins 😭', arch: ['gacha', 'casual'], w: 2 },
   { ja: '10連で{item}出た！', en: 'pulled {item} on a 10-pull!', arch: ['gacha', 'casual'] },
-  { ja: 'UR引いた人見たことない', arch: ['gacha'] },
-  { ja: 'コイン貯めては溶かしてる', arch: ['gacha'] },
+  { ja: 'UR引いた人見たことない', en: 'I\'ve never seen anyone actually pull a UR', arch: ['gacha'] },
+  { ja: 'コイン貯めては溶かしてる', en: 'I save coins just to melt them again', arch: ['gacha'] },
   { ja: '{item}買った！かっこいい', en: 'bought {item}, looks great', arch: ['casual', 'gacha', 'kid'] },
   { ja: 'スキン何使ってる？', en: 'what skin are you all using?', arch: ['casual', 'newbie', 'gacha'] },
-  { ja: '雪のステージ癒される', arch: ['casual', 'morning'] },
+  { ja: '雪のステージ癒される', en: 'the snow stage is so relaxing', arch: ['casual', 'morning'] },
   { ja: 'エフェクトかっこいい', en: 'the clear effects are so cool', arch: ['newbie', 'kid', 'casual'] },
   { ja: 'BGMすき', en: 'love the music in this game', arch: ['casual', 'morning', 'global'] },
-  { ja: 'バトルパス何ティアまでいった？', arch: ['casual', 'gacha'] },
-  { ja: '称号かっこいいのほしい', arch: ['casual', 'kid'] },
+  { ja: 'バトルパス何ティアまでいった？', en: 'what tier are you on the battle pass?', arch: ['casual', 'gacha'] },
+  { ja: '称号かっこいいのほしい', en: 'I want a cool title', arch: ['casual', 'kid'] },
   { ja: 'ミッション全部終わった！', en: 'finished all my missions!', w: 2 },
-  { ja: 'デイリーミッションのボーナスおいしい', arch: ['casual', 'gacha', 'morning'] },
+  { ja: 'デイリーミッションのボーナスおいしい', en: 'the daily mission bonus is great value', arch: ['casual', 'gacha', 'morning'] },
   { ja: '実績「{ach}」解除した', en: 'unlocked "{ach}"', w: 1.5 },
-  { ja: '実績まとめて受け取ったらコインえぐい増えた', arch: ['casual', 'gacha'] },
+  { ja: '実績まとめて受け取ったらコインえぐい増えた', en: 'claimed every achievement at once and the coins went wild', arch: ['casual', 'gacha'] },
   { ja: '連続ログイン{n}日目', en: 'day {n} login streak', arch: ['morning', 'casual', 'lurker'] },
-  { ja: '戦績ダッシュボードのグラフ見るの楽しい', arch: ['tryhard', 'lurker', 'morning'] },
+  { ja: '戦績ダッシュボードのグラフ見るの楽しい', en: 'the stats dashboard graphs are weirdly fun to stare at', arch: ['tryhard', 'lurker', 'morning'] },
 
   // --- newbie / kid / senpai flavor ---
   { ja: '今日から始めました！', en: 'just started today!', arch: ['newbie'], w: 2 },
-  { ja: 'はじめて10分の初心者です', arch: ['newbie'] },
+  { ja: 'はじめて10分の初心者です', en: 'ten minutes in, complete beginner here', arch: ['newbie'] },
   { ja: '初心者におすすめの立ち回りある？', en: 'any tips for a beginner?', arch: ['newbie'] },
-  { ja: '効率いいコイン稼ぎ教えて', arch: ['newbie', 'kid'] },
-  { ja: 'リロールって1回しか使えないの？', arch: ['newbie'] },
-  { ja: '奥義ってどうやって撃つの？', arch: ['newbie', 'kid'] },
+  { ja: '効率いいコイン稼ぎ教えて', en: 'teach me the efficient way to farm coins', arch: ['newbie', 'kid'] },
+  { ja: 'リロールって1回しか使えないの？', en: 'can you really only reroll once?', arch: ['newbie'] },
+  { ja: '奥義ってどうやって撃つの？', en: 'how do you even fire the ultimate?', arch: ['newbie', 'kid'] },
   { ja: 'やっとLv{level}になった', en: 'hit level {level}', arch: ['newbie', 'casual'] },
-  { ja: 'ぼくがいちばんつよい！', arch: ['kid'] },
-  { ja: 'ママにあと10分って言われた', arch: ['kid'] },
-  { ja: '宿題おわったからやる！', arch: ['kid'], ctx: 'evening' },
-  { ja: 'ボスたおした！！', arch: ['kid'] },
-  { ja: '初心者さんいたら教えるよ〜', arch: ['senpai'] },
-  { ja: '角から埋めると詰みにくいよ', arch: ['senpai'] },
-  { ja: 'わからんことあったら聞いてね', arch: ['senpai'] },
-  { ja: '今日も平和ですね', arch: ['senpai', 'lurker', 'morning'] },
-  { ja: '配信中！来てね', arch: ['streamer'], w: 0.7 },
-  { ja: '今日の配信はバトロワ縛り', arch: ['streamer'], w: 0.5 },
-  { ja: '見てる人ありがとう〜', arch: ['streamer'], w: 0.5 },
-  { ja: '…', arch: ['lurker'], w: 0.5 },
-  { ja: 'ROM専だけど今日は挨拶だけ', arch: ['lurker'], w: 0.5 },
+  { ja: 'ぼくがいちばんつよい！', en: 'I\'m the strongest here!', arch: ['kid'] },
+  { ja: 'ママにあと10分って言われた', en: 'mom says ten more minutes', arch: ['kid'] },
+  { ja: '宿題おわったからやる！', en: 'homework\'s done so I\'m playing!', arch: ['kid'], ctx: 'evening' },
+  { ja: 'ボスたおした！！', en: 'I beat the boss!!', arch: ['kid'] },
+  { ja: '初心者さんいたら教えるよ〜', en: 'any beginners around? happy to help~', arch: ['senpai'] },
+  { ja: '角から埋めると詰みにくいよ', en: 'fill from the corners and you brick less', arch: ['senpai'] },
+  { ja: 'わからんことあったら聞いてね', en: 'ask me anything if you get stuck', arch: ['senpai'] },
+  { ja: '今日も平和ですね', en: 'another peaceful day around here', arch: ['senpai', 'lurker', 'morning'] },
+  { ja: '配信中！来てね', en: 'live right now! come hang out', arch: ['streamer'], w: 0.7 },
+  { ja: '今日の配信はバトロワ縛り', en: 'today\'s stream is battle royale only', arch: ['streamer'], w: 0.5 },
+  { ja: '見てる人ありがとう〜', en: 'thanks to everyone watching~', arch: ['streamer'], w: 0.5 },
+  { ja: '…', en: '…', arch: ['lurker'], w: 0.5 },
+  { ja: 'ROM専だけど今日は挨拶だけ', en: 'usually just lurking, but hi for once', arch: ['lurker'], w: 0.5 },
 
   // --- international (en-only residents) ---
   { ja: 'hi everyone!', en: 'hi everyone!', arch: ['global'] },
@@ -348,8 +398,8 @@ const LINES = [
   { ja: 'イベントあと何時間？', en: 'how long is the event on?', ctx: 'event' },
   { ja: '投票した？', en: 'did you vote yet?', ctx: 'poll', w: 2 },
   { ja: '{opt}に入れた', en: 'I voted {opt}', ctx: 'poll', w: 2 },
-  { ja: '投票バナー光ってて草', ctx: 'poll' },
-  { ja: '「{question}」悩む', ctx: 'poll' },
+  { ja: '投票バナー光ってて草', en: 'the poll banner is glowing at me lol', ctx: 'poll' },
+  { ja: '「{question}」悩む', en: '"{question}" is a tough one', ctx: 'poll' },
 ];
 
 const CTX_OK = (line, ctx) => {
@@ -357,6 +407,7 @@ const CTX_OK = (line, ctx) => {
   switch (line.ctx) {
     case 'event': return !!ctx.event;
     case 'noevent': return !ctx.event;
+    case 'sale': return !!ctx.sale;
     case 'poll': return !!ctx.poll;
     case 'weekend': return ctx.weekend;
     case 'friday': return ctx.friday;
@@ -443,6 +494,22 @@ const CHAMPION_LINES = [
 // 相手言語の面をネイティブ翻訳（tr）として同梱する。辞書の後付け翻訳より
 // はるかに自然 — 素材にはもともと人間が書いた英語がある。
 // 返り値: { text, tr: {lang, text, engine:'native'} | null }
+
+// 英語で「前置き, 本文」と繋ぐときの受け（日本語の「前置き、本文」に相当）。
+// 素材の英文は7割が大文字始まりなので、そのまま繋ぐと文の途中に大文字が
+// 現れる ── 英語ではここがいちばん素人臭く見える崩れ方なので、本文の頭を
+// 小文字に落とす。曜日・月名・"I" のような、文中でも大文字のままの語は除く。
+const EN_KEEP_CAPS = /^(I|January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/;
+function enAfterOpener(opener, s) {
+  // 「Wi-Fi」「LETS GOOO」のような語は触らない（単純な Capitalized 語だけ）。
+  const body = (/^[A-Z][a-z]+(?=[\s,.!?'’]|$)/.test(s) && !EN_KEEP_CAPS.test(s))
+    ? s[0].toLowerCase() + s.slice(1)
+    : s;
+  // 疑問形の前置き（原文が「?」で終わるもの）は、カンマだと接続が壊れるので
+  // 「?」で受けて空白で繋ぐ。'can I say something, Lost round one...' の防止。
+  return /[?？]\s*$/.test(opener.ja || '') ? `${opener.en}? ${body}` : `${opener.en}, ${body}`;
+}
+
 function renderBoth(r, ctx, src, extra = {}, opener = null, tail = null) {
   const primaryEn = r.lang === 'en';
   const cache = {};   // 数字やスロット値は両言語で一致させる
@@ -450,7 +517,7 @@ function renderBoth(r, ctx, src, extra = {}, opener = null, tail = null) {
     const core = lang === 'en' ? src.en : src.ja;
     if (!core) return null;
     let s = fill(core, { ...r, lang }, ctx, extra, cache);
-    if (opener) s = lang === 'en' ? `${opener.en}, ${s}` : `${opener.ja}、${s}`;
+    if (opener) s = lang === 'en' ? enAfterOpener(opener, s) : `${opener.ja}、${s}`;
     else if (tail) s = lang === 'en' ? `${s} — ${tail.en}` : `${s}。${tail.ja}`;
     return s;
   };
@@ -562,7 +629,7 @@ const DIALOGUES = [
   { lang: 'ja', lines: [['a', 'ガチャ10連した', 'did a 10-pull'], ['b', '結果は？', 'and??'], ['a', 'コインだけ…', 'coins. only coins…'], ['b', '爆死仲間がここにも', 'another victim of the gacha']], archA: ['gacha', 'casual', 'kid'], archB: ['gacha', 'casual'] },
   { lang: 'ja', lines: [['a', 'ガチャで{item}出た！', 'pulled {item} from the gacha!'], ['b', 'まじか！いいなあ', 'no way! lucky'], ['a', '装備して自慢する', 'equipping it to show off']], archA: ['gacha', 'casual', 'kid'] },
   { lang: 'ja', lines: [['a', 'レート{rating}なった', 'just hit {rating} rating'], ['b', 'つよ', 'strong'], ['a', '{tier}帯キープしたい', 'trying to hold {tier} now'], ['b', '対戦しよ', 'fight me sometime!']], archA: ['tryhard', 'nightowl'], archB: ['tryhard', 'senpai', 'nightowl'] },
-  { lang: 'ja', lines: [['a', '奥義どれ使ってる？', 'which ultimate do you run?'], ['b', '神の裁き一択', 'divine judgment, no contest'], ['a', 'ジェムたりない…', 'not enough gems…'], ['b', '浄化の波動もコスパいいよ', 'the purge wave is great value too']], archA: ['casual', 'newbie'], archB: ['tryhard', 'senpai', 'explorer'] },
+  { lang: 'ja', lines: [['a', '奥義どれ使ってる？', 'which ultimate do you run?'], ['b', '神の裁き一択', 'divine judgement, no contest'], ['a', 'ジェムたりない…', 'not enough gems…'], ['b', '浄化の波動もコスパいいよ', 'the purge wave is great value too']], archA: ['casual', 'newbie'], archB: ['tryhard', 'senpai', 'explorer'] },
   { lang: 'ja', lines: [['a', 'レイド行く？', 'raid?'], ['b', '行く！', "i'm in!"], ['a', 'ハデス出たら泣く', 'if we get Hades I will cry'], ['b', 'クラーケン来い', 'give us the Kraken']], archA: ['explorer', 'senpai'], archB: ['explorer', 'casual', 'tryhard'] },
   { lang: 'ja', lines: [['a', '協力プレイ誰か組も', 'anyone for co-op?'], ['b', '組む！', 'me!'], ['a', 'お互いの置き方で全消し狙お', "let's set up a full clear together"], ['b', 'いいね', 'nice']], archA: ['casual', 'senpai', 'kid'] },
   { lang: 'ja', lines: [['a', 'タイムアタック60秒で{sprint}点いった', 'got {sprint} in the 60s time attack'], ['b', 'はや', 'so fast'], ['a', '3分のほうが伸びる気がする', 'the 3 min one scores higher I think'], ['b', '集中力もたんw', 'my focus dies lol']], archA: ['tryhard', 'morning', 'global'], archB: ['casual', 'tryhard', 'lurker'] },
@@ -609,18 +676,26 @@ function genTopicDialogue(ctx) {
     const fA = gen.smartPick(`follow.${kindA}`, (FOLLOWS[kindA] || []).filter(archOkFor(a)), { now: ctx.now, rid: a.id });
     if (fA) script.push([a, fA, { name: b.name }]);
   }
-  gen.adoptTopic(id, ctx);
+  // まず全行をレンダリングして「全部新鮮に流せる」ことを確かめてから副作用を確定する。
+  // 途中で棄却する場合、表示されない文を surface メモリに焼き付けたり、話題スレッドを
+  // 乗っ取ったり、住人を noteSpoken で黙らせてはいけない（会話は流れていないため）。
+  const built = [];
+  const seen = new Set();   // 同一バッチ内の重複も従来どおり弾く
   let delay = 0;
-  const out = [];
   for (const [r, srcE, extra] of script) {
     delay += 3000 + rnd() * 9000;
     const rendered = renderBoth(r, ctx, srcE, extra);
-    if (!rendered || !gen.surfaceFresh(rendered.text, ctx.now)) return null;   // rare — just skip this tick
-    gen.noteSurface(rendered.text, ctx.now);
-    gen.noteSpoken(r.id, ctx.now);
-    out.push({ resident: r, text: rendered.text, tr: rendered.tr, delay });
+    if (!rendered || !gen.surfaceFresh(rendered.text, ctx.now) || seen.has(rendered.text)) return null;   // rare — 副作用なしで中断
+    seen.add(rendered.text);
+    built.push({ resident: r, text: rendered.text, tr: rendered.tr, delay });
   }
-  return out;
+  // 全行そろった — ここで初めて話題採用・surface・spoken を確定する。
+  gen.adoptTopic(id, ctx);
+  for (const x of built) {
+    gen.noteSurface(x.text, ctx.now);
+    gen.noteSpoken(x.resident.id, ctx.now);
+  }
+  return built;
 }
 
 // Returns [{ resident, text, delay }] or null when the cast is too thin.
@@ -691,8 +766,6 @@ const FEED = [
   { id: 'join',     icon: '👋', w: 2,  min: 0,    ja: '{me} が新しく参加しました！ようこそ！',        en: '{me} just joined — welcome!', newbie: true },
 ];
 
-const RAID_NAMES = ['深海のクラーケン', '魔竜ティアマト', '冥王ハデス'];
-
 export function composeFeed(ctx) {
   const active = ctx.active || [];
   if (!active.length) return null;
@@ -704,7 +777,13 @@ export function composeFeed(ctx) {
     if (!cands.length) continue;
     const r = pick(cands);
     const extra = {};
-    if (f.id === 'raid') extra.boss = pick(RAID_NAMES);
+    // RAID_BOSSES はオブジェクト（nameEn 持ち）。文字列を渡すと renderSlot の
+    // boss 分岐が素通しし、英語面 textEn に日本語ボス名が挿さる回帰になる。
+    if (f.id === 'raid') extra.boss = pick(RAID_BOSSES);
+    // 「自己ベスト更新」速報は実際のランキング値（bestScore）そのものを告知する。
+    // {score} スロットの 86〜100% 丸めだと、更新と言いながらプロフィール/ランキングの
+    // 自己ベストを下回る数字が出て矛盾する。
+    if (f.id === 'record') extra.score = residentStats(r, ctx.now).bestScore;
     const ctxOthers = { ...ctx, active: active.filter(x => x.id !== r.id) };
     const cache = {};   // same numbers in both languages
     // 各面はその面の言語で描く。r をそのまま渡すと fill が住人の lang を使うので、
@@ -943,6 +1022,34 @@ const REPLY_RULES = [
   ['question', /[?？]$/],
 ];
 
+// 名指し判定。単純な部分文字列一致だと2文字の住人名が日常語に埋もれて誤爆する
+// （『レイ』が『プレイ』『レイド』、英語の 'Kai' が 'Kaito'）。境界を見る:
+//   ・ラテン名: 前後が英数字でない（単語境界）。
+//   ・カナ名: 名前の端が別のカナに続いていない（プレイ/レイド を弾く）。
+//     さん/ちゃん 等の敬称は語頭がひらがなでも許す（レイさん・むぎちゃん）。
+const isKata = c => (c >= 'ァ' && c <= 'ヶ') || c === 'ー';
+const isHira = c => c >= 'ぁ' && c <= 'ん';
+const isLatinWord = c => /[A-Za-z0-9]/.test(c);
+const HONORIFIC = /^(さん|くん|ちゃん|さま|っち|きゅん|ちゃ)/;
+function nameMentioned(text, name) {
+  if (!name || name.length < 2) return false;
+  const latin = /^[\x00-\x7F]+$/.test(name);
+  const first = name[0], last = name[name.length - 1];
+  for (let from = 0, idx; (idx = text.indexOf(name, from)) !== -1; from = idx + 1) {
+    const before = idx > 0 ? text[idx - 1] : '';
+    const after = idx + name.length < text.length ? text[idx + name.length] : '';
+    if (latin) {
+      if (!isLatinWord(before) && !isLatinWord(after)) return true;
+      continue;
+    }
+    const badBefore = before && ((isKata(first) && isKata(before)) || (isHira(first) && isHira(before)));
+    let badAfter = after && ((isKata(last) && isKata(after)) || (isHira(last) && isHira(after)));
+    if (badAfter && isHira(last) && HONORIFIC.test(text.slice(idx + name.length))) badAfter = false;
+    if (!badBefore && !badAfter) return true;
+  }
+  return false;
+}
+
 // Returns [{ resident, text, delay }]. `residents` = currently active cast.
 // forcedName: a resident who MUST answer first (a direct reply to their
 // message) — even quiet lurkers respond when spoken to directly.
@@ -955,7 +1062,7 @@ export function chooseReplies(text, ctx, forcedName = null) {
   const lang = /[ぁ-んァ-ヶ一-龠ー]/.test(t) ? 'ja' : 'en';
 
   // Mentioned residents always answer; a direct-reply target leads the queue.
-  let mentioned = active.filter(r => r.name.length >= 2 && t.includes(r.name));
+  let mentioned = active.filter(r => nameMentioned(t, r.name));
   if (forced) mentioned = [forced, ...mentioned.filter(r => r.id !== forced.id)];
 
   let category = 'generic';
@@ -1026,12 +1133,12 @@ export { tierOf };
 
 const EXTRA_LINES = [
   { ja: "目覚まし止めた流れでログインしてた", en: "turned off my alarm and somehow ended up logged in", ctx: "morning" },
-  { ja: "朝のソロ1周で頭起こしてる", arch: ["morning"], ctx: "morning" },
-  { ja: "午前中に用事ぜんぶ終わらせた 偉すぎる", not: ["kid"], ctx: "day" },
+  { ja: "朝のソロ1周で頭起こしてる", en: "one solo run to wake my brain up", arch: ["morning"], ctx: "morning" },
+  { ja: "午前中に用事ぜんぶ終わらせた 偉すぎる", en: "finished every errand before noon, I deserve a medal", not: ["kid"], ctx: "day" },
   { ja: "昼のロビー静かで好き", en: "the afternoon lobby is so peaceful", arch: ["lurker","senpai","morning"], ctx: "day" },
-  { ja: "夕焼け見ながらタイムアタックしてた", ctx: "evening" },
-  { ja: "今日はもう店じまい ランクマは明日の私に任せた", not: ["kid"], ctx: "night" },
-  { ja: "風呂上がりのランクマ謎に勝てる", ctx: "night" },
+  { ja: "夕焼け見ながらタイムアタックしてた", en: "played time attack with the sunset in the window", ctx: "evening" },
+  { ja: "今日はもう店じまい ランクマは明日の私に任せた", en: "closing up shop, ranked is tomorrow-me's problem", not: ["kid"], ctx: "night" },
+  { ja: "風呂上がりのランクマ謎に勝てる", en: "post-bath ranked wins, no idea why it works", ctx: "night" },
   { ja: "気づいたら日付変わってた", en: "wait, when did it become tomorrow", ctx: "late", w: 2 },
   { ja: "明日の自分に謝りながら{mode}回してる", en: "apologizing to tomorrow's me while queuing {mode} again", not: ["kid"], ctx: "late" },
   { ja: "寝る前の1戦が3戦になるのなんで", en: "\"one game before bed\" is never one game", ctx: "night", w: 2 },
@@ -1040,21 +1147,21 @@ const EXTRA_LINES = [
   { ja: "日曜の夜だけ時間の流れ早すぎる", en: "sunday evenings last five minutes I swear", ctx: "weekend" },
   { ja: "月曜はログボだけが裏切らない", en: "the monday login bonus, only good part of mondays", ctx: "mondayish" },
   { ja: "金曜の脳は判断力ゼロだからガチャ引きがち", en: "friday brain says pull the gacha", arch: ["gacha","casual","nightowl"], ctx: "friday" },
-  { ja: "土曜の朝から協力募集出てて平和", ctx: "weekend" },
-  { ja: "週末しか潜れないランクマ勢です", not: ["kid"], ctx: "weekend" },
+  { ja: "土曜の朝から協力募集出てて平和", en: "co-op invites up since saturday morning, very wholesome", ctx: "weekend" },
+  { ja: "週末しか潜れないランクマ勢です", en: "weekend-only ranked player here", not: ["kid"], ctx: "weekend" },
   { ja: "週間ランキングのリセット見届けるのちょっと寂しい", en: "watching the weekly board reset always stings a little", ctx: "mondayish" },
   { ja: "カレー煮込みながら片手でソロ", en: "stirring curry with one hand, placing blocks with the other" },
   { ja: "電車乗り過ごしかけた このゲームのせい", en: "almost missed my station because of this game", not: ["kid"] },
   { ja: "雨だし今日は引きこもりブロック日和", en: "raining all day, so it's a blocks day" },
   { ja: "布団の中でやると勝率下がる説", en: "playing under the covers = instant losses, proven" },
-  { ja: "テスト前なのにダンジョン潜ってる", arch: ["kid","casual"] },
+  { ja: "テスト前なのにダンジョン潜ってる", en: "exam tomorrow and here I am in the dungeon", arch: ["kid","casual"] },
   { ja: "洗濯機が回ってる間だけソロやる縛り", en: "solo runs synced to the washing machine cycle", not: ["kid"] },
   { ja: "夜食ラーメン作りながらマッチング待ち", en: "making midnight ramen while the queue pops", not: ["kid"], ctx: "late" },
   { ja: "仕事の休憩ぜんぶタイムアタックに溶けてる", en: "my work breaks are just time attack now", not: ["kid"], ctx: "day" },
-  { ja: "コンビニ行く道でウィークリーの残り数えてた", not: ["kid"] },
+  { ja: "コンビニ行く道でウィークリーの残り数えてた", en: "counted my remaining weekly runs on the walk to the store", not: ["kid"] },
   { ja: "ご飯できたって呼ばれたのに{boss}が第二形態入った", en: "dinner is ready but {boss} just hit phase two", ctx: "evening", w: 2 },
-  { ja: "目が乾いてきたから目薬さして続行" },
-  { ja: "眠気と手持ちのピース どっちも限界", ctx: "night" },
+  { ja: "目が乾いてきたから目薬さして続行", en: "eye drops in, run continues" },
+  { ja: "眠気と手持ちのピース どっちも限界", en: "my eyelids and my piece tray are both done for", ctx: "night" },
   { ja: "手が滑って一番置きたくない場所に置いた", en: "my finger slipped onto the exact spot I was avoiding", w: 2 },
   { ja: "リロール温存しすぎて使わないまま詰むのやめたい", en: "hoarded my reroll so hard I topped out still holding it", w: 2 },
   { ja: "全消しの音で脳汁出る", en: "the full clear sound is pure dopamine", w: 2 },
@@ -1062,65 +1169,65 @@ const EXTRA_LINES = [
   { ja: "最適配置ひらめいた瞬間に時間切れた", en: "found the perfect placement exactly as the timer hit zero" },
   { ja: "ほしい向きと逆のL字ばっかり来る", en: "every L piece comes mirrored from the one I need" },
   { ja: "詰んでるのに気づくのはいつも1手遅い", en: "I always spot the dead board one move too late" },
-  { ja: "ボム温存→盤面事故→使う暇なし いつもの" },
+  { ja: "ボム温存→盤面事故→使う暇なし いつもの", en: "hoard the bomb, board explodes, never got to use it. every time" },
   { ja: "3x3の穴キープしてたのに最後まで来なかった", en: "kept a 3x3 hole open all game, it never came" },
   { ja: "コンボ続いてる時ほど手汗がやばい", en: "the longer the combo the sweatier my hands" },
-  { ja: "惜しかった盤面ほどスクショ撮りがち" },
+  { ja: "惜しかった盤面ほどスクショ撮りがち", en: "the closer the near-miss, the more likely I screenshot it" },
   { ja: "予告マス見えてるのに手が追いつかない", en: "I can see the telegraphed cells, my hands just refuse" },
   { ja: "フィーバー中に限って置きミスする", en: "fever time is when I misplace everything" },
   { ja: "瀕死盤面から全消しで生還した時だけ天才", en: "clutch full clear from a dead board = temporary genius" },
   { ja: "始めて3日ですがもう毎日ログインしてます", en: "day 3 and I haven't missed a login yet", arch: ["newbie"] },
   { ja: "今日はノルマ10戦 終わるまで喋らん", en: "ten game quota today, talk after", arch: ["tryhard"] },
   { ja: "勝ち負けよりブロック積んでる時間が好きかもしれん", en: "honestly the stacking is more fun than the winning", arch: ["casual"] },
-  { ja: "ガチャ断ち3日目 えらい", arch: ["gacha"] },
+  { ja: "ガチャ断ち3日目 えらい", en: "day 3 of no gacha, look at me go", arch: ["gacha"] },
   { ja: "learning japanese one chat message at a time", en: "learning japanese one chat message at a time", arch: ["global"] },
   { ja: "塔100Fの景色いつか絶対見る", en: "one day I'll see the view from floor 100", arch: ["explorer"] },
   { ja: "みんな水分とってね〜 休憩も上達のうちよ", en: "hydrate everyone, resting is part of improving", arch: ["senpai"] },
-  { ja: "きょう学校でこのゲームの話でもりあがった！", arch: ["kid"] },
+  { ja: "きょう学校でこのゲームの話でもりあがった！", en: "everyone at school was talking about this game today!", arch: ["kid"] },
   { ja: "配信ない日は逆に落ち着かない", en: "off-stream days feel so weird", arch: ["streamer"], w: 0.7 },
   { ja: "…見てるだけでも楽しい", en: "…just watching is fun too", arch: ["lurker"], w: 0.5 },
   { ja: "無限地獄ラッシュ深度{n}到達 手が震えてる", en: "depth {n} in endless hell rush, hands are shaking", arch: ["tryhard","explorer","nightowl"] },
   { ja: "不死鳥の羽に2回救われた あれ実質勝ち確遺物", en: "phoenix feather revived me twice, that relic is a free win", arch: ["explorer","casual"] },
   { ja: "遺物、火薬と雷どっち取る？", en: "gunpowder or thunder, which relic do you grab?", arch: ["explorer","tryhard","global"] },
   { ja: "2周目入った瞬間ボスのHP倍でラン終わったw", en: "lap 2 doubled the boss hp and my run just died lol", arch: ["casual","explorer"] },
-  { ja: "慈悲の遺物、地味だけど一番仕事してる説", arch: ["senpai","explorer"] },
+  { ja: "慈悲の遺物、地味だけど一番仕事してる説", en: "the mercy relic looks boring but quietly does the most work", arch: ["senpai","explorer"] },
   { ja: "深度12きた 「地獄を駆ける者」ゲット", en: "depth 12 done, got the hell-runner title", arch: ["tryhard","explorer"], w: 0.7 },
   { ja: "寝る前に1周のつもりの無限地獄ラッシュ、3周してた", en: "\"one quick hell rush before bed\" — three laps later", arch: ["nightowl"], ctx: "late" },
-  { ja: "遺物の引き悪くて深度3で終了 かなしい", arch: ["casual","gacha","newbie"] },
+  { ja: "遺物の引き悪くて深度3で終了 かなしい", en: "bad relic rolls, run over at depth 3, sad", arch: ["casual","gacha","newbie"] },
   { ja: "予告マス全部カットしてCOUNTER!出た時の快感やばい", en: "cutting every telegraphed cell for that COUNTER! is the best feeling", w: 2 },
   { ja: "ドラゴンのブレス予告見逃して1行まるごと焼かれた", en: "missed the breath telegraph and a whole row got torched", arch: ["casual","newbie","kid"] },
-  { ja: "まおうの呪縛で手札凍ったまま何もできず終わった", arch: ["casual","newbie"] },
+  { ja: "まおうの呪縛で手札凍ったまま何もできず終わった", en: "the demon king froze my hand and I just watched the run end", arch: ["casual","newbie"] },
   { ja: "エクスマキナの縦レーザー初見殺しすぎでしょ", en: "ex machina's vertical laser is a certified first-timer killer", arch: ["casual","explorer","tryhard"] },
   { ja: "フリオーネの二重呪縛どう捌くのあれ", en: "how are you even supposed to handle frione's double bind", arch: ["tryhard","explorer","nightowl"] },
-  { ja: "第二形態で発狂した瞬間の空気変わるのこわい", arch: ["casual","kid","newbie"] },
+  { ja: "第二形態で発狂した瞬間の空気変わるのこわい", en: "the air changes the moment phase two enrages, genuinely scary", arch: ["casual","kid","newbie"] },
   { ja: "ゴーレムの大地震で盤面ぐちゃぐちゃにされた", en: "golem earthquake turned my board into soup", arch: ["casual","explorer"] },
   { ja: "スライムキングすらSランク取れないんだが", en: "can't even S rank the slime king, help", arch: ["casual","nightowl"] },
   { ja: "討伐ランクずっとA止まり Sの壁高すぎ", en: "forever stuck at rank A, the S wall is real", arch: ["tryhard","explorer"] },
   { ja: "全ボスSで「完全討伐者」取った 燃え尽きた", en: "S ranked every boss for the perfect-slayer title, I am now retired", arch: ["tryhard","explorer","nightowl"], w: 0.5 },
   { ja: "カットあと一手間に合わなくて直撃もらった", en: "one move short of the cut and ate the full hit" },
-  { ja: "ボスのカットは慣れると詰将棋みたいで楽しいよ〜", arch: ["senpai"] },
+  { ja: "ボスのカットは慣れると詰将棋みたいで楽しいよ〜", en: "once cutting boss telegraphs clicks, it plays like a chess puzzle~", arch: ["senpai"] },
   { ja: "月曜のログインは週間報酬の受け取りから始まる", en: "monday login ritual: collect the weekly rewards first", arch: ["morning","casual","lurker"], ctx: "mondayish", w: 2 },
   { ja: "週間王者の🏅つけてる人ロビーで見た オーラある", en: "saw someone with the weekly champ badge in the lobby, instant aura", arch: ["casual","kid","newbie"] },
-  { ja: "今週こそ週間王者とる", arch: ["tryhard"], w: 0.8 },
+  { ja: "今週こそ週間王者とる", en: "this week I'm taking weekly champion", arch: ["tryhard"], w: 0.8 },
   { ja: "週間チャレンジ2位でジェム入った 1位の壁は厚い", en: "2nd place weekly gems secured, but 1st is a fortress", arch: ["tryhard","morning","explorer"] },
   { ja: "ジュークボックス、PIXEL RUSH 182でループ固定してる", en: "jukebox permanently locked on PIXEL RUSH 182", arch: ["nightowl","tryhard","streamer"] },
   { ja: "「限界突破」流れると勝手に手が速くなる", en: "when the Limit Break track plays my hands just speed up on their own" },
   { ja: "やすらぎのロビーを作業用BGMにしてる 眠くなる", en: "the lobby theme is my study music now, dangerously sleepy", arch: ["lurker","morning","casual"] },
-  { ja: "天国ダンジョンで「天上の光」聴くとちょっと泣きそうになる", arch: ["explorer","casual"] },
+  { ja: "天国ダンジョンで「天上の光」聴くとちょっと泣きそうになる", en: "Heavenly Light in the heaven dungeon nearly makes me tear up", arch: ["explorer","casual"] },
   { ja: "自分のメッセージにスタンプ3個ついてた ちょっとうれしい", en: "my message got 3 reactions, small win", arch: ["lurker","newbie","casual"] },
   { ja: "名前タップでプロフカード出るの今日知った", en: "today I learned you can tap a name to see the profile card", arch: ["newbie","casual","lurker"] },
-  { ja: "返信機能できてから会話追いやすくなったね", arch: ["senpai","morning"] },
+  { ja: "返信機能できてから会話追いやすくなったね", en: "conversations got so much easier to follow once replies existed", arch: ["senpai","morning"] },
   { ja: "the auto-translate here is lowkey magic, I can actually talk to everyone", en: "the auto-translate here is lowkey magic, I can actually talk to everyone", arch: ["global"] },
   { ja: "深淵ダンジョン、暗すぎて画面の明るさ上げた", en: "the abyss is so dark I had to turn my brightness up", arch: ["explorer","casual","nightowl"] },
-  { ja: "深淵、途中から急に別ゲーになるのやめてほしいw", arch: ["explorer","casual"] },
+  { ja: "深淵、途中から急に別ゲーになるのやめてほしいw", en: "the abyss turning into a different game halfway down is rude lol", arch: ["explorer","casual"] },
   { ja: "深淵の最深部って何があるの 行った人いる？", en: "what's at the bottom of the abyss? anyone been?", arch: ["explorer","nightowl","casual"] },
   { ja: "ギルドの週間レースあと少しで1位 みんなログインして！", en: "guild race is SO close to 1st, everyone log in!", arch: ["tryhard","senpai","kid"] },
   { ja: "ギルドレベル上がってコインボーナス増えた 入り得すぎる", en: "guild leveled up and the coin bonus went up, join one already", arch: ["casual","gacha","senpai"] },
-  { ja: "無言ギルドだけど週間レースだけは全員本気なのすき", arch: ["lurker","casual"] },
+  { ja: "無言ギルドだけど週間レースだけは全員本気なのすき", en: "silent guild, but everyone goes all in on the weekly race. love that", arch: ["lurker","casual"] },
   { ja: "バトロワ残り10人からの心拍数えぐい", en: "final 10 in battle royale, my heart rate is not ok", arch: ["casual","streamer","nightowl"] },
   { ja: "バトロワ開幕の100人表示、見るだけで圧ある", en: "seeing all 100 players at the start is such a rush", arch: ["newbie","casual","kid"] },
   { ja: "称号「{title}」に付け替えた しっくりきてる", en: "switched my title to {title}, it just fits" },
-  { ja: "プロフカードで見た称号がレアすぎて取り方調べてる", arch: ["explorer","casual","gacha"] },
+  { ja: "プロフカードで見た称号がレアすぎて取り方調べてる", en: "saw a title on someone's profile card so rare I'm researching how to get it", arch: ["explorer","casual","gacha"] },
   { ja: "実績コンプまであと{n}個 先は長い", en: "{n} achievements to 100%… the road is long", arch: ["explorer","lurker","tryhard"] },
   { ja: "隠し実績あるらしくて手当たり次第変なことしてる", en: "apparently there are hidden achievements so now I just do weird stuff every run", arch: ["explorer","casual"] },
 ];
@@ -1240,26 +1347,26 @@ for (const [k, add] of Object.entries(REACTION_ADDITIONS)) {
 LINES.push(
   { ja: "メルトダウン90%キープで稼ぐの心臓に悪すぎ", en: "farming at 90% heat is terrible for my heart", arch: ["tryhard", "nightowl", "streamer"] },
   { ja: "❄️のライン迷ってる間に熱100いった", en: "hesitated on the coolant line and boom, 100%", arch: ["casual", "newbie"] },
-  { ja: "メルトダウン、爆発する瞬間ちょっとクセになる", arch: ["casual", "kid", "gacha"] },
+  { ja: "メルトダウン、爆発する瞬間ちょっとクセになる", en: "the moment meltdown blows up is lowkey addictive", arch: ["casual", "kid", "gacha"] },
   { ja: "臨界ボーナス欲張って爆散した 後悔はない", en: "greeded the critical bonus and exploded, zero regrets", arch: ["nightowl", "gacha", "streamer"] },
   { ja: "メルトダウンで初めて×12見た 手が震えた", en: "saw a ×12 multiplier in meltdown, hands were shaking", arch: ["tryhard", "explorer"] },
-  { ja: "冷却セル、来てほしい列に限って湧かない", arch: ["casual", "lurker"] },
+  { ja: "冷却セル、来てほしい列に限って湧かない", en: "coolant cells never spawn in the column I need", arch: ["casual", "lurker"] },
   { ja: "メルトダウンのアラーム鳴り出すと心拍数上がる", en: "the meltdown alarm spikes my heart rate every time", arch: ["casual", "morning"] },
-  { ja: "熱ゼロ安全運転じゃ全然伸びないのよく出来てる", arch: ["senpai", "tryhard"] },
+  { ja: "熱ゼロ安全運転じゃ全然伸びないのよく出来てる", en: "zero-heat safe play scores nothing, and that is good design", arch: ["senpai", "tryhard"] },
   { ja: "キメラ工房で3体合体の怪物つくった", en: "built a triple-monster in the chimera lab", arch: ["casual", "explorer", "kid"] },
   { ja: "15マスキメラを完璧な穴に落とした 気持ちよすぎ", en: "dropped a 15-cell chimera into the perfect hole, bliss", arch: ["tryhard", "explorer"] },
   { ja: "キメラでかくしすぎて置き場なくて詰んだw", en: "made a chimera too big to place anywhere lol", arch: ["casual", "gacha", "kid"] },
-  { ja: "溶接は2体まで派 3体はロマン", arch: ["senpai", "tryhard"] },
-  { ja: "キメラ×3で6ライン同時に消えた時の音えぐい", arch: ["streamer", "casual"] },
-  { ja: "溶接のやり方いま知った ピース同士ドラッグなのね", arch: ["newbie", "casual"] },
+  { ja: "溶接は2体まで派 3体はロマン", en: "I weld two, three is for dreamers", arch: ["senpai", "tryhard"] },
+  { ja: "キメラ×3で6ライン同時に消えた時の音えぐい", en: "a triple chimera clearing six lines at once sounds insane", arch: ["streamer", "casual"] },
+  { ja: "溶接のやり方いま知った ピース同士ドラッグなのね", en: "just learned how welding works, you drag pieces onto each other", arch: ["newbie", "casual"] },
   { ja: "メルトダウンもキメラ工房も中毒性たかい", en: "meltdown and the chimera lab are both way too addicting", arch: ["casual", "global"] },
   { ja: "the chimera lab rewired how I see pieces", en: "the chimera lab rewired how I see pieces", arch: ["global"] },
 );
 
 DIALOGUES.push(
-  { lang: "ja", lines: [["a", "メルトダウン何点いった？"], ["b", "12万 熱95で回してた"], ["a", "それもう消防士でしょ"], ["b", "燃えてるのは俺の心"]], archA: ["casual", "tryhard"], archB: ["nightowl", "tryhard", "streamer"] },
-  { lang: "ja", lines: [["a", "キメラ工房で5連バー2本つないだ"], ["b", "10マス棒！？"], ["a", "置き場なくて死んだ"], ["b", "ロマンの代償w"]], archA: ["explorer", "casual", "gacha"], archB: ["casual", "senpai"] },
-  { lang: "ja", lines: [["a", "❄️消すか稼ぐか毎回悩む"], ["b", "悩んでる間に熱上がるのよね"], ["a", "それで2回爆発した"]], archA: ["casual", "newbie"], archB: ["senpai", "nightowl"] },
+  { lang: "ja", lines: [["a", "メルトダウン何点いった？", "what did you score in meltdown?"], ["b", "12万 熱95で回してた", "120k, ran the whole thing at 95% heat"], ["a", "それもう消防士でしょ", "at that point you are a firefighter"], ["b", "燃えてるのは俺の心", "the only thing burning is my heart"]], archA: ["casual", "tryhard"], archB: ["nightowl", "tryhard", "streamer"] },
+  { lang: "ja", lines: [["a", "キメラ工房で5連バー2本つないだ", "welded two 5-bars together in the chimera lab"], ["b", "10マス棒！？", "a ten-cell bar?!"], ["a", "置き場なくて死んだ", "nowhere to put it, run over"], ["b", "ロマンの代償w", "the price of ambition lol"]], archA: ["explorer", "casual", "gacha"], archB: ["casual", "senpai"] },
+  { lang: "ja", lines: [["a", "❄️消すか稼ぐか毎回悩む", "clear the ❄️ or keep scoring — I agonize every time"], ["b", "悩んでる間に熱上がるのよね", "and the heat climbs while you agonize"], ["a", "それで2回爆発した", "which is how I blew up twice"]], archA: ["casual", "newbie"], archB: ["senpai", "nightowl"] },
 );
 
 FEED.push(
@@ -1328,11 +1435,11 @@ REPLY_RULES.splice(REPLY_RULES.length - 1, 0,
 // ===========================================================================
 
 LINES.push(
-  { ja: 'メニューのロゴ、じっと見てると数字が浮かぶ気がする…13、とか', arch: ['nightowl', 'explorer'] },
+  { ja: 'メニューのロゴ、じっと見てると数字が浮かぶ気がする…13、とか', en: 'stare at the logo on the menu long enough and a number surfaces… thirteen, maybe', arch: ['nightowl', 'explorer'] },
   { ja: '昨日フレンドが「ロゴを連打してたら消えた」って言ってた。冗談だよね？', en: 'my friend said they vanished after tapping the logo a bunch… joking right?', arch: ['casual', 'kid'] },
   { ja: '👻の実績、うちの実績欄にあるんだけど取り方が分からない', en: 'there is a 👻 achievement in my list and I have no idea how to get it', arch: ['newbie', 'casual', 'gacha'] },
-  { ja: '深夜にメニューでカタカタ音がした。空耳だと思いたい', arch: ['nightowl'] },
-  { ja: '幽霊屋敷？知らない子ですね…', arch: ['lurker', 'senpai'], w: 0.6 },
+  { ja: '深夜にメニューでカタカタ音がした。空耳だと思いたい', en: 'heard a rattling from the menu late at night. I would like to believe I imagined it', arch: ['nightowl'] },
+  { ja: '幽霊屋敷？知らない子ですね…', en: 'the haunted house? never heard of it…', arch: ['lurker', 'senpai'], w: 0.6 },
 );
 
 REPLIES.secret.ja.push(
@@ -1363,3 +1470,148 @@ REACTIONS.rankup = {
     'my promotion is next, calling it',
   ],
 };
+
+// ===========================================================================
+// 🏷️ 日替わりピックアップショップ（セール）への住人の反応
+// ---------------------------------------------------------------------------
+// ctx: 'sale' の行は ctx.sale が入っているときだけ出る（CTX_OK）。セール情報が
+// まだ供給されていない間はこのグループ全体が沈黙するので、開催していないのに
+// 「安くなってる」と言い出す事故は起きない。
+// {saleitem} は saleItem() が解決する — セール対象があればその品、無ければ
+// 通常のショップ品にフォールバック（throneOnly / gachaOnly は常に除外）。
+// ===========================================================================
+
+LINES.push(
+  { ja: '今日のセール見た？', en: "did you see today's sale?", ctx: 'sale', w: 2 },
+  { ja: '{saleitem}安くなってる、買っちゃおうかな', en: '{saleitem} is on sale… I might just buy it', ctx: 'sale', w: 2 },
+  { ja: 'セール品もう買った人いる？', en: 'anyone picked up the sale item yet?', ctx: 'sale' },
+  { ja: '{saleitem}この値段なら買いでしょ', en: '{saleitem} at that price is a steal', ctx: 'sale', arch: ['gacha', 'casual', 'streamer'] },
+  { ja: 'セール狙いでコイン貯めといてよかった', en: 'so glad I saved my coins for a sale', ctx: 'sale', arch: ['gacha', 'tryhard', 'lurker'] },
+  { ja: 'ショップ覗くのが日課になってる', en: 'checking the shop has become a daily ritual', ctx: 'sale', arch: ['morning', 'casual', 'lurker'] },
+  { ja: 'セール、明日には変わっちゃうんだよね？急がなきゃ', en: "the sale changes tomorrow right? gotta hurry", ctx: 'sale', arch: ['newbie', 'kid', 'casual'] },
+  { ja: '{saleitem}買った！セールありがとう運営', en: 'bought {saleitem}! thanks for the sale 🙏', ctx: 'sale', arch: ['casual', 'gacha', 'kid'] },
+  { ja: 'コインが足りない…セールなのに…', en: 'not enough coins… during a sale… pain', ctx: 'sale', arch: ['newbie', 'casual', 'kid', 'gacha'] },
+  { ja: '欲しいやつがセールに来るまで粘る', en: "i'm holding out until the one I want goes on sale", ctx: 'sale', arch: ['lurker', 'senpai', 'tryhard'] },
+  { ja: 'セールの日はショップ見てるだけで楽しい', en: 'window shopping on sale day is a whole activity', ctx: 'sale', arch: ['casual', 'morning', 'global'] },
+  { ja: '割引ぶんでもう1個いけるな…って考えてる時点で負け', en: 'thinking "the discount pays for a second one" is how they get you', ctx: 'sale', arch: ['gacha', 'nightowl', 'streamer'] },
+  { ja: 'the daily sale is dangerous for my coin stash', en: 'the daily sale is dangerous for my coin stash', ctx: 'sale', arch: ['global'] },
+
+  // セール情報が無くても成立する汎用のショップ話題（常時候補）。
+  { ja: 'ショップ覗いてたら時間溶けた', en: 'lost half an hour just browsing the shop' },
+  { ja: 'コイン貯まったのに何買うか決まらない', en: "finally saved up and now I can't decide what to buy", arch: ['casual', 'gacha', 'newbie'] },
+  { ja: '欲しいスキンがあると急にコイン稼ぎ頑張れる', en: 'nothing motivates coin farming like wanting a skin', arch: ['casual', 'gacha', 'kid', 'global'] },
+);
+
+// セール切り替わり時の速報リアクション用。index.js から
+// `battle.crowd.react('shop_sale')` で呼べる。対象品を明示したいときは
+// `battle.crowd.react('shop_sale', { saleitem: { name, nameEn } })`。
+REACTIONS.shop_sale = {
+  ja: [
+    'セール更新きてる！',
+    '{saleitem}がセール対象じゃん！',
+    '今日のセールは当たりだ',
+    'セール見てきた、{saleitem}安い',
+    'ショップ更新の時間だ〜',
+    '今日のセール、狙ってたやつ来るかな',
+    'セール品チェックした？',
+  ],
+  en: [
+    'new sale is up!',
+    '{saleitem} is on sale today!',
+    "today's sale is actually good",
+    'shop just rotated, go look',
+    'checked the sale — {saleitem} is cheap right now',
+  ],
+};
+
+// ===========================================================================
+// ⛓️連鎖カスケード / 🏗️ブループリント / 🛠️パズル工房 の語彙（第3波の3モード）
+// ---------------------------------------------------------------------------
+// 追加モードには専用の話題セットを用意する、という🧩遺跡・⛏️採掘場のときの
+// 流儀にそろえる。ロビーで誰も口にしないモードは「メニューに増えただけ」に
+// 見えるので、仕組みそのもの（重力と倍率／崩壊と★3／共有コードと❤️）から
+// ネタを取る。数字は既存スロットだけを使う（{n}=2〜9）。
+// ===========================================================================
+
+LINES.push(
+  // ⛓️ 連鎖カスケード — 重力・連鎖・倍率
+  { ja: '⛓️で{n}連鎖出た瞬間、手が震えた', en: 'my hands shook the moment I hit a {n}-chain in Chain Cascade', arch: ['casual', 'kid', 'streamer'] },
+  { ja: '置いたあとブロックが落ちてくの、黙って見ちゃう', en: 'I just sit and watch everything fall after each placement', arch: ['lurker', 'casual', 'explorer'] },
+  { ja: 'あと1マス空けて溜めるの、我慢比べすぎる', en: 'holding that last gap to build the chain is pure willpower', arch: ['tryhard', 'senpai'] },
+  { ja: '倍率が×64で頭打ちって知ってから組み方変わった', en: 'learned the multiplier caps at ×64 and my whole approach changed', arch: ['tryhard', 'explorer'] },
+  { ja: '重力あるだけで完全に別ゲーになるの面白い', en: 'just adding gravity turns it into a completely different game', arch: ['senpai', 'explorer'] },
+  { ja: '連鎖狙って積み上げたのに1連鎖で終わって崩れ落ちた', en: 'stacked the whole board for a chain and got exactly one clear', arch: ['casual', 'newbie', 'gacha'] },
+  { ja: 'chain cascade is the only mode where the board plays itself', en: 'chain cascade is the only mode where the board plays itself', arch: ['global'] },
+
+  // 🏗️ ブループリント — 日替わりの図面・崩壊・★3
+  { ja: '今日の設計図むずくない？崩壊2回した', en: "today's blueprint is rough, I crumbled it twice", arch: ['casual', 'tryhard', 'newbie'] },
+  { ja: '列そろえたら作品ごと崩れて声出た', en: 'completed a line and the whole build crumbled — I yelped' },
+  { ja: '設計図の外に1マスはみ出しただけで詰むの、こわいけど好き', en: 'one square outside the blueprint and the run is done — terrifying but I love it', arch: ['explorer', 'senpai'] },
+  { ja: '崩壊0・90秒以内の★3、やっと取れた', en: 'finally got the 3-star: zero crumbles, under 90 seconds', arch: ['morning', 'tryhard'] },
+  { ja: '設計図が👑の日はテンション上がる', en: 'blueprint days with the crown shape just hit different', arch: ['kid', 'casual', 'gacha'] },
+  { ja: 'ピースが図面ぴったりぶんしか来ないの、気づいたとき鳥肌立った', en: 'you get exactly enough pieces for the blueprint and nothing more — that realization gave me chills', arch: ['senpai', 'explorer'] },
+
+  // 🛠️ パズル工房 — 共有コード・投稿・❤️
+  { ja: '工房、6文字のコードで友達の作品に飛べるの便利すぎる', en: 'six letters and you land straight on your friend\'s workshop stage, so convenient', arch: ['casual', 'newbie'] },
+  { ja: '自分の作ったステージに❤️ついてた ちょっとうれしい', en: 'someone hearted the stage I made, small but real joy', arch: ['lurker', 'newbie', 'casual'] },
+  { ja: '自分でクリアできた図しか公開されないの、遊ぶ側として安心する', en: 'only stages the author actually solved get published — as a player that is a relief', arch: ['senpai', 'casual'] },
+  { ja: '作者の手数に1手も勝てん…', en: "can't beat the author's move count, not even by one", arch: ['tryhard', 'explorer'] },
+  { ja: '遊ばれるたびに🪙入るの知って、急に投稿したくなった', en: 'found out you earn coins every time someone plays your stage — suddenly I want to publish', arch: ['gacha', 'casual', 'kid'] },
+  { ja: '工房のステージ作ってると、遊ぶより時間溶ける', en: 'building a workshop stage eats more time than playing one', arch: ['explorer', 'nightowl', 'streamer'] },
+);
+
+DIALOGUES.push(
+  { lang: 'ja', lines: [
+    ['a', '⛓️で{n}連鎖出た！手が震えてる', 'got a {n}-chain in Chain Cascade! hands are shaking'],
+    ['b', 'どうやって組んだの', 'how did you set it up?'],
+    ['a', '上を先に埋めて、落ちたら下が揃うようにした', 'filled the top first so the drop would finish the bottom rows'],
+    ['b', 'なるほど、重力に働いてもらうのか', 'ah, you let gravity do the work'],
+  ], archA: ['casual', 'kid', 'streamer'], archB: ['tryhard', 'senpai'] },
+  { lang: 'ja', lines: [
+    ['a', '今日の設計図、★3取れた人いる？', "anyone 3-star today's blueprint?"],
+    ['b', '崩壊0で90秒以内でしょ？1回だけ取れた', 'zero crumbles under 90 seconds, right? managed it once'],
+    ['a', '列そろえたら崩れるの毎回忘れる', 'I keep forgetting that completing a line makes it crumble'],
+    ['b', 'あれ最初は全員やるやつ', 'everyone does that at least once'],
+  ], archA: ['casual', 'newbie'], archB: ['senpai', 'tryhard'] },
+  { lang: 'ja', lines: [
+    ['a', '工房のステージ作ったけど自分で解けなくて投稿できない', 'made a workshop stage but I cannot solve it myself, so I cannot publish it'],
+    ['b', '解ける手順を先に決めて、そこから盤面を作るといいよ', 'decide the solution first, then build the board around it'],
+    ['a', 'その発想はなかった', 'never thought of that'],
+    ['b', '3回作り直しただけ', 'I just rebuilt mine three times'],
+  ], archA: ['kid', 'casual', 'gacha'], archB: ['senpai', 'explorer'] },
+);
+
+FEED.push(
+  { id: 'chain_big', icon: '⛓️', w: 3, min: 0.35, ja: '{me} が連鎖カスケードで{n}連鎖を決めた！', en: '{me} pulled off a {n}-chain in Chain Cascade!' },
+  { id: 'blueprint_star3', icon: '🏗️', w: 2, min: 0.45, ja: '{me} が今日の設計図を★3で完成させた', en: "{me} finished today's blueprint with 3 stars" },
+  { id: 'workshop_post', icon: '🛠️', w: 2, min: 0, ja: '{me} がパズル工房に自作ステージを投稿した', en: '{me} published a stage in the Puzzle Workshop' },
+);
+
+Object.assign(REPLIES, {
+  chain: {
+    ja: ['落ちたあとに揃うように上から埋めるといいよ', '⛓️は倍率×64で頭打ちだから、そこまで狙えたら十分', '1連鎖で終わると心が折れるよねw', '重力あるとピースの見え方まで変わる', 'あと1マス我慢するかどうかの勝負だと思ってる'],
+    en: ['fill the top so the drop finishes the bottom rows', 'the multiplier caps at ×64, so anything past that is style', 'one-chain endings hurt lol'],
+  },
+  blueprint: {
+    ja: ['列を揃えたら崩れるから、はみ出しに気をつけて', '★3は崩壊0＋90秒以内だよ', '今日の図面、地味に難しかった', 'ピースは図面ぴったりぶんしか来ないから、1マスも無駄にできない', '崩壊するとこっちの心も崩れる'],
+    en: ['never complete a line — the build crumbles', '3 stars means zero crumbles under 90 seconds', "today's shape was sneaky hard"],
+  },
+  workshop: {
+    ja: ['コード貼ってくれたら遊びに行くよ', '自分でクリアできた図しか公開されないから安心して挑んでいい', '作者の手数に勝てたためしがない', '❤️送っておいた', '投稿するとプレイされるたびにコイン入るのいいよね'],
+    en: ['drop the code and I will play it', 'every published stage was cleared by its author first', 'beating the author par is another game entirely'],
+  },
+});
+// 'puzzle' ルールの正規表現が「パズル工房」を先に拾ってしまうので、この3つは
+// その手前に差し込む（REPLY_RULES は先勝ちマッチ）。'puzzle' が見つからない
+// 場合だけ従来どおり包括ルールの手前へ。
+// 「連鎖」単体は日替わりフラグ『連鎖の日』(コンボ2倍) でも使われる語なので、
+// ⛓️モードだと分かる語形だけを拾う。
+{
+  const NEW3_RULES = [
+    ['chain', /連鎖カスケード|カスケード|⛓️|[0-9０-９]+連鎖|chain ?cascade/i],
+    ['blueprint', /設計図|ブループリント|blueprint/i],
+    ['workshop', /パズル工房|工房のステージ|ワークショップ|workshop/i],
+  ];
+  const at = REPLY_RULES.findIndex(r => r[0] === 'puzzle');
+  REPLY_RULES.splice(at >= 0 ? at : REPLY_RULES.length - 1, 0, ...NEW3_RULES);
+}

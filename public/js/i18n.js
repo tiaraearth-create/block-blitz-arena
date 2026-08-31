@@ -43,7 +43,7 @@ const SERVER_MSG_EN = {
   // v2.12: 英語面に日本語のトーストが出ていたぶんをまとめて追加。
   // trServer は表に無い文字列をそのまま返すので、抜けても壊れない ──
   // だから気づかれないまま残る。増やしたら必ずここも足すこと。
-  'ファイルが大きすぎます（最大12MB）': 'That file is too large (12MB max)',
+  'ファイルが大きすぎます（最大4MB）': 'That file is too large (4MB max)',
   'その名前は使えません。別の名前でどうぞ': 'That name is not available — please pick another',
   '名前を入力してください': 'Enter a name',
   'メッセージが空です': 'Your message is empty',
@@ -56,7 +56,7 @@ const SERVER_MSG_EN = {
   '接続数が上限に達しています。しばらくしてからお試しください': 'The server is at capacity — please try again shortly',
   '同時接続が多すぎます': 'Too many simultaneous connections',
   '同じアカウントの接続が多すぎます': 'Too many connections from this account',
-  'その名前は使われています。別の名前になりました': 'That name is taken — you have been given another',
+  'その名前は使えません。別の名前になりました': 'That name is taken — you have been given another',
   '結果の送信が多すぎます。しばらく待ってください': 'Too many results submitted — please wait a moment',
   '送信が多すぎます。しばらく待ってください': 'Too many submissions — please wait a moment',
   'アイテムを持っていません': 'You do not have that item',
@@ -145,16 +145,17 @@ const SERVER_MSG_EN = {
   '報酬がありません': 'No reward here',
   'ティアが見つかりません': 'Tier not found',
   'アイテムが見つかりません': 'Item not found',
-  'アイテムを持っていません': "You don't have that item",
-  '所持していないアイテムです': "You don't own that item",
+  // 'アイテムを持っていません' / '所持していないアイテムです' /
+  // 'まだ獲得していない称号です' / '連投しすぎです。少し待ってください' は
+  // この表の上（v2.12 の追加ぶん）に既にある。オブジェクトリテラルの重複キーは
+  // 後勝ちなので、ここに二重に書くと上の訳が黙って死ぬ。増やすときは必ず
+  // 既にあるか確かめること（表全体は非短縮形で揃えてある）。
   '不正なアイテムです': 'Invalid item',
   '不正なスロットです': 'Invalid slot',
   '称号が見つかりません': 'Title not found',
-  'まだ獲得していない称号です': "You haven't earned that title yet",
   'ルームが見つかりません': 'Room not found',
   'ルームが満員です': 'The room is full',
   'ホストのみ開始できます': 'Only the host can start',
-  '連投しすぎです。少し待ってください': "You're sending too fast — wait a moment",
   '🔇 管理者によりチャットが制限されています': '🔇 Chat restricted by an admin',
   '💳 課金機能は製作中です。もうしばらくお待ちください！': '💳 Payments are coming soon!',
   '決済サービスに接続できません': 'Could not reach the payment service',
@@ -191,11 +192,65 @@ const SERVER_MSG_EN = {
   '管理者専用のアイテムです': 'Staff-only item',
   '管理者専用の装備です（非売品）': 'Staff-only gear (not for sale)',
   '管理者専用の装備です': 'Staff-only gear',
-  'ファイルが大きすぎます（最大64MB）': 'File is too large (max 64MB)',
+  'データが大きすぎます（最大64KB）': 'That data is too large (64KB max)',
   'JSONとして読み取れませんでした': 'Could not parse the file as JSON',
   '接続タイムアウト': 'Connection timed out',
   '対戦相手が見つかりません': 'Opponent not found',
   '再戦の相手はもういません': 'Your opponent has left — no rematch',
+  // v2.16: trServer は通るのに表に無かったプレイヤー向け固定文言を追加。
+  '🛠 サーバー更新のためマッチングを中止しました。少し待ってからもう一度お試しください': '🛠 Matchmaking was cancelled for a server update — please wait a moment and try again',
+  'その時間枠は存在しません': 'That time slot does not exist',
+  'その枠はもう終わっています': 'That slot has already ended',
+  '開催中の枠からは変更できません': 'You cannot switch away from a slot that is live',
+  '開始の連打はできません。少し待ってください': 'You are starting too fast — please wait a moment',
+  '報告箱がいっぱいです。少し時間をおいてからお願いします': 'The report box is full — please try again a little later',
+  'サーバー内部でエラーが発生しました': 'An internal server error occurred',
+  '投票がありません': 'No poll is running',
+  // 👁️ 断罪（管理者ゼロ）── 取引投票と伝言まわりのサーバー送信文言。
+  'もう投票しました': 'You have already voted',
+  '投票を受け付けられません': 'Your vote could not be accepted',
+  '伝言は、段にとどめを刺した人だけが残せます': 'Only the player who landed the finishing blow on a tier can leave a message',
+  '伝言を入力してください': 'Enter a message',
+  // ---- 🔁 ミッションの引き直し（missions.js / index.js の /api/missions/reroll）----
+  '受け取り済みのミッションは引き直せません': 'A claimed mission cannot be rerolled',
+  'きょうの引き直しは使い切りました': 'No mission rerolls left today',
+  '引き直せるお題がもうありません': 'No other missions left to draw',
+  'ミッションを選んでください': 'Pick a mission first',
+  'このミッションは引き直せません': 'That mission cannot be rerolled',
+  'ミッションの引き直しはまだ使えません': 'Mission rerolls are not available yet',
+  '引き直しが多すぎます。少し待ってください': 'Too many rerolls — please wait a moment',
+  '引き直しに失敗しました': 'The reroll failed',
+  // ---- 🏰 ギルドクエストの金庫（guilds.js）----
+  'そのクエストは見つかりません': 'Quest not found',
+  'そのクエストは今週のものではありません': 'That quest is not part of this week',
+  'ギルドがまだ達成していません': 'Your guild has not completed it yet',
+  '今週は別のギルドで金庫を開けています': 'You already opened another guild vault this week',
+  // ---- 📕 コレクション図鑑（catalog.js の claimCollection）----
+  '受け取れるセットがありません': 'No collection sets ready to claim',
+  'まだコンプしていないか、受け取り済みです': 'Not complete yet, or already claimed',
+  '図鑑の報酬は1日1セットまでです（残りはまた明日）': 'You can claim one collection set per day — the rest are waiting tomorrow',
+  // ---- 🔔 挑戦状（friends.js）----
+  '挑戦状を送れませんでした': 'The challenge could not be sent',
+  '自分には送れません': 'You cannot send that to yourself',
+  '今日のデイリーチャレンジの記録がまだありません': 'You have no Daily Challenge record today yet',
+  'この相手にはもう送っています': 'You have already sent one to this player',
+  'その挑戦状はありません': 'There is no such challenge',
+  // ---- 🎁 本日の無料ギフト / 🧳 ゲスト記録の引き継ぎ（index.js）----
+  '本日の無料ギフトは受け取り済みです': 'The free gift for today has already been claimed',
+  'ゲスト記録の引き継ぎは1アカウント1回だけです（すでに実行済み）': 'Guest progress can be imported only once per account (already done)',
+  // ---- 🧩 パズル工房（index.js の /api/workshop/*）----
+  // 英文は server/index.js が同じ応答に載せている errorEn とそろえてある
+  // （どちらの経路で拾っても同じ文が出る）。数が入る文言は下の
+  // SERVER_MSG_PATTERNS 側。
+  '投稿が多すぎます。時間をおいてください': 'Too many submissions — please try again later',
+  'クリアの記録が読めません。もう一度自分でクリアしてから投稿してください': 'That clear record is unreadable — clear the stage yourself once more, then submit',
+  'そのステージはサーバー側で再生してもクリアできませんでした（解けるステージだけ投稿できます）': 'Replaying your clear on the server did not solve the stage — only solvable stages can be published',
+  '工房がいっぱいです。しばらくしてからお試しください': 'The workshop is full — please try again later',
+  '共有コードを発行できませんでした。もう一度お試しください': 'Could not mint a share code — please try again',
+  'そのコードのステージは見つかりません': 'No stage with that code',
+  'すでに♡を送っています': 'You already liked this stage',
+  '♡の受付は上限に達しました': 'This stage has reached its like limit',
+  '自分が投稿したステージだけ削除できます': 'You can only delete stages you published',
 };
 
 const SERVER_MSG_PATTERNS = [
@@ -205,6 +260,14 @@ const SERVER_MSG_PATTERNS = [
   [/^コインが足りません（([\d,]+)必要）$/, (m) => `Not enough coins (need ${m[1]})`],
   [/^ギルドは満員です（最大(\d+)人）$/, (m) => `The guild is full (max ${m[1]} members)`],
   [/^ギルド設立には🪙(\d+)必要です$/, (m) => `Founding a guild costs 🪙${m[1]}`],
+  [/^このモードは(\d+)人までです（いま(\d+)人）$/, (m) => `This mode is for up to ${m[1]} players (you have ${m[2]} now)`],
+  // 🧩 パズル工房の投稿検査。数はサーバーの定数（WS_TITLE_MAX / WS_MIN_CELLS /
+  // WS_MAX_PIECES / WS_MAX_PER_USER）から埋まるので、上限を調整しても英訳が
+  // 死なないように正規表現で受ける。
+  [/^ステージ名は(\d+)〜(\d+)文字で入力してください$/, (m) => `The stage name must be ${m[1]}–${m[2]} characters`],
+  [/^盤面が不正です（8×8・光るマスは(\d+)個以上）$/, (m) => `Invalid board (8×8, at least ${m[1]} glowing cells)`],
+  [/^ピースは(\d+)〜(\d+)個で指定してください$/, (m) => `Provide ${m[1]}–${m[2]} pieces`],
+  [/^投稿できるのは1人(\d+)ステージまでです。古いものを削除してください$/, (m) => `You can publish up to ${m[1]} stages — delete an old one first`],
 ];
 
 export function trServer(msg) {
@@ -223,7 +286,15 @@ export function applyStaticI18n() {
   document.documentElement.lang = LANG;
   if (LANG !== 'en') return;
 
-  const set = (sel, text) => { const el = document.querySelector(sel); if (el) el.textContent = text; };
+  const set = (sel, text) => {
+    const el = document.querySelector(sel);
+    if (!el) return;
+    // 通知ドット(.nav-dot)を内包する要素は textContent 代入だとドットごと消える。
+    // ドット要素を退避してからテキストを入れ、差し戻す（id/hidden 状態を保つ）。
+    const dot = el.querySelector('.nav-dot');
+    el.textContent = text;
+    if (dot) el.appendChild(dot);
+  };
 
   // menu buttons
   set('#btnSolo', '▶ Solo Play');
@@ -290,6 +361,18 @@ export function applyStaticI18n() {
   attr('#liveFeed', 'title', 'Live feed');
   attr('#chaosBar', 'title', 'Until the next rule change');
   attr('#chatReplyCancel', 'title', 'Cancel reply');
+  // 絵文字だけのボタンは、読み上げでは名前が無いと「✕ ボタン」としか出ない。
+  // 日本語面の名前は index.html 側に置いてある。
+  attr('#btnQuit', 'title', 'Quit');
+  attr('#btnQuit', 'aria-label', 'Quit');
+  attr('#chatToggle', 'title', 'Global chat');
+  attr('#chatToggle', 'aria-label', 'Open global chat');
+  // 試合が始まると game.js がもっと詳しい名前へ差し替える（こちらは控え）。
+  attr('#gameCanvas', 'aria-label', 'Game board');
+  for (const el of document.querySelectorAll('[data-back], #btnRoomBack')) {
+    el.setAttribute('title', 'Back');
+    el.setAttribute('aria-label', 'Back');
+  }
   document.title = 'Block Blitz Arena — Block Puzzle × Online Battles';
   set('#screen-shop .sub-header h2', '🛍️ Shop');
   set('[data-shop="skin"]', 'Blocks');
@@ -311,6 +394,8 @@ export function applyStaticI18n() {
   // 🤝 フレンド（v2.12 で追加）
   set('#screen-friends .sub-header h2', '🤝 Friends');
   set('[data-fr="list"]', 'Friends');
+  // 「申請」タブは中に通知ドット(#frReqDot)を内包しているが、set() が
+  // ドットを退避・差し戻すので textContent 代入でも消えない。
   set('[data-fr="requests"]', 'Requests');
   set('[data-fr="find"]', 'Find');
   set('[data-fr="settings"]', 'Settings');

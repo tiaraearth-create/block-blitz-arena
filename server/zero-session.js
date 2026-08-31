@@ -22,6 +22,7 @@ import {
   seatsFor, lanesFor, moodFor, pickVerdictCells, verdictAccepts,
   MIN_BOT_SEATS, REVIVE_SEC, EXECUTIONS_PER_SLOT, EXECUTIONS_PER_DAY, SIZE,
   MISS_HEAL, TOPOUT_HEAL, SEATS_MAX, missHealFor,
+  GRID_FRESH_MS, HUMAN_DPM_CAP, HUMAN_BUDGET_MAX_SEC,
   makeDeal, dealTally, dealWinner, clearDealEffects, dealForDay,
   DEAL_AT_SEC, DEAL_SEC, HUMAN_VOTE_WEIGHT,
 } from './zero.js';
@@ -52,7 +53,33 @@ function seatPlan(botSeats) {
 // セッション
 // ---------------------------------------------------------------------------
 
-export function createSession(deps, humanSocks) {
+// 開幕の宣言を読み上げてよい間隔。
+//
+// なぜ「セッションに1回」ではないか: クライアントの1走行は120秒で、走行ごとに
+// zero_leave → zero_join が飛んでセッションが作り直される。セッション側の
+// フラグでは、ソロの人が枠の間ずっと2分おきに開幕宣言を浴びることになる。
+// 世界で1本の run に「最後に読み上げた時刻」を持ち、この時間だけは黙る。
+// （枠は既定30分。部屋が枠ごとに1つなら、実際に流れるのは枠の頭の1回だけ）
+export const OPEN_COOLDOWN_MS = 15 * 60 * 1000;
+
+// 開幕（複数人）と solo（実プレイヤーが1人）の宣言。
+// ZERO_LINES には日英4行×3態度で用意されていたのに、どの kind からも
+// 呼ばれておらず、管理者の動作確認API以外では一度も表に出ていなかった。
+// open と solo で別のガードを持つ（片方が鳴っても、もう片方は鳴れる）。
+function sayOpening(s, run, deps, t) {
+  const { say } = deps;
+  if (!say || !run) return null;
+  const humans = seatedHumans(s).length;
+  const kind = humans <= 1 ? 'solo' : 'open';
+  const key = kind === 'solo' ? 'soloSaidAt' : 'openSaidAt';
+  if (t - (run[key] || 0) < OPEN_COOLDOWN_MS) return null;
+  run[key] = t;
+  // {n} は「ここまでに返した王座の数」＝割れた段の数。
+  say(kind, Math.min(DAN.length - 1, run.dan | 0), { n: run.dan | 0, seed: t });
+  return kind;
+}
+
+export function createSession(deps, humanSocks, run = null) {
   const {
     Engine, chooseMove, pickResidentBot, pickPersona, sockName,
     now = () => Date.now(), random = Math.random, uuid,
@@ -66,10 +93,16 @@ export function createSession(deps, humanSocks) {
   const botSeats = Math.max(MIN_BOT_SEATS, seats - humans);
   const seed = Math.floor(random() * 2 ** 31);
   const used = new Set(seated.map(sockName));
+  // その日すでに処刑された住人は抽選から外す（説明文「その日はもう戻ってきません」）。
+  // run を渡さない旧テスト等では従来どおり（除外なし）。
+  if (run && Array.isArray(run.fallen)) for (const f of run.fallen) if (f && f.name) used.add(f.name);
 
   const entrants = seated.map(ws => ({
     ws, human: true, name: sockName(ws), score: 0, cuts: 0, missed: 0,
     alive: true, downUntil: 0, lastSeen: now(),
+    // 盤面同期（zero_state）。届くまでは null ＝「サーバーは盤面を知らない」。
+    grid: null, gridAt: 0, gridPrev: null, gridPrevAt: 0,
+    syncScore: null, syncAt: 0, dealt: 0,
   }));
 
   const plan = seatPlan(botSeats);
@@ -90,13 +123,15 @@ export function createSession(deps, humanSocks) {
   // ゼロ自身も盤面を持って本当に打つ。HPバーではないことの実体。
   const zeroEngine = new Engine((seed + 104729) >>> 0);
 
-  return {
+  const s = {
     id: uuid(),
     overflow: humanSocks.slice(seated.length),
     entrants,
     startedAt: now(),
     ended: false,
     seed,
+    // 人数。あとから合流した人のぶんは addHuman が足す。**抜けても下げない**
+    // （理由は addHuman / zeroSeatOut の注記）。
     humans,
     zero: { engine: zeroEngine, nextMoveAt: now() + COUNTDOWN * 1000, score: 0, lines: 0 },
     verdicts: [],          // 進行中の断罪
@@ -105,6 +140,84 @@ export function createSession(deps, humanSocks) {
     targetCol: Math.floor(random() * SIZE),
     stakes: [],            // このセッションで割れた段（枠の終わりに精算）
   };
+  // 部屋ができた＝枠が開いた。ここが open / solo の唯一の発火点。
+  sayOpening(s, run, deps, now());
+  return s;
+}
+
+// 席の再計算。人が増えたぶんだけ住人の席を減らす（**増やしはしない**）。
+// 処刑済みの住人は席に残す ── 「その日はもう戻ってきません」を画面で見せる
+// のがこのモードの見せ場なので、ここで消してはいけない。
+function rebalanceBots(s) {
+  const humans = Math.max(1, seatedHumans(s).length);
+  const want = Math.max(MIN_BOT_SEATS, seatsFor(humans) - humans);
+  let drop = liveBots(s).length - want;
+  if (drop <= 0) return 0;
+  let removed = 0;
+  // あとから座った住人（配列の後ろ）から退席させる。
+  for (let i = s.entrants.length - 1; i >= 0 && drop > 0; i--) {
+    const e = s.entrants[i];
+    if (e.human || e.executed) continue;
+    s.entrants.splice(i, 1);
+    drop--; removed++;
+  }
+  return removed;
+}
+
+// 途中合流。
+//
+// createSession は最初から複数人を受け取れる設計（seated / seats / botSeats を
+// humanSocks.length から計算している）だったのに、あとから席を1つ増やす道が
+// 無かった。そのため呼び出し側は毎回 1 ソケットで新しい部屋を作るしかなく、
+// s.humans が恒久的に 1 になっていた ── 人数ぶんHPを重くする補正も、
+// 回復量を断罪の本数で割る補正も、満席案内も、全部死んでいた。
+//
+// 返り値: 座れた席（entrant）／満席なら false（呼び出し側が案内を出す）
+export function addHuman(s, ws, deps, run = null) {
+  const { sockName, now = () => Date.now() } = deps;
+  if (!s || s.ended || !ws) return false;
+  const name = sockName(ws);
+
+  // 同じソケット、または同じ名前の席が既にあるなら座り直す。走行のたびに
+  // zero_leave → zero_join が来るので、実際にはこれが通常の経路になる。
+  const seat = s.entrants.find(e => e.human && (e.ws === ws || e.name === name));
+  if (seat) {
+    seat.ws = ws;
+    seat.left = false;
+    // トップアウトで落ちている最中の人はそのまま（60秒の上限を回避させない）。
+    // 復帰は tick が downUntil を見て面倒をみる。
+    if (!seat.downUntil) seat.alive = true;
+    seat.lastSeen = now();
+    s.lastState = 0;
+    return seat;
+  }
+
+  // 抜けたきり戻ってこない席（ソケットも閉じている）は片付ける。走行の合間に
+  // いる人はソケットが生きているので消えない。
+  for (let i = s.entrants.length - 1; i >= 0; i--) {
+    const e = s.entrants[i];
+    if (e.human && e.left && (!e.ws || e.ws.readyState !== e.ws.OPEN)) s.entrants.splice(i, 1);
+  }
+
+  // 席は人間も含めて上限24。住人の席も必ず MIN_BOT_SEATS 残す。
+  const before = seatedHumans(s).length;
+  if (before >= SEATS_MAX - MIN_BOT_SEATS) return false;
+
+  const e = {
+    ws, human: true, name, score: 0, cuts: 0, missed: 0,
+    alive: true, downUntil: 0, lastSeen: now(),
+    grid: null, gridAt: 0, gridPrev: null, gridPrevAt: 0,
+    syncScore: null, syncAt: 0, dealt: 0,
+  };
+  s.entrants.push(e);
+  // 一度上がった人数は下げない。抜けたぶんHPを下げるのは、与えたダメージを
+  // 巻き戻すのと同じこと（既存方針と整合）。zeroSeatOut 側にも同じ注記がある。
+  s.humans = Math.max(s.humans | 0, before + 1);
+  rebalanceBots(s);
+  // 席が変わったので、次の tick で全員へ状態を配り直す（既存の1秒配信に乗せる）。
+  s.lastState = 0;
+  sayOpening(s, run, deps, now());
+  return e;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +225,15 @@ export function createSession(deps, humanSocks) {
 // ---------------------------------------------------------------------------
 
 export function aliveHumans(s) {
-  return s.entrants.filter(e => e.human && e.alive);
+  // 席を外した人(e.left)は名指ししない。zeroSeatOut は alive も false にするが、
+  // 断罪の的になるかどうかは席の有無で決まるべきなので、両方を見る。
+  return s.entrants.filter(e => e.human && e.alive && !e.left);
+}
+// 「いま席に座っている」人間。走行を終えて席を外した人(e.left)は数えないし、
+// 配信もしない ── 部屋が枠ごとに1つになったことで、抜けた人の席は次の走行まで
+// 残る。ここを見ないと、結果画面にいる人へ zero_state を送り続けてしまう。
+export function seatedHumans(s) {
+  return s.entrants.filter(e => e.human && !e.left);
 }
 export function liveBots(s) {
   return s.entrants.filter(e => !e.human && !e.executed);
@@ -132,9 +253,13 @@ export function tick(s, run, deps) {
     if (!run.allBroken) {
       run.allBroken = Date.now();
       if (deps.say) deps.say('wrap', DAN.length - 1, { n: DAN.length });
-      if (deps.emit) for (const x of s.entrants) if (x.human) {
+      // 部屋は枠ごとに1つなので、完全勝利の演出は「その枠にいる全員」に届く。
+      // 1ソケット1部屋だった頃は、最初に条件を満たした部屋の人しか見られなかった。
+      if (deps.emit) for (const x of seatedHumans(s)) {
         deps.emit(x, { type: 'zero_complete', dan: DAN.length });
       }
+      // 👑 称号「七冠奪還」── 七段すべてが陥落したその場に居合わせた人にバッジ 'zero7'。
+      if (deps.onZeroSevenBadge) deps.onZeroSevenBadge(seatedHumans(s).map(x => x.name));
     }
     return;
   }
@@ -188,8 +313,11 @@ export function tick(s, run, deps) {
   }
 
   // --- トップアウトからの復帰 ---
+  // 席を外した人(e.left)は復帰させない。復帰させると aliveHumans に混ざり、
+  // 画面を見ていない人へ断罪が飛んで、必ず落ちて（＝ゼロが回復して住人が処刑
+  // される）しまう。次に座り直したとき addHuman が起こす。
   for (const e of s.entrants) {
-    if (e.human && !e.alive && e.downUntil && t >= e.downUntil) {
+    if (e.human && !e.left && !e.alive && e.downUntil && t >= e.downUntil) {
       e.alive = true; e.downUntil = 0;
       if (emit) emit(e, { type: 'zero_revive' });
     }
@@ -209,7 +337,12 @@ export function tick(s, run, deps) {
     s.lastState = t;
     if (emit) {
       const view = stateView(s, run);
-      for (const e of s.entrants) if (e.human) emit(e, { ...view, you: youView(e) });
+      // canWill は視聴者ごとに違う（とどめを刺して未記入の段があるか）。共有 view の
+      // ハードコード null を上書きして配る ── 再接続後も伝言を書く権利を復元できる。
+      for (const e of seatedHumans(s)) {
+        const canWill = (run.broken || []).some(b => b.by === e.name && !b.will);
+        emit(e, { ...view, canWill, you: youView(e) });
+      }
     }
   }
 }
@@ -231,8 +364,15 @@ function resolveExpiredVerdicts(s, run, danIndex, deps) {
     chronicle(run, 'missed', { by: v.target, victim: victim ? victim.name : null });
     if (say) say('missed', danIndex, { you: v.target, name: victim ? victim.name : undefined, seed: v.at });
     if (emit) {
-      for (const x of s.entrants) if (x.human) {
-        emit(x, { type: 'zero_missed', target: v.target, victim: victim ? victim.name : null });
+      for (const x of seatedHumans(s)) {
+        // 落とした本人には赤マス座標も送る ── モード説明「時間内に斬れないと
+        // 赤マスがそのままお邪魔になる」を満たすため、クライアントは自分が target の
+        // ときこの cells を盤面へお邪魔として書き込む。他人には座標は送らない。
+        const mine = x.name === v.target;
+        emit(x, {
+          type: 'zero_missed', target: v.target, victim: victim ? victim.name : null,
+          cells: mine ? v.cells : undefined, mine,
+        });
       }
     }
   }
@@ -255,7 +395,15 @@ function fireVerdicts(s, run, danIndex, deps) {
     e.lastVerdictAt = t;
     // 取引「今夜の的を八列すべてにしてやる」= 寄せる列を無効化する
     const mark = run.dealMarkAll ? -1 : s.targetCol;
-    const { cells, keystone } = pickVerdictCells(e.grid, danIndex, mark, random);
+    // zero_state で同期された盤面が新しければ、それを渡す ── 赤マスが
+    // 「いま空いているマス」から選ばれる（pickVerdictCells の本来の設計）。
+    // まだ届いていない／古いときだけ null（全マスから選ぶ・安全側）。
+    const grid = e.grid && (t - (e.gridAt || 0)) <= GRID_FRESH_MS ? e.grid : null;
+    let { cells, keystone } = pickVerdictCells(grid, danIndex, mark, random);
+    // 盤面が満杯で空きマスが無いときは、的が1つも出せない＝その人だけ断罪が
+    // 飛ばなくなる（＝落とす罰も受けない）。埋まった盤面はどのみち詰み寸前
+    // なので、全マスから選び直して必ず名指しする。
+    if (!cells.length && grid) ({ cells, keystone } = pickVerdictCells(null, danIndex, mark, random));
     if (!cells.length) continue;
     // 杭が効いていれば予告が伸びる。取引で縮むこともある。
     const warnMs = Math.max(1200, dan.warnMs + (s.warnBonus || 0) - (run.dealWarnCut || 0));
@@ -289,23 +437,98 @@ export function submitStake(s, run, name, cols, deps) {
   const ready = s.stakes2 >= need;
   if (ready) { s.stakes2 = 0; s.warnBonus = 1500; }
   if (emit) {
-    for (const x of s.entrants) if (x.human) {
+    for (const x of seatedHumans(s)) {
       emit(x, { type: 'zero_stake', by: name, have: s.stakes2, need, ready });
     }
   }
   return { ok: true, ready };
 }
 
+// ---------------------------------------------------------------------------
+// 盤面同期（zero_state）
+// ---------------------------------------------------------------------------
+//
+// バトルロイヤルの 'state' と同じ作法。クライアントが grid と score を定期的に
+// （＋1手ごとに）送り、サーバーが席に保存する。レート制限は battle.js の
+// sockRate が持つ（他の zero_* と同じ）。
+//
+// ■ 人間の点を段に入れる（住人＝火力／人間＝鍵 との関係）
+// zero.js の役割分けは「住人が7割を削り、人間が残り3割の封印を斬る」。
+// 人間の点も**7割の側にだけ**入れる ── 封印は今までどおり斬らないと1ミリも
+// 減らないので、役割の壁はそのまま残る。変わるのは「自分の点が段のバーを
+// 動かす」という手応えと、scripts/sim-zero.mjs が最初から前提にしていた
+// 火力の式（住人＋人間）に実装が追いつくこと。
+// 入れすぎて段が一瞬で溶けないよう、1人あたり毎分 HUMAN_DPM_CAP で頭打ちにする。
+export function syncBoard(s, run, name, payload, deps = {}) {
+  const { now = () => Date.now() } = deps;
+  if (!s || s.ended || !payload) return { ok: false, why: 'no-session' };
+  const t = now();
+  const e = s.entrants.find(x => x.human && !x.left && x.name === name);
+  if (!e) return { ok: false, why: 'no-seat' };
+  e.lastSeen = t;
+
+  let gotGrid = false;
+  if (Array.isArray(payload.grid) && payload.grid.length >= SIZE * SIZE) {
+    // 呼び出し側（battle.js）が sanitizeGrid 済みだが、単体でも安全にする。
+    const g = new Array(SIZE * SIZE);
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const v = Math.floor(Number(payload.grid[i]));
+      g[i] = Number.isFinite(v) && v > 0 ? Math.min(9, v) : 0;
+    }
+    // 直近2枚を持つ（verdictAccepts が「置く前／置いた後」どちらの実装でも
+    // 正しく裏づけを取れるようにするため。理由は zero.js の注記）。
+    e.gridPrev = e.grid; e.gridPrevAt = e.gridAt || 0;
+    e.grid = g; e.gridAt = t; gotGrid = true;
+  }
+  const dealt = applyHumanScore(s, run, e, payload.score, t);
+  return { ok: true, grid: gotGrid, dealt };
+}
+
+// 申告スコアの増分を段のHPに入れる。増分だけを見るので、走行が変わって
+// スコアが 0 に戻っても（クライアントの1走行は120秒）巻き戻らない。
+function applyHumanScore(s, run, e, rawScore, t) {
+  const score = Math.floor(Number(rawScore));
+  if (!Number.isFinite(score) || score < 0) return 0;
+  const last = e.syncAt || 0;
+  const prev = e.syncScore;
+  e.syncAt = t;
+  e.syncScore = score;
+  // 初回、または新しい走行（スコアが下がった）＝基準を取り直すだけ。
+  if (prev == null || score < prev) return 0;
+  const gained = score - prev;
+  if (gained <= 0) return 0;
+  e.score = (e.score || 0) + gained;      // 席の一覧に出る、この枠での累計
+  if (!run || !e.alive) return 0;
+  const danIndex = run.dan | 0;
+  if (danIndex >= DAN.length) return 0;
+  // 前回の同期からの経過時間ぶんだけ。黙っていた時間は繰り越さない。
+  const span = Math.max(0, Math.min(HUMAN_BUDGET_MAX_SEC * 1000, last ? t - last : 0));
+  const budget = Math.floor(HUMAN_DPM_CAP * span / 60_000);
+  const add = Math.min(gained, budget);
+  if (add <= 0) return 0;
+  const softCap = softCapFor(danIndex, s.humans, run);
+  const before = run.dealt || 0;
+  // 点は封印の手前で必ず止まる（住人の火力とまったく同じ扱い）。
+  run.dealt = Math.min(softCap, before + add);
+  const applied = run.dealt - before;
+  e.dealt = (e.dealt || 0) + applied;
+  return applied;
+}
+
 export function submitCut(s, run, name, verdictId, clearedCells, deps) {
   const { now = () => Date.now(), say, emit } = deps;
   const t = now();
   const v = s.verdicts.find(x => x.id === verdictId && x.target === name);
-  const r = verdictAccepts(v, t, clearedCells);
+  const e = s.entrants.find(x => x.name === name);
+  // 同期済みの盤面があれば、それを裏づけに使う（zero.js の verdictAccepts 参照）。
+  const board = e && e.grid
+    ? { grid: e.grid, at: e.gridAt || 0, prev: e.gridPrev || null, prevAt: e.gridPrevAt || 0 }
+    : null;
+  const r = verdictAccepts(v, t, clearedCells, board);
   if (!r.ok) return { ok: false, why: r.why };
   v.resolved = true;
   s.verdicts = s.verdicts.filter(x => !x.resolved);
 
-  const e = s.entrants.find(x => x.name === name);
   if (e) e.cuts = (e.cuts || 0) + 1;
   if (deps.onStat) deps.onStat(name, 'zeroCuts');
   // 👑 王座の欠片。急所ごと斬れば上乗せ。
@@ -317,7 +540,7 @@ export function submitCut(s, run, name, verdictId, clearedCells, deps) {
   chronicle(run, 'cut', { by: name, keystone: !!r.keystone, dan: danIndex + 1 });
   if (say) say('cut', danIndex, { you: name, seed: t });
   if (emit) {
-    for (const x of s.entrants) if (x.human) {
+    for (const x of seatedHumans(s)) {
       emit(x, { type: 'zero_cut', by: name, keystone: !!r.keystone, damage: dmg });
     }
   }
@@ -325,12 +548,21 @@ export function submitCut(s, run, name, verdictId, clearedCells, deps) {
 }
 
 // トップアウト。回数無制限だが、そのたびにゼロが回復する。
-export function topOut(s, run, name, deps) {
+export function topOut(s, run, name, deps, userId = null) {
   const { now = () => Date.now(), say } = deps;
   const e = s.entrants.find(x => x.human && x.name === name);
   if (!e || !e.alive) return false;
+  const t = now();
+  // クールダウンはユーザー単位で run（世界で1本の共有進捗）に持つ。席単位の
+  // e.alive だけだと、zero_leave→zero_join で新セッションの alive:true な席を
+  // 即座に得られ、60秒に1回の上限を回避して共有進捗を巻き戻せた（griefing）。
+  if (userId) {
+    run.topoutAt = run.topoutAt || {};
+    if (t - (run.topoutAt[userId] || 0) < REVIVE_SEC * 1000) return false;
+    run.topoutAt[userId] = t;
+  }
   e.alive = false;
-  e.downUntil = now() + REVIVE_SEC * 1000;
+  e.downUntil = t + REVIVE_SEC * 1000;
   const danIndex = run.dan | 0;
   run.dealt = Math.max(0, (run.dealt || 0) - Math.round(danHpFor(danIndex, s.humans, run) * TOPOUT_HEAL));
   if (say) say('revive', danIndex, { you: name, seed: now() });
@@ -372,18 +604,17 @@ function breakDan(s, run, danIndex, deps) {
   s.stakes.push(rec);
   if (say) say('danBroken', danIndex, { dan: danIndex + 1, seed: rec.at });
   if (emit) {
-    for (const x of s.entrants) if (x.human) {
+    for (const x of seatedHumans(s)) {
       emit(x, { type: 'zero_dan', dan: danIndex + 1, by: rec.by, next: run.dan < DAN.length ? run.dan + 1 : null });
     }
   }
   // 段が割れた瞬間そこに居た人だけにバッジ。あとから点を足しても手に入らない。
-  if (deps.onDanBadge) deps.onDanBadge(s.entrants.filter(x => x.human).map(x => x.name));
+  if (deps.onDanBadge) deps.onDanBadge(seatedHumans(s).map(x => x.name));
   // 欠片も同じ扱い ── 居合わせた人だけ。とどめを刺した人はさらに上乗せ。
   if (deps.shard) {
     const P = deps.SHARD ? deps.SHARD.danPresent : 40;
     const F = deps.SHARD ? deps.SHARD.danFinish : 80;
-    for (const x of s.entrants) {
-      if (!x.human) continue;
+    for (const x of seatedHumans(s)) {
       deps.shard(x.name, P + (rec.by === x.name ? F : 0));
     }
   }
@@ -437,11 +668,17 @@ export function latestWill(run) {
 
 function runDeal(s, run, danIndex, deps, elapsed, t) {
   const { emit, say, residentVoters, residentChoice, random = Math.random } = deps;
+  // 発火はセッション基準の elapsed ではなく「枠(スロット)の20分地点」で測る。
+  // クライアントの1走行は120秒でセッションが作り直されるため、セッション基準では
+  // DEAL_AT_SEC(=1200秒) に構造的に到達できず、取引が本番で一度も発動しなかった。
+  // run.slotStartsAt（現在スロットの開始時刻, ms）を adminevent 側が書き込む。
+  // 無い場合は後方互換でセッション基準にフォールバックする。
+  const slotElapsed = run.slotStartsAt ? (t - run.slotStartsAt) / 1000 : elapsed;
   // 開幕
-  if (!run.deal && elapsed >= DEAL_AT_SEC && run.dealDoneFor !== danIndex) {
+  if (!run.deal && slotElapsed >= DEAL_AT_SEC && run.dealDoneFor !== danIndex) {
     run.deal = makeDeal(run.dayKey || 'x', danIndex, t);
     if (say) say('deal', danIndex, { seed: t });
-    if (emit) for (const x of s.entrants) if (x.human) emit(x, { type: 'zero_deal', deal: dealView(run.deal) });
+    if (emit) for (const x of seatedHumans(s)) emit(x, { type: 'zero_deal', deal: dealView(run.deal) });
     return;
   }
   if (!run.deal || run.deal.settled) return;
@@ -460,7 +697,7 @@ function runDeal(s, run, danIndex, deps, elapsed, t) {
       run.deal.residentVoted[r.id] = true;
       const o = run.deal.options.find(x => x.id === pick);
       if (o) o.votes++;
-      if (emit) for (const x of s.entrants) if (x.human) {
+      if (emit) for (const x of seatedHumans(s)) {
         emit(x, { type: 'zero_deal_vote', by: r.name, pick, tally: dealTally(run.deal) });
       }
     }
@@ -480,7 +717,7 @@ function runDeal(s, run, danIndex, deps, elapsed, t) {
         s.executed = 0;
       }
     }
-    if (emit) for (const x of s.entrants) if (x.human) {
+    if (emit) for (const x of seatedHumans(s)) {
       emit(x, { type: 'zero_deal_done', win, tally: dealTally(run.deal) });
     }
     chronicle(run, 'deal', { win, tally: dealTally(run.deal), q: run.deal.q });

@@ -55,6 +55,7 @@ export const CATALOG_EN = {
   // ultimate skills
   ult_blast: { name: 'Destruction Shockwave', desc: 'Force-clears the two fullest rows and columns' },
   ult_purify: { name: 'Purifying Wave', desc: 'Erases all garbage + the bottom two rows' },
+  ult_gravity: { name: 'Gravity Crush', desc: 'Compresses the board downward and clears any completed rows — tidying the mess is still on you' },
   ult_overdrive: { name: 'Overdrive', desc: 'Triple score for 15 seconds' },
   ult_meteor: { name: 'Meteor Strike', desc: 'Obliterates 14 random cells' },
   ult_rainbow: { name: 'Rainbow Hand', desc: 'Your hand becomes the best-fitting pieces' },
@@ -62,6 +63,13 @@ export const CATALOG_EN = {
   ult_timestop: { name: 'Time Stop', desc: '+12s on the clock / freezes bosses for 20s' },
   ult_judgement: { name: 'Divine Judgement', desc: 'Annihilates the board for a colossal score' },
   ult_admin: { name: 'Omnipotence [Staff]', desc: 'Staff-only: board wipe + instant gauge refill' },
+  // admin-exclusive booster items (item_god_*)
+  item_god_wipe: { name: 'God Strike [Staff]', desc: 'Wipes the board and grants +50,000 (multiplier applies)' },
+  item_god_time: { name: 'Time Mastery [Staff]', desc: '+120s on the clock / seals enemy attacks for 60s' },
+  item_god_hand: { name: 'Creator’s Hand [Staff]', desc: 'The best 3 pieces + the next 12 draws are big line-clearing pieces' },
+  item_god_mult: { name: 'Divine Might [Staff]', desc: '10× score for 30 seconds' },
+  item_god_shield: { name: 'Absolute Guard [Staff]', desc: '60s of no game-over, garbage immunity, and a permanent combo' },
+  item_god_nuke: { name: 'Cataclysm [Staff]', desc: 'Strips 99% of the enemy’s HP (or +100,000 if no enemy)' },
   // admin-exclusive gear
   skin_admin: { name: 'Rainbow [Staff]', desc: 'Staff-only blocks shimmering in rainbow' },
   board_admin: { name: 'Throne Room [Staff]', desc: 'A staff-only stage of royal gold' },
@@ -132,8 +140,27 @@ export const CATALOG_EN = {
   gachaprince: { name: 'Gacha Prodigy', desc: 'Pull the gacha 100 times' },
   lobbyface: { name: 'Lobby Regular', desc: 'Send 300 chat messages' },
   ghostmaster: { name: 'Ghost Whisperer', desc: 'Score 15,000 in the Haunted House' },
+  voidseeker: { name: 'Voidseeker', desc: 'Emptied the board enough times' },
+  // 📕 図鑑のセットコンプ称号
+  ultcollector: { name: 'Arts Collector', desc: 'Own every ultimate skill' },
+  rainbowtrio: { name: 'The Rainbow Three', desc: 'Own all gacha-exclusive gear' },
+  thronekeeper: { name: 'Keeper of the Vault', desc: 'Own every item from the 👑 vault' },
+  curator: { name: 'The Curator', desc: 'Fill in the whole catalog' },
   mecha: { name: 'Deus Ex Machina', desc: '' },
   frost: { name: 'Frost Queen Frione', desc: '' },
+  // 📕 コレクション図鑑のセット（server/catalog.js の COLLECTION_SETS）。
+  // セット側は nameEn / descEn も持っているが、画面が catName() / catDesc() で
+  // 引く経路もあるので、ほかのカタログと同じくここにも id で置いておく。
+  set_skin: { name: 'Skin Collection', desc: 'Own every block skin' },
+  set_board: { name: 'Board Collection', desc: 'Own every board theme' },
+  set_fx: { name: 'Effect Collection', desc: 'Own every clear effect' },
+  set_ult: { name: 'Arts Collection', desc: 'Own every ultimate skill' },
+  set_boost: { name: 'Booster Shelf', desc: 'Hold at least one of every booster' },
+  set_gacha: { name: 'Gacha Exclusives', desc: 'Own all gacha-exclusive gear' },
+  set_throne: { name: 'The Throne Vault', desc: 'Own every item from the 👑 vault' },
+  set_trial: { name: 'Marks of the Three Trials', desc: 'Earn the Oni, Kami and Creator God badges' },
+  set_slayer: { name: 'Slayer Titles', desc: 'Earn every boss-slaying title' },
+  set_master: { name: 'Full Catalog', desc: 'Own every item in the catalog' },
 };
 
 // id から英語名を引く。無ければ日本語名のまま（未翻訳のものは従来どおり）。

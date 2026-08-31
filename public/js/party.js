@@ -8,10 +8,14 @@
 // あれはメニュー画面でしか出ない作りなので、試合中に見えなくなる。
 
 import { $, showModal, closeModal, toast, showScreen } from './dom.js';
-import { t, trServer } from './i18n.js';
+import { t, trServer, LANG } from './i18n.js';
 import { audio } from './audio.js';
 import { session, api } from './net.js';
 import { sendWs, registerHandler, onWsReady } from './chat.js';
+import { getSettings } from './settings.js';
+
+// 全体チャット側（chat.js）と同じ判定。日本語かな/カナ/漢字があれば ja。
+const msgLang = text => (/[ぁ-んァ-ヶ一-龠ー]/.test(text) ? 'ja' : 'en');
 
 const LAST_PARTY_KEY = 'bba_last_party';
 
@@ -103,9 +107,25 @@ export function renderParty() {
   ].join('');
 
   $('#ptToggle').onclick = () => { openDock = !openDock; audio.click(); renderParty(); };
-  $('#ptCopy').onclick = () => {
-    navigator.clipboard?.writeText(state.code);
-    toast(t('合言葉をコピーしました', 'Code copied'), 'ok', 1500);
+  $('#ptCopy').onclick = async () => {
+    // 非セキュアな LAN(http) では navigator.clipboard 自体が無く、セキュアでも
+    // writeText が拒否され得る。成功を確かめてから知らせる ── ytexport の ytCopy と
+    // 同じく execCommand へ退避し、それも駄目なら「コピーできなかった」と正直に出す。
+    const code = state.code;
+    let ok = false;
+    try {
+      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(code); ok = true; }
+    } catch { /* execCommand に退避 */ }
+    if (!ok) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = code; document.body.appendChild(ta); ta.select();
+        ok = document.execCommand('copy'); ta.remove();
+      } catch { ok = false; }
+    }
+    toast(ok ? t('合言葉をコピーしました', 'Code copied')
+             : t(`コピーできませんでした（合言葉: ${code}）`, `Could not copy (code: ${code})`),
+      ok ? 'ok' : 'err', ok ? 1500 : 3000);
   };
   el.querySelectorAll('[data-kick]').forEach(b => {
     b.onclick = () => sendWs({ type: 'party_kick', userId: b.dataset.kick });
@@ -144,11 +164,14 @@ export function renderParty() {
 function renderChat() {
   const box = $('#ptMsgs');
   if (!box) return;
+  // 翻訳行は全体チャット（chat.js:231）と同じ約束に合わせる ── 設定でOFFなら
+  // 出さず、自分の言語で書かれた発言（同言語の読者・自分の発言を含む）にも付けない。
+  const showTr = getSettings().chatTranslate;
   box.innerHTML = chatLog.map(m => [
     `<div class="pt-msg" data-id="${esc(m.id)}">`,
     `  <b>${esc(m.from)}</b>`,
     `  <span>${esc(m.text)}</span>`,
-    m.tr ? `  <i class="pt-tr">${esc(m.tr)}</i>` : '',
+    (m.tr && showTr && msgLang(m.text) !== LANG) ? `  <i class="pt-tr">${esc(m.tr)}</i>` : '',
     '</div>',
   ].join('')).join('');
   box.scrollTop = box.scrollHeight;
@@ -255,6 +278,72 @@ function openReport() {
       closeModal();
       toast(t('通報しました。ありがとうございます。', 'Reported — thank you.'), 'ok', 3000);
     } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 🚩 工房ステージの通報
+//
+// 上の openReport（パーティー）と同じ形をそのまま工房にも使う。UGCで最初に
+// 要るのは通報の受け口なのに、工房には「/api/bugreport に自分で6文字コードを
+// 書く」しか無く、そこにステージの情報は何も付かなかった。
+//
+// 呼ぶのは工房の画面（screens.js の詳細モーダルの🚩）なので、ここから外へ出す。
+// 送り先は2段構え:
+//   ① 専用の口 POST /api/workshop/stages/:code/report があればそちら
+//      （パーティーと同じく db.bugreports へ kind 付きで積まれる想定）
+//   ② まだ無いサーバー（404）なら、既存の /api/bugreport にコード・タイトル・
+//      作者を書き添えて落とす
+// どちらでも管理画面の🐛モーダルで同じように読める。取りこぼしを作らない。
+export function openStageReport(stage) {
+  const st = stage || {};
+  const code = String(st.code || '');
+  const title = String(st.name || st.title || '');
+  const author = String(st.author || st.byName || '');
+  if (!code) {
+    toast(t('このステージは通報できません', 'This stage cannot be reported'), 'err', 2400);
+    return;
+  }
+  const m = showModal([
+    `<h2>🚩 ${t('ステージを通報', 'Report this stage')}</h2>`,
+    `<p class="center"><b>${esc(title)}</b>${author ? ` <span class="muted">👤 ${esc(author)}</span>` : ''}</p>`,
+    `<p class="muted" style="font-size:12px">${t(
+      `ステージの内容とコード（${code}）が運営に届きます。`,
+      `The stage and its code (${code}) are sent to staff.`)}</p>`,
+    `<textarea id="wrText" maxlength="300" rows="3" placeholder="${t('気になったところ（任意）', 'What is wrong (optional)')}"></textarea>`,
+    '<div class="modal-buttons">',
+    `  <button class="btn btn-ghost" id="wrCancel">${t('やめる', 'Cancel')}</button>`,
+    `  <button class="btn btn-danger" id="wrSend">${t('通報する', 'Report')}</button>`,
+    '</div>',
+  ].join(''));
+  m.querySelector('#wrCancel').onclick = closeModal;
+  const btn = m.querySelector('#wrSend');
+  btn.onclick = async () => {
+    const reason = m.querySelector('#wrText').value.trim();
+    // 二重送信を止める。失敗したときだけ戻す（押せないまま置き去りにしない）。
+    btn.disabled = true;
+    try {
+      await api(`/api/workshop/stages/${encodeURIComponent(code)}/report`, { method: 'POST', body: { reason } });
+    } catch (err) {
+      if (err.status !== 404) { btn.disabled = false; toast(err.message, 'err'); return; }
+      // 専用の口が無い（あるいはステージが既に消えている）ときの退避。
+      // ここで黙って諦めると、通報したつもりの人の一報がどこにも残らない。
+      try {
+        await api('/api/bugreport', {
+          method: 'POST',
+          body: {
+            text: [
+              `[通報/工房] コード ${code}`,
+              `タイトル: ${title || '(無題)'}`,
+              `作者: ${author || '(不明)'}`,
+              reason || '(理由の記入なし)',
+            ].join('\n'),
+          },
+        });
+      } catch (err2) { btn.disabled = false; toast(err2.message, 'err'); return; }
+    }
+    closeModal();
+    toast(t('通報しました。ありがとうございます。', 'Reported — thank you.'), 'ok', 3000);
   };
 }
 
@@ -490,7 +579,9 @@ export function initParty() {
     // 「合言葉で入る」から自力で入れる。
     if (modalLocked()) {
       toast(t(`👥 部屋ができました（合言葉 ${msg.code}）`, `👥 The room is open — code ${msg.code}`), 'announce', 6000);
-      showLater(open);
+      // 招待と同じく期限を守る。until=0 のままだと順番待ちで数分寝かせた
+      // モーダルが後から湧き、既に閉じた部屋への参加を押させてしまう。
+      showLater(open, Date.now() + (msg.expiresIn || 60000));
       return;
     }
     open();

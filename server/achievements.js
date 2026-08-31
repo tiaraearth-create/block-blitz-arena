@@ -152,6 +152,27 @@ export const ACHIEVEMENTS = [
   a('ach_dig60',    '⛏️', 'explore', 60,     2800, 22, 'ベテラン採掘士','Veteran Miner',    '採掘場で深度60',        'Reach depth 60 in the Mines', u => S(u).digDepth || 0),
   a('ach_dig100',   '💎', 'explore', 100,    9000, 80, '地底の王',      'King Underground', '採掘場で深度100',       'Reach depth 100 in the Mines', u => S(u).digDepth || 0),
 
+  // ---- 探索（⛓️連鎖カスケード・🏗️ブループリント・🛠️パズル工房） ----
+  // 追加モードには2〜3個ずつ実績があるのに、この3モードだけ0個だった
+  // ＝「遊んでも図鑑が1マスも埋まらないモード」になっていた。
+  // 参照する統計は applyGameResult（server/index.js）が積む3モードぶんの
+  // 記録: s.chainPlays / s.chainMax / s.blueprintClears / s.workshopClears。
+  // ほかの実績と同じく進捗は毎回 stats から計算されるので、統計が入りしだい
+  // 過去に遊んだぶんもさかのぼって解除される。
+  a('ach_chain1',   '⛓️', 'explore', 1,   300,  2,  '連鎖のはじまり', 'First Cascade',    '連鎖カスケードを1回遊ぶ', 'Play Chain Cascade once',  u => S(u).chainPlays || 0),
+  a('ach_chain5',   '⛓️', 'explore', 5,   900,  7,  '五連鎖',        'Five in a Row',    '5連鎖を決める',          'Land a 5-chain cascade',   u => S(u).chainMax || 0),
+  a('ach_chain10',  '💥', 'explore', 10,  3000, 25, '連鎖の使い手',   'Cascade Master',   '10連鎖を決める',          'Land a 10-chain cascade',  u => S(u).chainMax || 0),
+  a('ach_blueprint1',  '🏗️', 'explore', 1,  400,  3,  '設計図どおり',  'As Drawn',        '設計図を1枚完成させる',   'Complete 1 blueprint',     u => S(u).blueprintClears || 0),
+  a('ach_blueprint10', '📐', 'explore', 10, 2500, 20, '製図の達人',    'Master Draughtsman', '設計図を10枚完成させる', 'Complete 10 blueprints',   u => S(u).blueprintClears || 0),
+  a('ach_ws1',      '🛠️', 'explore', 1,   300,  2,  '工房の見学',     'Workshop Visitor', '工房のステージを1つクリア', 'Clear 1 Workshop stage',  u => S(u).workshopClears || 0),
+  a('ach_ws20',     '🛠️', 'explore', 20,  2600, 22, '工房の常連',     'Workshop Regular', '工房のステージを20クリア', 'Clear 20 Workshop stages', u => S(u).workshopClears || 0),
+  // 上の ach_ws1/ach_ws20 は「遊ぶ側」(workshopClears)。以下は「作る側」の実績で、
+  // workshop.js が作者の stats に積む wsPublished / wsPlaysGot / wsLikesGot から導出する。
+  // ほかと同じく保存済み統計から毎回計算されるので、過去ぶんもさかのぼって解除される。
+  a('ach_ws_pub1',     '🏗️', 'explore', 1,   400,  3,  '工房デビュー',   'Workshop Debut',   '自作ステージを初めて公開する', 'Publish your first Workshop stage', u => S(u).wsPublished || 0),
+  a('ach_ws_played100','🎡', 'explore', 100, 2500, 20, '遊ばれる作品',   'Played by Others', '自作が通算100回遊ばれる',      'Get 100 total plays on your stages', u => S(u).wsPlaysGot || 0),
+  a('ach_ws_liked50',  '❤️', 'explore', 50,  2000, 16, '♡をもらう人',    'Well Liked',       '自作が通算50♡もらう',        'Get 50 total likes on your stages', u => S(u).wsLikesGot || 0),
+
   // ---- 収集 ----
   a('ach_gacha10',  '🎰', 'collect', 10,  600,  5,  'ガチャデビュー', 'Gacha Debut',     'ガチャを10回引く',      'Pull the gacha 10 times',    u => S(u).gachaPulls || 0),
   a('ach_gacha100', '🎰', 'collect', 100, 3000, 25, 'ガチャの申し子', 'Gacha Prodigy',   'ガチャを100回引く',     'Pull the gacha 100 times',   u => S(u).gachaPulls || 0),
@@ -170,6 +191,13 @@ export const ACHIEVEMENTS = [
   // ---- 👻 隠しモードのティーザー（実績欄そのものがヒントになる） ----
   a('ach_ghost1',   '👻', 'explore', 1,     666,  6,  'ソレは存在する',   'It Exists',       '「幽霊屋敷」を見つけて1回遊ぶ', 'Find and play the "Haunted House"', u => S(u).ghostPlays || 0),
   a('ach_ghost15k', '🕯️', 'explore', 15000, 3000, 25, '見えないものが見える', 'Sixth Sense', '幽霊屋敷で15,000点',          'Score 15,000 in the Haunted House', u => S(u).ghostBest || 0),
+
+  // ---- ✨ 全消し「昇華」 ----
+  // 盤面を空にした通算回数（stats.perfectClears）。ほかの実績と同じく
+  // 保存済み統計から毎回計算されるので、過去に空にした分もさかのぼって解除される。
+  a('ach_pclear1',  '✨', 'legend', 1,  600,  5,  '昇華のはじまり', 'First Sublimation', '盤面を初めて空にする',  'Empty the board for the first time', u => S(u).perfectClears || 0),
+  a('ach_pclear10', '✨', 'legend', 10, 2800, 22, '無へ還す者',     'Into the Void',     '盤面を10回空にする',    'Empty the board 10 times',           u => S(u).perfectClears || 0),
+  a('ach_pclear50', '🕳️', 'legend', 50, 9000, 80, '無の求道者',     'Voidseeker',        '盤面を50回空にする',    'Empty the board 50 times',           u => S(u).perfectClears || 0),
 ];
 
 export function achievementsView(user) {

@@ -8,7 +8,7 @@
 
 import crypto from 'crypto';
 import { getRoster, residentStats } from './ambient.js';
-import { unit, strHash } from './residents.js';
+import { unit, strHash, mulberry32 } from './residents.js';
 
 export const GUILD_CREATE_COST = 2000;
 export const GUILD_MAX_MEMBERS = 20;
@@ -137,7 +137,11 @@ export function addGuildPoints(db, user, pts, weekId) {
   w.byMember[user.id] = (w.byMember[user.id] || 0) + pts;
   guild.lifetime = (guild.lifetime || 0) + pts;
   // keep only the last 8 weeks
-  const keys = Object.keys(guild.weekly).sort();
+  // weekId は 'W2954' のような文字列。桁数が同じ間は辞書順=数値順だが、桁が
+  // 変わる境界（'W9999' → 'W10000'）では 'W10000' < 'W9999' となり、辞書順ソート
+  // だと最新週が先頭に来て shift() で消えてしまう。数値部で比べて古い週から落とす。
+  const wkNum = k => { const n = parseInt(String(k).replace(/^\D+/, ''), 10); return Number.isFinite(n) ? n : Infinity; };
+  const keys = Object.keys(guild.weekly).sort((a, b) => wkNum(a) - wkNum(b));
   while (keys.length > 8) delete guild.weekly[keys.shift()];
   return pts;
 }
@@ -151,11 +155,14 @@ export function guildView(db, guild, weekId, { detailed = false, viewerId = null
     memberCount: guild.members.length, maxMembers: GUILD_MAX_MEMBERS,
     weeklyPoints: w.total, lifetime: guild.lifetime || 0,
     createdAt: guild.createdAt, ghost: false,
+    ...guildQuestSummary(guild, weekId),
   };
   if (!detailed) return base;
   const isOwner = viewerId === guild.ownerId;
+  const viewer = viewerId && Object.prototype.hasOwnProperty.call(db.users, viewerId) ? db.users[viewerId] : null;
   return {
     ...base,
+    quests: guildQuestView(guild, weekId, viewer),
     ownerId: guild.ownerId,
     code: isOwner ? guild.code : null,
     members: guild.members.map(id => db.users[id]).filter(Boolean).map(u => ({
@@ -166,6 +173,243 @@ export function guildView(db, guild, weekId, { detailed = false, viewerId = null
       joinedAt: u.guildJoinedAt || guild.createdAt,
     })).sort((a, b) => (b.role === 'owner') - (a.role === 'owner') || b.weeklyPts - a.weeklyPts),
   };
+}
+
+// ---------------------------------------------------------------------------
+// 🗡️ Weekly guild quests + the guild vault (ギルド週間クエスト＆ギルド金庫)
+//
+// Three quests per guild per week, picked deterministically from the pool with
+// the guild id + week id as the seed (same mulberry32 / shuffle-and-slice
+// recipe as server/missions.js, so the set never moves once the week starts and
+// survives a restart with an empty data dir).
+//
+// Progress is the SUM of every member's finished games — fed by
+// trackGuildQuests() from applyGameResult, right next to addGuildPoints().
+// Every completed quest opens the guild vault: each member may claim that
+// quest's chest exactly once, and the payout is recomputed here from the pool
+// (the client only ever names a quest id). Claiming all three grants a
+// guild-only badge.
+// ---------------------------------------------------------------------------
+
+// Reward + goal live in the pool, never in the request.
+const gq = (id, track, goal, coins, gems, name, nameEn) => ({ id, track, goal, coins, gems, name, nameEn });
+
+export const QUEST_POOL = [
+  gq('gq_lines3000',  'lines',   3000,  1200, 6, 'ギルド全員でラインを3,000本消す',      'Clear 3,000 lines as a guild'),
+  gq('gq_boss20',     'bossWin', 20,    1400, 8, 'ギルド全員でボスを20体討伐する',        'Defeat 20 bosses as a guild'),
+  gq('gq_pts15000',   'points',  15000, 1500, 8, '今週のギルドptを15,000ためる',          'Bank 15,000 guild points this week'),
+  gq('gq_perfect30',  'perfect', 30,    1300, 7, 'ギルド全員で全消しを30回決める',        'Land 30 perfect clears as a guild'),
+  gq('gq_games200',   'games',   200,   1000, 5, 'ギルド全員で200回プレイする',           'Play 200 games as a guild'),
+  gq('gq_ults150',    'ults',    150,   1100, 6, 'ギルド全員でアルティメットを150回発動', 'Use 150 ultimate skills as a guild'),
+  gq('gq_floors200',  'floors',  200,   1300, 7, 'ギルド全員でダンジョンを200階クリア',   'Clear 200 dungeon floors as a guild'),
+  gq('gq_pvp40',      'pvpWin',  40,    1400, 8, 'ギルド全員でオンライン40勝する',        'Win 40 online battles as a guild'),
+];
+
+export const GUILD_QUEST_COUNT = 3;
+// 3本コンプでもらえるギルド限定バッジ。
+export const GUILD_QUEST_BADGE = 'guildquest';
+const KEEP_QUEST_WEEKS = 8;
+
+function questDefOf(id) {
+  return QUEST_POOL.find(d => d.id === id) || null;
+}
+
+// Deterministic pick of GUILD_QUEST_COUNT quests for (guild, week).
+// missions.js の pickN と同じ「シードでシャッフルして先頭から取る」流儀。
+function pickQuestIds(guildId, weekId) {
+  const rnd = mulberry32(strHash(`${guildId}:${weekId}:quests`));
+  const arr = QUEST_POOL.slice();
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr.slice(0, Math.min(GUILD_QUEST_COUNT, arr.length)).map(d => d.id);
+}
+
+const own = (o, k) => o && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k);
+const numAt = (o, k) => (own(o, k) && Number.isFinite(Number(o[k])) ? Number(o[k]) : 0);
+
+// Read-only view of a guild's quest row — never writes, so plain GETs
+// (ギルドランキングは50件走査する) don't dirty the db.
+function readGuildQuests(guild, weekId) {
+  const stored = own(guild.quests, weekId) ? guild.quests[weekId] : null;
+  const ids = stored && Array.isArray(stored.ids) && stored.ids.length ? stored.ids : pickQuestIds(guild.id, weekId);
+  return { ids, p: (stored && stored.p) || {}, done: (stored && stored.done) || {} };
+}
+
+// Progress of one quest. 'points' は週間ptそのものなので guild.weekly から引く
+// （加算で二重に数えない）。
+function questProgress(guild, weekId, q, def) {
+  if (def.track === 'points') return (guild.weekly[weekId] && guild.weekly[weekId].total) || 0;
+  return numAt(q.p, def.id);
+}
+
+// Writable version: creates this week's row and prunes old weeks.
+function syncGuildQuests(guild, weekId) {
+  if (!guild.quests || typeof guild.quests !== 'object' || Array.isArray(guild.quests)) guild.quests = {};
+  let q = own(guild.quests, weekId) ? guild.quests[weekId] : null;
+  if (!q || typeof q !== 'object' || !Array.isArray(q.ids) || !q.ids.length) {
+    q = guild.quests[weekId] = { ids: pickQuestIds(guild.id, weekId), p: {}, done: {} };
+  }
+  if (!q.p || typeof q.p !== 'object') q.p = {};
+  if (!q.done || typeof q.done !== 'object') q.done = {};
+  // weekly と同じ理由（'W9999' → 'W10000' の桁またぎ）で数値部で比べて古い週から落とす。
+  const wkNum = k => { const n = parseInt(String(k).replace(/^\D+/, ''), 10); return Number.isFinite(n) ? n : Infinity; };
+  const keys = Object.keys(guild.quests).sort((a, b) => wkNum(a) - wkNum(b));
+  while (keys.length > KEEP_QUEST_WEEKS) delete guild.quests[keys.shift()];
+  return q;
+}
+
+// 1ゲームがクエストに足せる上限。値はすべてクライアント申告なので、
+// ミッションと同じく「正直に遊べば必ず届く」水準で頭を押さえておく。
+const QUEST_PER_GAME_CAP = { lines: 400, bossWin: 1, perfect: 20, games: 1, ults: 40, floors: 40, pvpWin: 1 };
+
+function questContributions(event = {}) {
+  const mode = String(event.mode || '');
+  const won = !!event.won;
+  const isPvp = mode === 'pvp' || mode === 'tournament' || mode === 'royale' || mode === 'team';
+  const isBoss = mode === 'boss' || mode === 'boss_rush' || mode === 'raid';
+  const raw = {
+    lines: event.lines,
+    bossWin: isBoss && won ? 1 : 0,
+    perfect: event.perfectClears,
+    // 'games' は空の結果を連投しても進んでしまう唯一のトラックだった。
+    // index.js が実プレイ判定を event.realPlay で渡すので、偽プレイ(false)は
+    // 0 に落とす。realPlay 未指定の呼び出しは従来どおり 1（後方互換）。
+    games: event.realPlay === false ? 0 : 1,
+    ults: event.ults,
+    floors: event.floors,
+    pvpWin: isPvp && won ? 1 : 0,
+  };
+  const out = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const n = Math.floor(Number(v) || 0);
+    out[k] = Math.max(0, Math.min(QUEST_PER_GAME_CAP[k] || 0, n));
+  }
+  return out;
+}
+
+// Apply one finished game to the member's guild quests.
+// Returns the quest defs that were completed BY THIS GAME (for the crowd feed).
+// applyGameResult から addGuildPoints の直後に呼ぶこと（'points' クエストが
+// 加算後の週間ptを読むため）。
+export function trackGuildQuests(db, user, weekId, event = {}) {
+  const guild = user && user.guildId ? db.guilds[user.guildId] : null;
+  if (!guild) return [];
+  const q = syncGuildQuests(guild, weekId);
+  const contrib = questContributions(event);
+  const completed = [];
+  for (const id of q.ids) {
+    const def = questDefOf(id);
+    if (!def) continue;
+    const before = questProgress(guild, weekId, q, def);
+    const was = before >= def.goal;
+    if (def.track !== 'points') {
+      const add = contrib[def.track] || 0;
+      if (add) q.p[def.id] = Math.min(def.goal, before + add);
+    }
+    const after = questProgress(guild, weekId, q, def);
+    if (!was && after >= def.goal) {
+      q.done[def.id] = Date.now();
+      completed.push(def);
+    }
+  }
+  return completed;
+}
+
+// --- guild vault (ギルド金庫): one claim per member, per quest ---------------
+
+// 受取記録はメンバー側に持つ。今週ぶんだけ持てば十分なので、週が変われば作り直す
+// （勝手に肥らない）。gid は「今週はこのギルドで受け取った」印で、ギルドを渡り
+// 歩いて同じ週に何度も金庫を開ける抜け道をふさぐ。
+function memberQuestRec(user, weekId, guildId) {
+  let rec = user.guildQuests;
+  if (!rec || typeof rec !== 'object' || rec.week !== weekId || !Array.isArray(rec.claimed)) {
+    rec = user.guildQuests = { week: weekId, gid: guildId, claimed: [], badge: false };
+  }
+  return rec;
+}
+
+function readMemberRec(user, weekId, guildId) {
+  const rec = user && user.guildQuests;
+  if (!rec || rec.week !== weekId || rec.gid !== guildId || !Array.isArray(rec.claimed)) return null;
+  return rec;
+}
+
+// Claim one opened chest. Reward は必ずここでプールから引き直す。
+export function claimGuildQuest(db, user, weekId, questId) {
+  const guild = user && user.guildId ? db.guilds[user.guildId] : null;
+  if (!guild) return { error: 'ギルドに所属していません' };
+  const def = questDefOf(String(questId || ''));
+  if (!def) return { error: 'そのクエストは見つかりません' };
+  const q = syncGuildQuests(guild, weekId);
+  if (!q.ids.includes(def.id)) return { error: 'そのクエストは今週のものではありません' };
+  if (questProgress(guild, weekId, q, def) < def.goal) return { error: 'ギルドがまだ達成していません' };
+
+  const rec = memberQuestRec(user, weekId, guild.id);
+  if (rec.gid !== guild.id) {
+    if (rec.claimed.length || rec.badge) return { error: '今週は別のギルドで金庫を開けています' };
+    rec.gid = guild.id;
+  }
+  if (rec.claimed.includes(def.id)) return { error: 'すでに受け取り済みです' };
+  rec.claimed.push(def.id);
+
+  user.coins = (user.coins || 0) + def.coins;
+  user.gems = (user.gems || 0) + def.gems;
+  if (user.stats) user.stats.guildQuestsClaimed = (user.stats.guildQuestsClaimed || 0) + 1;
+
+  // 3本すべて達成＆すべて受け取ったらギルド限定バッジ。
+  let badge = null;
+  const allDone = q.ids.every(id => { const d = questDefOf(id); return d && questProgress(guild, weekId, q, d) >= d.goal; });
+  if (allDone && q.ids.every(id => rec.claimed.includes(id))) {
+    if (!Array.isArray(user.badges)) user.badges = [];
+    if (!user.badges.includes(GUILD_QUEST_BADGE)) { user.badges.push(GUILD_QUEST_BADGE); badge = GUILD_QUEST_BADGE; }
+    rec.badge = true;
+  }
+  return { coins: def.coins, gems: def.gems, badge, questId: def.id, name: def.name, nameEn: def.nameEn };
+}
+
+// Serialisable quest state for the client (/api/guild 系から使う).
+// viewer を渡すと「自分が受け取ったか」も入る。読み取り専用。
+export function guildQuestView(guild, weekId, viewer = null) {
+  const q = readGuildQuests(guild, weekId);
+  const rec = readMemberRec(viewer, weekId, guild.id);
+  const quests = q.ids.map(id => {
+    const def = questDefOf(id);
+    if (!def) return null;
+    const p = questProgress(guild, weekId, q, def);
+    return {
+      id: def.id, name: def.name, nameEn: def.nameEn,
+      goal: def.goal, progress: Math.min(def.goal, Math.max(0, Math.floor(p))),
+      coins: def.coins, gems: def.gems,
+      done: p >= def.goal,
+      doneAt: numAt(q.done, def.id) || null,
+      claimed: !!(rec && rec.claimed.includes(def.id)),
+    };
+  }).filter(Boolean);
+  const doneCount = quests.filter(r => r.done).length;
+  return {
+    week: weekId, quests,
+    total: quests.length, doneCount,
+    allDone: quests.length > 0 && doneCount === quests.length,
+    badge: GUILD_QUEST_BADGE,
+    badgeName: 'ギルドの誉れ', badgeNameEn: 'Guild Honors',
+    badgeEarned: !!(rec && rec.badge),
+    claimable: quests.some(r => r.done && !r.claimed),
+  };
+}
+
+// Quest headline for the ranking rows (どのギルドが何本開けたか).
+export function guildQuestSummary(guild, weekId) {
+  const q = readGuildQuests(guild, weekId);
+  let done = 0, total = 0;
+  for (const id of q.ids) {
+    const def = questDefOf(id);
+    if (!def) continue;
+    total++;
+    if (questProgress(guild, weekId, q, def) >= def.goal) done++;
+  }
+  return { questsDone: done, questTotal: total };
 }
 
 // ---------------------------------------------------------------------------
@@ -239,9 +483,42 @@ function ghostWeekly(guild, weekId, now) {
   return total;
 }
 
+// ゴーストギルドの週間クエストも決定的に。抽選は本物と同じ pickQuestIds、
+// 進み具合は (ギルドid, クエストid, 週) のノイズ × 人数と実力 × 週の経過。
+// db には何も書かないので、いつ誰が見ても同じ数字になる。
+function ghostQuestState(guild, weekId, now) {
+  const days = now / 86400000;                       // 月曜0時UTC＝weekIdの区切り
+  const weekFrac = Math.min(1, ((days + 3) % 7) / 7 + 0.15);
+  const size = guild.members.length / GUILD_MAX_MEMBERS;
+  const skill = guild.members.length
+    ? guild.members.reduce((a, r) => a + (r.skill || 0), 0) / guild.members.length
+    : 0;
+  const power = 0.6 + size * 0.5 + skill * 0.5;
+  const quests = pickQuestIds(guild.id, weekId).map(id => {
+    const def = questDefOf(id);
+    if (!def) return null;
+    const ratio = (0.35 + unit(`${guild.id}-${def.id}`, weekId) * 0.95) * power * weekFrac;
+    const progress = Math.max(0, Math.min(def.goal, Math.round(def.goal * ratio)));
+    return {
+      id: def.id, name: def.name, nameEn: def.nameEn,
+      goal: def.goal, progress, coins: def.coins, gems: def.gems,
+      done: progress >= def.goal, doneAt: null, claimed: false,
+    };
+  }).filter(Boolean);
+  const doneCount = quests.filter(r => r.done).length;
+  return {
+    week: weekId, quests, total: quests.length, doneCount,
+    allDone: quests.length > 0 && doneCount === quests.length,
+    badge: GUILD_QUEST_BADGE, badgeName: 'ギルドの誉れ', badgeNameEn: 'Guild Honors',
+    badgeEarned: quests.length > 0 && doneCount === quests.length,
+    claimable: false,
+  };
+}
+
 export function ghostGuildViews(weekId, now = Date.now()) {
   return ghostGuilds().map((g, i) => {
     const weeklyPoints = ghostWeekly(g, weekId, now);
+    const quests = ghostQuestState(g, weekId, now);
     const lifetime = Math.round(weeklyPoints * (6 + (strHash(g.id) % 9)));
     const level = guildLevel(lifetime);
     return {
@@ -249,6 +526,7 @@ export function ghostGuildViews(weekId, now = Date.now()) {
       level, bonusPct: Math.round(guildCoinBonus(level) * 100),
       memberCount: g.members.length, maxMembers: GUILD_MAX_MEMBERS,
       weeklyPoints, lifetime, ghost: true,
+      questsDone: quests.doneCount, questTotal: quests.total, quests,
       members: g.members.map(r => { const st = residentStats(r, now, weekId); return { username: r.name, level: st.level, rating: st.rating, weeklyPts: Math.round((600 + r.skill * 2600) * 0.9) }; }),
     };
   });

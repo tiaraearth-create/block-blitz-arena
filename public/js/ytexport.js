@@ -51,14 +51,23 @@ let studioState = null;   // { raf, analyser, dest, rec, timer, worker, wakeLock
 // 実際にこれで録画が丸ごと死んでいた（描画もフレーム送出も進行管理も
 // この Worker が駆動しているため、状態表示が空のまま何も起きなくなる）。
 function makeTickWorker(onTick, onFail) {
+  let url = null;
   try {
     const src = 'let iv=null;onmessage=e=>{if(e.data==="start"&&!iv)iv=setInterval(()=>postMessage(0),33);if(e.data==="stop"&&iv){clearInterval(iv);iv=null}}';
-    const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    // Blob URL は Worker を作った時点で読み込みが始まるので、直後に revoke しても
+    // 出来上がった Worker は動き続ける。捨てないと録画のたびに1つずつ残る。
+    url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    const w = new Worker(url);
+    URL.revokeObjectURL(url); url = null;
     w.onmessage = onTick;
     w.onerror = () => { try { w.terminate(); } catch { /* gone */ } if (onFail) onFail(); };
     w.postMessage('start');
     return w;
-  } catch { if (onFail) onFail(); return null; }
+  } catch {
+    if (url) { try { URL.revokeObjectURL(url); } catch { /* gone */ } }
+    if (onFail) onFail();
+    return null;
+  }
 }
 
 function stopStudio() {
@@ -378,12 +387,19 @@ export function showYouTubeStudio() {
     starting = true;              // recording はまだ false。この間も操作を止める
     status(t('準備中…', 'Getting ready…'));
     btnRec.disabled = true;
+    // hush() は「これから予約する音」しか止められない。すでに start() 済みの
+    // パッド／ベース／ドローンは自分の長さぶん鳴り続ける。いちばん長いのは
+    // 1小節ぶん伸びるパッド（stepDur*16 = 240/bpm 秒）で、遅い曲だと3秒を超える。
+    // 先読みぶん（最大で lookahead 先に予約済み）＋1小節を待てば、直前の試聴が
+    // 完全に鳴り終わってから dest を繋げられるので、頭に残響が混ざらない。
+    const selInfo = tracks.find(x => x.id === sel);
+    const barMs = selInfo && selInfo.bpm ? Math.ceil(240000 / selInfo.bpm) : 3200;
     setTimeout(() => {
       btnRec.disabled = false;
       starting = false;
       if (studioState !== session || recording) { status(''); return; }   // 待つ間に閉じられた
       beginRec();
-    }, Math.round((audio.lookahead || 0.35) * 1000) + 120);
+    }, Math.round((audio.lookahead || 0.35) * 1000) + barMs + 120);
   };
 
   const beginRec = () => {
@@ -396,7 +412,11 @@ export function showYouTubeStudio() {
       return;
     }
     const wasMusicOn = audio.musicOn;
-    audio.setMusicEnabled(true);
+    // フラグだけ立てる。setMusicEnabled(true) は syncTrack() を呼び、hush() 直後の
+    // この時点では previewTrack=null のため lockedTrack||trackName（通常メニュー曲）を
+    // step0 から即スケジュールしてしまう ── その1拍目は取り消せず録画の頭に混ざる。
+    // 頭出しは rec.start() 後の preview(sel)/restart() が担うので、ここでは鳴らさない。
+    audio.musicOn = true;
     const dest = audio.ctx.createMediaStreamDestination();
     audio.musicGain.connect(dest);
     studioState.dest = dest;

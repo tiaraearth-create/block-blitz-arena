@@ -55,6 +55,9 @@ function pushFeed(item, fresh) {
   if (feed.length > 40) feed.shift();
   tickerIdx = Math.min(7, feed.slice(-8).length - 1);
   showTicker(item, fresh);
+  // 初回接続時にフィードが空だと hello_ok 側の cycleTicker() が呼ばれず、
+  // 以後 feed が来ても自動循環タイマーが張られないまま止まる。未始動ならここで張る。
+  if (!tickerTimer) cycleTicker();
 }
 
 export function getFeed() { return feed.slice(); }
@@ -144,11 +147,12 @@ function cancelReply() {
 }
 
 // バッジの絵文字。screens.js の badgeIcons（プロフィール／ランキング）と
-// 同じ25種を必ず全部持たせる ── under・heaven・zero・adminevent・
+// 同じ26種を必ず全部持たせる ── under・heaven・zero・adminevent・
 // bronze・silver・gold の7つが抜けていたせいで、👁️断罪や👑管理者イベント制覇と
 // いったいちばん希少なバッジが、チャットのプロフィールカードでだけ
 // 見分けのつかない 🎖️ に潰れていた（同じバッジが画面ごとに違って見える）。
-// バッジを増やすときは screens.js:78 / screens.js:726 の表もいっしょに直すこと。
+// バッジを増やすときは screens.js の badgeIcons 2か所（showProfileModal /
+// ランキング描画）と BADGE_INFO・BADGE_ORDER もいっしょに直すこと。
 const PROFILE_BADGES = {
   bronze: '🥉', silver: '🥈', gold: '🥇',
   oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️',
@@ -156,7 +160,22 @@ const PROFILE_BADGES = {
   tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', daily7: '📅',
   puzzle: '🧩', dig: '⛏️', ghost: '👻',
   crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈',
+  guildquest: '🎖️',
 };
+// 🏛 シーズン刻印バッジ `s{N}champ`（s3champ, s4champ …）はシーズンが終わるたびに
+// サーバー（server/index.js の settleSeasonHallOfFame）が新しいidを作るので、
+// 上の固定表では持ちきれない。固定キーを引く手前でこの正規表現に通すこと。
+// screens.js 側の seasonBadgeNo() と同じ扱い。
+const SEASON_BADGE_RE = /^s(\d{1,4})champ$/;
+function seasonBadgeNo(id) {
+  const m = SEASON_BADGE_RE.exec(String(id || ''));
+  return m ? Number(m[1]) : 0;
+}
+// プロフィールカードのバッジ1つぶん。動的なシーズン刻印を先に見て、
+// そのあと固定表を引く。名前は screens.js のインベントリ側で出す。
+function profileBadgeIcon(id) {
+  return seasonBadgeNo(id) ? '🏛' : PROFILE_BADGES[id] || '🎖️';
+}
 // 👑 王座のボード名（プロフィールカード表示用）
 const THRONE_LABELS = {
   score: ['スコア', 'Score'], rating: ['レート', 'Rating'], sprint: ['タイムアタック', 'Time Attack'],
@@ -167,8 +186,13 @@ const THRONE_LABELS = {
 async function showProfileCard(name) {
   audio.click();
   let p;
+  // api() を通していないのは 404 を「エラー」ではなく普通の案内にしたいから。
+  // そのぶんタイムアウトも自前で持つ ── 付けていなかった頃は、返らない回線で
+  // 名前をタップしても何も出ないまま無反応だった（net.js の api() と同じ話）。
+  const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => { try { ctrl.abort(); } catch { /* ignore */ } }, 10000) : null;
   try {
-    const res = await fetch(`/api/profile/${encodeURIComponent(name)}`);
+    const res = await fetch(`/api/profile/${encodeURIComponent(name)}`, { signal: ctrl ? ctrl.signal : undefined });
     if (res.status === 404) {
       // 未登録のゲストプレイヤー — エラーではなく普通の案内にする。
       toast(t(`${name} はゲストプレイヤーです`, `${name} is a guest player`), '', 2000);
@@ -179,6 +203,8 @@ async function showProfileCard(name) {
   } catch {
     toast(t('プロフィールを取得できません', 'Could not load the profile'), 'err', 1600);
     return;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   if (p.kind === 'guest') {
     toast(t(`${p.name} はゲストプレイヤーです`, `${p.name} is a guest player`), '', 2000);
@@ -193,7 +219,14 @@ async function showProfileCard(name) {
           <b class="${(p.thrones || []).length ? `crowned${Math.min(3, p.thrones.length)}` : ''}">${p.guildTag ? `<span class="lb-tag">[${escapeHtml(p.guildTag)}]</span>` : ''}${escapeHtml(p.name)}</b>
           ${p.title ? `<span class="pc-title" style="color:${escapeHtml(p.title.color || '#fff')}">《${escapeHtml(p.title.id ? catName(p.title) : p.title.name)}》</span>` : ''}
           <small class="muted">${p.kind === 'resident'
-            ? `${escapeHtml((LANG === 'en' && p.archLabelEn) || p.archLabel || '')} ・ ${p.online ? t('🟢 オンライン', '🟢 online') : t(`⚫ ${p.hours ? `${p.hours[0]}時〜${p.hours[1] % 24}時に出現` : 'オフライン'}`, '⚫ offline')}`
+            ? `${escapeHtml((LANG === 'en' && p.archLabelEn) || p.archLabel || '')} ・ ${p.online
+              ? t('🟢 オンライン', '🟢 online')
+              // 出現時間帯もチャットのタイムスタンプと同じ時計で出す（fmtClockHM）。
+              // 英語だけ 24時間制で残っていたので、同じ画面の中で時計が2種類あった。
+              : (p.hours
+                ? t(`⚫ ${fmtClockHM(p.hours[0])}〜${fmtClockHM(p.hours[1])}に出現`,
+                  `⚫ appears ${fmtClockHM(p.hours[0])}–${fmtClockHM(p.hours[1])}`)
+                : t('⚫ オフライン', '⚫ offline'))}`
             : t(`Lv.${p.level} プレイヤー`, `Level ${p.level} player`)}</small>
         </div>
       </div>
@@ -204,7 +237,7 @@ async function showProfileCard(name) {
         <div class="pc-stat"><b>F${fmtNum(p.dungeonMax)}</b><span>${t('ダンジョン', 'Dungeon')}</span></div>
       </div>
       ${(p.thrones || []).length ? `<p class="center pc-thrones">👑 ${p.thrones.map(b => THRONE_LABELS[b] ? t(THRONE_LABELS[b][0], THRONE_LABELS[b][1]) : b).join(' ・ ')} ${t('王者', 'Champion')}</p>` : ''}
-      ${(p.badges || []).length ? `<p class="center pc-badges">${p.badges.map(b => PROFILE_BADGES[b] || '🎖️').join(' ')}</p>` : ''}
+      ${(p.badges || []).length ? `<p class="center pc-badges">${p.badges.map(b => profileBadgeIcon(b)).join(' ')}</p>` : ''}
       ${p.kind === 'resident' ? `<p class="muted center" style="font-size:11px">${t('この住人はアリーナのAIプレイヤーです', 'This resident is one of the arena AI players')}</p>` : ''}
     </div>
     <div class="modal-buttons"><button class="btn btn-primary" id="pcClose">${t('閉じる', 'Close')}</button></div>`);
@@ -212,6 +245,41 @@ async function showProfileCard(name) {
 }
 
 function fmtNum(n) { return Number(n || 0).toLocaleString('ja-JP'); }
+
+// ---------------------------------------------------------------------------
+// 🕐 時計の書式は必ずここを通す。
+//
+// 画面ごとに 12時間制と 24時間制が混ざっていて、同じアプリを行き来しながら
+// どちらの時計を読んでいるのか分からなくなっていた（チャットのタイムスタンプと
+// 住人の出現時間帯は 24時間制、イベント予告だけ 12時間制）。しかも予告側は
+// `hour:'2-digit'` を渡していたので en-US でも "08:00 PM" とゼロ埋めされていて、
+// 英語としては読まない書き方だった（"8:00 PM" が普通）。
+//
+// 決めごと: 日本語は 24時間制の HH:MM、英語は 12時間制の "8:00 PM"。
+// サーバー側の内部表現（server/adminevent.js の分単位・"HH:MM"）はそのまま
+// 24時間制でよい ── 表示の直前にこれを通すこと。
+export function fmtClockHM(hour, minute = 0) {
+  const h = ((Math.floor(Number(hour) || 0) % 24) + 24) % 24;
+  const raw = Math.floor(Number(minute) || 0);
+  const mm = String(Math.max(0, Math.min(59, raw))).padStart(2, '0');
+  if (LANG === 'en') {
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${mm} ${h < 12 ? 'AM' : 'PM'}`;
+  }
+  return `${String(h).padStart(2, '0')}:${mm}`;
+}
+// Date（またはミリ秒）から。
+export function fmtClock(when) {
+  const d = when instanceof Date ? when : new Date(when);
+  if (isNaN(d.getTime())) return '';
+  return fmtClockHM(d.getHours(), d.getMinutes());
+}
+// サーバーが返す "HH:MM"（管理者イベントの枠時刻など）から。
+// 読めない形はそのまま返す ── 表示のために落ちるほうが困る。
+export function fmtClockStr(s) {
+  const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(String(s == null ? '' : s));
+  return m ? fmtClockHM(Number(m[1]), Number(m[2])) : String(s == null ? '' : s);
+}
 
 // box を差し替えられるようにしてある。パーティー欄へ流すために、
 // 同じ描画をもう1本書き写すのを避ける。
@@ -225,14 +293,12 @@ function appendMsg(msg, scroll = true, box = $('#chatMsgs')) {
   const isZero = msg.role === 'zero';
   el.className = `chat-msg ${me ? 'mine' : ''} ${isAdmin ? 'admin-msg' : ''} ${isZero ? 'zero-msg' : ''}`;
   if (msg.id) el.dataset.id = msg.id;
-  const time = new Date(msg.at || Date.now());
-  const hh = String(time.getHours()).padStart(2, '0');
-  const mm = String(time.getMinutes()).padStart(2, '0');
+  const clock = fmtClock(msg.at || Date.now());
   const useTr = getSettings().chatTranslate && msg.tr && msg.tr.lang === LANG && msgLang(msg.text) !== LANG && !me;
   const tag = msg.tag ? `<span class="cm-tag">[${escapeHtml(msg.tag)}]</span>` : '';
   const reply = msg.reply ? `<span class="cm-reply">↩ <b>${escapeHtml(msg.reply.from)}</b> ${escapeHtml(msg.reply.text)}</span>` : '';
   el.innerHTML = `
-    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''} ${isZero ? 'cm-zero' : ''} ${Number(msg.crown) ? `crowned${Math.min(3, Number(msg.crown))}` : ''}">${msg.crown ? '👑' : ''}${isZero ? '👁️' : isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${hh}:${mm}</span>
+    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''} ${isZero ? 'cm-zero' : ''} ${Number(msg.crown) ? `crowned${Math.min(3, Number(msg.crown))}` : ''}">${msg.crown ? '👑' : ''}${isZero ? '👁️' : isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${clock}</span>
     ${reply}
     <span class="cm-bubble">${escapeHtml(useTr ? msg.tr.text : msg.text)}</span>
     ${useTr ? `<button class="cm-tr" title="${t('原文を表示', 'Show original')}">🌐 ${msg.tr.engine !== 'table' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}</button>` : ''}
@@ -245,7 +311,7 @@ function appendMsg(msg, scroll = true, box = $('#chatMsgs')) {
       ev.stopPropagation();
       showingOriginal = !showingOriginal;
       bubble.textContent = showingOriginal ? msg.text : msg.tr.text;
-      btn.textContent = showingOriginal ? `🌐 ${t('翻訳を表示', 'Show translation')}` : `🌐 ${t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}`;
+      btn.textContent = showingOriginal ? `🌐 ${t('翻訳を表示', 'Show translation')}` : `🌐 ${msg.tr.engine !== 'table' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}`;
     };
   }
   // タップでリアクション/返信。名前タップでプロフィールカード。

@@ -1,9 +1,139 @@
 // GameView: canvas renderer + input controller for one board (player or spectator).
-import { SIZE, shapeSize } from './engine.js';
+import { SIZE, shapeSize, ICE, ICE_CRACKED } from './engine.js';
 import { PALETTE, getSkin, getBoard } from './themes.js';
 import { ParticleSystem } from './particles.js';
 import { audio } from './audio.js';
 import { getSettings, particleFactor } from './settings.js';
+import { t } from './i18n.js';
+
+// 🔥 コンボの段位 0=streak 2-4 / 1=5-9 / 2=10-19 / 3=20+ ごとの演出強度。
+// スコアの comboMult は上限なしで伸びるのに、演出側は揺れも音も文字も
+// streak 7 前後で全部天井に当たっていた。段ごとに開ける値をここにまとめる。
+const COMBO_SHAKE_CAP = [14, 17, 20, 22];
+const COMBO_FLASH = [0.15, 0.26, 0.38, 0.5];
+const COMBO_SIZE = [1.8, 2.1, 2.45, 2.8];
+const COMBO_COLOR = ['#ffe14d', '#ffa93d', '#ff5b5b', '#ff7bf0'];
+
+// 🧊 氷が割れる音。audio.js 側に氷用の一発物が無いので、公開されている
+// tone/noise だけで組み立てる（どちらも sfxOn と ensure() を自分で見るので、
+// 音量ゼロ・音OFF・AudioContext 未生成でも安全に空振りする）。
+// ICE→ヒビ（crack）と ヒビ→消滅（shatter）で音を分け、氷を2段階で崩している
+// 手応えが耳にも残るようにする。割れたマス数だけ少しずつ遅らせて重ねる。
+function sfxIce(count, shatter = false) {
+  const n = Math.max(1, Math.min(4, Math.round(count) || 1));
+  for (let i = 0; i < n; i++) {
+    const d = i * 0.045;
+    audio.noise({ dur: shatter ? 0.26 : 0.18, vol: shatter ? 0.15 : 0.13, freq: (shatter ? 6400 : 5200) + i * 400, delay: d });
+    audio.tone({
+      freq: (shatter ? 1320 : 880) + i * 60, dur: shatter ? 0.2 : 0.14,
+      type: 'triangle', vol: shatter ? 0.14 : 0.12, sweep: -260, delay: d,
+    });
+  }
+  // 落ちる低音。割れた（消えなかった）ときは鈍く、砕けた（消えた）ときは短く。
+  audio.tone({ freq: shatter ? 420 : 320, dur: shatter ? 0.16 : 0.2, type: 'sine', vol: 0.08, sweep: -120, delay: 0.04 });
+}
+
+// ---------------------------------------------------------------------------
+// ❄️ 氷結ブロック (engine.js の ICE=10 / ICE_CRACKED=11)
+// ---------------------------------------------------------------------------
+// お邪魔(9)は PALETTE に1エントリ足すだけで済んだが、氷は「半透明＋質感」なので
+// 色2本では表せない。PALETTE は 9 番までしか無く、10/11 をスキン関数に渡すと
+// PALETTE[ci] の分割代入がその場で落ちる（描画が止まる）ので、
+// 盤面のマス値を描く経路はすべて withIce() を通してここで横取りする。
+// getSkin() の戻り値をそのまま包むので、色覚サポート（themes.js の
+// withColorMarks ラッパ）とは二重にならない ── 氷は色 index を持たないため
+// 記号を重ねる対象でもなく、包む順序に関係なく通常色だけに記号が付く。
+
+// グラデーションは「セルサイズごとに1本」だけ作って使い回す。氷は盤面に
+// 乗っているマスの数だけ毎フレーム描かれるので、ここで createLinearGradient を
+// 毎回作ると一番重い部分を毎フレーム作り直すことになる（themes.js の
+// markFont / withColorMarks と同じ「毎フレーム生成しない」方針にそろえた）。
+// 座標はセル原点へ translate してから描くので、見た目は以前と同一。
+const _iceGrads = new WeakMap();   // ctx -> Map(size -> CanvasGradient)
+function iceGradient(ctx, size, pad, bs) {
+  let bySize = _iceGrads.get(ctx);
+  if (!bySize) { bySize = new Map(); _iceGrads.set(ctx, bySize); }
+  let g = bySize.get(size);
+  if (!g) {
+    g = ctx.createLinearGradient(pad, pad, pad, pad + bs);
+    g.addColorStop(0, 'rgba(236,251,255,0.72)');
+    g.addColorStop(0.55, 'rgba(170,226,247,0.50)');
+    g.addColorStop(1, 'rgba(112,182,222,0.62)');
+    if (bySize.size > 8) bySize.clear();   // リサイズを繰り返しても膨らませない
+    bySize.set(size, g);
+  }
+  return g;
+}
+
+export function drawIceBlock(ctx, x, y, s, cracked, alpha = 1) {
+  const a = Math.max(0, Math.min(1, Number(alpha) >= 0 ? Number(alpha) : 1));
+  if (a <= 0.02 || !(s > 0)) return;
+  const pad = s * 0.06;
+  // 以下はセル原点 (0,0) からの相対座標。ctx.translate(x, y) 済み。
+  const bx = pad, by = pad, bs = s - pad * 2;
+  const rad = s * 0.16;
+  const body = () => {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(bx, by, bs, bs, rad);
+    else ctx.rect(bx, by, bs, bs);
+  };
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = a;
+  ctx.fillStyle = iceGradient(ctx, s, pad, bs);
+  body(); ctx.fill();
+  // 厚みのある透明に見せる斜めのハイライト2本
+  ctx.globalAlpha = a * 0.55;
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = Math.max(1, s * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(bx + bs * 0.18, by + bs * 0.74); ctx.lineTo(bx + bs * 0.60, by + bs * 0.14);
+  ctx.moveTo(bx + bs * 0.54, by + bs * 0.88); ctx.lineTo(bx + bs * 0.86, by + bs * 0.46);
+  ctx.stroke();
+  ctx.globalAlpha = a;
+  ctx.strokeStyle = 'rgba(226,248,255,0.85)';
+  ctx.lineWidth = Math.max(1, s * 0.045);
+  body(); ctx.stroke();
+  if (cracked) {
+    // ヒビ: 中心から3方向。白いフチ→濃い線の順に重ねて氷の上に浮かせる。
+    ctx.lineCap = 'round';
+    const cx = bx + bs * 0.44, cy = by + bs * 0.5;
+    const crack = () => {
+      ctx.beginPath();
+      ctx.moveTo(bx + bs * 0.12, by + bs * 0.18); ctx.lineTo(cx, cy); ctx.lineTo(bx + bs * 0.30, by + bs * 0.92);
+      ctx.moveTo(cx, cy); ctx.lineTo(bx + bs * 0.94, by + bs * 0.40);
+      ctx.moveTo(cx, cy); ctx.lineTo(bx + bs * 0.74, by + bs * 0.94);
+    };
+    ctx.globalAlpha = a * 0.85;
+    ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+    ctx.lineWidth = Math.max(1.5, s * 0.10);
+    crack(); ctx.stroke();
+    ctx.strokeStyle = 'rgba(38,86,122,0.78)';
+    ctx.lineWidth = Math.max(1, s * 0.05);
+    crack(); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// 元のスキン関数ごとにラッパを1つだけ作って使い回す（毎フレーム生成しない）。
+// themes.js 側も同じ流儀でキャッシュしているので、getSkin() の戻り値の
+// 同一性は保たれ、ここの Map も膨らまない。
+const _iceSkins = new Map();
+function withIce(draw) {
+  let wrapped = _iceSkins.get(draw);
+  if (!wrapped) {
+    wrapped = function (ctx, x, y, s, ci, alpha = 1) {
+      if (ci === ICE || ci === ICE_CRACKED) { drawIceBlock(ctx, x, y, s, ci === ICE_CRACKED, alpha); return; }
+      draw(ctx, x, y, s, ci, alpha);
+    };
+    _iceSkins.set(draw, wrapped);
+  }
+  return wrapped;
+}
+
+// 盤面のマス値（engine.grid 由来）を描くときは必ずこれを通す。
+// 手札・ゴーストは piece.color(1..8) しか出さないので素の getSkin() で足りる。
+export function boardSkin(skinId) { return withIce(getSkin(skinId)); }
 
 export class GameView {
   constructor(canvas, opts = {}) {
@@ -21,11 +151,15 @@ export class GameView {
     this.dying = [];                // {r,c,color,t}
     this.flashes = [];              // {kind:'row'|'col', index, t}
     this.floatTexts = [];           // {x,y,text,color,t,life,size}
-    this.shake = 0;
+    this._shake = 0;                // 実体。読み書きは下のアクセサ経由（設定でゲート）
+    this._screenFlash = 0;          // 実体。読み書きは下のアクセサ経由（設定でゲート）
     this.time = 0;
     this.deco = [];                 // background decorations (stars etc.)
 
     this.drag = null;               // {index, piece, px, py}
+    // ♿ 掴んで運ぶ以外の置きかた（手札をタップ／1〜3で選び、盤面をタップ／
+    // 矢印キー＋Enter で置く）。ドラッグと併存し、どちらも同じ commitPlace() へ。
+    this.sel = null;                // {index, piece, r, c}
     this.inputLocked = false;
     this.onPlace = null;            // callback(result)
     this.onIntentPlace = null;      // callback(index,row,col) -> true to take over the move
@@ -61,8 +195,37 @@ export class GameView {
 
   destroy() {
     this.running = false;
+    this.stopIdleSweep();
     window.removeEventListener('resize', this._resize);
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
+  }
+
+  // ✨ 全画面フラッシュ（白）は設定「画面フラッシュ」で完全に切れる。
+  // 連鎖・ボス・スキルなど view.screenFlash へ直接代入する経路が各所にあるので、
+  // 代入側を触らずに済むようアクセサで一括して受ける（揺れの getSettings().shake
+  // ゲートと同じ扱い）。OS の「視差効果を減らす」が ON の人は初回既定で false。
+  get screenFlash() { return this._screenFlash || 0; }
+  set screenFlash(v) {
+    const n = Number(v);
+    if (!(n > 0)) { this._screenFlash = 0; return; }
+    let on = true;
+    try { on = getSettings().flash !== false; } catch { /* 設定が読めなければ従来どおり */ }
+    this._screenFlash = on ? n : 0;
+  }
+
+  // 💥 画面の揺れも同じ形で一括ゲートする。モード・スキル側には
+  // view.shake = N の直接代入が38箇所あり（modes.js 33 / skills.js 5）、
+  // そのどれもが設定「画面の揺れ」を素通りしていた ── OS の「視差効果を減らす」で
+  // 既定 false になっている人でも、ボス攻撃では 24 の最大級の揺れが出ていた。
+  // フラッシュだけ消えて揺れだけ残ると、スイッチが壊れて見える。
+  // 代入側は一切触らず、ここで受けて 0 に落とす。
+  get shake() { return this._shake || 0; }
+  set shake(v) {
+    const n = Number(v);
+    if (!(n > 0)) { this._shake = 0; return; }
+    let on = true;
+    try { on = getSettings().shake !== false; } catch { /* 設定が読めなければ従来どおり */ }
+    this._shake = on ? n : 0;
   }
 
   setEngine(engine) {
@@ -73,8 +236,11 @@ export class GameView {
     this.floatTexts.length = 0;
     this.particles.clear();
     this.drag = null;
+    this.sel = null;
     this.glowCells = null;
     this.dangerCells = null;
+    this.dangerUntil = 0;
+    this.dangerTotal = 0;
     this.keystoneCell = -1;
     this.coolCells = null;
     this.oreCells = null;
@@ -161,7 +327,7 @@ export class GameView {
   }
 
   // ------------------------------------------------------------------
-  // Input (drag & drop)
+  // Input (drag & drop / tap to place / keyboard)
   // ------------------------------------------------------------------
 
   bindInput() {
@@ -170,7 +336,22 @@ export class GameView {
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     };
 
+    // ♿ キーボードだけの人・長いドラッグを保てない人（片手操作、震え、
+    // スイッチ操作）のために、canvas を Tab で到達できるようにする。
+    // #gameCanvas は index.html 側に tabindex を持たないので、ここで付ける。
+    try {
+      if (!this.canvas.hasAttribute('tabindex')) this.canvas.setAttribute('tabindex', '0');
+      this.canvas.setAttribute('role', 'application');
+      this.canvas.setAttribute('aria-label', t(
+        'ブロック盤面。1〜3キーで手札を選び、矢印キーで動かし、Enterで置く。Escで選択解除。手札をタップして選び、盤面をタップして置くこともできる。',
+        'Block board. Press 1-3 to pick a piece, arrow keys to move it, Enter to place, Esc to cancel. You can also tap a piece then tap the board.',
+      ));
+    } catch { /* 差し替えられた canvas スタブなど */ }
+
     this.canvas.addEventListener('pointerdown', e => {
+      // Already dragging with another pointer? A second finger / the palm
+      // touching the canvas must not hijack or replace the active drag.
+      if (this.drag) return;
       if (!this.engine || this.engine.over || !this.running || this.inputLocked) return;
       const { x, y } = pos(e);
       const slot = this.trayHit(x, y);
@@ -181,24 +362,41 @@ export class GameView {
           return;
         }
         try { this.canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
-        this.drag = { index: slot, piece: this.engine.hand[slot], px: x, py: y };
+        // sx/sy と moved は「掴んで運んだ」のか「つまんで離しただけ（タップ）」
+        // なのかの判定用。ここで sel を消さないのは、同じ枠をもう一度タップして
+        // 選択を解除できるようにするため（実際に運び始めた時点で消える）。
+        this.drag = { index: slot, piece: this.engine.hand[slot], px: x, py: y, pointerId: e.pointerId, sx: x, sy: y, moved: false };
         audio.pickup();
         e.preventDefault();
+        return;
       }
+      // 👆 タップで置く: 手札を選んだ状態で盤面をタップしたら、そこへ置く。
+      if (this.sel) { if (this.tapPlace(x, y)) e.preventDefault(); }
     });
 
     this.canvas.addEventListener('pointermove', e => {
-      if (!this.drag) return;
+      // Only the pointer that started the drag may move it — a second finger's
+      // movement must not drag the held piece to its position.
+      if (!this.drag || e.pointerId !== this.drag.pointerId) return;
       const { x, y } = pos(e);
       this.drag.px = x;
       this.drag.py = y;
+      if (!this.drag.moved && Math.abs(x - this.drag.sx) + Math.abs(y - this.drag.sy) > 8) {
+        this.drag.moved = true;
+        this.sel = null;          // 運び始めた＝従来どおりのドラッグ。選択は捨てる。
+      }
     });
 
     const drop = e => {
-      if (!this.drag) return;
+      // Only the pointer that started the drag may release it — a second
+      // finger's pointerup must not drop the held piece.
+      if (!this.drag || e.pointerId !== this.drag.pointerId) return;
       const { x, y } = pos(e);
       const anchor = this.dragAnchor();
       const { index, piece } = this.drag;
+      // 動かさずに同じ枠で離した＝タップ選択。従来はここで dragAnchor() が
+      // null になり「putback の音だけ鳴って何も起きない」空振りだった。
+      const tapped = !this.drag.moved && this.trayHit(x, y) === index;
       this.drag = null;
       // pointerdown checks inputLocked, but the lock can land DURING a drag —
       // the timer expiring, the run ending, the result already submitted. A
@@ -207,6 +405,7 @@ export class GameView {
         audio.putback();
         return;
       }
+      if (tapped && this.engine.hand[index] === piece) { this.setSel(index, piece, true); return; }
       // Chimera welding: the drag preview (drawDrag) uses the same predicate,
       // so whenever the weld highlight is showing, releasing welds — and
       // whenever a board ghost is showing, releasing places. Never both.
@@ -216,22 +415,129 @@ export class GameView {
       // the admin's 🎴 hand shuffle). dragAnchor() ghosts the piece you picked
       // UP, so placing hand[index] blind would drop a different shape than the
       // one under your finger.
-      if (this.engine.hand[index] !== piece) {
-        audio.putback();
-        return;
-      }
-      if (anchor && this.engine.canPlace(piece, anchor.r, anchor.c)) {
-        // Co-op runs on a server-authoritative board: the hook forwards the
-        // move and returns true, and the real placement arrives as a broadcast.
-        if (this.onIntentPlace && this.onIntentPlace(index, anchor.r, anchor.c)) return;
-        const result = this.engine.place(index, anchor.r, anchor.c);
-        if (result) this.applyResult(result);
-      } else {
-        audio.putback();
-      }
+      if (anchor) this.commitPlace(index, piece, anchor.r, anchor.c);
+      else audio.putback();
     };
     this.canvas.addEventListener('pointerup', drop);
-    this.canvas.addEventListener('pointercancel', () => { if (this.drag) { this.drag = null; audio.putback(); } });
+    this.canvas.addEventListener('pointercancel', e => { if (this.drag && e.pointerId === this.drag.pointerId) { this.drag = null; audio.putback(); } });
+
+    // ⌨️ キーボード操作。1〜3 で手札、矢印で移動、Enter で設置、Esc で解除。
+    // Space は必殺技（main.js の window keydown）に割り当て済みなので触らない。
+    // 矢印は preventDefault だけして伝播は止めない（コナミコマンド等はそのまま）。
+    this.canvas.addEventListener('keydown', e => {
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (!this.engine || this.engine.over || !this.running || this.inputLocked) return;
+      const k = e.key;
+      if (k === '1' || k === '2' || k === '3') { this.selectSlot(Number(k) - 1); e.preventDefault(); return; }
+      if (k === 'Escape') { if (this.sel) { this.sel = null; audio.putback(); e.preventDefault(); } return; }
+      const dr = k === 'ArrowUp' ? -1 : k === 'ArrowDown' ? 1 : 0;
+      const dc = k === 'ArrowLeft' ? -1 : k === 'ArrowRight' ? 1 : 0;
+      if (dr || dc) {
+        if (!this.sel && !this.selectFirstPlayable()) return;
+        this.moveSel(dr, dc);
+        e.preventDefault();
+        return;
+      }
+      if (k === 'Enter') {
+        if (this.sel) { this.commitSel(); e.preventDefault(); }
+        else if (this.selectFirstPlayable()) e.preventDefault();
+      }
+    });
+  }
+
+  // ドラッグ・タップ・キーボードの3経路が最後に必ず通る1本道。
+  // 「置けたか（＝手を消費したか）」を返す。false のときは選択を残す。
+  commitPlace(index, piece, r, c) {
+    if (this.inputLocked || !this.running || !this.engine || this.engine.over) { audio.putback(); return false; }
+    // 掴んでいる/選んでいる間に手札が書き換わることがある（ボスの技、協力プレイの
+    // 配信、管理者の🎴シャッフル）。別の形を置いてしまわないよう同一性を見る。
+    if (this.engine.hand[index] !== piece) { audio.putback(); return false; }
+    if (!(r >= 0 && c >= 0) || !this.engine.canPlace(piece, r, c)) { audio.putback(); return false; }
+    // Co-op runs on a server-authoritative board: the hook forwards the
+    // move and returns true, and the real placement arrives as a broadcast.
+    if (this.onIntentPlace && this.onIntentPlace(index, r, c)) return true;
+    const result = this.engine.place(index, r, c);
+    if (result) this.applyResult(result);
+    return true;
+  }
+
+  // ------------------------------------------------------------------
+  // ♿ 選択カーソル（タップ選択 / キーボード）
+  // ------------------------------------------------------------------
+
+  // 手札の枠を選ぶ。同じ枠をもう一度選ぶと解除（トグル）。
+  // quiet: pointerdown 側で既に pickup が鳴っているタップ経路用（音の二重鳴り防止）。
+  setSel(slot, piece, quiet = false) {
+    if (!piece) return false;
+    if (this.sel && this.sel.index === slot && this.sel.piece === piece) { this.sel = null; audio.putback(); return false; }
+    const { rows, cols } = shapeSize(piece.cells);
+    let r, c;
+    if (this.sel) { r = this.sel.r; c = this.sel.c; }   // 持ち替えてもカーソルは動かさない
+    else {
+      // 最初の1手でいきなり赤いゴーストを出さないよう、置ける場所へ寄せる。
+      const spots = this.engine ? this.engine.placements(piece) : [];
+      if (spots.length) { r = spots[0][0]; c = spots[0][1]; }
+      else { r = (SIZE - rows) >> 1; c = (SIZE - cols) >> 1; }
+    }
+    this.sel = {
+      index: slot, piece,
+      r: Math.max(0, Math.min(SIZE - rows, r)),
+      c: Math.max(0, Math.min(SIZE - cols, c)),
+    };
+    if (!quiet) audio.pickup();
+    return true;
+  }
+
+  selectSlot(slot) {
+    if (!this.engine || this.engine.over || !this.running || this.inputLocked) return false;
+    const piece = this.engine.hand[slot];
+    if (!piece) { audio.invalid(); return false; }
+    if (piece.frozenUntil > Date.now()) { audio.invalid(); return false; }   // ボスの氷結
+    return this.setSel(slot, piece);
+  }
+
+  // 矢印キーをいきなり押した人のために、掴める枠を1つ選んでおく。
+  selectFirstPlayable() {
+    if (!this.engine) return false;
+    for (let i = 0; i < 3; i++) {
+      const p = this.engine.hand[i];
+      if (p && !(p.frozenUntil > Date.now())) return this.selectSlot(i);
+    }
+    return false;
+  }
+
+  moveSel(dr, dc) {
+    const s = this.sel;
+    if (!s) return;
+    const { rows, cols } = shapeSize(s.piece.cells);
+    s.r = Math.max(0, Math.min(SIZE - rows, s.r + dr));
+    s.c = Math.max(0, Math.min(SIZE - cols, s.c + dc));
+  }
+
+  commitSel() {
+    const s = this.sel;
+    if (!s) return false;
+    if (!this.commitPlace(s.index, s.piece, s.r, s.c)) return false;
+    this.sel = null;
+    return true;
+  }
+
+  // 盤面タップ → 選んでいるピースの中心をそこへ合わせて置く。
+  // ドラッグの持ち上げ（liftAmount）は掛けない ── 指の位置がそのまま置き場所。
+  // 盤面から大きく外れたタップは無視する（余白の誤タップで消費させない）。
+  tapPlace(x, y) {
+    const s = this.sel;
+    if (!s || !this.engine) return false;
+    const m = this.cell * 0.75;
+    if (x < this.boardX - m || x > this.boardX + this.boardSize + m
+      || y < this.boardY - m || y > this.boardY + this.boardSize + m) return false;
+    const { rows, cols } = shapeSize(s.piece.cells);
+    const c = Math.round((x - this.boardX - cols * this.cell / 2) / this.cell);
+    const r = Math.round((y - this.boardY - rows * this.cell / 2) / this.cell);
+    s.r = Math.max(0, Math.min(SIZE - rows, r));
+    s.c = Math.max(0, Math.min(SIZE - cols, c));
+    this.commitSel();
+    return true;
   }
 
   trayHit(x, y) {
@@ -317,23 +623,45 @@ export class GameView {
       for (const c of result.fullCols) {
         this.particles.ring(this.boardX + (c + 0.5) * this.cell, this.boardY + this.boardSize / 2, this.boardSize * 0.55, '#ffffff');
       }
-      // full-screen flash on multi-line clears / hot streaks
-      if (result.lineCount >= 2) this.screenFlash = Math.min(0.45, 0.18 + result.lineCount * 0.09);
-      else if (result.streak >= 3) this.screenFlash = 0.15;
+      // 🔥 コンボの段位。加点側（engine.js の comboMult）は青天井なのに、
+      // 演出は streak 7 前後でほぼ全部が天井に当たっていた ── streak 8 と
+      // streak 25 が音も画面も同じで、いちばん盛り上がる所で演出が黙る。
+      // 段（2-4 / 5-9 / 10-19 / 20+）ごとに揺れ・フラッシュ・文字を伸ばす。
+      const tier = result.streak >= 20 ? 3 : result.streak >= 10 ? 2 : result.streak >= 5 ? 1 : 0;
 
-      if (getSettings().shake) this.shake = Math.min(14, 4 + result.lineCount * 3 + result.streak);
+      // full-screen flash on multi-line clears / hot streaks
+      // 以前は streak 側が 0.15 固定で、どれだけ繋いでも明るくならなかった。
+      const lineFlash = result.lineCount >= 2 ? Math.min(0.45, 0.18 + result.lineCount * 0.09) : 0;
+      const comboFlash = result.streak >= 3 ? COMBO_FLASH[tier] : 0;
+      const flash = Math.max(lineFlash, comboFlash);
+      if (flash > 0) this.screenFlash = flash;
+
+      // 揺れの上限も段で開ける（14 → 22）。1ライン消しだと streak 7 で天井だった。
+      if (getSettings().shake) this.shake = Math.min(COMBO_SHAKE_CAP[tier], 4 + result.lineCount * 3 + result.streak);
       audio.clearLines(result.lineCount, result.streak);
+      // 🧊 ヒビの入った氷(11)が実際に砕けた回だけ、通常のライン音に
+      // 高い破砕音を重ねる。「割った → 砕いた」の2段階が耳でも分かる。
+      const shattered = result.clearedCells.reduce((n, cc) => n + (cc[2] === ICE_CRACKED ? 1 : 0), 0);
+      if (shattered > 0) sfxIce(shattered, true);
 
       const centerX = this.boardX + this.boardSize / 2;
       const centerY = this.boardY + this.boardSize * 0.4;
       this.addFloatText(centerX, centerY, `+${result.gained}`, '#ffffff', 1.4);
       if (result.streak >= 2) {
-        this.addFloatText(centerX, centerY - this.cell * 1.3, `${result.streak} COMBO!`, '#ffe14d', 1.8);
+        // 文字も段で大きく・熱く（黄→橙→赤→桃）。以前はサイズ1.8固定だった。
+        this.addFloatText(centerX, centerY - this.cell * 1.3, `${result.streak} COMBO!`, COMBO_COLOR[tier], COMBO_SIZE[tier]);
         audio.combo(result.streak);
         this.particles.confetti(centerX, centerY, this.cell, 10 + result.streak * 6);
       }
-      const praise = result.lineCount >= 4 ? 'LEGENDARY!' : result.lineCount === 3 ? 'AMAZING!' : result.lineCount === 2 ? 'GREAT!' : null;
-      if (praise) this.addFloatText(centerX, centerY + this.cell, praise, '#43d9e8', 1.5);
+      // 称号は lineCount だけで決まっていたので、長く繋いでも一言も出なかった。
+      // 高い段では streak 側の称号を優先して出す。
+      const streakPraise = tier >= 3 ? 'UNREAL!' : tier >= 2 ? 'UNSTOPPABLE!' : null;
+      const praise = streakPraise
+        || (result.lineCount >= 4 ? 'LEGENDARY!' : result.lineCount === 3 ? 'AMAZING!' : result.lineCount === 2 ? 'GREAT!' : null);
+      if (praise) {
+        this.addFloatText(centerX, centerY + this.cell, praise,
+          streakPraise ? COMBO_COLOR[tier] : '#43d9e8', streakPraise ? 1.8 : 1.5);
+      }
     } else {
       const [r, c] = result.placedCells[0];
       this.addFloatText(
@@ -341,6 +669,22 @@ export class GameView {
         this.boardY + r * this.cell,
         `+${result.gained}`, 'rgba(255,255,255,0.75)', 0.9,
       );
+    }
+
+    // ❄️ 氷結: 揃ったのに消えなかった線を水色で光らせ、ヒビが入ったマスを
+    // 一度弾ませる。文字は出さない ── 「消えない」ことは絵で伝わるほうが速い。
+    if (result.frozenCount > 0) {
+      // 音が無いと、盤面で一番緊張する瞬間と何も起きていない1手が
+      // 耳には同じに聞こえていた（凍った線は lineCount に入らないので
+      // audio.clearLines() も鳴らない）。割れた手応えをここで返す。
+      sfxIce(result.crackedCells.length);
+      for (const r of result.frozenRows) this.flashes.push({ kind: 'row', index: r, t: now, color: '#9be3ff' });
+      for (const c of result.frozenCols) this.flashes.push({ kind: 'col', index: c, t: now, color: '#9be3ff' });
+      for (const [r, c] of result.crackedCells) {
+        this.spawnAnim.set(r * SIZE + c, now);
+        this.particles.ring(this.boardX + (c + 0.5) * this.cell, this.boardY + (r + 0.5) * this.cell, this.cell * 0.9, '#9be3ff');
+      }
+      if (getSettings().shake) this.shake = Math.max(this.shake, 4);
     }
 
     if (this.onPlace) this.onPlace(result);
@@ -371,6 +715,7 @@ export class GameView {
     if (this.running) return;
     this.running = true;
     this.lastTs = performance.now();
+    this.startIdleSweep();
     const loop = ts => {
       if (!this.running) return;
       const dt = Math.min(0.05, (ts - this.lastTs) / 1000);
@@ -387,7 +732,31 @@ export class GameView {
     requestAnimationFrame(loop);
   }
 
-  stop() { this.running = false; }
+  stop() { this.running = false; this.stopIdleSweep(); }
+
+  // 🧹 タブが隠れている間の掃除。
+  // 演出の間引きは update() の中にしか無く、update() は requestAnimationFrame
+  // からしか呼ばれない。ところがオートパイロットは setTimeout の連鎖で回るので、
+  // タブが隠れると「撒くだけ撒いて誰も片付けない」状態になり、粒子・消滅演出・
+  // 浮き文字が際限なく伸びる（実測で100秒に粒子12万個／ヒープ +33MB）。
+  // 隠れている間だけ、時計を進めて間引くだけの軽い経路をタイマーで回す
+  // （描画はしない）。表示中は rAF がやるので何もしない。
+  startIdleSweep() {
+    if (this._idleTimer || typeof document === 'undefined') return;
+    this._idleTs = performance.now();
+    this._idleTimer = setInterval(() => {
+      const now = performance.now();
+      const dt = Math.min(0.5, Math.max(0, (now - this._idleTs) / 1000));
+      this._idleTs = now;
+      if (!this.running || !document.hidden) return;
+      this.time += dt;
+      this.update(dt);
+    }, 250);
+  }
+
+  stopIdleSweep() {
+    if (this._idleTimer) { clearInterval(this._idleTimer); this._idleTimer = null; }
+  }
 
   update(dt) {
     this.particles.intensity = particleFactor();
@@ -398,6 +767,14 @@ export class GameView {
     this.dying = this.dying.filter(d => now - d.t < 0.35);
     this.flashes = this.flashes.filter(f => now - f.t < 0.4);
     this.floatTexts = this.floatTexts.filter(f => now - f.t < f.life);
+    // 選んだ枠を他所（ボスの技、協力プレイの配信、🎴シャッフル、オートパイロット）が
+    // 書き換えたら選択は捨てる。commitPlace も同一性を見るので二重の保険。
+    if (this.sel && this.engine && this.engine.hand[this.sel.index] !== this.sel.piece) this.sel = null;
+    // 上限を超えたぶんは古いものから捨てる。上の間引きが効かない経路が
+    // また生えても、同じ壊れ方（際限なく伸びる）はしない。
+    if (this.dying.length > 900) this.dying.splice(0, this.dying.length - 900);
+    if (this.floatTexts.length > 200) this.floatTexts.splice(0, this.floatTexts.length - 200);
+    if (this.flashes.length > 200) this.flashes.splice(0, this.flashes.length - 200);
   }
 
   render() {
@@ -419,6 +796,7 @@ export class GameView {
       this.drawDying();
       this.drawFlashes();
       if (this.drag) this.drawDrag();
+      else if (this.sel) this.drawSelection();
       if (this.showTray) this.drawTray();
     }
     this.particles.draw(ctx);
@@ -530,9 +908,10 @@ export class GameView {
 
   drawBlocks() {
     const { ctx, cell } = this;
-    const skin = getSkin(this.skinId);
-    const ghost = this.drag && this.weldTargetAt(this.drag.px, this.drag.py, this.drag.index) === -1
-      ? this.ghostInfo() : null;
+    const skin = boardSkin(this.skinId);
+    const ghost = this.drag
+      ? (this.weldTargetAt(this.drag.px, this.drag.py, this.drag.index) === -1 ? this.ghostInfo() : null)
+      : (this.sel ? this.selGhost() : null);
 
     for (let r = 0; r < SIZE; r++) {
       for (let c = 0; c < SIZE; c++) {
@@ -682,24 +1061,48 @@ export class GameView {
     // requestAnimationFrame の再登録に届かず描画が永久に止まる。
     // drawDrag は同じ読み出しに既にガードを持っているので、そちらに揃える。
     if (!piece) return null;
+    return this.ghostAt(piece, anchor);
+  }
+
+  // 選択カーソル（タップ選択／キーボード）のゴースト。ドラッグと同じ形で返す。
+  selGhost() {
+    const s = this.sel;
+    if (!s || !this.engine) return null;
+    const piece = this.engine.hand[s.index];
+    if (!piece || piece !== s.piece) return null;
+    return this.ghostAt(piece, { r: s.r, c: s.c });
+  }
+
+  ghostAt(piece, anchor) {
     const valid = this.engine.canPlace(piece, anchor.r, anchor.c);
     const willRows = new Set(), willCols = new Set();
+    // ❄️ 氷結: 揃っても氷があると消えない線。白く光らせると「消える」と嘘に
+    // なるので、別の集合に分けて水色で見せる（resolveLines の判定と同じ規則）。
+    const freezeRows = new Set(), freezeCols = new Set();
     if (valid) {
       // simulate: which rows/cols become full?
       const g = this.engine.grid;
       const temp = new Set(piece.cells.map(([dr, dc]) => (anchor.r + dr) * SIZE + (anchor.c + dc)));
       for (let r = 0; r < SIZE; r++) {
-        let full = true;
-        for (let c = 0; c < SIZE; c++) { const k = r * SIZE + c; if (!g[k] && !temp.has(k)) { full = false; break; } }
-        if (full) willRows.add(r);
+        let full = true, ice = false;
+        for (let c = 0; c < SIZE; c++) {
+          const k = r * SIZE + c;
+          if (!g[k] && !temp.has(k)) { full = false; break; }
+          if (g[k] === ICE) ice = true;
+        }
+        if (full) (ice ? freezeRows : willRows).add(r);
       }
       for (let c = 0; c < SIZE; c++) {
-        let full = true;
-        for (let r = 0; r < SIZE; r++) { const k = r * SIZE + c; if (!g[k] && !temp.has(k)) { full = false; break; } }
-        if (full) willCols.add(c);
+        let full = true, ice = false;
+        for (let r = 0; r < SIZE; r++) {
+          const k = r * SIZE + c;
+          if (!g[k] && !temp.has(k)) { full = false; break; }
+          if (g[k] === ICE) ice = true;
+        }
+        if (full) (ice ? freezeCols : willCols).add(c);
       }
     }
-    return { anchor, piece, valid, willRows, willCols };
+    return { anchor, piece, valid, willRows, willCols, freezeRows, freezeCols };
   }
 
   drawDrag() {
@@ -760,6 +1163,15 @@ export class GameView {
         for (const c of ghost.willCols) ctx.fillRect(this.boardX + c * cell, this.boardY, cell, this.boardSize);
         ctx.globalAlpha = 1;
       }
+      // 揃うけれど氷で止まる線は水色で。「白く光ったのに消えない」を防ぐ。
+      if (valid && ghost.freezeRows && (ghost.freezeRows.size || ghost.freezeCols.size)) {
+        const pulse = 0.18 + 0.12 * Math.sin(this.time * 8);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#9be3ff';
+        for (const r of ghost.freezeRows) ctx.fillRect(this.boardX, this.boardY + r * cell, this.boardSize, cell);
+        for (const c of ghost.freezeCols) ctx.fillRect(this.boardX + c * cell, this.boardY, cell, this.boardSize);
+        ctx.globalAlpha = 1;
+      }
     }
 
     // floating piece above finger
@@ -779,9 +1191,58 @@ export class GameView {
     if (piece.weld > 1) this.drawPieceTag(left, top, pw, ph, `×${piece.weld}`, '#b06bff');
   }
 
+  // ♿ 選択カーソルの表示。ドラッグのゴーストと同じ見せ方（置ける＝半透明の
+  // ピース／置けない＝赤、揃う線は白、氷で止まる線は水色）に、
+  // 「いまここを狙っている」枠を足しただけ。指の位置が無いので枠が必要。
+  drawSelection() {
+    const { ctx, cell } = this;
+    const s = this.sel;
+    const ghost = this.selGhost();
+    if (!ghost) { this.sel = null; return; }
+    const { piece, valid } = ghost;
+    const skin = getSkin(this.skinId);
+    for (const [dr, dc] of piece.cells) {
+      const x = this.boardX + (s.c + dc) * cell;
+      const y = this.boardY + (s.r + dr) * cell;
+      if (valid) {
+        skin(ctx, x, y, cell, piece.color, 0.45);
+      } else {
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = '#ff4444';
+        ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
+        ctx.globalAlpha = 1;
+      }
+    }
+    if (valid && (ghost.willRows.size || ghost.willCols.size)) {
+      const pulse = 0.25 + 0.15 * Math.sin(this.time * 8);
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = '#ffffff';
+      for (const r of ghost.willRows) ctx.fillRect(this.boardX, this.boardY + r * cell, this.boardSize, cell);
+      for (const c of ghost.willCols) ctx.fillRect(this.boardX + c * cell, this.boardY, cell, this.boardSize);
+      ctx.globalAlpha = 1;
+    }
+    if (valid && (ghost.freezeRows.size || ghost.freezeCols.size)) {
+      const pulse = 0.18 + 0.12 * Math.sin(this.time * 8);
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = '#9be3ff';
+      for (const r of ghost.freezeRows) ctx.fillRect(this.boardX, this.boardY + r * cell, this.boardSize, cell);
+      for (const c of ghost.freezeCols) ctx.fillRect(this.boardX + c * cell, this.boardY, cell, this.boardSize);
+      ctx.globalAlpha = 1;
+    }
+    const { rows, cols } = shapeSize(piece.cells);
+    ctx.save();
+    ctx.globalAlpha = 0.6 + 0.3 * Math.sin(this.time * 6);
+    ctx.strokeStyle = valid ? '#ffffff' : '#ff6b6b';
+    ctx.lineWidth = Math.max(2, cell * 0.07);
+    ctx.strokeRect(this.boardX + s.c * cell + 1, this.boardY + s.r * cell + 1, cols * cell - 2, rows * cell - 2);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
   drawDying() {
     const { ctx, cell } = this;
-    const skin = getSkin(this.skinId);
+    // 消えるのは盤面のマスなので、ヒビ(11)が混ざりうる ── boardSkin を使う。
+    const skin = boardSkin(this.skinId);
     for (const d of this.dying) {
       const p = (this.time - d.t) / 0.35;
       const x = this.boardX + d.c * cell, y = this.boardY + d.r * cell;
@@ -794,7 +1255,7 @@ export class GameView {
     for (const f of this.flashes) {
       const p = (this.time - f.t) / 0.4;
       ctx.globalAlpha = (1 - p) * 0.5;
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = f.color || '#ffffff';   // 氷で止まった線は水色（既定は従来どおり白）
       if (f.kind === 'row') ctx.fillRect(this.boardX, this.boardY + f.index * cell, this.boardSize, cell);
       else ctx.fillRect(this.boardX + f.index * cell, this.boardY, cell, this.boardSize);
     }
@@ -828,6 +1289,17 @@ export class GameView {
         skin(ctx, ox + dc * maxCell, oy + dr * maxCell + bob, maxCell, piece.color, frozen ? 0.45 : alpha);
       }
       if (piece.weld > 1) this.drawPieceTag(ox, oy + bob, pw, ph, `×${piece.weld}`, '#b06bff', alpha);
+      // ♿ タップ選択／キーボードで選んでいる枠。掴んでいないので、
+      // どれを持っているのかは枠でしか分からない。
+      if (this.sel && this.sel.index === i && this.sel.piece === piece) {
+        ctx.save();
+        ctx.globalAlpha = 0.55 + 0.35 * Math.sin(this.time * 6);
+        ctx.strokeStyle = '#ffe14d';
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(ox - 6, oy + bob - 6, pw + 12, ph + 12);
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
       if (frozen) {
         ctx.globalAlpha = 0.4;
         ctx.fillStyle = '#9bd8ff';
@@ -922,7 +1394,7 @@ export class MiniBoard {
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const cell = Math.min(rect.width, rect.height) / SIZE;
-    const skin = getSkin(this.skinId);
+    const skin = boardSkin(this.skinId);
     ctx.clearRect(0, 0, rect.width, rect.height);
     ctx.fillStyle = 'rgba(255,255,255,0.04)';
     for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {

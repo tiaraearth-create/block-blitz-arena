@@ -260,13 +260,13 @@ TRACKS.kami.bars[3].chord = [N.E4, 415.3, N.B4];
 export const TRACK_INFO = [
   { id: 'menu',   icon: '🏠', name: 'やすらぎのロビー', nameEn: 'Cozy Lobby',      where: 'メニュー',                 whereEn: 'Menu' },
   { id: 'solo',   icon: '🧩', name: 'ブロックさんぽ',   nameEn: 'Block Stroll',    where: 'ソロ・ウィークリー',       whereEn: 'Solo / Weekly' },
-  { id: 'battle', icon: '⚔️', name: 'アリーナの熱気',   nameEn: 'Arena Heat',      where: 'オンライン対戦',           whereEn: 'Online battles' },
+  { id: 'battle', icon: '⚔️', name: 'アリーナの熱気',   nameEn: 'Arena Heat',      where: 'オンライン対戦・⛓️連鎖・👻リプレイ', whereEn: 'Online battles / Chain / Replay' },
   { id: 'hard',   icon: '🔥', name: '限界突破',         nameEn: 'Limit Break',     where: '達人・タイムアタック',     whereEn: 'Expert / Time Attack' },
   { id: 'boss',   icon: '🐲', name: '巨影せまる',       nameEn: 'Looming Giant',   where: 'ボス戦',                   whereEn: 'Boss fights' },
   { id: 'oni',    icon: '👹', name: '鬼の巣窟',         nameEn: "Oni's Den",       where: '鬼・深淵',                 whereEn: 'Oni / Abyss' },
   { id: 'pixel',  icon: '👾', name: 'PIXEL RUSH 182',   nameEn: 'PIXEL RUSH 182',  where: 'バトルロイヤル',           whereEn: 'Battle Royale' },
   { id: 'kami',   icon: '🔱', name: '天上の光',         nameEn: 'Celestial Light', where: '神・天国ダンジョン',       whereEn: 'Kami / Heaven' },
-  { id: 'ruins',  icon: '🗿', name: '遺跡の囁き',       nameEn: 'Whisper of Ruins', where: 'パズル遺跡',              whereEn: 'Puzzle Ruins' },
+  { id: 'ruins',  icon: '🗿', name: '遺跡の囁き',       nameEn: 'Whisper of Ruins', where: 'パズル遺跡・🏗️設計図・🛠️工房', whereEn: 'Puzzle Ruins / Blueprint / Workshop' },
   { id: 'mine',   icon: '⛏️', name: '地底のハンマー',   nameEn: 'Hammer Below',     where: '採掘場',                  whereEn: 'The Mines' },
   { id: 'royal',  icon: '👑', name: '王座の間',         nameEn: 'Throne Room',      where: '王者のテーマ（ジュークボックス限定）', whereEn: 'Champions (jukebox exclusive)' },
   { id: 'ghost',  icon: '👻', name: '幽霊屋敷のオルゴール', nameEn: 'Haunted Music Box', where: '？？？', whereEn: '???', hidden: true },
@@ -299,6 +299,12 @@ class AudioEngine {
     // 先読み秒数。通常0.35秒。YouTubeスタジオが録画中にタブが隠れたとき、
     // タイマーが1秒間隔に制限されても音が途切れないよう一時的に増やす。
     this.lookahead = 0.35;
+    // 🔇 タブが隠れている間の自動停止まわりの状態
+    this.hiddenTimer = null;      // 「隠れた」→ 実際に止めるまでの猶予タイマー
+    this.pausedHidden = false;    // 自動停止で止めた（＝復帰時に戻す責任がある）
+    this.wasScheduling = false;   // 止めた時点でBGMが鳴っていたか
+    // 録画など「隠れても鳴らし続けたい」処理はこれを true にする（外部から設定可）。
+    this.keepAliveWhileHidden = false;
   }
 
   // 再生中の曲を1小節目から流し直す（録画の頭出し用）。
@@ -306,7 +312,15 @@ class AudioEngine {
 
   ensure() {
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') this.ctx.resume();
+      // 🔇 自動停止で止めている最中（かつ本当にまだ隠れている）なら resume しない。
+      // ここで無条件に戻すと、裏で鳴った効果音ひとつで AudioContext が復活し、
+      // バックグラウンドから音が漏れる（⛓️連鎖の自走中など）。
+      // 復帰は resumeFromHidden() の責務 ── あちらは pausedHidden を false に
+      // してから resume するのでここを通り抜ける。
+      const stillHidden = this.pausedHidden
+        && typeof document !== 'undefined' && document.hidden
+        && !this.keepSoundWhileHidden();
+      if (this.ctx.state === 'suspended' && !stillHidden) this.ctx.resume();
       return true;
     }
     try {
@@ -403,6 +417,65 @@ class AudioEngine {
   stopScheduler() {
     if (this.scheduler) { clearInterval(this.scheduler); this.scheduler = null; }
     this.playing = null;
+  }
+
+  // -------------------------------------------------------------------------
+  // 🔇 バックグラウンド時の自動停止（タブ/アプリが隠れたら鳴らさない）
+  // -------------------------------------------------------------------------
+  // 隠れても鳴らし続けたい場面（YouTubeスタジオの録画中）は先読みが広げられる。
+  // その間は絶対に止めない ── 止めると録画に無音が焼き込まれてしまう。
+  keepSoundWhileHidden() {
+    return this.keepAliveWhileHidden === true || (this.lookahead || 0.35) > 0.4;
+  }
+
+  onVisibilityChange() {
+    if (typeof document === 'undefined') return;
+    if (document.hidden) {
+      // すぐには止めない。同じイベントで先読みを広げる処理（録画）が走るので、
+      // 少し待ってから「本当に止めてよいか」を判断する。一瞬の切り替えでも
+      // 音が途切れないという副作用つき。
+      if (this.hiddenTimer) return;
+      this.hiddenTimer = setTimeout(() => {
+        this.hiddenTimer = null;
+        if (document.hidden) this.pauseForHidden();
+      }, 300);
+    } else {
+      if (this.hiddenTimer) { clearTimeout(this.hiddenTimer); this.hiddenTimer = null; }
+      this.resumeFromHidden();
+    }
+  }
+
+  pauseForHidden() {
+    // ctx 未生成（ユーザー操作前）や録画中は何もしない。
+    if (!this.ctx || this.pausedHidden || this.keepSoundWhileHidden()) return;
+    this.wasScheduling = !!this.scheduler;
+    this.stopScheduler();
+    this.pausedHidden = true;
+    try {
+      const p = this.ctx.suspend();
+      if (p && p.catch) p.catch(() => { /* すでに閉じている等 */ });
+    } catch { /* 古い実装 */ }
+  }
+
+  resumeFromHidden() {
+    // 自分で止めたときだけ戻す（止めていないのに曲を貼り直すと、タブを
+    // 切り替えるたびに1小節目に巻き戻ってしまう）。
+    if (!this.pausedHidden || !this.ctx) return;
+    this.pausedHidden = false;
+    // 隠れている間に別の曲が予約されていた場合、その nextTime は止まった時計を
+    // 基準にしていて過去になっている。どちらの場合も貼り直しが必要。
+    const wanted = this.wasScheduling || !!this.scheduler;
+    this.wasScheduling = false;
+    const back = () => {
+      if (!this.ctx || (typeof document !== 'undefined' && document.hidden)) return;
+      // syncTrack(force) が nextTime を ctx.currentTime 基準に引き直すので、
+      // 溜まった音が復帰直後に一斉に鳴ることはない。
+      if (wanted) this.syncTrack(true);
+    };
+    try {
+      const p = this.ctx.resume();
+      if (p && p.then) p.then(back, back); else back();
+    } catch { back(); }
   }
 
   scheduleAhead() {
@@ -597,8 +670,15 @@ class AudioEngine {
   // SFX (one-shot)
   // -------------------------------------------------------------------------
 
+  // 🔇 タブが裏に回っている間の効果音は鳴らさない。⛓️連鎖のように隠れていても
+  // 自走する処理があるので、ここで止めないと裏から音が聞こえてしまう。
+  // 録画中（keepSoundWhileHidden）は従来どおり鳴らす。
+  sfxSuppressed() {
+    return typeof document !== 'undefined' && document.hidden && !this.keepSoundWhileHidden();
+  }
+
   tone({ freq = 440, dur = 0.15, type = 'sine', vol = 0.3, attack = 0.005, sweep = 0, delay = 0 }) {
-    if (!this.sfxOn || !this.ensure()) return;
+    if (!this.sfxOn || this.sfxSuppressed() || !this.ensure()) return;
     const t0 = this.ctx.currentTime + delay;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -613,7 +693,7 @@ class AudioEngine {
   }
 
   noise({ dur = 0.2, vol = 0.25, freq = 1200, delay = 0 }) {
-    if (!this.sfxOn || !this.ensure()) return;
+    if (!this.sfxOn || this.sfxSuppressed() || !this.ensure()) return;
     const t0 = this.ctx.currentTime + delay;
     const len = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
     const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
@@ -641,17 +721,25 @@ class AudioEngine {
 
   clearLines(count, streak) {
     const base = [523, 659, 784, 1047];
+    // ピッチ上げの頭打ちが streak 6 と早すぎて、長い連鎖が短い連鎖と同じに
+    // 聞こえていた。10 まで開ける（上げ幅は 0.06→0.05 に緩めて音程の暴れを抑える）。
+    const lift = 1 + 0.05 * Math.min(streak, 10);
     for (let i = 0; i < Math.min(count + 1, 4); i++) {
-      this.tone({ freq: base[i] * (1 + 0.06 * Math.min(streak, 6)), dur: 0.22, type: 'triangle', vol: 0.22, delay: i * 0.05 });
+      this.tone({ freq: base[i] * lift, dur: 0.22, type: 'triangle', vol: 0.22, delay: i * 0.05 });
     }
     this.noise({ dur: 0.25, vol: 0.18, freq: 2000 });
     if (count >= 2) this.tone({ freq: 1568, dur: 0.4, type: 'sine', vol: 0.15, delay: 0.15 });
   }
 
   combo(streak) {
-    const f = 440 * Math.pow(1.12, Math.min(streak, 10));
+    // 以前は Math.min(streak, 10) で頭打ち ── streak 10 と 25 が同じ音だった。
+    // 16 まで開け、さらに上の段では倍音を1本足して「まだ伸びている」を耳で返す。
+    // 上の段は上げ幅を緩める（1.12 のまま 16 まで伸ばすと耳に刺さる）。
+    const n = Math.max(0, Math.min(Number(streak) || 0, 16));
+    const f = 440 * Math.pow(1.12, Math.min(n, 10)) * Math.pow(1.06, Math.max(0, n - 10));
     this.tone({ freq: f, dur: 0.15, type: 'sine', vol: 0.2 });
     this.tone({ freq: f * 1.5, dur: 0.2, type: 'sine', vol: 0.12, delay: 0.06 });
+    if (streak >= 10) this.tone({ freq: f * 2, dur: 0.24, type: 'triangle', vol: 0.09, delay: 0.12 });
   }
 
   gameOver() {
@@ -700,8 +788,29 @@ class AudioEngine {
     this.noise({ dur: 1.2, vol: 0.08, freq: 6000, delay: 0.2 });
   }
 
+  // ✨ 全消し「昇華」— 盤面が完全に空になった瞬間の短いジングル（1秒以内）。
+  // 上昇アルペジオ（Cメジャー）＋到達点のきらめき。
+  ascend() {
+    [523.25, 659.25, 783.99, 1046.5, 1318.51].forEach((f, i) => {
+      this.tone({ freq: f, dur: 0.26, type: 'triangle', vol: 0.2, delay: i * 0.07 });
+      this.tone({ freq: f * 2, dur: 0.16, type: 'sine', vol: 0.06, delay: i * 0.07 });
+    });
+    // きらめき: 高いベル2発＋空気感のノイズ
+    this.tone({ freq: 1567.98, dur: 0.45, type: 'sine', vol: 0.15, delay: 0.36 });
+    this.tone({ freq: 2093, dur: 0.4, type: 'sine', vol: 0.09, delay: 0.44 });
+    this.noise({ dur: 0.45, vol: 0.07, freq: 7000, delay: 0.3 });
+  }
+
   // legacy alias — some code paths call startMusic() without a track
   startMusic() { this.playTrack(this.trackName || 'solo'); }
 }
 
 export const audio = new AudioEngine();
+
+// 全消しジングル: audio.ascend() でも、この関数でも呼べる（modes.js 用）。
+export function sfxAscend() { audio.ascend(); }
+
+// タブ/アプリが隠れたらBGMを止め、戻ったら再開する。
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('visibilitychange', () => audio.onVisibilityChange());
+}

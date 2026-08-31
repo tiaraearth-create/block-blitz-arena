@@ -23,6 +23,7 @@ export const ULT_META = {
   ult_timestop:  { icon: '⏳', color: '#b06bff' },
   ult_judgement: { icon: '⚡', color: '#fff3b0' },
   ult_condemn:   { icon: '👁️', color: '#e03546' },
+  ult_gravity:   { icon: '🧲', color: '#8fb6ff' },
   ult_admin:     { icon: '👑', color: '#ffd75e' },
 };
 
@@ -49,9 +50,12 @@ function clearLines(engine, rows, cols, { comboStep = 1 } = {}) {
   const clearedCells = [];
   const push = (r, c) => {
     const k = r * SIZE + c;
-    if (seen.has(k)) return;
+    // 空マスは消滅演出の対象にしない。半端に埋まった行を強制消去するとき
+    // （浄化の下2行・衝撃波/断罪の密度行など）に、存在しないブロックの
+    // 幻の消滅アニメが出ていた。
+    if (seen.has(k) || engine.grid[k] === 0) return;
     seen.add(k);
-    clearedCells.push([r, c, engine.grid[k] || 1]);
+    clearedCells.push([r, c, engine.grid[k]]);
   };
   for (const r of rows) for (let c = 0; c < SIZE; c++) push(r, c);
   for (const c of cols) for (let r = 0; r < SIZE; r++) push(r, c);
@@ -191,12 +195,23 @@ const EFFECTS = {
     const { engine, view } = ctx;
     const garbage = cellsOf(engine, v => v === 9);
     for (const [r, c] of garbage) { engine.grid[r * SIZE + c] = 0; burst(view, r, c, 9); }
-    const res = clearLines(engine, [SIZE - 2, SIZE - 1], []);
+    // 下2行のうち、実際にブロックが残っている行だけを消す。空の行を無条件に
+    // 消していたため、下2行が空でも lineCount=2 として400点×コンボ倍率＋
+    // streak＋linesCleared が入っていた。
+    const rows = [SIZE - 2, SIZE - 1].filter(r => {
+      for (let c = 0; c < SIZE; c++) if (engine.grid[r * SIZE + c] !== 0) return true;
+      return false;
+    });
+    // お邪魔も無く消せる行も無いなら、他の盤面系奥義と同じくゲージを温存する。
+    if (!garbage.length && !rows.length) return { error: t('盤面が空です！', 'The board is empty!') };
+    const res = rows.length
+      ? clearLines(engine, rows, [])
+      : { rows: [], cols: [], clearedCells: [], lineCount: 0, gained: 0 };
     const bonus = awardPoints(engine, garbage.length * 60);
     view.reviveFlash();
     view.screenFlash = 0.4;
     audio.coin();
-    emit(ctx, { ...res, gained: res.gained + bonus, rows: [SIZE - 2, SIZE - 1] });
+    emit(ctx, { ...res, gained: res.gained + bonus, rows });
     return { msg: t(`🌊 浄化の波動！お邪魔${garbage.length}個を消し飛ばした！`, `🌊 Purifying Wave — ${garbage.length} garbage cells erased!`) };
   },
 
@@ -217,10 +232,17 @@ const EFFECTS = {
     // their own via feverUntil, so the timeout only has to tidy up, and only
     // if it is still the same run.
     setTimeout(() => {
-      if (engine.feverUntil <= Date.now()) {
-        engine.feverMult = 2;
+      // 発動した run のフィーバーが切れていれば、その run のズレた倍率を戻す。
+      if (engine.feverUntil <= Date.now()) engine.feverMult = 2;
+      // 金色グローは「今表示中のエンジン」がフィーバー中でなければ外す。
+      // 発動 run が15秒以内に終わって別 run（別エンジン）が始まっていても
+      // 確実に掃除する ── 以前は発動エンジンとの同一性で判定していたため、
+      // 新 run では金色が固着していた。
+      const cur = window.__bbaMode && window.__bbaMode.engine;
+      const inFever = cur && cur.feverUntil > Date.now();
+      if (!inFever) {
         const el = document.querySelector('#hudScore');
-        if (el && (!window.__bbaMode || window.__bbaMode.engine === engine)) el.classList.remove('fever');
+        if (el) el.classList.remove('fever');
       }
     }, 15000);
     const [cx, cy] = boardCenter(view);
@@ -369,12 +391,59 @@ const EFFECTS = {
     return { msg: t('👁️ 断罪の一撃！ 縦横を斬り抜いた！', '👁️ Condemnation — cut clean through!') };
   },
 
+  // 🧲 重力圧縮。盤面のブロックを全部そのまま下端へ落として詰め、
+  // 落ちた結果そろった行だけを「通常どおり」消す。派手さは無いが、
+  // 穴だらけの盤面を一気に畳んで空きを作り直せるのが値打ち。
+  ult_gravity(ctx) {
+    const { engine, view } = ctx;
+    const filled = cellsOf(engine, v => v !== 0);
+    if (!filled.length) return { error: t('盤面が空です！', 'The board is empty!') };
+    const moved = engine.compactDown();
+    // 既に全部が下端に詰まっている（＝1マスも動かない）なら何も起きていない。
+    // 他の盤面系奥義と同じく、ゲージを消費させずに温存する。
+    if (!moved) return { error: t('これ以上は圧縮できません！', 'The board is already compressed!') };
+
+    // 落下でそろった行は engine.resolveLines() で通常経路のまま消す。
+    const res = engine.resolveLines();
+    let gained;
+    if (res.lineCount > 0) {
+      engine.streak += 1;
+      if (engine.streak > engine.maxCombo) engine.maxCombo = engine.streak;
+      engine.linesCleared += res.lineCount;
+      const comboMult = 1 + 0.5 * (engine.streak - 1);
+      gained = applyMultipliers(engine, Math.round(res.lineCount * res.lineCount * 100 * comboMult));
+      engine.score += gained;
+    } else {
+      // そろわなくても「詰めた」ぶんの小さな報酬は出す（コンボには触れない）。
+      gained = awardPoints(engine, moved * 20);
+    }
+
+    view.shake = 16;
+    view.screenFlash = 0.35;
+    audio.bossAttack();
+    const [cx] = boardCenter(view);
+    // 演出は既存のものを流用：盤面下端から広がるリング1つだけ。
+    view.particles.ring(cx, view.boardY + view.boardSize * 0.95, view.boardSize * 0.8, '#8fb6ff');
+    emit(ctx, {
+      clearedCells: res.clearedCells, rows: res.fullRows, cols: res.fullCols,
+      lineCount: res.lineCount, gained,
+      anchor: res.clearedCells.length ? [res.clearedCells[0][0], res.clearedCells[0][1]] : [SIZE - 1, 0],
+    });
+    return {
+      msg: res.lineCount > 0
+        ? t(`🧲 重力圧縮！盤面が崩れ落ち、${res.lineCount}ライン消えた！`, `🧲 Gravity Crush — the board collapses, ${res.lineCount} lines gone!`)
+        : t('🧲 重力圧縮！盤面を下へ押し固めた！', '🧲 Gravity Crush — the board is packed down!'),
+    };
+  },
+
   // 👑 Staff-only: judgement, and the gauge refills instantly.
   ult_admin(ctx) {
     const out = EFFECTS.ult_judgement(ctx);
-    ctx.engine.ult = 100;
+    // 呼び出し元 fireUltCurrent は fireUlt の直後に consumeUlt() でゲージを
+    // 0 に戻すため、ここで同期的に 100 にしても即座に消される。消費のあとに
+    // 効くよう次のタスクで再充填し、トーストの「ゲージ再充填」を実態に一致させる。
+    setTimeout(() => { ctx.engine.ult = 100; }, 0);
     if (out.error) {
-      ctx.engine.ult = 100;
       return { msg: t('👑 全能：ゲージを再充填した', '👑 Omnipotence: gauge refilled') };
     }
     return { msg: t('👑 全能！！盤面消滅＋ゲージ再充填！', '👑 OMNIPOTENCE — board erased, gauge refilled!') };

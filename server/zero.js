@@ -47,6 +47,17 @@ export const MAX_LANES = 10;
 //   本数で割れば、何人居ても1枠あたりの回復量がほぼ一定になる。
 export const MISS_HEAL = 0.003;        // 断罪を落とす（本数で割る前の値）
 export const TOPOUT_HEAL = 0.010;      // トップアウト（60秒に1回が上限）
+// 人間の点が段を削れる上限（1人あたり毎分）。
+//
+// scripts/sim-zero.mjs は最初から「住人の火力 ＋ 人間の火力」で段が落ちる前提で
+// 数字を出している（dpmH = humans * skill.scorePerMin, 初心者2,600〜上手い人6,500）
+// のに、実装では人間の点がどこにも入っておらず、住人の火力だけが段を削っていた。
+// ここを繋ぐと sim と実装が同じ式になる。
+// 上限は実測の上振れ(6,500)より少し上に置く ── 上手い人を頭打ちにはしないが、
+// 申告スコアがそのまま段に流れて「一瞬で溶ける」ことは無い。
+export const HUMAN_DPM_CAP = 8_000;
+// 溜め込み防止。長く黙っていた（＝画面を見ていなかった）ぶんの枠は繰り越さない。
+export const HUMAN_BUDGET_MAX_SEC = 10;
 export const REVIVE_SEC = 60;          // トップアウトからの自動復帰
 export const EXECUTIONS_PER_SLOT = 3;  // 1枠で処刑される住人の上限
 export const EXECUTIONS_PER_DAY = 9;
@@ -393,12 +404,56 @@ export function clearDealEffects(run) {
 // 断罪の的
 // ---------------------------------------------------------------------------
 //
-// 盤面の空きマスから赤マスを選ぶ。うち1つが金（急所）。
+// 赤マスを選ぶ。うち1つが金（急所）。
 // 「今夜の的」に指定された列には6割を寄せる ── ここが効く。
 // 特定の1列を縦に消すのは点効率が悪いので、
 // 「点を稼ぐ置き方」と「斬りやすくする置き方」が同じ手番の中で衝突する。
+// ※ zero_state（盤面同期）が入ったので、呼び出し側は同期済みの盤面を渡せる。
+//   赤マスは「いま空いているマス」から選ばれる ── これが本来の意図。
+//   同期が無い／古いときだけ grid=null で全マスから選ぶ（安全側）。
 
 export const SIZE = 8;
+
+// ---------------------------------------------------------------------------
+// 盤面同期（zero_state）
+// ---------------------------------------------------------------------------
+//
+// バトルロイヤルの 'state'（sanitizeGrid(msg.grid) で盤面を受ける）と同じ作法で、
+// 断罪でも人間の盤面をサーバーが持つようにした。これで3つが同時に解ける:
+//   * 赤マスを「空きマス」から選べる（pickVerdictCells の本来の設計）
+//   * 「斬った」申告に盤面の裏づけを付けられる（下の verdictAccepts）
+//   * 人間の点を段のHPに入れられる（HUMAN_DPM_CAP / zero-session.js）
+
+// 赤マスを選ぶときに「その盤面はまだ使える」とみなす鮮度。
+export const GRID_FRESH_MS = 4_000;
+// 斬った申告を盤面と突き合わせるときの鮮度。**ここは短い**。
+// 正規クライアントは1手ごとに zero_state を送る（＝申告の直前の盤面が届いている）
+// ので、この窓に収まる。これより古い同期しか無いなら裏づけを取らず従来どおり通す。
+export const CUT_GRID_FRESH_MS = 1_600;
+// ひとつ前の同期も見る窓（下の「直近2枚」を参照）。
+export const CUT_GRID_PREV_MS = 3_200;
+// 斬ったと申告された行／列に、直前の盤面で最低これだけ埋まっていること。
+//
+// なぜ「8マス全部」ではないか: 申告は置いた瞬間に飛ぶが、盤面同期は1手前の
+// 状態しか届いていない。1ピースは最大5マスなので、直前に3マス以上埋まって
+// いれば足りる ── が、鮮度の窓(1.6秒)に2手入る速い人も居るので、そこから
+// さらに1マスぶん緩めて 2 にしてある。厳しくすると正当なプレイヤーを弾く。
+// これで少なくとも「盤面に一切触れずに点灯セルを送り返すだけ」は通らない。
+export const MIN_LINE_FILLED = 2;
+
+// その行／列が「1手で消せる形になっていた」と言える程度に埋まっているか。
+export function lineFilledEnough(grid, cell, min = MIN_LINE_FILLED) {
+  if (!Array.isArray(grid) || grid.length < SIZE * SIZE) return true;
+  const k = cell | 0;
+  if (k < 0 || k >= SIZE * SIZE) return false;
+  const r = Math.floor(k / SIZE), c = k % SIZE;
+  let row = 0, col = 0;
+  for (let i = 0; i < SIZE; i++) {
+    if (grid[r * SIZE + i]) row++;
+    if (grid[i * SIZE + c]) col++;
+  }
+  return row >= min || col >= min;
+}
 
 export function pickVerdictCells(grid, danIndex, targetCol, rnd = Math.random) {
   const d = danAt(danIndex);
@@ -425,16 +480,49 @@ export function pickVerdictCells(grid, danIndex, targetCol, rnd = Math.random) {
 }
 
 // 申告されたカットが成立するか。
-// 人間の盤面はサーバーが持っていないので判定はクライアント申告になるが、
-// 構造的な安全弁がある: 斬れる回数は断罪の発生回数（＝経過時間）で決まり、
-// 1回の貫通量にも上限がある。つまり申告できる最大値が時間で頭打ちになる。
+//
+// 構造的な安全弁は前からある: 斬れる回数は断罪の発生回数（＝経過時間）で決まり、
+// 1回の貫通量にも上限があるので、申告できる最大値は時間で頭打ちになる。
 // そのうえで「発生から予告時間内に届いたものだけ」を受け付ける。
-export function verdictAccepts(verdict, now, clearedCells) {
+//
+// ここに **盤面の裏づけ** を足した（board 引数）。以前は「点灯セルを送り返すだけで
+// 必ず成功する」状態で、盤面に一度も触れずに封印を割れた。
+//
+// board は { grid, at, prev, prevAt } ── 同期済みの**直近2枚**の盤面と受信時刻。
+// 判定の緩さは意図的:
+//   * 使える盤面が1枚も無い（古い／届いていない） → 従来どおり通す（安全側）
+//   * ある → 申告した赤マスのうち少なくとも1つが、どちらかの盤面で
+//     その行か列が「1手で消せる形」になっていたことを求める（lineFilledEnough）
+//
+// なぜ2枚見るか（ここを外すと正当なプレイヤーを弾く）:
+// 申告(zero_cut)はピースを置いた瞬間に飛ぶ。クライアントが盤面を送るのが
+// 置く**前**なら直近の1枚は「消える直前の、ほぼ埋まった線」になるが、
+// 置いた**後**なら直近の1枚は「消えた後＝空の線」になる。どちらの実装でも
+// 通るように、ひとつ前の盤面も候補に入れる。
+//
+// 「申告セルが実際に埋まっていて、かつ今回消えた」を字面どおり検証することは
+// できない ── 消えた後の盤面はまだ届いていないし、赤マスは元々「空きマス」に
+// 点く（＝直前の盤面では空で正しい）。検証できるのは「その行／列が消せる形
+// だったか」なので、そこを見る。これで「盤面に一切触れずに点灯セルを送り返す
+// だけ」は通らなくなる。
+export function verdictAccepts(verdict, now, clearedCells, board = null) {
   if (!verdict || verdict.resolved) return { ok: false, why: 'no-verdict' };
   if (now > verdict.at + verdict.warnMs) return { ok: false, why: 'too-late' };
   if (!Array.isArray(clearedCells) || !clearedCells.length) return { ok: false, why: 'no-cells' };
   const hit = new Set(clearedCells.map(n => n | 0));
   const covered = verdict.cells.filter(c => hit.has(c));
   if (!covered.length) return { ok: false, why: 'missed' };
-  return { ok: true, keystone: hit.has(verdict.keystone) };
+  const keystone = hit.has(verdict.keystone);
+
+  const usable = (g, at, within) =>
+    Array.isArray(g) && g.length >= SIZE * SIZE && now - (at || 0) <= within ? g : null;
+  const grids = board
+    ? [usable(board.grid, board.at, CUT_GRID_FRESH_MS), usable(board.prev, board.prevAt, CUT_GRID_PREV_MS)]
+      .filter(Boolean)
+    : [];
+  // 同期が無い／古い → 裏づけを取らずに通す（正当なプレイヤーを弾かない）
+  if (!grids.length) return { ok: true, keystone, checked: false };
+  const ok = grids.some(g => covered.some(c => lineFilledEnough(g, c)));
+  if (!ok) return { ok: false, why: 'no-line' };
+  return { ok: true, keystone, checked: true };
 }

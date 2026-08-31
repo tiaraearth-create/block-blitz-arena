@@ -3,6 +3,16 @@
 
 export const SIZE = 8;
 
+// grid のマス値。0=空 / 1..8=通常色 / 9=お邪魔 は既存の規則で、
+// 10・11 はここで足した❄️氷結ブロックの2段耐久。
+//   ICE(10)         … 揃った行・列に1つでもあると、その線は消えずに ICE_CRACKED へ降格する
+//   ICE_CRACKED(11) … 通常のブロックとして消える（＝2回目のライン成立で消滅）
+// 氷を盤に置くのはモード側の責務（e.grid[r * SIZE + c] = ICE）。
+// 氷を1つも置かないモードでは grid に 10/11 が入らないので、
+// resolveLines() の判定は素通りし、従来どおりの挙動になる。
+export const ICE = 10;
+export const ICE_CRACKED = 11;
+
 // mulberry32 — fast deterministic PRNG
 export class Rng {
   constructor(seed) { this.s = seed >>> 0; }
@@ -68,7 +78,7 @@ export function shapeSize(cells) {
 export class Engine {
   constructor(seed = (Math.random() * 2 ** 31) | 0) {
     this.rng = new Rng(seed);
-    this.grid = new Array(SIZE * SIZE).fill(0);   // 0 empty, 1..8 color index
+    this.grid = new Array(SIZE * SIZE).fill(0);   // 0 empty, 1..8 color index, 9 garbage, 10/11 ice
     this.hand = [null, null, null];
     this.score = 0;
     this.streak = 0;          // consecutive clearing placements
@@ -194,17 +204,49 @@ export class Engine {
   // 加点をここに入れないのは、妨害で埋まった行を消した分まで攻撃された側の
   // 得点にすると、攻撃が相手への贈り物になってしまうため。
   resolveLines() {
+    // ❄️ 氷結: 揃った線に ICE(10) が1つでもあると、その線は消えず、
+    // その線の氷が ICE_CRACKED(11) に降格するだけ。11 は普通に消える。
+    // 氷は自分の行と列の両方を止めるので、「消える線」と「凍って止まった線」が
+    // 交差するマスが氷になることはない ── だから降格と消去を同じ回で
+    // まとめて処理しても取り合いにならない。
     const fullRows = [], fullCols = [];
+    const frozenRows = [], frozenCols = [];
+    const crackKeys = new Set();
+    const crackedCells = [];
+
     for (let r = 0; r < SIZE; r++) {
-      let full = true;
-      for (let c = 0; c < SIZE; c++) if (this.grid[r * SIZE + c] === 0) { full = false; break; }
-      if (full) fullRows.push(r);
+      let full = true, ice = false;
+      for (let c = 0; c < SIZE; c++) {
+        const v = this.grid[r * SIZE + c];
+        if (v === 0) { full = false; break; }
+        if (v === ICE) ice = true;
+      }
+      if (!full) continue;
+      if (!ice) { fullRows.push(r); continue; }
+      frozenRows.push(r);
+      for (let c = 0; c < SIZE; c++) {
+        const k = r * SIZE + c;
+        if (this.grid[k] === ICE && !crackKeys.has(k)) { crackKeys.add(k); crackedCells.push([r, c]); }
+      }
     }
     for (let c = 0; c < SIZE; c++) {
-      let full = true;
-      for (let r = 0; r < SIZE; r++) if (this.grid[r * SIZE + c] === 0) { full = false; break; }
-      if (full) fullCols.push(c);
+      let full = true, ice = false;
+      for (let r = 0; r < SIZE; r++) {
+        const v = this.grid[r * SIZE + c];
+        if (v === 0) { full = false; break; }
+        if (v === ICE) ice = true;
+      }
+      if (!full) continue;
+      if (!ice) { fullCols.push(c); continue; }
+      frozenCols.push(c);
+      for (let r = 0; r < SIZE; r++) {
+        const k = r * SIZE + c;
+        if (this.grid[k] === ICE && !crackKeys.has(k)) { crackKeys.add(k); crackedCells.push([r, c]); }
+      }
     }
+    // 行と列の両方を見終わってから書き換える。途中で降格させると、
+    // 行で 11 にした氷を列の判定が「氷なし」と読んで列だけ消えてしまう。
+    for (const k of crackKeys) this.grid[k] = ICE_CRACKED;
 
     const clearedCells = [];
     const seen = new Set();
@@ -218,7 +260,37 @@ export class Engine {
     }
     for (const [r, c] of clearedCells) this.grid[r * SIZE + c] = 0;
 
-    return { fullRows, fullCols, clearedCells, lineCount: fullRows.length + fullCols.length };
+    // fullRows / fullCols / clearedCells / lineCount は「実際に消えた分」だけ。
+    // 凍って消えなかった線は frozen* 側に出す（加点やコンボの扱いはモード側の責務）。
+    return {
+      fullRows, fullCols, clearedCells,
+      lineCount: fullRows.length + fullCols.length,
+      frozenRows, frozenCols,
+      frozenCount: frozenRows.length + frozenCols.length,
+      crackedCells,
+    };
+  }
+
+  // 全列を下詰めして、ブロックを下端へ落とす（🧲 重力圧縮）。
+  // 消去も加点もここではしない ── 呼び出し側が resolveLines() を回して
+  // 通常の消去・加点経路にそのまま乗せられるようにするため。
+  // 戻り値は実際に動いたマス数。0 なら盤面は1マスも変わっていない。
+  compactDown() {
+    let moved = 0;
+    for (let c = 0; c < SIZE; c++) {
+      let write = SIZE - 1;                       // 次にブロックを置く行（下から詰める）
+      for (let r = SIZE - 1; r >= 0; r--) {
+        const v = this.grid[r * SIZE + c];
+        if (v === 0) continue;
+        if (write !== r) {
+          this.grid[write * SIZE + c] = v;
+          this.grid[r * SIZE + c] = 0;
+          moved++;
+        }
+        write--;
+      }
+    }
+    return moved;
   }
 
   // Place hand[index] at (row, col). Returns a result object for rendering/audio,
@@ -236,7 +308,13 @@ export class Engine {
     this.hand[index] = null;
     this.piecesPlaced++;
 
-    const { fullRows, fullCols, clearedCells, lineCount } = this.resolveLines();
+    const {
+      fullRows, fullCols, clearedCells, lineCount,
+      frozenRows, frozenCols, frozenCount, crackedCells,
+    } = this.resolveLines();
+    // 全消し「昇華」: この1手でラインを消し、その結果 盤面が完全に空になった。
+    // 消去直後に見るのがポイント（このあと refillHand() が走っても grid は動かない）。
+    const perfect = lineCount > 0 && this.grid.every(v => v === 0);
     let gained = placedCells.length;               // 1 point per placed cell
     if (lineCount > 0) {
       this.streak++;
@@ -260,6 +338,9 @@ export class Engine {
       placedCells, color: piece.color,
       fullRows, fullCols, clearedCells,
       lineCount, gained, streak: this.streak,
+      perfect,
+      // ❄️ 氷結を使わないモードでは frozenCount は常に 0、配列は常に空。
+      frozenRows, frozenCols, frozenCount, crackedCells,
       over: this.over,
     };
   }
@@ -275,7 +356,11 @@ export class Engine {
     }
     const added = [];
     for (let i = 0; i < n && empties.length > 0; i++) {
-      const k = Math.floor(this.rng.next() * empties.length);
+      // お邪魔マスの選択に共有シードRNG(this.rng)を使うと、攻撃を受けた側だけ
+      // 乱数ストリームが進み、以後の drawPiece() のピース列が相手とズレて
+      // 「同一シードのピース列を両者に配布」という公平化が崩れる。
+      // 妨害配置は盤面公平性に無関係なので Math.random() を使う。
+      const k = Math.floor(Math.random() * empties.length);
       const [r, c] = empties.splice(k, 1)[0];
       this.grid[r * SIZE + c] = 9;
       added.push([r, c]);
@@ -296,6 +381,8 @@ export class Engine {
     this.refillHand();
   }
 
-  // Compact grid snapshot (0..8 per cell) for network relay.
+  // Compact grid snapshot (0..9 通常 / 10・11 は氷結モードのみ) for network relay.
+  // 注意: server/battle.js の sanitizeGrid() は 9 までしか通さないので、
+  // 対戦の相手ミニ盤面に氷を映したいならサーバー側の上限も上げる必要がある。
   snapshot() { return this.grid.slice(); }
 }

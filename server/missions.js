@@ -66,8 +66,12 @@ export const DAILY_POOL = [
   m('d_sprint2',  'sprint',  'sum', 2,    400,  0,  'タイムアタックを2回遊ぶ',        'Play 2 Time Attack runs'),
   m('d_sprint10k','sprintScore', 'max', 10000, 550, 2, 'タイムアタックで10,000点',    'Score 10,000 in Time Attack'),
   m('d_coop1',    'coop',    'sum', 1,    500,  2,  '協力プレイを1回遊ぶ',            'Play 1 co-op run'),
-  m('d_puzzle1',  'puzzle',  'sum', 1,    450,  0,  'パズル遺跡を1ステージクリア',     'Clear 1 Puzzle Ruins stage'),
+  // 🧩パズル遺跡と🛠️パズル工房は同じ契約（固定ピース列・元からあったマスを
+  // 全部消せば勝ち）なので、お題も両方で進む。文面も両方を名指しする。
+  m('d_puzzle1',  'puzzle',  'sum', 1,    450,  0,  'パズル遺跡か工房を1ステージクリア', 'Clear 1 Puzzle Ruins or Workshop stage'),
   m('d_dig12',    'digDepth','max', 12,   500,  2,  '採掘場で深度12に到達',           'Reach depth 12 in the Mines'),
+  m('d_chain2',   'chain',   'sum', 2,    400,  0,  '連鎖カスケードを2回遊ぶ',         'Play 2 Chain Cascade runs'),
+  m('d_blueprint1','blueprint','sum', 1,  500,  2,  '今日の設計図を完成させる',        "Complete today's blueprint"),
 ];
 
 export const WEEKLY_POOL = [
@@ -85,8 +89,10 @@ export const WEEKLY_POOL = [
   m('w_pieces1500','pieces',  'sum', 1500,   2200, 11, 'ブロックを1,500個置く',       'Place 1,500 blocks'),
   m('w_sprint10',  'sprint',  'sum', 10,     2400, 12, 'タイムアタックを10回遊ぶ',     'Play 10 Time Attack runs'),
   m('w_coop5',     'coop',    'sum', 5,      2600, 14, '協力プレイを5回遊ぶ',          'Play 5 co-op runs'),
-  m('w_puzzle5',   'puzzle',  'sum', 5,      2400, 12, 'パズル遺跡を5ステージクリア',   'Clear 5 Puzzle Ruins stages'),
+  m('w_puzzle5',   'puzzle',  'sum', 5,      2400, 12, 'パズル遺跡か工房を5ステージクリア', 'Clear 5 Puzzle Ruins or Workshop stages'),
   m('w_dig35',     'digDepth','max', 35,     2800, 14, '採掘場で深度35に到達',          'Reach depth 35 in the Mines'),
+  m('w_chain8',    'chain',   'sum', 8,      2400, 12, '連鎖カスケードを8回遊ぶ',        'Play 8 Chain Cascade runs'),
+  m('w_workshop5', 'workshop','sum', 5,      2600, 14, '工房のステージを5つクリア',      'Clear 5 Workshop stages'),
 ];
 
 export const DAILY_COUNT = 3;
@@ -132,6 +138,14 @@ export function syncMissions(user, weekNum) {
     ms.day = day;
     ms.daily = buildSet(DAILY_POOL, DAILY_COUNT, `${user.id}:${day}`);
     ms.dailyBonusClaimed = false;
+    // 引き直しの使用回数は「日付キー＝デイリー／週キー＝ウィークリー」で
+    // 別々に持つ（rerollCounts 参照）。日が変わったら日付ぶんだけ捨てる ──
+    // ここで丸ごと空にすると、ウィークリーの回数まで毎日戻ってしまう。
+    if (ms.rerolls && typeof ms.rerolls === 'object') {
+      for (const k of Object.keys(ms.rerolls)) if (k !== ms.week) delete ms.rerolls[k];
+    } else {
+      ms.rerolls = {};
+    }
   }
   if (ms.week !== week) {
     ms.week = week;
@@ -146,8 +160,8 @@ function defOf(id) {
 }
 
 // Contribution of one finished game, per track key.
-function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, items, pieces, stage, depth }) {
-  const isPvp = mode === 'pvp' || mode === 'tournament' || mode === 'royale';
+function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, items, pieces, stage, depth, maxChain }) {
+  const isPvp = mode === 'pvp' || mode === 'tournament' || mode === 'royale' || mode === 'team';
   return {
     games: 1,
     score,
@@ -156,7 +170,7 @@ function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, 
     win: won ? 1 : 0,
     pvpWin: isPvp && won ? 1 : 0,
     aiWin: mode.startsWith('ai') && won ? 1 : 0,
-    bossWin: (mode === 'boss' || mode === 'boss_rush') && won ? 1 : 0,
+    bossWin: (mode === 'boss' || mode === 'boss_rush' || mode === 'raid') && won ? 1 : 0,
     floors,
     wave,
     ults,
@@ -166,8 +180,16 @@ function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, 
     sprint: mode === 'sprint' ? 1 : 0,
     sprintScore: mode === 'sprint' ? score : 0,
     coop: mode === 'coop' ? 1 : 0,
-    puzzle: mode === 'puzzle' && won ? 1 : 0,
+    // 🛠️工房は🧩パズル遺跡と同じ契約のステージなので、同じトラックで数える
+    // （プレイヤーには区別がつかないので、別扱いだとお題が壊れて見える）。
+    puzzle: (mode === 'puzzle' || mode === 'workshop') && won ? 1 : 0,
     digDepth: mode === 'dig' ? (depth || 0) : 0,
+    chain: mode === 'chain' ? 1 : 0,
+    // 最大連鎖は連鎖モードの申告値。ほかのモードの stray な値は混ぜない
+    // （wave / stage / depth と同じ作法）。呼び出し側がまだ渡していない間は 0。
+    maxChain: mode === 'chain' ? (maxChain || 0) : 0,
+    blueprint: mode === 'blueprint' && won ? 1 : 0,
+    workshop: mode === 'workshop' && won ? 1 : 0,
   };
 }
 
@@ -188,6 +210,135 @@ export function trackMissions(user, weekNum, event) {
     }
   }
   return completed;
+}
+
+// --- reroll (お題の引き直し) ----------------------------------------------
+
+// 引き直せる回数と、その n 回目の値段（🪙コイン）。先頭が 0 なので
+// 「1回は無料」。デイリーは1日ごと・ウィークリーは1週ごとに数え直す
+// （＝お題が作り直される区切りに合わせる。rerollCounts 参照）。
+// 実際の引き落としは呼び出し側（routes/missions.js）が行う。
+export const REROLL_COSTS = {
+  daily: [0, 400, 800],
+  weekly: [0, 1500, 3000],
+};
+
+// 💎で払う選択肢。ジェムの出口はバトルパス（500💎/シーズン）と一度きりの
+// 装備しか無く、無課金でも1シーズンに約2,150💎入るので余り続ける ──
+// 「毎シーズン確実に減る」導線をここに1本足す。
+// 相場はおよそ 100🪙 ＝ 1💎 なので、50で割る＝コインの2倍の「便利料金」。
+// 既定は今までどおりコイン。ジェム払いは呼び出し側が明示したときだけ。
+const REROLL_GEM_DIVISOR = 50;
+export function rerollGemCost(coinCost) {
+  const n = Math.max(0, Math.floor(Number(coinCost) || 0));
+  return n > 0 ? Math.max(1, Math.ceil(n / REROLL_GEM_DIVISOR)) : 0;
+}
+
+function rerollScopes() { return ['daily', 'weekly']; }
+
+// ms.rerolls = { '<dayKey>': { daily: n, … }, '<weekKey>': { …, weekly: n } }
+//
+// 数える区切りは「お題が作り直される区切り」に合わせる:
+//   デイリーのお題は日次で作り直される → 日付キーで数える
+//   ウィークリーのお題は週次で作り直される → 週キー（W35）で数える
+// 以前は両方とも日付キーだったので、ウィークリーだけ毎日リセットされ、
+// 1週間で無料7回＋有料14回 ＝ プール全種から一番易しい4つを選び直せた。
+// 当日ぶん・今週ぶん以外は捨てる（古いキーが溜まっても誰も読まない）。
+function rerollCounts(ms) {
+  const day = ms.day;
+  const week = ms.week || 'W?';
+  if (!ms.rerolls || typeof ms.rerolls !== 'object') ms.rerolls = {};
+  for (const k of Object.keys(ms.rerolls)) if (k !== day && k !== week) delete ms.rerolls[k];
+  const bucket = (key) => {
+    let c = ms.rerolls[key];
+    if (!c || typeof c !== 'object') c = ms.rerolls[key] = { daily: 0, weekly: 0 };
+    for (const s of rerollScopes()) {
+      const n = Number(c[s]);
+      c[s] = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    }
+    return c;
+  };
+  const dayBucket = bucket(day);
+  const weekBucket = week === day ? dayBucket : bucket(week);
+  // 呼び出し側は今までどおり counts.daily / counts.weekly を読み書きする。
+  // 置き場所（日キー／週キー）だけがここで切り替わる。
+  return {
+    get daily() { return dayBucket.daily; },
+    set daily(v) { dayBucket.daily = v; },
+    get weekly() { return weekBucket.weekly; },
+    set weekly(v) { weekBucket.weekly = v; },
+  };
+}
+
+// 画面向けの残り回数と次の値段。
+function rerollInfoFrom(ms) {
+  const c = rerollCounts(ms);
+  const out = {};
+  for (const s of rerollScopes()) {
+    const costs = REROLL_COSTS[s];
+    const used = Math.min(c[s], costs.length);
+    out[s] = {
+      used, max: costs.length, left: costs.length - used,
+      cost: used < costs.length ? costs[used] : null,
+      // 💎で払う場合の値段（画面が「🪙で引く／💎で引く」を出せるように）。
+      costGems: used < costs.length ? rerollGemCost(costs[used]) : null,
+      free: used < costs.length && costs[used] === 0,
+    };
+  }
+  return out;
+}
+
+export function rerollInfo(user, weekNum) {
+  return rerollInfoFrom(syncMissions(user, weekNum));
+}
+
+// お題を1件引き直す。通貨は引き落とさず「いくら要るか」を返すだけ
+// （引き落としは routes/missions.js 側）。
+// opts.currency に 'gems' を渡すと💎払い（既定は今までどおり🪙コイン）。
+// 成功: { ok:true, cost, costGems, currency, scope, from, to, missions }
+export function rerollMission(user, weekNum, id, opts = {}) {
+  const ms = syncMissions(user, weekNum);
+  const scope = ms.daily.some(r => r.id === id) ? 'daily'
+    : ms.weekly.some(r => r.id === id) ? 'weekly' : null;
+  if (!scope) return { error: 'ミッションが見つかりません' };
+  const set = scope === 'daily' ? ms.daily : ms.weekly;
+  const idx = set.findIndex(r => r.id === id);
+  const row = set[idx];
+  if (row.claimed) return { error: '受け取り済みのミッションは引き直せません' };
+
+  const counts = rerollCounts(ms);
+  const costs = REROLL_COSTS[scope];
+  const used = counts[scope];
+  if (used >= costs.length) return { error: 'きょうの引き直しは使い切りました' };
+  const cost = costs[used];
+  const currency = (opts && opts.currency) === 'gems' ? 'gems' : 'coins';
+  const costGems = rerollGemCost(cost);
+  // 引き落とすのはルーター側だが、払えないのに差し替えると巻き戻せない。
+  // ここでも残高を見て、足りなければ盤面に触らず断る。
+  if (currency === 'gems') {
+    if (costGems > 0 && (Number(user.gems) || 0) < costGems) {
+      return { error: 'ジェムが足りません' };
+    }
+  } else if (cost > 0 && (Number(user.coins) || 0) < cost) {
+    return { error: `コインが足りません（${cost.toLocaleString('en-US')}必要）` };
+  }
+
+  // 「いま出ていないお題」から抽選する。defOf が引けない孤児行（プールから
+  // 消えた id）もここでは普通に引き直せる ── むしろ掃除できて都合がよい。
+  const pool = scope === 'daily' ? DAILY_POOL : WEEKLY_POOL;
+  const taken = new Set(set.map(r => r.id));
+  const cands = pool.filter(d => !taken.has(d.id));
+  if (!cands.length) return { error: '引き直せるお題がもうありません' };
+
+  // 同じ日に何度引いても同じ物が出ないよう、使用回数と対象行もシードに混ぜる。
+  const next = pickN(cands, 1, hashStr(`${user.id}:${ms.day}:reroll:${scope}:${used}:${id}`))[0];
+  set[idx] = { id: next.id, p: 0, claimed: false };
+  counts[scope] = used + 1;
+
+  return {
+    ok: true, cost, costGems, currency, scope, from: id, to: next.id,
+    missions: missionsView(user, weekNum),
+  };
 }
 
 // Serialisable view for the client.
@@ -214,6 +365,8 @@ export function missionsView(user, weekNum) {
     weeklyBonusClaimed: !!ms.weeklyBonusClaimed,
     dailyBonus: DAILY_ALL_BONUS,
     weeklyBonus: WEEKLY_ALL_BONUS,
+    // 引き直しの残り回数と次の値段（デイリー/ウィークリー別）。
+    rerolls: rerollInfoFrom(ms),
     // Milliseconds until each set regenerates.
     dailyResetIn: msUntilDailyReset(),
   };
@@ -243,7 +396,10 @@ export function claimMissionBonus(user, weekNum, scope) {
   const bonus = daily ? DAILY_ALL_BONUS : WEEKLY_ALL_BONUS;
   const flag = daily ? 'dailyBonusClaimed' : 'weeklyBonusClaimed';
   if (ms[flag]) return { error: 'すでに受け取り済みです' };
-  if (!set.every(r => r.claimed)) return { error: 'まだ全て達成していません' };
+  // プール変更でプールから消えた id（defOf が null）は view から除かれ、
+  // 受け取りもできない孤児行。全達成判定も view と同じ母集合に揃えないと、
+  // 見えない未受取行がコンプリートボーナスを永久に塞ぐ。
+  if (!set.filter(r => defOf(r.id)).every(r => r.claimed)) return { error: 'まだ全て達成していません' };
   ms[flag] = true;
   user.coins += bonus.coins;
   user.gems += bonus.gems;

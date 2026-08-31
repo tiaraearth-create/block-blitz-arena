@@ -24,6 +24,8 @@ export function showScreen(name, { push = true } = {}) {
     if (el) el.classList.toggle('hidden', s !== name);
   }
   document.body.dataset.screen = name;   // used by CSS (e.g. chat drawer on menu only)
+  // 画面を出したあとにタブが描かれるので、次の順番で印を付け直す。
+  setTimeout(() => markCurrent(document), 0);
 
   // メニューはいちばん下。ここに来たら積み上げを畳む ── そうしないと
   // 「メニュー→ショップ→メニュー」で戻り先にメニューが溜まっていき、
@@ -129,8 +131,87 @@ export function toast(message, kind = '', ms = 2600) {
   }, ms);
 }
 
-export function showModal(html, { dismissable = true } = {}) {
-  closeModal();
+// ---------------------------------------------------------------------------
+// 読み上げ・キーボードまわりの下ごしらえ
+//
+// モーダルはこの1関数から生えているので、ここに足せば全部のモーダルに効く。
+// ・role="dialog" / aria-modal / 見出しとの結びつけ
+// ・開いたらフォーカスをモーダルへ、閉じたら開いたボタンへ戻す
+// ・Tab をモーダルの中で巻き戻す（裏のメニューへ抜けない）
+// ・Escape で閉じる（端末の「戻る」と同じ判定を使う ── [data-locked] は閉じない）
+// ---------------------------------------------------------------------------
+const FOCUSABLE_SEL = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+let a11yUid = 0;
+let modalReturnFocus = null;
+
+const isVisible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+const focusablesIn = root => [...root.querySelectorAll(FOCUSABLE_SEL)].filter(isVisible);
+
+// <label> と入力欄が「兄弟に並んでいるだけ」の行を結ぶ。設定モーダルがこの形で、
+// for が無いせいでチェックボックスに読み上げ名が無く、ラベルを押しても
+// トグルしなかった（22px の四角だけが当たり判定だった）。
+// 入力欄が2つ以上ある行は、どれを指すのか決められないので触らない。
+function linkLabels(root) {
+  for (const label of root.querySelectorAll('label:not([for])')) {
+    if (label.querySelector('input, select, textarea')) continue;   // 包んである形は元から結ばれている
+    const row = label.parentElement;
+    if (!row) continue;
+    const fields = row.querySelectorAll('input, select, textarea');
+    if (fields.length !== 1) continue;
+    const f = fields[0];
+    if (!f.id) f.id = `a11yf${++a11yUid}`;
+    label.setAttribute('for', f.id);
+  }
+}
+
+// 選ばれているタブ／セグメントに印を付ける。class="active" は見た目だけの印で、
+// 読み上げにはどれが開いているのか届いていなかった。
+// role="tab" は矢印キーでの移動まで期待されてしまうので、どこにでも置けて
+// 意味が変わらない aria-current を使う。
+function markCurrent(root) {
+  if (!root || !root.querySelectorAll) return;
+  for (const el of root.querySelectorAll('.tab, .seg button')) {
+    if (el.classList.contains('active')) el.setAttribute('aria-current', 'true');
+    else el.removeAttribute('aria-current');
+  }
+}
+
+// タブの切り替えはあちこちに散っているので、押された結果を後から拾う。
+document.addEventListener('click', e => {
+  const el = e.target && e.target.closest ? e.target.closest('.tab, .seg button') : null;
+  if (!el) return;
+  const group = el.closest('.tabs, .seg') || document;
+  setTimeout(() => markCurrent(group), 0);
+});
+
+document.addEventListener('keydown', e => {
+  const root = document.getElementById('modal-root');
+  if (!root || !root.firstChild) return;
+  const backdrop = root.lastElementChild;
+  const modal = backdrop && backdrop.querySelector('.modal');
+  if (!modal) return;
+  if (e.key === 'Escape') {
+    if (e.isComposing) return;                 // 変換中の Escape は入力側のもの
+    if (backdrop.dataset.locked) return;       // 結果画面などは閉じない
+    e.preventDefault();
+    e.stopPropagation();
+    closeModal();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const items = focusablesIn(modal);
+  const cur = document.activeElement;
+  if (!items.length) { e.preventDefault(); modal.focus({ preventScroll: true }); return; }
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (!modal.contains(cur)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
+  if (!e.shiftKey && cur === last) { e.preventDefault(); first.focus(); }
+  else if (e.shiftKey && (cur === first || cur === modal)) { e.preventDefault(); last.focus(); }
+});
+
+export function showModal(html, { dismissable = true, peekable = false } = {}) {
+  const opener = document.activeElement;
+  closeModal({ restoreFocus: false });
   const root = $('#modal-root');
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
@@ -145,11 +226,146 @@ export function showModal(html, { dismissable = true } = {}) {
     });
   }
   root.appendChild(backdrop);
-  return backdrop.querySelector('.modal');
+  const modal = backdrop.querySelector('.modal');
+  if (peekable) attachPeekButton(root, backdrop, modal);
+  if (modal) {
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    const h = modal.querySelector('h2');
+    if (h) {
+      if (!h.id) h.id = `a11yt${++a11yUid}`;
+      modal.setAttribute('aria-labelledby', h.id);
+    }
+    modal.tabIndex = -1;
+    linkLabels(modal);
+    markCurrent(modal);
+    // 入力欄ではなくモーダルそのものへ寄せる ── いきなり文字入力欄に
+    // 移すと、スマホでキーボードが勝手にせり上がってくる。
+    // 呼び出し側が自分で .focus() するモーダルは、そちらが後から上書きする。
+    try { modal.focus({ preventScroll: true }); } catch { /* 非対応環境 */ }
+  }
+  // 閉じたときの戻り先。閉じた直後に消える要素（前のモーダルの中のボタン）は
+  // ここで既に document から外れているので、自然に対象外になる。
+  modalReturnFocus = (opener && opener !== document.body && document.contains(opener)) ? opener : null;
+  return modal;
 }
 
-export function closeModal() {
-  $('#modal-root').innerHTML = '';
+// 結果モーダルの「👁」。押しているあいだだけ #modal-root（とその中の
+// .modal-backdrop）に `.peeking` が付き、モーダルが透けて後ろの盤面
+// ＝どう詰んだのかが見える。見た目は CSS 側（`.peeking` / `.modal-peek-btn`）。
+//
+// 「押している間だけ」なので pointerup を取り逃すと透けたまま固まる。
+// ボタン自身の pointerup/pointercancel だけでなく、ポインタ捕捉と window の
+// 保険、キーボード操作（Space / Enter を押しっぱなし）、フォーカス外れまで
+// すべて解除に繋いである。
+function attachPeekButton(root, backdrop, modal) {
+  if (!modal) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'modal-peek-btn';
+  btn.textContent = '👁';
+  const label = t('押している間だけ盤面を見る', 'Hold to peek at the board');
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+
+  let peeking = false;
+  const end = () => {
+    if (!peeking) return;
+    peeking = false;
+    window.removeEventListener('pointerup', end);
+    window.removeEventListener('pointercancel', end);
+    root.classList.remove('peeking');
+    backdrop.classList.remove('peeking');
+  };
+  const start = e => {
+    // タッチの長押しメニューやスクロールに持っていかれないようにする。
+    if (e && e.cancelable) e.preventDefault();
+    if (e && e.pointerId != null) {
+      try { btn.setPointerCapture(e.pointerId); } catch { /* 非対応環境 */ }
+    }
+    if (peeking) return;
+    peeking = true;
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    root.classList.add('peeking');
+    backdrop.classList.add('peeking');
+  };
+
+  btn.addEventListener('pointerdown', start);
+  btn.addEventListener('pointerup', end);
+  btn.addEventListener('pointercancel', end);
+  btn.addEventListener('lostpointercapture', end);
+  btn.addEventListener('contextmenu', e => e.preventDefault());
+  btn.addEventListener('keydown', e => {
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); start(); }
+  });
+  btn.addEventListener('keyup', e => {
+    if (e.key === ' ' || e.key === 'Enter') end();
+  });
+  btn.addEventListener('blur', end);
+  modal.appendChild(btn);
+}
+
+// ---------------------------------------------------------------------------
+// モーダルの退場アニメ。
+//
+// 開くときは modalIn（バネ）で気持ちよく出るのに、閉じるときだけ一瞬で消えて
+// いた（トーストには .out の退場があるのに、モーダルだけ入退場が非対称）。
+//
+// ただし「本物を残したままフェードさせる」のは危ない ── 消えたことを見張って
+// いる側が何人もいる（録画スタジオの MutationObserver、パーティーの待ち行列、
+// 各画面の $('#…')）。同じ id の要素が180ms だけ2つ並ぶと、閉じて開き直す
+// パターンで新しいモーダルの配線が古いほうに刺さる。
+// なので踊らせるのは「見た目の写し」だけにして、本物はこれまでどおり同じ行で
+// #modal-root ごと消す。写しは id を全部剥がし、当たり判定も持たせない。
+// ---------------------------------------------------------------------------
+function ghostOut(node) {
+  try {
+    if (!node || node.nodeType !== 1 || typeof node.cloneNode !== 'function') return;
+    const ghost = node.cloneNode(true);
+    ghost.removeAttribute('id');
+    for (const el of ghost.querySelectorAll('[id]')) el.removeAttribute('id');
+    // 読み上げにも渡さない（本物はもう無い）。
+    ghost.setAttribute('aria-hidden', 'true');
+    const dst = ghost.querySelector('.modal');
+    if (dst) {
+      dst.removeAttribute('role');
+      dst.removeAttribute('aria-modal');
+      dst.removeAttribute('tabindex');
+    }
+    // 👁 は遅れて出る作りなので、写しでは消しておく（点滅して見える）。
+    const peek = ghost.querySelector('.modal-peek-btn');
+    if (peek) peek.remove();
+    ghost.classList.remove('peeking');   // 覗き見中に閉じても、写しは普通に出す
+    ghost.classList.add('closing');
+    document.body.appendChild(ghost);
+    // スクロールしていた位置を合わせる（写しは先頭に戻っているので飛んで見える）。
+    const src = node.querySelector('.modal');
+    if (src && dst) { try { dst.scrollTop = src.scrollTop; } catch { /* ignore */ } }
+    setTimeout(() => ghost.remove(), 260);
+  } catch { /* 見た目だけの飾り。閉じる動作そのものは絶対に止めない */ }
+}
+
+export function closeModal(opts) {
+  const root = $('#modal-root');
+  if (!root) return;
+  // 覗き見中に閉じた場合の保険（透けたままの印を残さない）。
+  root.classList.remove('peeking');
+  const had = !!root.firstChild;
+  for (const el of [...root.children]) ghostOut(el);
+  root.innerHTML = '';
+  // 開いたボタンへフォーカスを返す。返さないと <body> に落ちて、
+  // 次の Tab がページの先頭（トップバー）からやり直しになる。
+  // 引数はイベントハンドラに直接渡されることがあるので、明示的に
+  // restoreFocus === false のときだけ止める。
+  const target = modalReturnFocus;
+  modalReturnFocus = null;
+  if (!had || (opts && opts.restoreFocus === false)) return;
+  if (!target || !document.contains(target) || typeof target.focus !== 'function') return;
+  // 文字入力欄には返さない（スマホでキーボードがせり上がってくる）。
+  const tag = target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return;
+  try { target.focus({ preventScroll: true }); } catch { /* 非対応環境 */ }
 }
 
 export function countdownOverlay(n, onDone, audio) {
@@ -216,6 +432,9 @@ export function confettiBurst(count = 40) {
     s.style.width = s.style.height = `${6 + Math.random() * 8}px`;
     s.style.animationDuration = `${1.6 + Math.random() * 1.4}s`;
     s.style.animationDelay = `${Math.random() * 0.5}s`;
+    // 落ちながら左右に振れる幅（style.css の confFall が --sway で読む）。
+    // 粒ごとに幅と向きを散らさないと、全部が同じ形で揺れて機械に見える。
+    s.style.setProperty('--sway', `${(Math.random() < 0.5 ? -1 : 1) * (10 + Math.random() * 26)}px`);
     if (Math.random() < 0.4) s.style.borderRadius = '50%';
     root.appendChild(s);
   }
