@@ -8,8 +8,12 @@
 # メモリ上は正常なので、次の再起動で初めて「全部消えた」と分かる。
 # ここで落としておけば、GitHub が失敗をメールで知らせてくれる。
 #
-# 任意の Secrets:
-#   PROD_URL … 本番のURL。未設定なら下の既定値を見る。
+# 必要な Secrets:
+#   PROD_URL … 本番のURL（例 https://<サービス名>.onrender.com）。
+#     以前はサービス名を決め打ちした既定値にフォールバックしていたが、実際の
+#     URL が違うと「存在しないホストを30分おきに叩いて永久に赤い監視」になる。
+#     そうなると誰も見なくなり、本番が本当に死んだ日に気づけない。
+#     未設定なら backup.yml と同じく ::error:: で即止める。
 name: watchdog
 
 on:
@@ -27,8 +31,11 @@ jobs:
           PROD_URL: ${{ secrets.PROD_URL }}
         run: |
           set -e
-          URL="${PROD_URL:-https://block-blitz-arena.onrender.com}"
-          URL="${URL%/}"
+          if [ -z "$PROD_URL" ]; then
+            echo "::error::secrets.PROD_URL が設定されていません（監視先が未設定です）。GitHub の Settings → Secrets and variables → Actions に本番URL（例 https://<サービス名>.onrender.com）を登録してください。"
+            exit 1
+          fi
+          URL="${PROD_URL%/}"
           echo "対象: $URL"
 
           # 無料プランはアクセスが無いと眠る。起こすのに数十秒かかることが

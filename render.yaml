@@ -23,10 +23,17 @@ services:
     name: block-blitz-arena
     runtime: node
     plan: starter
-    buildCommand: npm install
+    # npm ci は package-lock.json のとおりに入れる（npm install は ^ の範囲で
+    # 新しい版を拾うので、CI が一度も試していない依存で本番だけが動きうる）。
+    # CI も Dockerfile も npm ci なので、これで3系統すべてが lock 準拠になる。
+    buildCommand: npm ci --omit=dev
     startCommand: npm start
     healthCheckPath: /api/status
     envVars:
+      # 本番の処理系を CI（.github/workflows/*.yml）と Dockerfile に合わせて固定する。
+      # 未指定だと Render 側の既定が使われ、その既定が上がった日に無言で変わる。
+      - key: NODE_VERSION
+        value: "20"
       - key: SESSION_SECRET
         generateValue: true        # long random string; keeps logins across deploys
       - key: ADMIN_PASSWORD

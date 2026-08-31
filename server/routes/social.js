@@ -188,11 +188,16 @@ function rivalSection(rows, valueOf) {
 
 socialRouter.get('/api/friends/board', requireAuth, (req, res) => {
   migrateUser(req.user);
+  // rivalBoard は challengeOut の期限切れ**だけ**を掃除する（キーを消すのみ）。
+  // 掃除が起きなかった読み取りで毎回 saveDb() すると、盤面を開くたびに
+  // ディスクへ書き込む無駄になる。掃除前後で件数を比べ、減ったとき＝実際に
+  // db を書き換えたときだけ保存する。
+  const before = Object.keys(req.user.challengeOut || {}).length;
   const board = rivalBoard(db, req.user, {
     dayKey: jstDayKey(), weekId: curWeek(), levelOf, statusOf: friendStatus(),
   });
-  // rivalBoard は challengeOut の期限切れを掃除する（＝db を触る）ので書き戻す。
-  saveDb();
+  const after = Object.keys(req.user.challengeOut || {}).length;
+  if (after !== before) saveDb();
   res.json({
     ...board,
     daily: rivalSection(board.rows, r => r.daily || 0),

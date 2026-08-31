@@ -40,6 +40,9 @@ import {
 import {
   healSocial, unfriendAll,
 } from '../friends.js';
+import {
+  archivedTransactions,
+} from './shop.js';
 import { ctx } from '../context.js';
 
 // index.js のモジュールスコープにしか無いもの。値は起動時に一度だけ
@@ -438,6 +441,20 @@ adminRouter.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res)
   leaveGuild(db, target);   // same reason as DELETE /api/me — before the record goes
   unfriendAll(db, target);  // フレンド側も同じ（DELETE /api/me と同じ理由）
   if (battleReady && battle.party) battle.party.ejectUser(target.id);
+  // 🧩 工房の後始末。作者が退会すると db.users から引けなくなるので、
+  // その作者名義（s.by === target.id）のステージはここで消しておく。判定できる
+  // のは target がまだ居るこの瞬間だけ ── workshop.js は削除後の id を db.users
+  // から引けないので、あちら側からは取り残しを掃除できない。
+  // （凍結 banned=true は別。あちらは workshop.js が公開面から隠すだけなので
+  //  ここでは触らず、凍結解除でそのまま戻す。）
+  const ws = db.meta && db.meta.workshop;
+  if (ws && ws.stages && typeof ws.stages === 'object' && !Array.isArray(ws.stages)) {
+    let removed = 0;
+    for (const [code, s] of Object.entries(ws.stages)) {
+      if (s && s.by === target.id) { delete ws.stages[code]; removed++; }
+    }
+    if (removed) console.log(`[workshop] 退会に伴い ${target.username} のステージ ${removed} 件を削除しました`);
+  }
   if (Object.prototype.hasOwnProperty.call(db.users, String(req.params.id))) delete db.users[String(req.params.id)];
   db.deleted[req.params.id] = Date.now();
   saveDb();
@@ -504,12 +521,110 @@ adminRouter.post('/api/admin/leaderboard/reset', requireAuth, requireAdmin, (req
   res.json({ ok: true, affected: count });
 });
 
+// 💾 バックアップと復元は同じ天井を共有しなければならない。
+//
+// /api/admin/restore は本文が RESTORE_LIMIT_MB を超えていたら**読む前に**
+// 413 で落とす。ダンプ側にはその制限が無かったので、db が育つほど
+// 「自分で取ったバックアップを自分で戻せない」状態に静かに入り、しかも
+// それに気づくのは復旧が必要になった当日だった。
+// そこで書き出し側にも同じ天井を持たせ、越えるときだけ「消えても作り直せる／
+// 無くても世界が壊れない」塊から順に落として、必ず戻せるファイルにする。
+//
+// 値は server/index.js の RESTORE_LIMIT_MB と同じ。あちらが ctx に載せたら
+// 自動でそれに追従する（載っていない間は同じ既定値を使う）。
+const BACKUP_LIMIT_MB_DEFAULT = 4;
+function restoreLimitBytes() {
+  const mb = Number(ctx.RESTORE_LIMIT_MB);
+  return (Number.isFinite(mb) && mb > 0 ? mb : BACKUP_LIMIT_MB_DEFAULT) * 1024 * 1024;
+}
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
 // Full database backup download.
-adminRouter.get('/api/admin/backup', requireAuth, requireAdmin, (_req, res) => {
+adminRouter.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   res.setHeader('Content-Disposition', `attachment; filename="block-blitz-backup-${stamp}.json"`);
   // Stamp the dump so the restore dialog can show when it was taken.
-  res.json({ ...db, meta: { ...db.meta, backupAt: Date.now(), backupVersion: BACKUP_VERSION } });
+  // meta は作り直した器なので、ここから消しても live の db.meta は動かない
+  // （入れ子を削るときだけ、その階層も作り直している）。
+  const dump = { ...db, meta: { ...db.meta, backupAt: Date.now(), backupVersion: BACKUP_VERSION } };
+  // 🧾 取引の書庫（transactions-*.jsonl）。TX_KEEP を越えて db.transactions から
+  // 書庫へ移った過去の購入明細は db に無いので、これまでバックアップに一切
+  // 入らず、復元すると古い購入履歴だけが永久に消えていた。ここで新しい順に
+  // 最大2000件を同梱し、復元側(backup.js)がアーカイブへ追記マージする。
+  // 売上の合計金額・件数は db.meta.revenueTotal / revenueCount が別に保持して
+  // いるので、この明細が(下の天井調整で)落ちても金額表示は狂わない。
+  try {
+    const arch = archivedTransactions(2000);
+    if (arch.length) dump.txArchive = arch;
+  } catch (err) {
+    console.error('[backup] 取引の書庫を読めませんでした:', err.message);
+  }
+  const limit = restoreLimitBytes();
+  let body = JSON.stringify(dump);
+  const fullBytes = Buffer.byteLength(body);
+  const dropped = [];
+  const over = () => Buffer.byteLength(body) > limit;
+
+  // 🎞 その日のゴーストリプレイ。今日と昨日ぶんしか持たず2日で自動的に消える
+  // 見せ物で、落ちてもスコア・報酬・ストリークには一切効かない。
+  if (over() && dump.meta.dailyReplays != null) {
+    delete dump.meta.dailyReplays;
+    dropped.push('dailyReplays');
+    body = JSON.stringify(dump);
+  }
+  // 💥 クライアントのJSエラー。障害調査用のログで、世界の状態ではない。
+  if (over() && dump.meta.clientErrors != null) {
+    delete dump.meta.clientErrors;
+    dropped.push('clientErrors');
+    body = JSON.stringify(dump);
+  }
+  // 🧾 取引の書庫（過去の購入明細）。合計金額・件数は db.meta.revenue* が
+  // 別に保持しているので、明細が落ちても売上表示は狂わない。明細はまとまった
+  // 大きさになりうるので、ログ類の次・工房データより先に外す。
+  if (over() && dump.txArchive != null) {
+    delete dump.txArchive;
+    dropped.push('txArchive');
+    body = JSON.stringify(dump);
+  }
+  // ❤️ 工房の「いいね済み」名簿。二重いいねを止めている唯一の記録なので、
+  // 他を削っても足りないときの最後の手段。♡の数は表示用に残す。
+  if (over() && isObj(dump.meta.workshop) && isObj(dump.meta.workshop.stages)) {
+    const stages = {};
+    let n = 0;
+    for (const [code, s] of Object.entries(dump.meta.workshop.stages)) {
+      if (isObj(s) && Array.isArray(s.likedBy) && s.likedBy.length) {
+        const { likedBy, ...rest } = s;
+        stages[code] = { ...rest, likes: Math.max(Number(s.likes) || 0, likedBy.length) };
+        n += likedBy.length;
+      } else stages[code] = s;
+    }
+    if (n) {
+      dump.meta.workshop = { ...dump.meta.workshop, stages };
+      dropped.push('workshop.likedBy');
+      body = JSON.stringify(dump);
+    }
+  }
+
+  if (dropped.length) {
+    // ファイル自身にも「何を落としたか」を残す（復元側は backup.js の
+    // META_NOT_RESTORED で読み捨てるので、db には入らない）。
+    dump.meta.backupTrimmed = { at: Date.now(), dropped, fullBytes, limitBytes: limit };
+    body = JSON.stringify(dump);
+  }
+  const bytes = Buffer.byteLength(body);
+  // 気づける状態にしておく。天井の8割を越えたら（＝削らずに済んでいても）
+  // 運営ログに残す ── ここが唯一の早期警告になる。
+  if (dropped.length || bytes > limit * 0.8 || fullBytes > limit * 0.8) {
+    adminLog(req, 'backup', null, {
+      bytes, fullBytes, limitBytes: limit,
+      dropped: dropped.length ? dropped.join(',') : 'なし',
+      overLimit: bytes > limit,
+    });
+  }
+  res.setHeader('X-Backup-Bytes', String(bytes));
+  res.setHeader('X-Backup-Limit-Bytes', String(limit));
+  if (dropped.length) res.setHeader('X-Backup-Trimmed', dropped.join(','));
+  res.type('application/json').send(body);
 });
 
 // Restore a backup file. Defaults to a merge so players who signed up after a

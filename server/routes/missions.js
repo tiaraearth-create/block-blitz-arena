@@ -51,8 +51,14 @@ export const missionsRouter = express.Router();
 
 missionsRouter.get('/api/missions', requireAuth, (req, res) => {
   migrateUser(req.user);
-  syncMissions(req.user, currentWeekNum());
-  saveDb();
+  // ログイン中のクライアントは全員が120秒ごとにここを叩く。無条件に saveDb()
+  // すると、誰も遊んでいない待機中でも db.json 全体の書き直しが走り続ける。
+  // 実際に書き換わるのは「日／週が変わってお題を作り直したとき」だけなので、
+  // その時だけ保存する（index.js の syncPoll と同じ作法）。
+  const ms0 = req.user.missions || {};
+  const before = `${ms0.day || ''}|${ms0.week || ''}`;
+  const ms = syncMissions(req.user, currentWeekNum());
+  if (`${ms.day || ''}|${ms.week || ''}` !== before) saveDb();
   res.json({
     missions: missionsView(req.user, currentWeekNum()),
     // 🎲 引き直しの残り回数と次の値段。missions.js に rerollMission が
@@ -116,39 +122,53 @@ missionsRouter.post('/api/missions/reroll', requireAuth, maintenanceGuard, (req,
   syncMissions(req.user, weekNum);
   const id = String((req.body || {}).id || '').slice(0, 40);
   if (!id) return res.status(400).json({ error: 'ミッションを選んでください' });
+  // 💎払いは明示したときだけ（既定は今までどおり🪙コイン）。値段はここでも
+  // 決めない ── missions.js が返した costGems しか信じない。
+  const currency = (req.body || {}).currency === 'gems' ? 'gems' : 'coins';
 
   let out;
   try {
-    out = fn(req.user, weekNum, id);
+    out = fn(req.user, weekNum, id, { currency });
   } catch (err) {
     console.error('[missions] rerollMission が失敗:', err && err.message);
     return res.status(500).json({ error: '引き直しに失敗しました' });
   }
   if (!out || out.error) {
     const msg = (out && out.error) || 'このミッションは引き直せません';
-    // 残高不足は 400（画面が「コインが足りない」を出し分けられるように）。
-    return res.status(/コインが足りません/.test(msg) ? 400 : 409).json({ error: msg });
+    // 残高不足は 400（画面が「コイン／ジェムが足りない」を出し分けられるように）。
+    return res.status(/(コイン|ジェム)が足りません/.test(msg) ? 400 : 409).json({ error: msg });
   }
 
   // 💰 引き落としはここでだけ行う。金額はサーバー（missions.js）が決めた値。
+  // 通貨も向こうが確定させた out.currency を見る（クライアントの申告は
+  // 「どちらで払うか」の希望まで。値段は一切見ない）。
   // 管理者は無料（ショップ・ガチャと同じ扱い）。
-  let cost = Math.max(0, Math.floor(Number(out.cost) || 0));
+  const paidWith = out.currency === 'gems' ? 'gems' : 'coins';
+  const listed = paidWith === 'gems' ? out.costGems : out.cost;
+  let cost = Math.max(0, Math.floor(Number(listed) || 0));
   if (req.user.role === 'admin') cost = 0;
   if (cost > 0) {
-    if ((req.user.coins || 0) < cost) {
+    const have = Math.max(0, Number(req.user[paidWith]) || 0);
+    if (have < cost) {
       // ここに来るのは、向こうの残高確認と食い違ったときだけ（本来起きない）。
       // 盤面は書き換わってしまっているので、引き直し自体は成立させ、
       // 取れるぶんだけ取る（マイナス残高は作らない）。
-      console.warn(`[missions] ${req.user.username}: 引き直しの残高が不足（cost=${cost} coins=${req.user.coins}）`);
-      cost = Math.max(0, req.user.coins || 0);
+      console.warn(`[missions] ${req.user.username}: 引き直しの残高が不足（cost=${cost} ${paidWith}=${have}）`);
+      cost = have;
     }
-    req.user.coins -= cost;
+    req.user[paidWith] -= cost;
   }
   saveDb();
   res.json({
     missions: out.missions || missionsView(req.user, weekNum),
     user: publicUser(req.user),
-    reroll: { cost, scope: out.scope || null, from: out.from || id, to: out.to || null, ...rerollViewOf(req.user, weekNum) },
+    reroll: {
+      cost: paidWith === 'coins' ? cost : 0,
+      gems: paidWith === 'gems' ? cost : 0,
+      currency: paidWith,
+      scope: out.scope || null, from: out.from || id, to: out.to || null,
+      ...rerollViewOf(req.user, weekNum),
+    },
   });
 });
 

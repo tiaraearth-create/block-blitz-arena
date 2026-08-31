@@ -282,6 +282,72 @@ function openReport() {
 }
 
 // ---------------------------------------------------------------------------
+// 🚩 工房ステージの通報
+//
+// 上の openReport（パーティー）と同じ形をそのまま工房にも使う。UGCで最初に
+// 要るのは通報の受け口なのに、工房には「/api/bugreport に自分で6文字コードを
+// 書く」しか無く、そこにステージの情報は何も付かなかった。
+//
+// 呼ぶのは工房の画面（screens.js の詳細モーダルの🚩）なので、ここから外へ出す。
+// 送り先は2段構え:
+//   ① 専用の口 POST /api/workshop/stages/:code/report があればそちら
+//      （パーティーと同じく db.bugreports へ kind 付きで積まれる想定）
+//   ② まだ無いサーバー（404）なら、既存の /api/bugreport にコード・タイトル・
+//      作者を書き添えて落とす
+// どちらでも管理画面の🐛モーダルで同じように読める。取りこぼしを作らない。
+export function openStageReport(stage) {
+  const st = stage || {};
+  const code = String(st.code || '');
+  const title = String(st.name || st.title || '');
+  const author = String(st.author || st.byName || '');
+  if (!code) {
+    toast(t('このステージは通報できません', 'This stage cannot be reported'), 'err', 2400);
+    return;
+  }
+  const m = showModal([
+    `<h2>🚩 ${t('ステージを通報', 'Report this stage')}</h2>`,
+    `<p class="center"><b>${esc(title)}</b>${author ? ` <span class="muted">👤 ${esc(author)}</span>` : ''}</p>`,
+    `<p class="muted" style="font-size:12px">${t(
+      `ステージの内容とコード（${code}）が運営に届きます。`,
+      `The stage and its code (${code}) are sent to staff.`)}</p>`,
+    `<textarea id="wrText" maxlength="300" rows="3" placeholder="${t('気になったところ（任意）', 'What is wrong (optional)')}"></textarea>`,
+    '<div class="modal-buttons">',
+    `  <button class="btn btn-ghost" id="wrCancel">${t('やめる', 'Cancel')}</button>`,
+    `  <button class="btn btn-danger" id="wrSend">${t('通報する', 'Report')}</button>`,
+    '</div>',
+  ].join(''));
+  m.querySelector('#wrCancel').onclick = closeModal;
+  const btn = m.querySelector('#wrSend');
+  btn.onclick = async () => {
+    const reason = m.querySelector('#wrText').value.trim();
+    // 二重送信を止める。失敗したときだけ戻す（押せないまま置き去りにしない）。
+    btn.disabled = true;
+    try {
+      await api(`/api/workshop/stages/${encodeURIComponent(code)}/report`, { method: 'POST', body: { reason } });
+    } catch (err) {
+      if (err.status !== 404) { btn.disabled = false; toast(err.message, 'err'); return; }
+      // 専用の口が無い（あるいはステージが既に消えている）ときの退避。
+      // ここで黙って諦めると、通報したつもりの人の一報がどこにも残らない。
+      try {
+        await api('/api/bugreport', {
+          method: 'POST',
+          body: {
+            text: [
+              `[通報/工房] コード ${code}`,
+              `タイトル: ${title || '(無題)'}`,
+              `作者: ${author || '(不明)'}`,
+              reason || '(理由の記入なし)',
+            ].join('\n'),
+          },
+        });
+      } catch (err2) { btn.disabled = false; toast(err2.message, 'err'); return; }
+    }
+    closeModal();
+    toast(t('通報しました。ありがとうございます。', 'Reported — thank you.'), 'ok', 3000);
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 割り込みモーダルの順番待ち
 //
 // showModal は必ず closeModal() から始まる（dom.js）。つまり招待が1通届いた

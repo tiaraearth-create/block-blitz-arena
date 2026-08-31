@@ -156,6 +156,8 @@ const MODE_LABEL = {
   ai: ['AI戦', 'VS AI'], sprint: ['タイムアタック', 'Time Attack'],
   dungeon_abyss: ['深淵ダンジョン', 'The Abyss'],
   team: ['チーム戦', 'Team'], raid: ['レイド', 'Raid'], coop: ['協力プレイ', 'Co-op'],
+  chain: ['連鎖カスケード', 'Chain Cascade'], blueprint: ['ブループリント', 'Blueprint'],
+  workshop: ['パズル工房', 'Puzzle Workshop'],
 };
 const modeLabel = id => (MODE_LABEL[id] ? tr(MODE_LABEL[id][0], MODE_LABEL[id][1]) : id);
 
@@ -482,6 +484,10 @@ export function showSettingsModal() {
         <label>${tr('🔣 色にマークを付ける', '🔣 Show shape marks')}<br><small class="muted" style="font-weight:600">${tr('色が見分けにくいときに、ブロックへ形の記号を重ねます', 'Overlays a shape on each block for easier telling apart')}</small></label>
         <input type="checkbox" id="setColorMarks" ${s.colorMarks ? 'checked' : ''}>
       </div>
+      <div class="settings-row">
+        <label>${tr('✨ 画面フラッシュ', '✨ Screen flash')}<br><small class="muted" style="font-weight:600">${tr('連鎖やボスで画面が白く光る演出を切ります', 'Turns off the full-screen white flash on chains and boss hits')}</small></label>
+        <input type="checkbox" id="setFlash" ${s.flash !== false ? 'checked' : ''}>
+      </div>
       ${session.user ? `
       <div class="settings-row">
         <label>${tr('✏️ 名前を変更', '✏️ Change name')}</label>
@@ -540,6 +546,7 @@ export function showSettingsModal() {
   m.querySelector('#setSfxOn').onchange = e => { updateSettings({ sfxOn: e.target.checked }); audio.click(); };
   m.querySelector('#setMusicOn').onchange = e => updateSettings({ musicOn: e.target.checked });
   m.querySelector('#setShake').onchange = e => updateSettings({ shake: e.target.checked });
+  m.querySelector('#setFlash').onchange = e => updateSettings({ flash: e.target.checked });
   m.querySelector('#setColorMarks').onchange = e => {
     updateSettings({ colorMarks: e.target.checked });
     audio.click();
@@ -1666,6 +1673,14 @@ async function renderInvDex() {
   const slots = sets.reduce((a, s) => a + s.total, 0);
   const rate = slots ? Math.round((got / slots) * 100) : 0;
   const claimable = sets.filter(s => s.done && !s.claimed && hasReward(s)).length;
+  // 図鑑のセット報酬は1日 claimPerDay セットまで（サーバーが再計算・多重受取を止める）。
+  // claimsLeftToday が来ていて、受け取れる件数がそれを上回るときだけ注意書きを添える。
+  const claimPerDay = data && Number.isFinite(data.claimPerDay) ? data.claimPerDay : null;
+  const claimsLeft = data && Number.isFinite(data.claimsLeftToday) ? data.claimsLeftToday : null;
+  const capHint = (claimsLeft !== null && claimable > claimsLeft)
+    ? tr(`きょうは${claimPerDay || claimsLeft}セットまで（残り${claimable - claimsLeft}件は明日）`,
+         `Up to ${claimPerDay || claimsLeft} set${(claimPerDay || claimsLeft) > 1 ? 's' : ''} today (${claimable - claimsLeft} more tomorrow)`)
+    : '';
 
   const cell = (kind, id, owned) => {
     const info = dexEntryInfo(kind, id);
@@ -1689,7 +1704,8 @@ async function renderInvDex() {
     <p class="muted center inv-note">${tr('灰色はまだ持っていない品です。入手できる場所を各マスに書いています',
       'Greyed-out entries are still missing — each one lists where to get it')}</p>
     ${claimable && session.user
-      ? `<button class="btn btn-gold" id="dexClaimAll" style="width:100%;margin-bottom:10px">🎁 ${tr(`受け取れるセット報酬が${claimable}件あります`, `${claimable} set reward${claimable > 1 ? 's' : ''} ready to claim`)}</button>`
+      ? `<button class="btn btn-gold" id="dexClaimAll" style="width:100%;margin-bottom:${capHint ? '4' : '10'}px">🎁 ${tr(`受け取れるセット報酬が${claimable}件あります`, `${claimable} set reward${claimable > 1 ? 's' : ''} ready to claim`)}</button>${
+          capHint ? `<p class="muted center" style="font-size:12px;margin:0 0 10px">🎁 ${escapeHtml(capHint)}</p>` : ''}`
       : ''}
     ${sets.map(s => {
       const pct = Math.round((s.owned / Math.max(1, s.total)) * 100);
@@ -2072,6 +2088,8 @@ function renderMissions() {
   // 「1日1回無料」の既定表示で出し、可否と金額の判定はサーバーに任せる。
   const rr = (data.rerolls && data.rerolls[daily ? 'daily' : 'weekly']) || null;
   const rrCost = rr && Number.isFinite(Number(rr.cost)) ? Number(rr.cost) : 500;
+  // 💎払いの値段（サーバーが costGems を返したときだけ。無料枠では出さない）。
+  const rrCostGems = rr && Number.isFinite(Number(rr.costGems)) ? Number(rr.costGems) : 0;
   const rrFree = rr ? !!rr.free : true;
   const rrLeft = rr && Number.isFinite(Number(rr.left)) ? Number(rr.left) : null;
   const rrOut = rrLeft !== null && rrLeft <= 0;
@@ -2117,7 +2135,10 @@ function renderMissions() {
             : `${rrOut ? '' : `<button class="btn btn-sm btn-ghost" data-reroll="${escapeHtml(String(r.id))}"${r.done ? ' data-reroll-done="1"' : ''} title="${rrFree
                   ? tr('別のミッションに引き直す（本日1回無料）', 'Swap for another mission (free today)')
                   : tr(`別のミッションに引き直す（🪙${fmt(rrCost)}）`, `Swap for another mission (🪙${fmt(rrCost)})`)}"
-                style="padding:4px 8px;line-height:1.1">🔁<small style="display:block;font-size:9px">${rrLabel}</small></button>`}
+                style="padding:4px 8px;line-height:1.1">🔁<small style="display:block;font-size:9px">${rrLabel}</small></button>${
+                !rrFree && rrCostGems > 0
+                  ? `<button class="btn btn-sm btn-ghost" data-reroll-gems="${escapeHtml(String(r.id))}"${r.done ? ' data-reroll-done="1"' : ''} title="${tr(`💎で引き直す（💎${fmt(rrCostGems)}）`, `Reroll with gems (💎${fmt(rrCostGems)})`)}"
+                    style="padding:4px 8px;line-height:1.1">🔁<small style="display:block;font-size:9px">💎${fmt(rrCostGems)}</small></button>` : ''}`}
               <button class="btn btn-sm ${r.done ? 'btn-gold' : 'btn-ghost'}" data-claim="${r.id}" ${r.done ? '' : 'disabled'}>${r.done ? tr('受取', 'Claim') : tr('未達成', 'Locked')}</button>`}
         </div>`;
       }).join('')}
@@ -2136,34 +2157,51 @@ function renderMissions() {
   const rk = body.querySelector('#msRankRewards');
   if (rk) rk.onclick = () => showRankRewardsModal(true);
 
+  // 🔁 引き直し。🪙コイン払い（data-reroll）と💎ジェム払い（data-reroll-gems）で
+  // 入口を分ける。通貨も金額もサーバーが確定させる（クライアントは希望だけ渡す）。
+  const doReroll = async (btn, id, currency) => {
+    // 達成済み（未受取）を引き直すと報酬ごと消える。ここだけは無料でも確認する。
+    if (btn.dataset.rerollDone && !confirm(tr(
+      'このミッションはもう達成しています。引き直すと報酬を受け取れなくなります。よろしいですか？',
+      'This mission is already complete — rerolling forfeits its reward. Continue?'))) return;
+    if (currency === 'gems') {
+      if (rrCostGems > 0 && !confirm(tr(
+        `このミッションを別のものに引き直します。ジェム${fmt(rrCostGems)}を消費します。よろしいですか？`,
+        `Reroll this mission for ${fmt(rrCostGems)} gems?`))) return;
+    } else if (!rrFree && !confirm(tr(
+      `このミッションを別のものに引き直します。コイン${fmt(rrCost)}を消費します。よろしいですか？`,
+      `Reroll this mission for ${fmt(rrCost)} coins?`))) return;
+    btn.disabled = true;
+    try {
+      // 消費と抽選はサーバー側。ここは id と「どちらで払うか」を渡すだけで、金額は申告しない。
+      // 返ってくる user は api() が session に反映するので refreshMe は要らない。
+      const res = await api('/api/missions/reroll', { method: 'POST', body: currency === 'gems' ? { id, currency: 'gems' } : { id } });
+      missionsCache = (res && res.missions) || (await api('/api/missions')).missions;
+      audio.click();
+      updateTopbar();
+      const rw = (res && res.reroll) || {};
+      const paidGems = Number(rw.gems) || 0;
+      const paidCoins = Number(rw.cost) || 0;
+      const cost = rw.currency === 'gems' || paidGems
+        ? (paidGems ? `（-💎${fmt(paidGems)}）` : '')
+        : (paidCoins ? `（-🪙${fmt(paidCoins)}）` : '');
+      const costEn = rw.currency === 'gems' || paidGems
+        ? (paidGems ? ` (-💎${fmt(paidGems)})` : '')
+        : (paidCoins ? ` (-🪙${fmt(paidCoins)})` : '');
+      toast(tr(`🔁 ミッションを引き直しました！${cost}`, `🔁 Mission rerolled!${costEn}`), 'ok');
+      renderMissions();
+      refreshMissionDot();
+    } catch (err) {
+      audio.error();
+      toast(err.message, 'err');
+      btn.disabled = false;
+    }
+  };
   body.querySelectorAll('[data-reroll]').forEach(btn => {
-    btn.onclick = async () => {
-      // 達成済み（未受取）を引き直すと報酬ごと消える。ここだけは無料でも確認する。
-      if (btn.dataset.rerollDone && !confirm(tr(
-        'このミッションはもう達成しています。引き直すと報酬を受け取れなくなります。よろしいですか？',
-        'This mission is already complete — rerolling forfeits its reward. Continue?'))) return;
-      if (!rrFree && !confirm(tr(
-        `このミッションを別のものに引き直します。コイン${fmt(rrCost)}を消費します。よろしいですか？`,
-        `Reroll this mission for ${fmt(rrCost)} coins?`))) return;
-      btn.disabled = true;
-      try {
-        // 消費と抽選はサーバー側。ここは id を渡すだけで、金額は一切申告しない。
-        // 返ってくる user は api() が session に反映するので refreshMe は要らない。
-        const res = await api('/api/missions/reroll', { method: 'POST', body: { id: btn.dataset.reroll } });
-        missionsCache = (res && res.missions) || (await api('/api/missions')).missions;
-        audio.click();
-        updateTopbar();
-        const paid = res && res.reroll ? Number(res.reroll.cost) || 0 : 0;
-        toast(tr(`🔁 ミッションを引き直しました！${paid ? `（-🪙${fmt(paid)}）` : ''}`,
-          `🔁 Mission rerolled!${paid ? ` (-🪙${fmt(paid)})` : ''}`), 'ok');
-        renderMissions();
-        refreshMissionDot();
-      } catch (err) {
-        audio.error();
-        toast(err.message, 'err');
-        btn.disabled = false;
-      }
-    };
+    btn.onclick = () => doReroll(btn, btn.dataset.reroll, 'coins');
+  });
+  body.querySelectorAll('[data-reroll-gems]').forEach(btn => {
+    btn.onclick = () => doReroll(btn, btn.dataset.rerollGems, 'gems');
   });
 
   body.querySelectorAll('[data-claim]:not([disabled])').forEach(btn => {
@@ -2958,16 +2996,29 @@ async function showBugReportsAdminModal() {
   try {
     reports = (await api('/api/admin/bugreports')).reports || [];
   } catch (err) { toast(err.message, 'err'); return; }
-  const row = b => `
+  // 🧩 工房通報の該当ステージコード。専用の口で来たものは b.stage.code に、
+  // フォールバック（/api/bugreport）で来たものは本文頭の「コード XXXXXX」に載る。
+  const wsCodeOf = b => {
+    if (b.kind === 'workshop' && b.stage && b.stage.code) return String(b.stage.code).toUpperCase();
+    const mm = String(b.text || '').match(/\[通報\/工房\][^]*?コード\s*([A-Z0-9]{4,8})/i);
+    return mm ? mm[1].toUpperCase() : '';
+  };
+  const row = b => {
+    const wsCode = wsCodeOf(b);
+    return `
     <div class="feed-row ${b.status === 'done' ? '' : 'real'}" data-bug="${b.id}" style="align-items:flex-start">
-      <span class="feed-icon">${b.status === 'done' ? '✅' : '🐛'}</span>
-      <span class="feed-text" style="white-space:pre-wrap">${escapeHtml(b.text)}
+      <span class="feed-icon">${b.status === 'done' ? '✅' : b.kind === 'workshop' || wsCode ? '🚩' : '🐛'}</span>
+      <span class="feed-text" style="white-space:pre-wrap">${escapeHtml(b.text)}${
+        b.kind === 'workshop' && b.stage ? `
+        <small class="muted" style="display:block;margin-top:2px">🧩 ${escapeHtml(b.stage.title || '(無題)')} ・ 👤 ${escapeHtml(b.stage.author || '(不明)')} ・ コード ${escapeHtml(String(b.stage.code || wsCode))}</small>` : ''}
         <small class="muted" style="display:block;margin-top:2px">${escapeHtml(b.by)}${b.role === 'guest' ? '（ゲスト）' : ''} ・ ${new Date(b.at).toLocaleString('ja-JP')}</small></span>
       <span style="display:flex;flex-direction:column;gap:4px">
         ${b.status === 'done' ? '' : `<button class="btn btn-sm btn-ghost" data-done="${b.id}">✅</button>`}
+        ${wsCode ? `<button class="btn btn-sm btn-ghost" data-wsdel="${escapeHtml(wsCode)}" style="color:var(--red)" title="該当ステージを削除">🗑ステージ</button>` : ''}
         <button class="btn btn-sm btn-ghost" data-del="${b.id}" style="color:var(--red)">🗑</button>
       </span>
     </div>`;
+  };
   const open = reports.filter(b => b.status !== 'done').length;
   const m = showModal(`
     <h2>🐛 バグ報告（未処理 ${open} / 全 ${reports.length}）</h2>
@@ -2986,6 +3037,22 @@ async function showBugReportsAdminModal() {
     b.onclick = async () => {
       try { await api(`/api/admin/bugreports/${b.dataset.del}`, { method: 'DELETE' }); closeModal(); showBugReportsAdminModal(); }
       catch (err) { toast(err.message, 'err'); }
+    };
+  });
+  // 🚩工房通報 → 該当ステージをこの画面から直接削除（通報→削除を1画面で完結）。
+  m.querySelectorAll('[data-wsdel]').forEach(b => {
+    b.onclick = async () => {
+      const code = b.dataset.wsdel;
+      if (!confirm(`工房ステージ ${code} を削除しますか？（元に戻せません）`)) return;
+      b.disabled = true;
+      try {
+        await api(`/api/workshop/stages/${encodeURIComponent(code)}`, { method: 'DELETE' });
+        toast(`ステージ ${code} を削除しました`, 'ok');
+      } catch (err) {
+        // 既に消えている（404）なら「消えている」で足り、通報は処理済みにできる。
+        toast(err.status === 404 ? `ステージ ${code} は既にありません` : err.message, err.status === 404 ? 'ok' : 'err');
+        if (err.status !== 404) { b.disabled = false; return; }
+      }
     };
   });
 }
@@ -3331,6 +3398,11 @@ export function bindAdminActions() {
         headers: { Authorization: `Bearer ${session.token}` },
       });
       if (!res.ok) throw new Error('バックアップに失敗しました');
+      // 天井（restoreLimitBytes）に対する重さをヘッダから読む。削られたら必ず知らせ、
+      // 削らずに済んでも8割を越えていたら警告する ── ここが唯一の早期警告になる。
+      const trimmed = res.headers.get('X-Backup-Trimmed');
+      const bytes = Number(res.headers.get('X-Backup-Bytes')) || 0;
+      const limit = Number(res.headers.get('X-Backup-Limit-Bytes')) || 0;
       const blob = await res.blob();
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -3338,6 +3410,13 @@ export function bindAdminActions() {
       a.click();
       URL.revokeObjectURL(a.href);
       toast('💾 バックアップをダウンロードしました', 'ok');
+      if (trimmed) {
+        toast(tr(`🎞 サイズ上限のため一部（${trimmed}）を省いて保存しました`,
+          `🎞 Some data (${trimmed}) was left out to fit the size limit`), 'err', 5000);
+      } else if (limit > 0 && bytes > limit * 0.8) {
+        toast(tr(`⚠️ バックアップが上限の${Math.round((bytes / limit) * 100)}%に達しています`,
+          `⚠️ Backup is at ${Math.round((bytes / limit) * 100)}% of the size limit`), 'err', 5000);
+      }
     } catch (err) { toast(err.message, 'err'); }
   };
 
@@ -4368,6 +4447,38 @@ function renderMyGuild() {
   }
   const me = session.user.id;
   const isOwner = g.ownerId === me;
+  // 🗡️ 週間クエスト＋金庫（メンバー一覧の上）。データは追加取得不要で
+  // guildData.mine.quests（guildQuestView）に載っている。報酬額・受取可否は
+  // すべてサーバーが返した値だけを出す（クライアントは申告しない）。
+  const q = g.quests;
+  const questsHtml = q && Array.isArray(q.quests) && q.quests.length ? `
+    <div class="ms-head" style="margin-top:4px">
+      <div>
+        <b>${tr('🗡️ 週間クエスト', '🗡️ Weekly quests')}</b>
+        <div class="muted" style="font-size:12px">${tr(`達成 ${q.doneCount} / ${q.total}`, `Done ${q.doneCount} / ${q.total}`)}${
+          q.badgeEarned ? tr(' ・ 🎖️ ギルドの誉れ 獲得済み', ' ・ 🎖️ Guild Honors earned') : ''}<br>${
+          tr('達成したクエストの金庫は、メンバーが1人1回ずつ開けられます', 'Each completed quest is a vault every member can open once')}</div>
+      </div>
+    </div>
+    <div class="ms-list">
+      ${q.quests.map(quest => {
+        const pct = Math.min(100, Math.round((quest.progress / Math.max(1, quest.goal)) * 100));
+        return `
+        <div class="ms-row ${quest.claimed ? 'claimed' : quest.done ? 'done' : ''}">
+          <div class="ms-info">
+            <div class="ms-name">${escapeHtml(tr(quest.name, quest.nameEn))}</div>
+            <div class="ms-bar"><div style="width:${pct}%"></div></div>
+            <div class="ms-prog">${fmt(quest.progress)} / ${fmt(quest.goal)}</div>
+          </div>
+          ${rewardChip(quest.coins, quest.gems)}
+          ${quest.claimed
+            ? '<span class="ms-check">✓</span>'
+            : quest.done
+              ? `<button class="btn btn-sm btn-gold" data-gquest="${escapeHtml(String(quest.id))}">${tr('受取', 'Claim')}</button>`
+              : `<button class="btn btn-sm btn-ghost" disabled>${tr('未達成', 'Locked')}</button>`}
+        </div>`;
+      }).join('')}
+    </div>` : '';
   body.innerHTML = `
     <div class="guild-hero">
       <div class="guild-hero-icon">${escapeHtml(g.icon)}</div>
@@ -4380,6 +4491,8 @@ function renderMyGuild() {
       </div>
     </div>
     ${isOwner ? `<div class="settings-row" style="justify-content:center"><label>${tr('🔑 招待コード', '🔑 Invite code')}</label><b style="font-size:18px;letter-spacing:.12em">${escapeHtml(g.code || '')}</b><span class="muted" style="font-size:11px">${tr('（フレンドに教えると参加できます）', '(share it with friends)')}</span></div>` : ''}
+    ${questsHtml}
+    <div class="ms-head" style="margin-top:4px"><div><b>${tr('👥 メンバー', '👥 Members')}</b></div></div>
     <div class="ms-list">
       ${g.members.map(mb => `
         <div class="ms-row">
@@ -4397,6 +4510,27 @@ function renderMyGuild() {
       if (!confirm(tr('このメンバーを除名しますか？', 'Kick this member?'))) return;
       try { await api('/api/guild/kick', { method: 'POST', body: { userId: b.dataset.kick } }); toast(tr('除名しました', 'Member kicked'), 'ok'); openGuild('mine'); }
       catch (err) { toast(err.message, 'err'); }
+    };
+  });
+  // 🗡️ 週間クエストの金庫を開ける（q.done && !q.claimed のときだけボタンが出る）。
+  // 通貨はサーバー確定。応答の user で session を更新し、kick/settings と同じく
+  // openGuild('mine') で描き直す。二重受取はサーバーの claimed 名簿が止める。
+  body.querySelectorAll('[data-gquest]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const res = await api('/api/guild/quest/claim', { method: 'POST', body: { questId: b.dataset.gquest } });
+        if (res && res.user) { session.user = res.user; updateTopbar(); }
+        const rw = (res && res.reward) || {};
+        audio.coin(); confettiBurst(30);
+        const parts = [];
+        if (rw.coins) parts.push(`🪙${fmt(rw.coins)}`);
+        if (rw.gems) parts.push(`💎${fmt(rw.gems)}`);
+        toast(tr(`🎁 クエスト報酬を受け取りました！${parts.length ? ` ${parts.join(' ')}` : ''}`,
+          `🎁 Quest reward claimed!${parts.length ? ` ${parts.join(' ')}` : ''}`), 'ok', 3000);
+        if (rw.badge) toast(tr('🎖️ 「ギルドの誉れ」を獲得しました！', '🎖️ You earned Guild Honors!'), 'ok', 3500);
+        openGuild('mine');
+      } catch (err) { audio.error(); toast(err.message, 'err'); b.disabled = false; }
     };
   });
   const st = body.querySelector('#gdSettings');
@@ -4620,11 +4754,14 @@ function showNewsPostModal() {
 // を呼ぶだけにしてある（未実装なら「準備中」のトーストで止まる）。
 // ---------------------------------------------------------------------------
 
-const WS_SORTS = ['popular', 'new'];
+const WS_SORTS = ['popular', 'new', 'mine'];
+const WS_PAGE = 40;                          // 1ページの取得件数（サーバーの limit）
 const WS_LIKED_KEY = 'bba_workshop_liked';   // いいね済みコード（サーバーが liked を返さない場合の控え）
 
 let wsSort = 'popular';
 let wsStages = [];
+let wsMore = false;                          // まだ続きがある（応答の more）
+let wsMatched = 0;                           // この並び順で見えている総数（応答の matched）
 let wsGen = 0;
 
 function wsLikedCodes() {
@@ -4685,6 +4822,8 @@ function normalizeWorkshopStage(s, fallbackCode = '') {
     author: author || tr('名無しの職人', 'Anonymous'),
     likes, plays, pieceCount,
     liked: likedRaw === undefined ? wsLikedCodes().includes(code) : !!likedRaw,
+    // 自分の作品か（サーバーの workshopView が mine を返す）。🗑削除ボタンの出し分けに使う。
+    mine: !!(s.mine ?? s.isMine ?? (inner && inner.mine)),
     grid: wsNormalizeGrid(s.grid ?? s.cells ?? s.board ?? inner.grid ?? inner.cells ?? null),
     at: Number(s.at ?? s.createdAt ?? s.postedAt ?? 0) || 0,
     raw: s,
@@ -4753,6 +4892,8 @@ function wsEmptyHtml() {
 export async function openWorkshop(sort = wsSort) {
   audio.click();
   wsSort = WS_SORTS.includes(sort) ? sort : 'popular';
+  // 「自分の作品」はログイン中だけ。ログアウト状態で残っていたら人気に戻す。
+  if (wsSort === 'mine' && !session.user) wsSort = 'popular';
   const m = showModal(`
     <h2>🧩 ${tr('パズル工房', 'Puzzle Workshop')}</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:8px">${tr('みんなが作ったステージで遊ぼう。気に入ったら❤️を送ろう',
@@ -4765,11 +4906,16 @@ export async function openWorkshop(sort = wsSort) {
     <div class="tabs" id="wsTabs" style="justify-content:center;flex-wrap:wrap">
       <button class="tab ${wsSort === 'popular' ? 'active' : ''}" data-ws="popular">🔥 ${tr('人気', 'Popular')}</button>
       <button class="tab ${wsSort === 'new' ? 'active' : ''}" data-ws="new">🆕 ${tr('新着', 'Newest')}</button>
+      ${session.user ? `<button class="tab ${wsSort === 'mine' ? 'active' : ''}" data-ws="mine">🛠️ ${tr('自分の作品', 'My stages')}</button>` : ''}
     </div>
+    ${session.user && session.user.role === 'admin'
+      ? `<div class="settings-row" style="justify-content:center"><button class="btn btn-sm btn-ghost" id="wsAdmin">🛡️ ${tr('全ステージを管理', 'Manage all stages')}</button></div>` : ''}
     <div id="wsBody" class="ms-list" style="max-height:50vh;overflow-y:auto"><p class="muted center">${tr('読み込み中…', 'Loading…')}</p></div>
     <div class="modal-buttons"><button class="btn btn-primary" id="wsClose">${tr('閉じる', 'Close')}</button></div>`);
   m.querySelector('#wsClose').onclick = closeModal;
   m.querySelector('#wsNew').onclick = () => wsOpenEditor();
+  const adminBtn = m.querySelector('#wsAdmin');
+  if (adminBtn) adminBtn.onclick = () => showWorkshopAdminModal();
   const codeInput = m.querySelector('#wsCode');
   const go = () => openWorkshopByCode(codeInput.value);
   m.querySelector('#wsGo').onclick = go;
@@ -4794,9 +4940,27 @@ async function loadWorkshopList(m) {
   body.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
   let data = null;
   // API がまだ無くても「まだありません」で止める（画面は壊さない）。
-  try { data = await api(`/api/workshop/stages?sort=${encodeURIComponent(wsSort)}&limit=40`); } catch { data = null; }
+  try { data = await api(`/api/workshop/stages?sort=${encodeURIComponent(wsSort)}&limit=${WS_PAGE}&offset=0`); } catch { data = null; }
   if (gen !== wsGen || !m.isConnected) return;
   wsStages = normalizeWorkshopList(data);
+  wsMore = !!(data && data.more);
+  wsMatched = Number(data && data.matched) || wsStages.length;
+  renderWorkshopList(m);
+}
+
+// もっと見る（次ページ）。今の並び順のまま offset を進めて追加取得し、
+// 既存の一覧に重複を除いて足す。世代（wsGen）が変わっていたら捨てる。
+async function loadMoreWorkshop(m, btn) {
+  const gen = wsGen;
+  if (btn) { btn.disabled = true; btn.textContent = tr('読み込み中…', 'Loading…'); }
+  let data = null;
+  try { data = await api(`/api/workshop/stages?sort=${encodeURIComponent(wsSort)}&limit=${WS_PAGE}&offset=${wsStages.length}`); } catch { data = null; }
+  if (gen !== wsGen || !m.isConnected) return;
+  const next = normalizeWorkshopList(data);
+  const seen = new Set(wsStages.map(s => s.code));
+  for (const s of next) if (!seen.has(s.code)) { seen.add(s.code); wsStages.push(s); }
+  wsMore = !!(data && data.more) && next.length > 0;
+  wsMatched = Number(data && data.matched) || wsMatched;
   renderWorkshopList(m);
 }
 
@@ -4804,13 +4968,24 @@ function renderWorkshopList(m) {
   const body = m.querySelector('#wsBody');
   if (!body) return;
   if (!wsStages.length) {
-    body.innerHTML = wsEmptyHtml();
+    // 「自分の作品」タブが空のときは、初回作成ではなく専用の空表示にする。
+    if (wsSort === 'mine') {
+      body.innerHTML = `<div class="ms-empty">
+          <p>${tr('まだ自分のステージがありません', 'You have not published any stages yet')}</p>
+          <button class="btn btn-gold" id="wsMakeFirst">🛠️ ${tr('作ってみる', 'Build one')}</button>
+        </div>`;
+    } else {
+      body.innerHTML = wsEmptyHtml();
+    }
     const b = body.querySelector('#wsMakeFirst');
     if (b) b.onclick = () => wsOpenEditor();
     return;
   }
-  body.innerHTML = wsStages.map(wsCardHtml).join('');
+  body.innerHTML = wsStages.map(wsCardHtml).join('')
+    + (wsMore ? `<button class="btn btn-ghost" id="wsMore" style="width:100%;margin-top:8px">⬇️ ${tr('もっと見る', 'Show more')}${wsMatched ? tr(`（${wsStages.length} / ${wsMatched}）`, ` (${wsStages.length} / ${wsMatched})`) : ''}</button>` : '');
   bindWorkshopCards(body);
+  const more = body.querySelector('#wsMore');
+  if (more) more.onclick = () => loadMoreWorkshop(m, more);
 }
 
 // カード内のボタン。プレビュー／名前の側を押したら詳細モーダルへ。
@@ -4869,6 +5044,9 @@ function showWorkshopStageModal(st) {
     <div class="settings-row" style="justify-content:center;gap:8px;flex-wrap:wrap">
       <button class="btn btn-sm btn-ghost" id="wsCopy">📋 ${tr('コードをコピー', 'Copy code')}</button>
       <button class="btn btn-sm btn-ghost" id="wsLike1">${wsLikeLabel(st)}</button>
+      <button class="btn btn-sm btn-ghost" id="wsReport1">🚩 ${tr('通報', 'Report')}</button>
+      ${(st.mine || (session.user && session.user.role === 'admin'))
+        ? `<button class="btn btn-sm btn-ghost" id="wsDelete1" style="color:var(--red)">🗑 ${tr('削除', 'Delete')}</button>` : ''}
     </div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="wsBack">← ${tr('一覧へ', 'Back')}</button>
@@ -4877,6 +5055,14 @@ function showWorkshopStageModal(st) {
   m.querySelector('#wsBack').onclick = () => openWorkshop();
   m.querySelector('#wsPlay1').onclick = () => playWorkshopStage(st);
   m.querySelector('#wsLike1').onclick = e => likeWorkshopStage(st.code, e.currentTarget, st);
+  // 🚩 通報。導線は party.js の openStageReport をそのまま使う（st は code/name/author を持つ）。
+  m.querySelector('#wsReport1').onclick = () => {
+    import('./party.js').then(p => p.openStageReport(st)).catch(() => {
+      toast(tr('通報画面を開けませんでした', 'Could not open the report dialog'), 'err');
+    });
+  };
+  const delBtn = m.querySelector('#wsDelete1');
+  if (delBtn) delBtn.onclick = () => deleteWorkshopStage(st, delBtn);
   m.querySelector('#wsCopy').onclick = async () => {
     // 非セキュアな LAN(http) には navigator.clipboard が無い。party.js と同じ退避。
     let ok = false;
@@ -4892,6 +5078,99 @@ function showWorkshopStageModal(st) {
              : tr(`コピーできませんでした（コード: ${st.code}）`, `Could not copy (code: ${st.code})`),
       ok ? 'ok' : 'err', ok ? 1500 : 3000);
   };
+}
+
+// 🗑 削除。作者本人か管理者だけ（サーバーが最終判定する）。消したら一覧へ戻る。
+async function deleteWorkshopStage(st, btn) {
+  const code = String((st && st.code) || '').toUpperCase();
+  if (!code) return;
+  const mine = !!(st && st.mine);
+  if (!confirm(mine
+    ? tr('この自作ステージを削除しますか？（元に戻せません）', 'Delete this stage of yours? This cannot be undone.')
+    : tr(`このステージ（${code}）を削除しますか？（管理者操作・元に戻せません）`, `Delete this stage (${code})? (admin action, cannot be undone)`))) return;
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/workshop/stages/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    audio.click();
+    toast(tr('ステージを削除しました', 'Stage deleted'), 'ok');
+    closeModal();
+    openWorkshop();
+  } catch (err) {
+    audio.error();
+    toast(err.message, 'err');
+    if (btn) btn.disabled = false;
+  }
+}
+
+// 🛡️ 管理者用の全ステージ棚卸し。公開一覧はページ送りが要るので、通報を受けて
+// 「今どんなものが公開されているか」を丸ごと（新着順で）見る口。各行に🗑。
+// 盤面も解答も返ってこない（消すのに要るのはコードと見出しだけ）。
+let wsAdminGen = 0;
+async function showWorkshopAdminModal(q = '') {
+  const m = showModal(`
+    <h2>🛡️ ${tr('工房ステージ管理', 'Workshop stages')}</h2>
+    <div class="settings-row" style="justify-content:center;gap:6px">
+      <input id="waQ" type="text" maxlength="40" placeholder="${tr('コード・題名・作者で検索', 'Search code / title / author')}" value="${escapeHtml(q)}" style="width:200px">
+      <button class="btn btn-sm btn-primary" id="waSearch">🔍 ${tr('検索', 'Search')}</button>
+    </div>
+    <div id="waBody" class="feed-list" style="max-height:52vh"><p class="muted center">${tr('読み込み中…', 'Loading…')}</p></div>
+    <div class="modal-buttons"><button class="btn btn-primary" id="waClose">${tr('閉じる', 'Close')}</button></div>`);
+  m.querySelector('#waClose').onclick = closeModal;
+  const qInput = m.querySelector('#waQ');
+  const run = () => loadWorkshopAdmin(m, qInput.value.trim());
+  m.querySelector('#waSearch').onclick = run;
+  qInput.onkeydown = e => { if (e.key === 'Enter') run(); };
+  await loadWorkshopAdmin(m, q);
+  return m;
+}
+
+async function loadWorkshopAdmin(m, q = '') {
+  const gen = ++wsAdminGen;
+  const body = m.querySelector('#waBody');
+  if (!body) return;
+  body.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
+  let data = null;
+  try { data = await api(`/api/admin/workshop/stages${q ? `?q=${encodeURIComponent(q)}` : ''}`); } catch (err) {
+    if (gen !== wsAdminGen || !m.isConnected) return;
+    body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  if (gen !== wsAdminGen || !m.isConnected) return;
+  const rows = (data && Array.isArray(data.stages)) ? data.stages : [];
+  if (!rows.length) {
+    body.innerHTML = `<p class="muted center">${q ? tr('該当するステージがありません', 'No stages match') : tr('公開ステージはありません', 'No published stages')}</p>`;
+    return;
+  }
+  const flag = r => [
+    r.banned ? tr('🚫凍結中', '🚫 banned') : '',
+    r.orphan ? tr('👻作者退会', '👻 no author') : '',
+    r.seed ? tr('🌱初期', '🌱 seed') : '',
+  ].filter(Boolean).join(' ・ ');
+  body.innerHTML = `<p class="muted center" style="font-size:12px;margin-bottom:6px">${tr(`全 ${fmt(data.total || rows.length)} 件`, `${fmt(data.total || rows.length)} total`)}</p>`
+    + rows.map(r => `
+    <div class="feed-row real" style="align-items:flex-start" data-wa-row="${escapeHtml(r.code)}">
+      <span class="feed-text" style="white-space:normal;min-width:0;word-break:break-word">
+        <b>${escapeHtml(LANG === 'en' && r.titleEn ? r.titleEn : (r.title || tr('（無題）', '(untitled)')))}</b>
+        <small class="muted" style="display:block;margin-top:2px">👤 ${escapeHtml(r.author || tr('（不明）', '(unknown)'))} ・ <b style="letter-spacing:.1em">${escapeHtml(r.code)}</b> ・ ❤️${fmt(r.likes || 0)} ・ ▶${fmt(r.plays || 0)}</small>
+        ${flag(r) ? `<small class="muted" style="display:block">${flag(r)}</small>` : ''}</span>
+      <span style="display:flex;flex-direction:column;gap:4px">
+        <button class="btn btn-sm btn-ghost" data-wa-del="${escapeHtml(r.code)}" style="color:var(--red)" title="${tr('このステージを削除', 'Delete this stage')}">🗑</button>
+      </span>
+    </div>`).join('');
+  body.querySelectorAll('[data-wa-del]').forEach(b => {
+    b.onclick = async () => {
+      const code = b.dataset.waDel;
+      if (!confirm(tr(`ステージ ${code} を削除しますか？（元に戻せません）`, `Delete stage ${code}? This cannot be undone.`))) return;
+      b.disabled = true;
+      try {
+        await api(`/api/workshop/stages/${encodeURIComponent(code)}`, { method: 'DELETE' });
+        audio.click();
+        const rowEl = b.closest('[data-wa-row]');
+        if (rowEl) rowEl.remove();
+        toast(tr('ステージを削除しました', 'Stage deleted'), 'ok');
+      } catch (err) { audio.error(); toast(err.message, 'err'); b.disabled = false; }
+    };
+  });
 }
 
 // ❤️ いいね（1人1回）。サーバーが likes/liked を返せばそれを、返さなければ

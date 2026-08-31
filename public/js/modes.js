@@ -23,6 +23,26 @@ const MATCH_SECONDS = 120;
 let view = null;
 let currentMode = null;
 
+// ---------------------------------------------------------------------------
+// 開始入口のレース避け
+//
+// 通信を await している間もメニューは押せる。回線が遅いときに
+// 「🏗を押す → 待ちきれず⛓️を押す」と、先に始まった⛓️を後から届いた🏗が
+// 黙って destroy して奪ってしまう。await をまたぐ入口は
+//   const tk = beginModeStart();  ...await...  if (modeStartStale(tk)) return;
+// を通し、待っている間に別のモードが始まっていたら何もせず降りる。
+// （各モードの finish() にある `if (currentMode !== this) return;` と同じ考え方）
+// ---------------------------------------------------------------------------
+let modeStartGen = 0;
+function beginModeStart() {
+  modeStartGen++;
+  return { gen: modeStartGen, prev: currentMode };
+}
+function modeStartStale(tk) {
+  // 別の入口があとから走った／待っている間に currentMode が入れ替わった
+  return !tk || tk.gen !== modeStartGen || currentMode !== tk.prev;
+}
+
 // NOTE: this is a mutating accessor — every call re-applies a theme and
 // re-measures the canvas. That is deliberate (it keeps the board in sync with
 // a shop purchase or a rotation), but it used to slam the player's OWN theme
@@ -5323,7 +5343,8 @@ class OnlineMode extends VersusBase {
       'That move did not go through — the board has been resynced'), 'err', 2400);
   }
 
-  // 領土を盤面の上に色で重ねる。自分＝青、相手＝赤。
+  // 領土を盤面の上に重ねる。自分＝--land-p1 の実線＋●、相手＝--land-p2 の破線＋✕
+  // （色の見分けがつきにくい人にも持ち主が読めるよう、形でも分けている）。
   paintLand(owner) {
     if (!this.landOverlay) return;
     const marks = new Map();
@@ -7928,7 +7949,7 @@ class ChainMode {
       }
     } catch { /* 保存できなくても結果表示は続ける */ }
     const rewards = await submitResult({
-      mode: 'chain', score: e.score, lines: e.linesCleared,
+      mode: 'chain', score: e.score, lines: e.linesCleared, maxChain: this.maxChain,
       maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
     });
     // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
@@ -8113,6 +8134,35 @@ export async function fetchBlueprint() {
 // 小さな div を並べて重ねる。pointer-events:none なのでドラッグは素通りする。
 // ---------------------------------------------------------------------------
 
+// 🚩 陣取りの陣営色は style.css の --land-p1 / --land-p2 が正 ──
+// 帯・数字と盤面のオーバーレイがバラバラの色にならないよう、ここから読む。
+// テーマ切替でトークンが変わることもあるので、値は set() のたびに取り直す。
+const LAND_FALLBACK_ME = '#5b8bff';
+const LAND_FALLBACK_FOE = '#ff6bd4';
+let landTone = { me: LAND_FALLBACK_ME, foe: LAND_FALLBACK_FOE };
+
+function readCssColor(name, fallback) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) ? v : fallback;
+  } catch { return fallback; }
+}
+
+function hexRgba(hex, a) {
+  let h = String(hex).replace('#', '');
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const n = parseInt(h, 16);
+  if (!Number.isFinite(n)) return `rgba(255,255,255,${a})`;
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+function refreshLandTone() {
+  landTone = {
+    me: readCssColor('--land-p1', LAND_FALLBACK_ME),
+    foe: readCssColor('--land-p2', LAND_FALLBACK_FOE),
+  };
+}
+
 class CellOverlay {
   constructor() {
     const root = document.createElement('div');
@@ -8125,16 +8175,31 @@ class CellOverlay {
     this.int = setInterval(() => this.sync(), 200);
   }
 
+  // 🚩 領土は色だけで分けない ── 自分＝実線＋●／相手＝破線＋✕ と
+  // 形でも違えて、色の見分けがつきにくい人にも持ち主が読めるようにする。
+  static mark(kind) {
+    if (kind === 'own_me') return '●';
+    if (kind === 'own_foe') return '✕';
+    return '';
+  }
+
   static style(kind) {
     // 🏗️ 設計図: これから埋めるマス／はみ出したマス
     if (kind === 'stray') return 'background:rgba(255,59,59,0.20);border:1px solid rgba(255,107,107,0.75);';
-    // 🚩 陣取り: 自分の領土（青）／相手の領土（赤）。ブロックの上に薄く重ねる。
-    if (kind === 'own_me') return 'background:rgba(91,139,255,0.34);border:2px solid rgba(155,190,255,0.85);';
-    if (kind === 'own_foe') return 'background:rgba(255,93,93,0.30);border:2px solid rgba(255,150,150,0.85);';
+    // 🚩 陣取り: 自分の領土／相手の領土。ブロックの上に薄く重ねる。
+    if (kind === 'own_me') {
+      return `background:${hexRgba(landTone.me, 0.34)};border:2px solid ${hexRgba(landTone.me, 0.95)};`
+        + 'color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.85);';
+    }
+    if (kind === 'own_foe') {
+      return `background:${hexRgba(landTone.foe, 0.30)};border:2px dashed ${hexRgba(landTone.foe, 0.95)};`
+        + 'color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.85);';
+    }
     return 'background:rgba(155,227,255,0.15);border:1px dashed rgba(155,227,255,0.6);';
   }
 
   set(marks) {
+    refreshLandTone();
     this.marks = marks;
     for (const [k, el] of this.nodes) {
       if (!marks.has(k)) { el.remove(); this.nodes.delete(k); }
@@ -8162,9 +8227,14 @@ class CellOverlay {
       const x = Math.round(rect.left + v.boardX + c * v.cell + 1);
       const y = Math.round(rect.top + v.boardY + r * v.cell + 1);
       const w = Math.round(s);
-      const next = `position:absolute;border-radius:4px;box-sizing:border-box;left:${x}px;top:${y}px;width:${w}px;height:${w}px;${CellOverlay.style(kind)}`;
+      const glyph = CellOverlay.mark(kind);
+      const glyphCss = glyph
+        ? `display:flex;align-items:center;justify-content:center;line-height:1;font-weight:900;font-size:${Math.max(8, Math.round(w * 0.5))}px;`
+        : '';
+      const next = `position:absolute;border-radius:4px;box-sizing:border-box;left:${x}px;top:${y}px;width:${w}px;height:${w}px;${glyphCss}${CellOverlay.style(kind)}`;
       // 200ms ごとに回るので、変わっていないときは触らない（再レイアウトを避ける）。
       if (el.dataset.css !== next) { el.setAttribute('style', next); el.dataset.css = next; }
+      if (el.dataset.glyph !== glyph) { el.textContent = glyph; el.dataset.glyph = glyph; }
     }
   }
 
@@ -8413,12 +8483,15 @@ let blueprintStarting = false;
 export async function startBlueprint() {
   if (blueprintStarting) return;   // 二度押しで2回取りに行かせない
   blueprintStarting = true;
+  const tk = beginModeStart();
   try {
     const bp = await fetchBlueprint();
     if (!bp) {
       toast(t('今日の設計図を読み込めませんでした', 'Could not load today\'s blueprint'), 'err', 3000);
       return;
     }
+    // 待っている間に別のモードが始まっていたら、そちらを壊さずに降りる。
+    if (modeStartStale(tk)) return;
     if (currentMode) currentMode.destroy();
     currentMode = new BlueprintMode(bp);
     window.__bbaMode = currentMode;
@@ -8545,12 +8618,16 @@ export async function startDailyRace(row) {
   const rep = sanitizeReplayClient(row && row.replay);
   if (!rep) { toast(t('この走りは再生できません', 'This run cannot be replayed'), 'err', 2600); return; }
   let info = null;
+  const tk = beginModeStart();
   try {
     info = await api('/api/daily');
   } catch {
     toast(t('サーバーに接続できません', 'Cannot reach the server'), 'err');
     return;
   }
+  // 待っている間に別のモードが始まっていたら、そちらを壊さずに降りる。
+  // （デイリーの回数を消費するのは startDaily の予約なので、その手前で止める）
+  if (modeStartStale(tk)) return;
   if (!replayReproducible(info && info.modifier)) {
     toast(t('🪨 今日のお題では残像レースができません（瓦礫の位置がひとりずつ違うため）',
       '🪨 No ghost racing today — the rubble layout differs per player'), 'err', 3600);
@@ -8731,14 +8808,16 @@ function wsCellColor(v) {
 }
 
 // 8×8 を DOM の CSS グリッドで描く（canvas を持ち出さずに済む小さな絵）。
-function wsBoardHtml(board, opts = {}) {
-  const size = opts.size || 22;
+// 幅は style.css の .ws-edit-grid に任せる（min(288px,74vw) ／ 狭幅は
+// min(268px,82vw)）── 26px 固定だと 375px 端末で 100px 以上を捨てていた。
+// 1マスは 1fr + aspect-ratio で伸び縮みするので、タップ対象も広がる。
+function wsBoardHtml(board) {
   const cells = [];
   for (let k = 0; k < 64; k++) {
     const v = board[k] | 0;
-    cells.push(`<i data-k="${k}" style="display:block;border-radius:3px;background:${v ? wsCellColor(v) : 'rgba(255,255,255,0.06)'}"></i>`);
+    cells.push(`<i data-k="${k}" class="ws-edit-cell${v ? ' on' : ''}"${v ? ` style="background:${wsCellColor(v)}"` : ''}></i>`);
   }
-  return `<div class="ws-grid" style="display:grid;grid-template-columns:repeat(8,${size}px);grid-auto-rows:${size}px;gap:2px;justify-content:center">${cells.join('')}</div>`;
+  return `<div class="ws-edit-grid">${cells.join('')}</div>`;
 }
 
 // SHAPES の1つを小さく描く。
@@ -8899,6 +8978,11 @@ class WorkshopMode {
     const rewards = await submitResult({
       mode: 'workshop', score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
       duration: secs, won,
+      // どのステージを解いたかの6文字共有コード。サーバーはこれで
+      // 「同じ code の初回クリアだけ勝利扱い」に切り替えられる（暫定の
+      // 勝利加算レート上限の置き換え）。金額・勝敗はサーバー側で再判定するので、
+      // ここは識別子を名乗るだけ。空なら送らない（作者試遊はここに来ない）。
+      ...(this.stage.code ? { stageCode: this.stage.code } : {}),
     });
     // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
     if (currentMode !== this) return;
@@ -8940,25 +9024,36 @@ class WorkshopMode {
   }
 }
 
+let workshopStarting = false;
+
 // screens.js の「▶ 遊ぶ」がこの名前で呼ぶ（第2引数は一覧の生ステージ、無ければ null）。
 export async function startWorkshopStage(code, stage) {
-  let st = normalizeWorkshopStageForPlay(stage);
-  if (!st || !st.board) {
-    // 一覧には board が入っていない（軽くするため）ので個別取得する。
-    try {
-      st = normalizeWorkshopStageForPlay(await api(`/api/workshop/stages/${encodeURIComponent(String(code || '').toUpperCase())}`));
-    } catch {
-      st = null;
+  if (workshopStarting) return;   // 二度押しで2回取りに行かせない
+  workshopStarting = true;
+  const tk = beginModeStart();
+  try {
+    let st = normalizeWorkshopStageForPlay(stage);
+    if (!st || !st.board) {
+      // 一覧には board が入っていない（軽くするため）ので個別取得する。
+      try {
+        st = normalizeWorkshopStageForPlay(await api(`/api/workshop/stages/${encodeURIComponent(String(code || '').toUpperCase())}`));
+      } catch {
+        st = null;
+      }
     }
+    if (!st) {
+      toast(t('このステージを読み込めませんでした', 'Could not load that stage'), 'err', 3000);
+      return;
+    }
+    // 待っている間に別のモードが始まっていたら、そちらを壊さずに降りる。
+    if (modeStartStale(tk)) return;
+    if (currentMode) currentMode.destroy();
+    currentMode = new WorkshopMode(st);
+    window.__bbaMode = currentMode;
+    currentMode.start();
+  } finally {
+    workshopStarting = false;
   }
-  if (!st) {
-    toast(t('このステージを読み込めませんでした', 'Could not load that stage'), 'err', 3000);
-    return;
-  }
-  if (currentMode) currentMode.destroy();
-  currentMode = new WorkshopMode(st);
-  window.__bbaMode = currentMode;
-  currentMode.start();
 }
 
 // ---------------------------------------------------------------------------
@@ -8999,13 +9094,14 @@ function wsEditorStep1() {
   const d = wsDraft;
   const swatches = [];
   for (let v = 1; v <= 9; v++) {
-    swatches.push(`<button class="btn btn-ghost ws-sw" data-color="${v}" style="min-width:0;padding:6px 8px;background:${wsCellColor(v)}"></button>`);
+    // 色見本も指で押せる大きさに下限を切る（中身が空のボタンなので padding 任せにしない）。
+    swatches.push(`<button class="btn btn-ghost ws-sw" data-color="${v}" style="min-width:44px;min-height:34px;padding:6px 8px;background:${wsCellColor(v)}"></button>`);
   }
   const m = showModal(`
     <h2>🛠️ ${t('ステージを作る（1/3）', 'Create a stage (1/3)')}</h2>
-    <p class="muted center">${t('光らせたマスが「消すべきブロック」になります（4マス以上）。タップで塗る／もう一度で消す。',
-      'The squares you paint become the blocks to clear (4 or more). Tap to paint, tap again to erase.')}</p>
-    <div id="wsBoardWrap">${wsBoardHtml(d.board, { size: 26 })}</div>
+    <p class="muted center">${t('光らせたマスが「消すべきブロック」になります（4マス以上）。タップで塗る／もう一度で消す。なぞってまとめて塗れます。',
+      'The squares you paint become the blocks to clear (4 or more). Tap to paint, tap again to erase — or drag to paint several at once.')}</p>
+    <div id="wsBoardWrap">${wsBoardHtml(d.board)}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:10px">${swatches.join('')}</div>
     <p class="muted center" id="wsCount"></p>
     <div class="modal-buttons">
@@ -9020,22 +9116,56 @@ function wsEditorStep1() {
     m.querySelector('#wsCount').textContent = t(`光るマス ${n} / 64（${WS_MIN_CELLS}以上・全マスは不可）`,
       `${n} / 64 glowing (need ${WS_MIN_CELLS}+, cannot be all 64)`);
   };
+  const wrap = m.querySelector('#wsBoardWrap');
   const paint = () => {
-    m.querySelector('#wsBoardWrap').innerHTML = wsBoardHtml(d.board, { size: 26 });
-    bindCells();
+    wrap.innerHTML = wsBoardHtml(d.board);
+    refreshCount();
+  };
+  // 1マス塗る／消す（DOM も一緒に更新する。再描画はしない）。
+  const setCell = (k, on) => {
+    d.board[k] = on ? d.color : 0;
+    const el = wrap.querySelector(`[data-k="${k}"]`);
+    if (!el) return;
+    el.classList.toggle('on', !!d.board[k]);
+    el.style.background = d.board[k] ? wsCellColor(d.board[k]) : '';
+  };
+  // なぞって塗る。押した場所が空きなら「塗る」、埋まっていれば「消す」に決まり、
+  // 指を離すまでその向きを保つ（塗り／消しが交互に暴れない）。
+  // セルは innerHTML で作り直されるので、拾うのは入れ物側で1回だけにする。
+  let dragOn = null;
+  let lastBeep = 0;
+  const cellAt = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    if (!el || !wrap.contains(el) || el.dataset.k == null) return -1;
+    return el.dataset.k | 0;
+  };
+  const touchCell = (k) => {
+    if (k < 0 || dragOn === null) return;
+    const want = dragOn ? d.color : 0;
+    if ((d.board[k] | 0) === want) return;   // 変わらないなら触らない
+    setCell(k, dragOn);
+    const now = Date.now();
+    if (now - lastBeep > 60) { audio.pickup(); lastBeep = now; }   // なぞりで鳴り続けない
     refreshCount();
   };
   const bindCells = () => {
-    m.querySelectorAll('#wsBoardWrap [data-k]').forEach(el => {
-      el.style.cursor = 'pointer';
-      el.onclick = () => {
-        const k = el.dataset.k | 0;
-        d.board[k] = d.board[k] ? 0 : d.color;
-        el.style.background = d.board[k] ? wsCellColor(d.board[k]) : 'rgba(255,255,255,0.06)';
-        audio.pickup();
-        refreshCount();
-      };
+    wrap.addEventListener('pointerdown', e => {
+      const k = cellAt(e.clientX, e.clientY);
+      if (k < 0) return;
+      dragOn = !(d.board[k] | 0);
+      e.preventDefault();
+      try { wrap.setPointerCapture(e.pointerId); } catch { /* 取れなくても move は拾える */ }
+      touchCell(k);
     });
+    wrap.addEventListener('pointermove', e => {
+      if (dragOn === null) return;
+      // 盤の外で指／ボタンを離したときの保険（押していなければ塗らない）。
+      if (!e.buttons) { dragOn = null; return; }
+      touchCell(cellAt(e.clientX, e.clientY));
+    });
+    const endDrag = () => { dragOn = null; };
+    wrap.addEventListener('pointerup', endDrag);
+    wrap.addEventListener('pointercancel', endDrag);
   };
   const markSwatch = () => {
     m.querySelectorAll('.ws-sw').forEach(b => {
@@ -9063,7 +9193,8 @@ function wsEditorStep1() {
 // ---- ② ピース ----
 function wsEditorStep2() {
   const d = wsDraft;
-  const picker = SHAPES.map((s, i) => `<button class="btn btn-ghost" data-shape="${i}" style="min-width:0;padding:6px">${wsShapeHtml(i, 8)}</button>`).join('');
+  // 1×1 のピースでも指で押せるよう、ボタンの下限を 44px 角で切る。
+  const picker = SHAPES.map((s, i) => `<button class="btn btn-ghost" data-shape="${i}" style="min-width:44px;min-height:44px;padding:6px;display:inline-flex;align-items:center;justify-content:center">${wsShapeHtml(i, 8)}</button>`).join('');
   const m = showModal(`
     <h2>🛠️ ${t('ステージを作る（2/3）', 'Create a stage (2/3)')}</h2>
     <p class="muted center">${t(`配るピースを並べます（この順に配られます・最大${WS_MAX_PIECES}個）。`,

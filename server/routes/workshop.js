@@ -3,11 +3,12 @@
 // server/index.js から切り出しただけのもので、処理は1文字も変えていない。
 // 共有依存は server/context.js 経由で受け取る（index.js → context → ここ）。
 import express from 'express';
+import crypto from 'crypto';
 import {
   saveDb,
 } from '../db.js';
 import {
-  requireAuth,
+  requireAuth, requireAdmin,
 } from '../auth.js';
 import {
   jstDayKey,
@@ -22,9 +23,9 @@ import { buildWorkshopSeedStages, WORKSHOP_SEED_REV } from '../workshop-seed.js'
 // 流し込む（init… は server.listen より前・battle 生成より後に呼ばれる）。
 // sanitizeReplay の実体は routes/daily.js にあるが、routes 同士を直接
 // つながないため index.js がいったん受けて ctx に載せている。
-let db, rateLimit, sanitizeReplay;
+let db, rateLimit, sanitizeReplay, adminLog, BUGREPORT_CAP;
 export function initWorkshopRoutes() {
-  ({ db, rateLimit, sanitizeReplay } = ctx);
+  ({ db, rateLimit, sanitizeReplay, adminLog, BUGREPORT_CAP } = ctx);
   seedWorkshopStages();
 }
 
@@ -63,10 +64,12 @@ const WS_MAX_PER_USER = 10;            // 1人あたりの上限
 const WS_MAX_PIECES = 12;              // 配るピースの本数（遺跡の最大10より少しだけ広い）
 const WS_MIN_CELLS = 4;                // 光るマスがこれ未満の盤面は「ステージ」と呼べない
 const WS_TITLE_MAX = 24;
-const WS_LIKE_MAX = 3000;              // 1ステージが覚えておく「いいねした人」の上限
+const WS_LIKE_MAX = 3000;              // 1ステージが受け付ける♡の総数の上限（表示カウンタの天井）
+const WS_USER_LIKED_MAX = 1000;        // 1ユーザーが「♡した」と覚えておくステージ数（二重♡防止の実体）
 const WS_PLAY_COINS = 5;               // 1プレイあたり作者に還元するコイン
 const WS_AUTHOR_COIN_DAY_CAP = 300;    // 作者1人が1日に受け取れる還元の上限（60プレイぶん）
-const WS_LIST_MAX = 30;
+const WS_LIST_MAX = 30;                // 1ページの既定件数（limit 未指定のとき）
+const WS_LIST_HARD_MAX = 60;           // limit で広げられる上限（ページ送りの取りこぼしを防ぐ）
 
 function workshopStore() {
   const w = db.meta.workshop;
@@ -102,6 +105,38 @@ function makeWorkshopCode(stages) {
   }
   return null;
 }
+
+// ステージ名。ゲーム内で唯一「自由な文字がそのまま公開表示される永続テキスト」
+// なので、ユーザー名・ギルド名ほど厳しくはしない（絵文字は通したい）かわりに、
+// 表示を壊す種類の文字だけを落とす:
+//   ・制御文字（改行・タブ・C1）… カードの行を割る
+//   ・双方向制御（U+202A..202E, U+2066..2069, U+200E/200F, U+061C）… 周りの文字を反転させる
+//   ・ゼロ幅（U+200B..200D, U+FEFF）… 見えない字で長さを稼ぐ
+//   ・結合文字（いわゆる Zalgo）… カードの外へ縦に突き抜ける
+// 濁点・半濁点（U+3099/309A）は落とさない ── 分解済みの日本語を壊すため。
+// 先に NFC へ寄せておくと「が」のような分解表記が1文字に畳まれる。
+// 長さは Array.from で数える（絵文字1つを1文字として扱う）。
+const WS_TITLE_STRIP = /[\u0000-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/g;
+const WS_TITLE_COMBINING = /[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20F0\uFE20-\uFE2F]/g;
+function sanitizeWorkshopTitle(raw) {
+  let t = String(raw == null ? '' : raw);
+  try { t = t.normalize('NFC'); } catch { /* 壊れたサロゲートでも投稿は続行 */ }
+  // 改行・タブは「詰める」のではなく空白にする（単語がくっついて別の語に見えないように）。
+  t = t.replace(/[\t\n\r\u000B\u000C\u0085\u2028\u2029]/g, ' ');
+  t = t.replace(WS_TITLE_STRIP, '').replace(WS_TITLE_COMBINING, '').replace(/[<>"'`]/g, '');
+  t = t.replace(/\s+/g, ' ').trim();
+  return Array.from(t).slice(0, WS_TITLE_MAX).join('');
+}
+
+// 凍結された人の作品は公開面から引っ込める。db から導出しているだけなので、
+// 凍結を解けばそのまま戻る（stages 側に印を足さないぶん、復元の合流も無傷）。
+// ※ 退会・管理者削除でユーザーごと消えた場合は db.users から引けず、ここでは
+//   判定できない。その掃除は routes/admin.js 側の担当（coordination 参照）。
+function stageHidden(stage) {
+  const author = stage ? db.users[stage.by] : null;
+  return !!(author && author.banned);
+}
+const isAdminViewer = viewer => !!viewer && viewer.role === 'admin';
 
 // 投稿された盤面。8x8 で、マスの値は engine.js が知っている範囲だけ:
 // 0=空 / 1..8=通常色 / 9=お邪魔 / 10・11=❄️氷結（2段耐久）。
@@ -217,7 +252,12 @@ function workshopView(stage, viewer, opts = {}) {
     bestScore: stage.score || 0,
     plays: stage.plays || 0,
     likes: stage.likes || 0,
-    liked: !!viewer && Array.isArray(stage.likedBy) && stage.likedBy.includes(viewer.id),
+    // 二重♡防止はユーザー側（viewer.wsLiked）へ移したが、移行前に stage.likedBy へ
+    // 積まれた既存の♡も引き続き「済み」と見なす（新旧どちらかに印があれば liked）。
+    liked: !!viewer && (
+      (Array.isArray(viewer.wsLiked) && viewer.wsLiked.includes(stage.code))
+      || (Array.isArray(stage.likedBy) && stage.likedBy.includes(viewer.id))
+    ),
     mine,
   };
   // 英語のステージ名。プレイヤーの投稿には無い欄なので、持っているものだけ出す
@@ -252,13 +292,23 @@ function payWorkshopAuthor(w, stage) {
 
 // 投稿。作者のクリアリプレイを再生して、本当に解けるものだけ通す。
 workshopRouter.post('/api/workshop/stages', requireAuth, maintenanceGuard, (req, res) => {
-  if (!rateLimit(`wspost:${req.user.id}`, 5, 60 * 60 * 1000)
-      || !rateLimit(`wspostip:${req.ip}`, 20, 60 * 60 * 1000)) {
+  // ミュート中は公開テキスト（ステージ名）を新たに出せない。requireAuth は
+  // banned しか見ないので、ここで muted を弾く（play / like / delete は
+  // 表に出る文字を伴わないので対象外）。HTTP は ws と違い errorEn を同梱する。
+  if (req.user.muted) {
+    return res.status(403).json({ error: '🔇 管理者により投稿が制限されています', errorEn: 'Publishing is restricted by an admin' });
+  }
+  // 入口の門は「乱打を止める」ぶんだけ。ここを 5回/時 の公開枠にしていたころは、
+  // 盤面やリプレイの形式ミスで 400 になった回も枠を食い、数分かけて作った
+  // ステージが「投稿が多すぎます」で1時間はねられた。公開枠（wspost）は
+  // 検証を全部通って **実際に書き込む直前** で消費する。
+  if (!rateLimit(`wspostip:${req.ip}`, 20, 60 * 60 * 1000)
+      || !rateLimit(`wspostry:${req.user.id}`, 40, 60 * 60 * 1000)) {
     return res.status(429).json({ error: '投稿が多すぎます。時間をおいてください', errorEn: 'Too many submissions — please try again later' });
   }
   const b = req.body || {};
-  const title = String(b.title || '').trim().replace(/[<>"'`]/g, '').slice(0, WS_TITLE_MAX);
-  if (title.length < 2) {
+  const title = sanitizeWorkshopTitle(b.title);
+  if (Array.from(title).length < 2) {
     return res.status(400).json({ error: `ステージ名は2〜${WS_TITLE_MAX}文字で入力してください`, errorEn: `The stage name must be 2–${WS_TITLE_MAX} characters` });
   }
   const parsed = parseWorkshopBoard(b.board);
@@ -293,6 +343,10 @@ workshopRouter.post('/api/workshop/stages', requireAuth, maintenanceGuard, (req,
   }
   const code = makeWorkshopCode(stages);
   if (!code) return res.status(503).json({ error: '共有コードを発行できませんでした。もう一度お試しください', errorEn: 'Could not mint a share code — please try again' });
+  // 公開枠はここで消費する（＝実際に1件増えるときだけ数える）。
+  if (!rateLimit(`wspost:${req.user.id}`, 5, 60 * 60 * 1000)) {
+    return res.status(429).json({ error: '投稿が多すぎます。時間をおいてください', errorEn: 'Too many submissions — please try again later' });
+  }
   stages[code] = {
     code,
     title,
@@ -308,32 +362,81 @@ workshopRouter.post('/api/workshop/stages', requireAuth, maintenanceGuard, (req,
     likes: 0,
     likedBy: [],
   };
+  // 作った側の進行。実績（achievements.js）はこの統計から導出する。
+  const st = req.user.stats || (req.user.stats = {});
+  st.wsPublished = (Number(st.wsPublished) || 0) + 1;
   saveDb();
   res.json({ ok: true, code, stage: workshopView(stages[code], req.user, { board: true }) });
 });
 
 // 一覧。人気順（いいね→プレイ数）か新着順。ログイン不要で読める。
+// limit / offset でページ送りできる ── 以前は常に先頭30件だけを返していたので、
+// 31件目以降に沈んだステージは6文字の共有コードを知っている人以外どこからも
+// 到達できなかった（自分の作品も、運営が消したい作品も）。
 workshopRouter.get('/api/workshop/stages', (req, res) => {
   if (!rateLimit(`wslist:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください', errorEn: 'Please slow down' });
   const sort = req.query.sort === 'new' ? 'new' : req.query.sort === 'mine' ? 'mine' : 'popular';
+  const rawLimit = Math.floor(Number(req.query.limit));
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, WS_LIST_HARD_MAX) : WS_LIST_MAX;
+  const rawOffset = Math.floor(Number(req.query.offset));
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.min(rawOffset, WS_MAX_STAGES) : 0;
   let rows = Object.values(workshopStages()).filter(Boolean);
+  // 凍結中の人の作品は公開面に出さない（管理者には見えたままにする）。
+  if (!isAdminViewer(req.user)) rows = rows.filter(s => !stageHidden(s));
   if (sort === 'mine') rows = req.user ? rows.filter(s => s.by === req.user.id) : [];
   rows.sort((a, b) => sort === 'new' || sort === 'mine'
     ? (b.at || 0) - (a.at || 0)
     : ((b.likes || 0) - (a.likes || 0)) || ((b.plays || 0) - (a.plays || 0)) || ((b.at || 0) - (a.at || 0)));
+  const page = rows.slice(offset, offset + limit);
   res.json({
     sort,
     total: Object.keys(workshopStages()).length,
-    stages: rows.slice(0, WS_LIST_MAX).map(s => workshopView(s, req.user)),
+    matched: rows.length,                        // この並び順で見えている総数（ページ送りの終点）
+    offset,
+    limit,
+    more: offset + page.length < rows.length,
+    stages: page.map(s => workshopView(s, req.user)),
     limits: { perUser: WS_MAX_PER_USER, total: WS_MAX_STAGES, pieces: WS_MAX_PIECES },
   });
+});
+
+// 管理者用の全件一覧。公開一覧はページ送りが要るので、通報を受けて「今どんな
+// ものが公開されているか」を棚卸しする用に、新着順で丸ごと返す口を1本置く。
+// 盤面も模範解答も返さない（消すのに要るのはコードと見出しだけ）。
+workshopRouter.get('/api/admin/workshop/stages', requireAuth, requireAdmin, (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const rows = Object.values(workshopStages()).filter(Boolean)
+    .sort((a, b) => (b.at || 0) - (a.at || 0))
+    .map(s => {
+      const author = db.users[s.by];
+      return {
+        code: s.code,
+        title: s.title,
+        titleEn: s.titleEn || null,
+        author: author ? author.username : s.byName,
+        by: s.by,
+        at: s.at || 0,
+        plays: s.plays || 0,
+        likes: s.likes || 0,
+        par: s.par || 0,
+        seed: !!s.seed,
+        banned: !!(author && author.banned),      // 凍結中＝公開面からは既に隠れている
+        orphan: !author,                          // 退会・削除済み（byName だけが残っている）
+      };
+    })
+    .filter(r => !q || r.code.toLowerCase().includes(q)
+      || String(r.title || '').toLowerCase().includes(q)
+      || String(r.author || '').toLowerCase().includes(q));
+  res.json({ total: rows.length, stages: rows });
 });
 
 // 1ステージの取得（遊ぶのに必要な盤面・ピース列つき）。
 workshopRouter.get('/api/workshop/stages/:code', (req, res) => {
   if (!rateLimit(`wsget:${req.ip}`, 120, 60000)) return res.status(429).json({ error: '少し待ってください', errorEn: 'Please slow down' });
   const stage = findWorkshopStage(req.params.code);
-  if (!stage) return res.status(404).json({ error: 'そのコードのステージは見つかりません', errorEn: 'No stage with that code' });
+  if (!stage || (stageHidden(stage) && !isAdminViewer(req.user))) {
+    return res.status(404).json({ error: 'そのコードのステージは見つかりません', errorEn: 'No stage with that code' });
+  }
   res.json({ stage: workshopView(stage, req.user, { board: true }) });
 });
 
@@ -343,16 +446,26 @@ workshopRouter.post('/api/workshop/stages/:code/play', requireAuth, maintenanceG
     return res.status(429).json({ error: '送信が多すぎます。しばらく待ってください', errorEn: 'Too many requests — please wait a moment' });
   }
   const stage = findWorkshopStage(req.params.code);
-  if (!stage) return res.status(404).json({ error: 'そのコードのステージは見つかりません', errorEn: 'No stage with that code' });
-  stage.plays = (stage.plays || 0) + 1;
-  // 還元は「作者本人以外」かつ「同じ人が同じステージで1時間に1回まで」。
-  // 自作ステージを回し続けるだけのコイン増殖を、上限の前にここで止める。
-  let authorCoins = 0;
-  if (stage.by !== req.user.id && rateLimit(`wspay:${req.user.id}:${stage.code}`, 1, 60 * 60 * 1000)) {
-    authorCoins = payWorkshopAuthor(ensureWorkshop(), stage);
+  if (!stage || (stageHidden(stage) && !isAdminViewer(req.user))) {
+    return res.status(404).json({ error: 'そのコードのステージは見つかりません', errorEn: 'No stage with that code' });
   }
-  saveDb();
-  res.json({ ok: true, plays: stage.plays, authorCoins });
+  // 数えるのは「作者本人以外」かつ「同じ人が同じステージで1時間に1回まで」。
+  // 還元コインだけでなく **プレイ数そのもの** をこの門に通す ── 人気順は
+  // ♡が同数なら plays で決まるので、遊ばずに叩くだけで自作を上位へ押し上げ
+  // られてしまう。「もう一度」で数が増え続けるのも同じ門で止まる。
+  const counted = stage.by !== req.user.id && rateLimit(`wspay:${req.user.id}:${stage.code}`, 1, 60 * 60 * 1000);
+  let authorCoins = 0;
+  if (counted) {
+    stage.plays = (stage.plays || 0) + 1;
+    const author = db.users[stage.by];
+    if (author && !author.banned) {
+      const st = author.stats || (author.stats = {});
+      st.wsPlaysGot = (Number(st.wsPlaysGot) || 0) + 1;   // 作った側の進行（実績の材料）
+    }
+    authorCoins = payWorkshopAuthor(ensureWorkshop(), stage);
+    saveDb();
+  }
+  res.json({ ok: true, plays: stage.plays || 0, counted, authorCoins });
 });
 
 // いいね。1人1回（取り消しは無し）。
@@ -361,18 +474,76 @@ workshopRouter.post('/api/workshop/stages/:code/like', requireAuth, maintenanceG
     return res.status(429).json({ error: '送信が多すぎます。しばらく待ってください', errorEn: 'Too many requests — please wait a moment' });
   }
   const stage = findWorkshopStage(req.params.code);
-  if (!stage) return res.status(404).json({ error: 'そのコードのステージは見つかりません', errorEn: 'No stage with that code' });
-  if (!Array.isArray(stage.likedBy)) stage.likedBy = [];
-  if (stage.likedBy.includes(req.user.id)) {
+  if (!stage || (stageHidden(stage) && !isAdminViewer(req.user))) {
+    return res.status(404).json({ error: 'そのコードのステージは見つかりません', errorEn: 'No stage with that code' });
+  }
+  // 二重♡防止はユーザー側で覚える（6文字コードを上限つきで持つ）。以前は
+  // ステージが「♡した人」の UUID を最大3000件ずつ抱えていて、ステージ数×
+  // ユーザー数で db.json が数十MBまで伸びうる形だった。印をユーザー側へ移し、
+  // ステージは likes カウンタだけを持つ（O(ユーザー数×ステージ数)→O(ユーザー数)）。
+  // 移行前に stage.likedBy へ積まれた既存の♡もそのまま「済み」として扱う。
+  const liker = req.user;
+  if (!Array.isArray(liker.wsLiked)) liker.wsLiked = [];
+  const already = liker.wsLiked.includes(stage.code)
+    || (Array.isArray(stage.likedBy) && stage.likedBy.includes(liker.id));
+  if (already) {
     return res.status(409).json({ error: 'すでに♡を送っています', errorEn: 'You already liked this stage', likes: stage.likes || 0, liked: true });
   }
-  if (stage.likedBy.length >= WS_LIKE_MAX) {
+  if ((stage.likes || 0) >= WS_LIKE_MAX) {
     return res.status(409).json({ error: '♡の受付は上限に達しました', errorEn: 'This stage has reached its like limit', likes: stage.likes || 0, liked: false });
   }
-  stage.likedBy.push(req.user.id);
-  stage.likes = stage.likedBy.length;
+  liker.wsLiked.push(stage.code);
+  // 覚えておく上限。古いものからこぼす（ずっと積み増して db を太らせない）。
+  if (liker.wsLiked.length > WS_USER_LIKED_MAX) {
+    liker.wsLiked.splice(0, liker.wsLiked.length - WS_USER_LIKED_MAX);
+  }
+  stage.likes = (stage.likes || 0) + 1;
+  const author = db.users[stage.by];
+  if (author && author.id !== req.user.id && !author.banned) {
+    const st = author.stats || (author.stats = {});
+    st.wsLikesGot = (Number(st.wsLikesGot) || 0) + 1;     // 作った側の進行（実績の材料）
+  }
   saveDb();
   res.json({ ok: true, likes: stage.likes, liked: true });
+});
+
+// 🚩 通報。UGC で最初に要るのは「見つけた人が知らせる口」なので、パーティー
+// 通報（routes/social.js の /api/party/report）と同じ形をそのまま使う ──
+// 新しい入れ物は作らず、既存の db.bugreports に kind:'workshop' で落とす。
+// 復元（backup.js）も管理画面の🐛モーダルもそのまま読める。
+// ステージのコード・題名・作者を運営側で付ける（本人の申告に頼らない）。
+workshopRouter.post('/api/workshop/stages/:code/report', requireAuth, (req, res) => {
+  if (!rateLimit(`wsreport:${req.user.id}`, 3, 10 * 60 * 1000)) {
+    return res.status(429).json({ error: '通報が多すぎます。すこし待ってください', errorEn: 'Too many reports — please wait a little' });
+  }
+  const stage = findWorkshopStage(req.params.code);
+  if (!stage) return res.status(404).json({ error: 'そのコードのステージは見つかりません', errorEn: 'No stage with that code' });
+  const author = db.users[stage.by];
+  db.bugreports = db.bugreports || [];
+  db.bugreports.push({
+    id: crypto.randomUUID(), kind: 'workshop', at: Date.now(),
+    by: req.user.username, byId: req.user.id,
+    text: String((req.body || {}).reason || '').slice(0, 300),
+    stage: {
+      code: stage.code,
+      title: stage.title,
+      author: author ? author.username : stage.byName,
+      by: stage.by,
+    },
+    status: 'open',
+  });
+  // 上限の詰め方はバグ報告・パーティー通報と同じ（捨てるのは処理済みだけ）。
+  if (db.bugreports.length > (BUGREPORT_CAP || 300)) {
+    const doneIdx = db.bugreports.findIndex(x => x && x.status === 'done');
+    if (doneIdx !== -1) {
+      db.bugreports.splice(doneIdx, 1);
+    } else {
+      db.bugreports.pop();
+      return res.status(503).json({ error: '報告箱がいっぱいです。少し時間をおいてからお願いします', errorEn: 'The report box is full — please try again later' });
+    }
+  }
+  saveDb();
+  res.json({ ok: true });
 });
 
 // 削除は作者本人と管理者だけ。1人10ステージの上限に当たった人が、
@@ -385,5 +556,10 @@ workshopRouter.delete('/api/workshop/stages/:code', requireAuth, (req, res) => {
   }
   delete ensureWorkshop().stages[stage.code];
   saveDb();
+  // 他人の作品を消したときは誰がやったかを残す（🧾管理者操作の記録）。
+  // 自分の作品の消し直しは日常の操作なので記録しない。
+  if (stage.by !== req.user.id && typeof adminLog === 'function') {
+    adminLog(req, 'workshop_delete', stage.code, { title: stage.title, by: stage.byName || stage.by });
+  }
   res.json({ ok: true, code: stage.code });
 });

@@ -46,8 +46,26 @@ async function start() {
 async function stop() {
   if (!proc) return;
   const p = proc; proc = null;
+  if (p.exitCode !== null) return;   // もう終わっている（'exit' は二度と来ない）
+  // Windows では SIGTERM ハンドラが走らず gracefulShutdown/flushDb が呼ばれない。
+  // 250ms のデバウンス保存がディスクに落ちるだけの猶予を、終了要求の前に必ず取る。
+  // ここを飛ばすと editDb が db.json を ENOENT で読めず、以降の回が undefined になる。
   await sleep(700);
-  await new Promise(res => { p.on('exit', res); p.kill(); });
+  await new Promise(res => {
+    let t = null;
+    const done = () => { if (t) clearTimeout(t); res(); };
+    p.on('exit', done);
+    p.kill();
+    // kill() が届かないことがある（Windows では SIGTERM ハンドラも走らない）。
+    // 待ちっぱなしにするとランナーの時間切れになるので、5秒で強制終了に切り替える。
+    t = setTimeout(() => {
+      if (process.platform === 'win32' && p.pid) {
+        try { spawn('taskkill', ['/pid', String(p.pid), '/t', '/f'], { stdio: 'ignore' }); } catch { /* 下の SIGKILL にまかせる */ }
+      }
+      try { p.kill('SIGKILL'); } catch { /* もう死んでいる */ }
+      res();
+    }, 5000);
+  });
   await sleep(300);
 }
 // 停止中の db.json を直接書き換えて「昨日プレイした状態」を作る。

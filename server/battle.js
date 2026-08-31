@@ -2871,6 +2871,14 @@ export function initBattle(server, deps) {
           const run = db.meta.adminEventRun;
           if (!run || !zeroSessionOf(ws)) return;
           if (!sockRate(ws, 'zeroWillTimes', 3, 60_000)) return;
+          // ミュートは伝言にも効く（モデレーションの抜け穴防止）。伝言は run に
+          // 残って次の枠の開幕で全員に読まれる公開テキストなので、チャットを
+          // 止められている人がここから書けてしまうと規制の意味が無くなる。
+          const wu = ws.user ? db.users[ws.user.id] : null;
+          if (wu && wu.muted) {
+            send(ws, { type: 'error', error: '🔇 管理者によりチャットが制限されています' });
+            return;
+          }
           const r = zeroWill(run, sockName(ws), String(msg.text || ''));
           if (r.ok) {
             saveDb();

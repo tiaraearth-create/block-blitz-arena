@@ -41,6 +41,11 @@ export const MODE_NAMES = {
   chimera:  ['キメラ工房', 'the chimera lab'],
   puzzle:   ['パズル遺跡', 'the puzzle ruins'],
   dig:      ['採掘場', 'the mines'],
+  // 第3波の3モード。👻幽霊屋敷は隠しモードなので、ここには意図的に載せない
+  // （住人が名前を口にした時点で「隠し」ではなくなる）。
+  chain:     ['連鎖カスケード', 'chain cascade'],
+  blueprint: ['ブループリント', 'the blueprint'],
+  workshop:  ['パズル工房', 'the workshop'],
 };
 
 const AI_LABELS = [['見習い', 'Apprentice'], ['戦士', 'Warrior'], ['達人', 'Master'], ['鬼', 'Oni']];
@@ -1502,3 +1507,95 @@ REACTIONS.shop_sale = {
     'checked the sale — {saleitem} is cheap right now',
   ],
 };
+
+// ===========================================================================
+// ⛓️連鎖カスケード / 🏗️ブループリント / 🛠️パズル工房 の語彙（第3波の3モード）
+// ---------------------------------------------------------------------------
+// 追加モードには専用の話題セットを用意する、という🧩遺跡・⛏️採掘場のときの
+// 流儀にそろえる。ロビーで誰も口にしないモードは「メニューに増えただけ」に
+// 見えるので、仕組みそのもの（重力と倍率／崩壊と★3／共有コードと❤️）から
+// ネタを取る。数字は既存スロットだけを使う（{n}=2〜9）。
+// ===========================================================================
+
+LINES.push(
+  // ⛓️ 連鎖カスケード — 重力・連鎖・倍率
+  { ja: '⛓️で{n}連鎖出た瞬間、手が震えた', en: 'my hands shook the moment I hit a {n}-chain in Chain Cascade', arch: ['casual', 'kid', 'streamer'] },
+  { ja: '置いたあとブロックが落ちてくの、黙って見ちゃう', en: 'I just sit and watch everything fall after each placement', arch: ['lurker', 'casual', 'explorer'] },
+  { ja: 'あと1マス空けて溜めるの、我慢比べすぎる', en: 'holding that last gap to build the chain is pure willpower', arch: ['tryhard', 'senpai'] },
+  { ja: '倍率が×64で頭打ちって知ってから組み方変わった', en: 'learned the multiplier caps at ×64 and my whole approach changed', arch: ['tryhard', 'explorer'] },
+  { ja: '重力あるだけで完全に別ゲーになるの面白い', en: 'just adding gravity turns it into a completely different game', arch: ['senpai', 'explorer'] },
+  { ja: '連鎖狙って積み上げたのに1連鎖で終わって崩れ落ちた', en: 'stacked the whole board for a chain and got exactly one clear', arch: ['casual', 'newbie', 'gacha'] },
+  { ja: 'chain cascade is the only mode where the board plays itself', en: 'chain cascade is the only mode where the board plays itself', arch: ['global'] },
+
+  // 🏗️ ブループリント — 日替わりの図面・崩壊・★3
+  { ja: '今日の設計図むずくない？崩壊2回した', en: "today's blueprint is rough, I crumbled it twice", arch: ['casual', 'tryhard', 'newbie'] },
+  { ja: '列そろえたら作品ごと崩れて声出た', en: 'completed a line and the whole build crumbled — I yelped' },
+  { ja: '設計図の外に1マスはみ出しただけで詰むの、こわいけど好き', en: 'one square outside the blueprint and the run is done — terrifying but I love it', arch: ['explorer', 'senpai'] },
+  { ja: '崩壊0・90秒以内の★3、やっと取れた', en: 'finally got the 3-star: zero crumbles, under 90 seconds', arch: ['morning', 'tryhard'] },
+  { ja: '設計図が👑の日はテンション上がる', en: 'blueprint days with the crown shape just hit different', arch: ['kid', 'casual', 'gacha'] },
+  { ja: 'ピースが図面ぴったりぶんしか来ないの、気づいたとき鳥肌立った', en: 'you get exactly enough pieces for the blueprint and nothing more — that realization gave me chills', arch: ['senpai', 'explorer'] },
+
+  // 🛠️ パズル工房 — 共有コード・投稿・❤️
+  { ja: '工房、6文字のコードで友達の作品に飛べるの便利すぎる', en: 'six letters and you land straight on your friend\'s workshop stage, so convenient', arch: ['casual', 'newbie'] },
+  { ja: '自分の作ったステージに❤️ついてた ちょっとうれしい', en: 'someone hearted the stage I made, small but real joy', arch: ['lurker', 'newbie', 'casual'] },
+  { ja: '自分でクリアできた図しか公開されないの、遊ぶ側として安心する', en: 'only stages the author actually solved get published — as a player that is a relief', arch: ['senpai', 'casual'] },
+  { ja: '作者の手数に1手も勝てん…', en: "can't beat the author's move count, not even by one", arch: ['tryhard', 'explorer'] },
+  { ja: '遊ばれるたびに🪙入るの知って、急に投稿したくなった', en: 'found out you earn coins every time someone plays your stage — suddenly I want to publish', arch: ['gacha', 'casual', 'kid'] },
+  { ja: '工房のステージ作ってると、遊ぶより時間溶ける', en: 'building a workshop stage eats more time than playing one', arch: ['explorer', 'nightowl', 'streamer'] },
+);
+
+DIALOGUES.push(
+  { lang: 'ja', lines: [
+    ['a', '⛓️で{n}連鎖出た！手が震えてる', 'got a {n}-chain in Chain Cascade! hands are shaking'],
+    ['b', 'どうやって組んだの', 'how did you set it up?'],
+    ['a', '上を先に埋めて、落ちたら下が揃うようにした', 'filled the top first so the drop would finish the bottom rows'],
+    ['b', 'なるほど、重力に働いてもらうのか', 'ah, you let gravity do the work'],
+  ], archA: ['casual', 'kid', 'streamer'], archB: ['tryhard', 'senpai'] },
+  { lang: 'ja', lines: [
+    ['a', '今日の設計図、★3取れた人いる？', "anyone 3-star today's blueprint?"],
+    ['b', '崩壊0で90秒以内でしょ？1回だけ取れた', 'zero crumbles under 90 seconds, right? managed it once'],
+    ['a', '列そろえたら崩れるの毎回忘れる', 'I keep forgetting that completing a line makes it crumble'],
+    ['b', 'あれ最初は全員やるやつ', 'everyone does that at least once'],
+  ], archA: ['casual', 'newbie'], archB: ['senpai', 'tryhard'] },
+  { lang: 'ja', lines: [
+    ['a', '工房のステージ作ったけど自分で解けなくて投稿できない', 'made a workshop stage but I cannot solve it myself, so I cannot publish it'],
+    ['b', '解ける手順を先に決めて、そこから盤面を作るといいよ', 'decide the solution first, then build the board around it'],
+    ['a', 'その発想はなかった', 'never thought of that'],
+    ['b', '3回作り直しただけ', 'I just rebuilt mine three times'],
+  ], archA: ['kid', 'casual', 'gacha'], archB: ['senpai', 'explorer'] },
+);
+
+FEED.push(
+  { id: 'chain_big', icon: '⛓️', w: 3, min: 0.35, ja: '{me} が連鎖カスケードで{n}連鎖を決めた！', en: '{me} pulled off a {n}-chain in Chain Cascade!' },
+  { id: 'blueprint_star3', icon: '🏗️', w: 2, min: 0.45, ja: '{me} が今日の設計図を★3で完成させた', en: "{me} finished today's blueprint with 3 stars" },
+  { id: 'workshop_post', icon: '🛠️', w: 2, min: 0, ja: '{me} がパズル工房に自作ステージを投稿した', en: '{me} published a stage in the Puzzle Workshop' },
+);
+
+Object.assign(REPLIES, {
+  chain: {
+    ja: ['落ちたあとに揃うように上から埋めるといいよ', '⛓️は倍率×64で頭打ちだから、そこまで狙えたら十分', '1連鎖で終わると心が折れるよねw', '重力あるとピースの見え方まで変わる', 'あと1マス我慢するかどうかの勝負だと思ってる'],
+    en: ['fill the top so the drop finishes the bottom rows', 'the multiplier caps at ×64, so anything past that is style', 'one-chain endings hurt lol'],
+  },
+  blueprint: {
+    ja: ['列を揃えたら崩れるから、はみ出しに気をつけて', '★3は崩壊0＋90秒以内だよ', '今日の図面、地味に難しかった', 'ピースは図面ぴったりぶんしか来ないから、1マスも無駄にできない', '崩壊するとこっちの心も崩れる'],
+    en: ['never complete a line — the build crumbles', '3 stars means zero crumbles under 90 seconds', "today's shape was sneaky hard"],
+  },
+  workshop: {
+    ja: ['コード貼ってくれたら遊びに行くよ', '自分でクリアできた図しか公開されないから安心して挑んでいい', '作者の手数に勝てたためしがない', '❤️送っておいた', '投稿するとプレイされるたびにコイン入るのいいよね'],
+    en: ['drop the code and I will play it', 'every published stage was cleared by its author first', 'beating the author par is another game entirely'],
+  },
+});
+// 'puzzle' ルールの正規表現が「パズル工房」を先に拾ってしまうので、この3つは
+// その手前に差し込む（REPLY_RULES は先勝ちマッチ）。'puzzle' が見つからない
+// 場合だけ従来どおり包括ルールの手前へ。
+// 「連鎖」単体は日替わりフラグ『連鎖の日』(コンボ2倍) でも使われる語なので、
+// ⛓️モードだと分かる語形だけを拾う。
+{
+  const NEW3_RULES = [
+    ['chain', /連鎖カスケード|カスケード|⛓️|[0-9０-９]+連鎖|chain ?cascade/i],
+    ['blueprint', /設計図|ブループリント|blueprint/i],
+    ['workshop', /パズル工房|工房のステージ|ワークショップ|workshop/i],
+  ];
+  const at = REPLY_RULES.findIndex(r => r[0] === 'puzzle');
+  REPLY_RULES.splice(at >= 0 ? at : REPLY_RULES.length - 1, 0, ...NEW3_RULES);
+}

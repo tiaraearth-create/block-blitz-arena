@@ -21,10 +21,15 @@
 // サーバーが listen するまでの一瞬に他人が取る可能性はゼロではない。並列度を
 // 上げるほどその窓は踏まれやすくなる。また royale / shutdown のように実時間で
 // 待つテストがあり、機械が重いと起動待ち（15〜20秒）が間に合わなくなる。
-// 4本までなら実測で問題なかったが、疑わしいときは直列に落とせるようにしてある:
 //
-//   node test/run-all.mjs --jobs 1     … 直列（昔と同じ挙動）
-//   node test/run-all.mjs --jobs 2     … 控えめ
+// 既定は同時2本。以前の既定（4本）だと social / battle / royale あたりが
+// 「fetch failed」だけ残して落ちることがあり、単独で回すと全部通る——という
+// 偽の失敗が出ていた。テストが嘘をつくと、本物の失敗まで疑われなくなる。
+// CI（.github/workflows/ci.yml）も TEST_JOBS=2 なので、これで手元と揃う。
+// 速さが要るときだけ上げる:
+//
+//   node test/run-all.mjs --jobs 1     … 直列（いちばん安全・いちばん遅い）
+//   node test/run-all.mjs --jobs 4     … 速いマシン向け（偽の失敗が出たら下げる）
 //   TEST_JOBS=1 npm test               … 環境変数でも同じ
 //
 // 出力は「走らせた順」ではなく「1本ぶんをまとめて」出す。並列の出力を
@@ -44,6 +49,7 @@ const ROOT = path.join(__dirname, '..');
 const TESTS = [
   'engine.test.mjs',
   'modes-structure.test.mjs',
+  'workshop.test.mjs',
   'viewresize.test.mjs',
   'i18n.test.mjs',
   'clientwiring.test.mjs',
@@ -79,7 +85,7 @@ const TIMEOUT_MS = Number(process.env.TEST_TIMEOUT_MS || 300000);
 const args = process.argv.slice(2);
 const jobsArg = args.indexOf('--jobs');
 let JOBS = Number(
-  (jobsArg >= 0 && args[jobsArg + 1]) || process.env.TEST_JOBS || 4
+  (jobsArg >= 0 && args[jobsArg + 1]) || process.env.TEST_JOBS || 2
 );
 if (!Number.isFinite(JOBS) || JOBS < 1) JOBS = 1;
 JOBS = Math.min(JOBS, TESTS.length);
@@ -192,6 +198,13 @@ async function main() {
     // 失敗した行だけ抜き出して添える。上のログを遡らなくても原因に当たれる。
     const bad = (r.out + '\n' + r.err).split('\n').filter(l => l.includes('❌')).slice(0, 8);
     for (const l of bad) console.log(`       ${l.trim()}`);
+    // ❌ が1行も無いまま落ちた＝「何が壊れたのか分からない失敗」。
+    // 無言で終わったときは、せめて最後に出ていたものを見せる。
+    if (!bad.length) {
+      const tail = (r.err || r.out).split('\n').map(l => l.trimEnd()).filter(Boolean).slice(-8);
+      if (tail.length) for (const l of tail) console.log(`       ${l}`);
+      else console.log('       （出力はありませんでした）');
+    }
   }
   console.log('');
   console.log('  1本だけ回すには:  node test/<ファイル名>');

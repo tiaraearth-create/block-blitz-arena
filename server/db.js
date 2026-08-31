@@ -40,6 +40,14 @@ let lastWriteError = null;
 // 値は writeAtomic が実際に書けたときだけ更新する（失敗時は lastWriteError 側）。
 let lastWriteMs = null;
 let lastWriteBytes = null;
+// 保存が重くなり始めたことに、管理画面を開かなくても気づけるようにする。
+// 「O(ユーザー数×何か)」で伸びる入れ物が新しく入ると、db.json は静かに太り、
+// 保存＝イベントループが止まる時間としてじわじわ効いてくる（工房の♡一覧が
+// まさにその形）。閾値を越えた保存だけをログに出す。毎回出すと 250ms おきに
+// 同じ行が流れて肝心なときに埋もれるので、間隔を空けて1本だけ出す。
+const SLOW_SAVE_MS = 20;
+const SLOW_SAVE_LOG_INTERVAL = 10 * 60 * 1000;
+let lastSlowSaveLogAt = 0;
 
 // 本体の db.json はここで無整形に書く。整形（インデント2）は人が読むための
 // もので、db.json を人が開くのは事故のときだけ。実際に読むのは JSON.parse
@@ -76,6 +84,13 @@ function writeAtomic(file, text) {
   // ここまで来たら本当にディスクに載っている。計測値はその時だけ更新する。
   lastWriteMs = Math.round((performance.now() - startedAt) * 10) / 10;
   lastWriteBytes = Buffer.byteLength(text);
+  if (lastWriteMs >= SLOW_SAVE_MS) {
+    const now = Date.now();
+    if (now - lastSlowSaveLogAt >= SLOW_SAVE_LOG_INTERVAL) {
+      lastSlowSaveLogAt = now;
+      console.warn(`[db] 保存に ${lastWriteMs}ms かかりました（${lastWriteBytes} bytes）。保存は同期＋fsync なので、この間イベントループは止まっています`);
+    }
+  }
 }
 
 // db.json が壊れていたときの最後の砦。起動ごとに撮っている

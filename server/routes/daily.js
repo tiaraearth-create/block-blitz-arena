@@ -244,13 +244,35 @@ function dailyReplayView(row, day, rank, viewerId) {
   };
 }
 
+// ?day= の受け取り。形（YYYY-MM-DD）だけを見ていたので 9999-99-99 のような
+// 暦に無い日付でも「その日の設計図」を決定的に作って配ってしまっていた。
+// 見るのは3つ:
+//   1. 形       … 従来どおり
+//   2. 実在する日か … `new Date('2026-02-31T00:00:00+09:00')` は Invalid Date。
+//                    念のため JST の日付キーへ戻して一致も確かめる
+//   3. 今日か昨日か … リプレイの保持期間（DAILY_REPLAY_DAYS）と同じ窓。
+//                    未来の設計図を先に配らないための歯止め
+// どれかを外れたら従来の挙動どおり「今日」に落とす（400 は返さない ──
+// 既存クライアントは今日か昨日しか渡さないので、壊す側の変更にしない）。
+function requestedDay(raw) {
+  const today = jstDayKey();
+  const q = String(raw || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(q)) return today;
+  const ts = Date.parse(`${q}T00:00:00+09:00`);
+  if (!Number.isFinite(ts)) return today;
+  if (jstDayKey(ts) !== q) return today;
+  for (let i = 0; i < DAILY_REPLAY_DAYS; i++) {
+    if (jstDayKey(Date.now() - i * 86400000) === q) return q;
+  }
+  return today;
+}
+
 // 🏗 その日のブループリント（設計図）。全員が同じ図柄を解くので、日付から
 // 決定的に生成したものをそのまま配る。模範解答 at はクライアントが使わない
 // ので落として送る ── 送ると「今日の答え」がそのまま見えてしまう。
 dailyReplayRouter.get('/api/daily/blueprint', (req, res) => {
   if (!rateLimit(`dbp:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください', errorEn: 'Please slow down' });
-  const q = String(req.query.day || '');
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(q) ? q : jstDayKey();
+  const day = requestedDay(req.query.day);
   const bp = blueprintFor(day);
   if (!bp) return res.status(404).json({ error: 'きょうの設計図がありません', errorEn: 'No blueprint for today' });
   res.json({ ...bp, pieces: bp.pieces.map(({ at, ...p }) => p) });
@@ -260,8 +282,7 @@ dailyReplayRouter.get('/api/daily/blueprint', (req, res) => {
 // 公開データなので、他の公開読み取りと同じIPレート制限をかける。
 dailyReplayRouter.get('/api/daily/replays', (req, res) => {
   if (!rateLimit(`drep:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください', errorEn: 'Please slow down' });
-  const q = String(req.query.day || '');
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(q) ? q : jstDayKey();
+  const day = requestedDay(req.query.day);
   const store = dailyReplayStore();
   const all = store && Array.isArray(store[day]) ? store[day] : [];
   const sorted = all.slice().sort((a, b) => (b.score - a.score) || (a.at - b.at));

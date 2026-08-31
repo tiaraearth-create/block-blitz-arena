@@ -489,6 +489,17 @@ function migrateUser(user) {
     gachaPulls: 0, gachaSSR: 0, chatMessages: 0, reactionsGiven: 0,
     weeklyWins: 0, puzzleStage: 0, puzzlePlays: 0, digDepth: 0, digPlays: 0,
     ghostBest: 0, ghostPlays: 0, dailycPlays: 0, dailycBestStreak: 0,
+    // v2.16 以降に増えた累積カウンタ。読む側はどこも `|| 0` を通しているので
+    // 実害は無いが、同種のカウンタだけがここに無いと、後から「合計」「平均」で
+    // まとめて集計するコードが入ったときに undefined 混入で NaN になる。
+    perfectClears: 0, guildQuestsClaimed: 0,
+    // ⛓️🏗️🛠️ 新3モードの累積カウンタ。読む側（achievements.js / main.js）は
+    // どれも `|| 0` を通しているので実害は無いが、同種のカウンタを欄として
+    // 揃えておく（後から「合計」「平均」でまとめる集計が undefined で NaN に
+    // ならないように）。
+    chainPlays: 0, chainBest: 0, chainMax: 0,
+    blueprintPlays: 0, blueprintClears: 0,
+    workshopPlays: 0, workshopClears: 0,
   })) if (s[k] === undefined) s[k] = v;
   if (!s.bossRanks || typeof s.bossRanks !== 'object') s.bossRanks = {};
   // 同じ汚染で stats に増えた永久ゴミキー（'undefined' と 'constructorPrev'
@@ -693,7 +704,7 @@ const BUGREPORT_CAP = 300;
 const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7', 'guildquest'];
 const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']);
 
-function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, trusted, preClamped }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, trusted, preClamped }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   // mode はキー生成にも使う（下の `${mode}Prev`）。クライアント申告なので、
   // 長さを切っておかないと巨大文字列で stats を無限に太らせられる（実測で
@@ -723,7 +734,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   floors = clamp(floors, 100);
   // ✨全消し「昇華」の回数。1ランで現実的に出せるのはせいぜい数回なので、
   // ults/items と同じ作法で上限を切っておく（実績→💎の原資になるため）。
-  perfectClears = clamp(perfectClears, 20);
+  // 上限20は「現実的に数回」という自分の但し書きと合っていなかった:
+  // ach_pclear50(9,000🪙+80💎) までが 20秒あけた3リクエストで満額取れる。
+  // 実プレイの物理に寄せて5回まで。下の lines 相関チェックと2枚重ねにする。
+  perfectClears = clamp(perfectClears, 5);
   // 単数 floor（ダンジョン到達階）もクランプ。realm ブロックは別変数 fl で
   // クランプするが、到達フィード生成と `${mode}Prev` 書き込みは生 floor を
   // 使うため、ここで押さえないと F999999 の虚偽速報や dungeonPrev=Infinity
@@ -731,9 +745,18 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   floor = clamp(floor, 100);
   depth = clamp(depth, 9999);
   stage = clamp(stage, 9999);
+  // ⛓️連鎖カスケードの最大連鎖数。chainMult の上限が ×64（= 2^(連鎖-1)）なので
+  // 現実的な連鎖数は高々そのあたり。クライアント申告なので他のテレメトリと
+  // 同じ作法で頭を押さえる（実績 ach_chain5/10 の原資になるため）。
+  maxChain = clamp(maxChain, 64);
   rank = ['S', 'A', 'B', 'C'].includes(rank) ? rank : null;
   score = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
   lines = Math.max(0, Math.min(5000, Math.floor(Number(lines) || 0)));
+  // 全消しは「盤面を空にした」瞬間なので、直前にそれなりの数のラインを
+  // 消していないと成立しない。lines と相関させておけば、perfectClears だけを
+  // 盛った申告は通らなくなる（lines も一緒に偽ると今度はスコアの
+  // レート上限と実経過時間の側で引っかかる）。
+  perfectClears = Math.min(perfectClears, Math.floor(lines / 8));
   maxCombo = Math.max(0, Math.min(200, Math.floor(Number(maxCombo) || 0)));
   duration = Math.max(1, Math.min(7200, Number(duration) || 1));
   // `duration` is CLIENT-DECLARED, and the rate cap below divides by it — so
@@ -785,6 +808,32 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // exactly the ceiling the arena residents sit just under.
   const rateCap = mode === 'sprint' ? 1000 : mode === 'meltdown' ? 2000 : mode === 'chimera' ? 1000 : mode === 'dig' ? 2000 : 2000;
   if (score > duration * rateCap) score = Math.floor(duration * rateCap);
+
+  // 「1プレイの実体があった」判定。score も duration もここで確定するので、
+  // 以降どこからでも使える。💎ドロップ・累積カウンタ（下）に加えて、
+  // 🗡️ギルド週間クエスト（すぐ下のギルドブロック）もこの門をくぐらせる。
+  const realPlay = score >= GEMDROP_MIN_SCORE && duration >= GEMDROP_MIN_SECONDS;
+
+  // 🏗️ブループリントは「その日じゅう全員同じ固定盤面」なので、一度解けば
+  // 手順を覚えたまま何度でも won:true を送れる。📅デイリーは開始時の予約
+  // (attemptId) で反復を塞いでいるが、ブループリントには何も無かった。
+  // 勝利ぶんの上積み（+50🪙 / bpXp+100 / accXp+80 / ギルドpt+25 / totalWins /
+  // ミッションの 'win'）だけを「その日の初回」に限る。2回目以降も普通に
+  // 遊べて、汎用ミッション（games/lines/score）は今までどおり進む。
+  if (mode === 'blueprint') {
+    const today = jstDayKey();
+    const bp = user.stats.bpDay;
+    if (!bp || bp.day !== today) user.stats.bpDay = { day: today, cleared: false };
+    if (won) {
+      if (user.stats.bpDay.cleared) won = false;
+      else user.stats.bpDay.cleared = true;
+    }
+  }
+  // 🛠️工房も同型（自作の1〜2手ステージを公開して自分で回せる）。本筋は
+  // 結果に stage code を載せて「同じステージの初回だけ」にすることだが、
+  // それはクライアント側の送信を変える必要があるので、暫定として勝利加算に
+  // 1時間あたりの上限を置く。正直に色々なステージを遊ぶぶんには当たらない。
+  if (mode === 'workshop' && won && !rateLimit(`wswin:${user.id}`, 10, 60 * 60 * 1000)) won = false;
 
   let coins = Math.min(1000, 20 + Math.floor(score / 100) + (won ? 50 : 0));
   if (mode === 'chaos') coins = Math.min(1500, Math.round(coins * 1.5));   // chaos-mode bonus
@@ -848,9 +897,18 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     // 4つの世界を直に見る。他モードの stray な floors をクエストに足さないため。
     const isDungeonMode = mode === 'dungeon' || mode === 'dungeon_under'
       || mode === 'dungeon_heaven' || mode === 'dungeon_abyss';
+    // クエストの加算も実プレイ判定の門をくぐらせる。ここだけ門の外にあったので、
+    // score:0 / duration:1 の空の結果を連投するだけで「ライン3,000本」等が
+    // 達成状態になり、金庫の 🪙1200+💎6 がメンバー全員に配れてしまった。
+    // 正直に1プレイすれば必ず超える水準なので、通常プレイの取り分は変わらない。
+    // （'games' トラックは questContributions が固定で 1 を返すので、guilds.js
+    //  側でも realPlay を見るまでは寄与が残る ── coordination に残した）
     const questsDone = trackGuildQuests(db, user, wk, {
-      mode, won: !!won, lines, perfectClears, ults,
-      floors: isDungeonMode ? floors : 0,
+      mode, won: !!won && realPlay, realPlay,
+      lines: realPlay ? lines : 0,
+      perfectClears: realPlay ? perfectClears : 0,
+      ults: realPlay ? ults : 0,
+      floors: realPlay && isDungeonMode ? floors : 0,
     });
     // 達成はギルド全体の手柄なので、ライブフィードで世界に知らせる（日英）。
     // 1ゲームで2本以上ぶら下がることは滅多にないが、念のため頭を押さえる。
@@ -887,7 +945,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // 「誰でも挑めるモードのハイスコア」と並べても意味がない。
   // デイリーはお題（コンボ2倍等）でスコアの物差しが日ごとに変わるので、
   // 通常ハイスコアとは比べない — 専用のその日限りランキングだけに載る。
-  const scoreboardEligible = mode !== 'meltdown' && mode !== 'daily' && !mode.startsWith('ae_');
+  // ⛓️連鎖カスケードも同じ理由で除外: 倍率が最大×64（chainMult は 2^(連鎖-1)）
+  // で、×15のメルトダウンを外した基準に照らせば明確に除外側。連鎖の自己ベストは
+  // クライアント側の専用記録（bba_chain_best）が持っているので達成感は残る。
+  const scoreboardEligible = mode !== 'meltdown' && mode !== 'chain' && mode !== 'daily' && !mode.startsWith('ae_');
   if (scoreboardEligible && score > s.bestScore) s.bestScore = score;
   // これらの累積カウンタは実績→💎(課金通貨)の原資になるが、値はすべて
   // クライアント申告なのでスコア/コインと同様に信頼しない。💎ドロップと同じ
@@ -895,7 +956,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
   // 反映する。正直に1プレイすれば必ず超える水準なので通常プレイの取り分は
   // 変わらないが、{maxCombo:200} 等のテレメトリだけを連投しても最上位実績に
   // 到達できない。maxCombo は monotonic set ではなく実プレイ判定を通した回のみ更新。
-  const realPlay = score >= GEMDROP_MIN_SCORE && duration >= GEMDROP_MIN_SECONDS;
+  // （realPlay の宣言はレート上限の直後に移した ── ギルド週間クエストの加算も
+  //  同じ門をくぐらせる必要があり、そちらはこの行より前にあるため）
   if (realPlay && maxCombo > s.maxCombo) s.maxCombo = maxCombo;
   if (realPlay) {
     s.ultsUsed = (s.ultsUsed || 0) + ults;
@@ -1124,6 +1186,29 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
       }
     }
   }
+  // ⛓️ 連鎖カスケード: 遊んだ回数・スコアの自己ベスト・最大連鎖数を記録。
+  // score/maxChain はクライアント申告なので、💎ドロップや他の実績原資と同じ
+  // 「実プレイの痕跡」(realPlay) を通った回だけ自己ベストを更新する。
+  // chainBest は main.js が、chainMax は ach_chain5/10 が読む（chain は
+  // scoreboardEligible=false なので通常ハイスコアには載らない → 専用ベストを持つ）。
+  if (mode === 'chain') {
+    s.chainPlays = (s.chainPlays || 0) + 1;
+    if (realPlay && score > (s.chainBest || 0)) s.chainBest = score;
+    if (realPlay && maxChain > (s.chainMax || 0)) s.chainMax = maxChain;
+  }
+  // 🏗️ ブループリント: 遊んだ回数と完成枚数。won は上のブロックで「その日の
+  // 初回クリアだけ」に絞られている（丸暗記の再送を弾くため）ので、
+  // blueprintClears はその日の初回にだけ増える。
+  if (mode === 'blueprint') {
+    s.blueprintPlays = (s.blueprintPlays || 0) + 1;
+    if (won) s.blueprintClears = (s.blueprintClears || 0) + 1;
+  }
+  // 🛠️ 工房（遊ぶ側）: 遊んだ回数とクリア数。won は上のブロックで1時間あたりの
+  // 上限を通したものだけ（同一ステージ連投の緩衝）。
+  if (mode === 'workshop') {
+    s.workshopPlays = (s.workshopPlays || 0) + 1;
+    if (won) s.workshopClears = (s.workshopClears || 0) + 1;
+  }
   // Dungeon tower: track highest floor cleared; gems for each newly reached
   // checkpoint decade, badge + big gem bonus for conquering all 100 floors.
   // The Abyss: the hardest realm — double gems per decade, a badge and a big
@@ -1264,6 +1349,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, duration, won, dr
     wave: mode === 'survival' ? wave : 0,
     stage: mode === 'puzzle' ? stage : 0,
     depth: mode === 'dig' ? depth : 0,
+    // ⛓️ 連鎖数ベースのお題用。missions.js の contributions が maxChain を
+    // 受ける（chain 以外は 0）。他モードの stray な maxChain を混ぜないよう
+    // ここでも mode でゲートする。
+    maxChain: mode === 'chain' ? maxChain : 0,
     ults, items, pieces,
   });
   saveDb();
@@ -1556,7 +1645,13 @@ app.post('/api/me/rename', requireAuth, (req, res) => {
 
 const GUEST_PUZZLE_MAX = 50;
 const GUEST_STARS_MAX = 150;
-const GUEST_ITEM_MAX = 9;
+// 🎒 ブースターは「表示用」ではなく実際に在庫が増える唯一の引き継ぎ物なので、
+// 上の「通貨は引き継がない」という線の内側に収める必要がある。1種9個 × 非運営
+// 4種 = 36個は、ショップ価格に直すと 11,700🪙 相当が申告だけで湧く量だった。
+// さらに図鑑の set_boost（各ブースターを1個以上持つ → 1,500🪙+12💎）が
+// この在庫だけで解錠されるので、課金通貨にまで届いていた。ゲストの手持ちを
+// 尊重する趣旨は残しつつ、換算額が線を越えない水準まで下げる。
+const GUEST_ITEM_MAX = 3;
 // 引き継げる「自己ベスト」と、その上限。ここに無いキーは黙って捨てる。
 const GUEST_BEST_LIMITS = {
   solo: 1_000_000, chaos: 1_000_000, meltdown: 1_000_000, chimera: 1_000_000,
@@ -1777,6 +1872,17 @@ app.get('/api/status', (req, res) => {
     maintenance: inMaintenance(),
     // True when SESSION_SECRET is set, i.e. logins survive redeploys.
     sessionsPersist: SESSIONS_PERSIST,
+    // db.json の現在のサイズ。外形監視（.github/workflows/watchdog.yml）が
+    // このキーを読んでログに出しているのに、公開 /api/status は返していなかった
+    // （dbBytes は管理者専用の /api/admin/stats 側にしかなかった）ため、監視ログに
+    // 毎回 undefined が並び、本当に壊れたときの見落としにつながる。サイズ自体は
+    // 秘匿情報ではないので、ここで返して監視側を成立させる。
+    dbBytes: persistMetrics().dbBytes,
+    // 💾 復元の天井（バイト）と、db.json がそれを越えていないか。外形監視が
+    // 「戻せない大きさに育っている」ことを早期に拾えるよう公開側にも出す
+    // （サイズ自体は秘匿情報ではない。dbBytes を既に返しているのと同じ扱い）。
+    restoreLimitBytes: RESTORE_MAX_BYTES,
+    dbOverRestoreLimit: persistMetrics().dbBytes != null && persistMetrics().dbBytes > RESTORE_MAX_BYTES,
     // 直近の保存が失敗していれば、その事実。null なら書けている。
     // 保存の失敗はこれまで完全に無音で、遊べてしまうぶんだけ気づけなかった
     // （メモリ上は正常なので、次の再起動で初めて「全部消えた」と分かる）。
@@ -2648,6 +2754,10 @@ const HOF_BOARDS = [
   { id: 'wins',   name: '週間チャレンジ優勝', nameEn: 'Weekly Challenge wins' },
 ];
 const HOF_GEMS = [400, 200, 100];       // 1位 / 2位 / 3位
+// 表彰に必要な実プレイヤーの最少人数。1人しか値を持たないボードで
+// 無条件に 400💎 が出るのを防ぐ（rating は新規の初期値が1000なので、
+// gamesPlayed>0 の全員が候補に入る = 少人数の機体では素通りしていた）。
+const HOF_MIN_ENTRANTS = 3;
 const HOF_MAX_SEASONS = 100;            // これを越えたら古い順に落とす（実質8年ぶん）
 // シーズン刻印バッジ。ADMIN_KNOWN_BADGES に固定では書けない（シーズンごとに
 // 増える）ので、形で許可する。
@@ -2686,19 +2796,32 @@ function hofTopOf(board) {
     }
   }
   rows.sort((a, b) => b.value - a.value);
-  return { entrants: rows.length, top: rows.slice(0, 3).map((r, i) => ({ rank: i + 1, ...r })) };
+  // 表示用（top）は住人込み ── ボードの見た目はランキングと揃っていてほしい。
+  // 報酬用（realTop）は住人を外してから順位を振り直す。以前は表示用の上位3人から
+  // 住人を「飛ばす」だけだったので、住人が上位を占めた回は 400/200/100💎 が
+  // 誰にも配られず消えていた（ニュースには住人が1位として載るのに、である）。
+  const real = rows.filter(r => !r.resident);
+  return {
+    entrants: rows.length,
+    top: rows.slice(0, 3).map((r, i) => ({ rank: i + 1, ...r })),
+    realEntrants: real.length,
+    realTop: real.slice(0, 3).map((r, i) => ({ rank: i + 1, ...r })),
+  };
 }
 
 function settleSeasonHallOfFame() {
   const cur = currentSeason();
   const prev = db.meta.seasonMark;
   if (prev && prev.id === cur.id) return;
-  // 初回（この機能が入る前からある機体・復元直後）は刻印を置くだけ。
+  // 再デプロイ直後の空DB（復元待ち）では、刻印すら置かずに戻る。この門は
+  // 「初回は刻印を置くだけ」の分岐より **前** でなければならない ── backup.js の
+  // メタ合流は `db.meta[k] == null` のときだけ backup 側を採用するので、
+  // 復元前にここで印を置いてしまうと、復元で戻ってきた seasonMark は採用されず、
+  // 直前シーズンの殿堂入り・上位3名の💎・1位の刻印バッジが二度と表彰されない。
+  if (!Object.values(db.users).some(u => u.role !== 'admin' && !u.banned)) return;
+  // 初回（この機能が入る前からある機体）は刻印を置くだけ。
   // 直前のシーズンがどうだったかを知らないまま表彰しても嘘になる。
   if (!prev || !prev.id) { db.meta.seasonMark = seasonMarkOf(cur); saveDb(); return; }
-  // 再デプロイ直後の空DB（復元待ち）では進めない。ここで印だけ進めると、
-  // 復元されてくる人たちのシーズンが1回ぶん無言で飛ぶ。
-  if (!Object.values(db.users).some(u => u.role !== 'admin' && !u.banned)) return;
 
   if (!Array.isArray(db.meta.hallOfFame)) db.meta.hallOfFame = [];
   if (db.meta.hallOfFame.some(e => e && e.season === prev.id)) {
@@ -2711,10 +2834,14 @@ function settleSeasonHallOfFame() {
   const boards = [];
   const winners = [];
   for (const b of HOF_BOARDS) {
-    const { entrants, top } = hofTopOf(b.id);
+    const { entrants, top, realTop, realEntrants } = hofTopOf(b.id);
     if (!top.length) continue;
     boards.push({ id: b.id, name: b.name, nameEn: b.nameEn, entrants, top: top.map(t => ({ rank: t.rank, username: t.username, value: t.value, resident: t.resident })) });
-    for (const t of top) {
+    // フィードの見出しはボードの表示どおり（住人が首位ならその名前）。
+    if (top[0]) winners.push({ username: top[0].username, board: b.name, boardEn: b.nameEn });
+    // 実プレイヤーが少なすぎるボードは表彰を見送る（1人で400💎を防ぐ）。
+    if (realEntrants < HOF_MIN_ENTRANTS) continue;
+    for (const t of realTop) {
       if (!t.userId) continue;                       // 住人には配らない
       const u = db.users[t.userId];
       if (!u) continue;
@@ -2726,11 +2853,11 @@ function settleSeasonHallOfFame() {
         season: prev.id, seasonNumber: prev.number,
         seasonName: prev.name, seasonNameEn: prev.nameEn,
         boardName: b.name, boardNameEn: b.nameEn,
-        rank: t.rank, of: entrants, best: t.value,
+        // 順位は実プレイヤーだけで数え直したものなので、母数もそれに揃える。
+        rank: t.rank, of: realEntrants, best: t.value,
         coins: 0, gems, badge: t.rank === 1 ? badge : null,
         at: Date.now(),
       });
-      if (t.rank === 1) winners.push({ username: u.username, board: b.name, boardEn: b.nameEn });
     }
   }
 
@@ -2754,8 +2881,8 @@ function settleSeasonHallOfFame() {
       id: crypto.randomUUID(),
       title: `🏛 ${prev.name} 殿堂入り発表`,
       titleEn: `🏛 ${prev.nameEn} Hall of Fame`,
-      body: `${prev.name}が終了しました。歴代の記録として殿堂に刻まれた顔ぶれです。\n\n${lineJa}\n\n各ボードの上位3名にはジェムを、1位にはシーズン刻印バッジをお届けしました（ゲームを開くと受け取れます）。新シーズンもよろしくお願いします！`,
-      bodyEn: `${prev.nameEn} has ended — here are the names carved into the Hall of Fame.\n\n${lineEn}\n\nThe top 3 of each board received gems, and each #1 earned the season champion badge — open the game to claim. See you in the new season!`,
+      body: `${prev.name}が終了しました。歴代の記録として殿堂に刻まれた顔ぶれです。\n\n${lineJa}\n\n各ボードで上位に入った挑戦者にはジェムを、その首位にはシーズン刻印バッジをお届けしました（ゲームを開くと受け取れます）。新シーズンもよろしくお願いします！`,
+      bodyEn: `${prev.nameEn} has ended — here are the names carved into the Hall of Fame.\n\n${lineEn}\n\nThe top challengers on each board received gems, and the highest of them earned the season champion badge — open the game to claim. See you in the new season!`,
       pinned: false, by: '運営', at: Date.now(),
     });
     if (db.news.length > 200) db.news.shift();
@@ -3002,6 +3129,9 @@ const RESULT_FIELDS = [
   'mode', 'score', 'lines', 'maxCombo', 'duration', 'won', 'drew',
   'bossId', 'floor', 'wave', 'ults', 'items', 'pieces', 'floors',
   'sprintDur', 'rank', 'depth', 'stage',
+  // ⛓️ 連鎖カスケードの最大連鎖数。他のテレメトリと同じく実プレイ判定を
+  // 通った回だけ反映される（applyGameResult 側で clamp(…,64)）ので名乗らせてよい。
+  'maxChain',
   // ✨全消し「昇華」の回数。他のテレメトリと同じく実プレイ判定を通った回だけ
   // 累積される（applyGameResult 側）ので、名乗らせてよい。
   'perfectClears',
@@ -3073,9 +3203,30 @@ app.get('/api/leaderboard', (req, res) => {
     title: titleOf(u),
   }));
   // Ghost players pad the boards so rankings feel populated (weekly reshuffle).
-  const taken = new Set(Object.values(db.users).map(u => u.username));
+  //
+  // ゴースト行の🛡️タグを tagOfName で1行ずつ引くと、そのたびに
+  // Object.values(db.users) を作り直して名前を線形検索することになり、
+  // 計算量が O(行数 × ユーザー数) になる。行数は40〜100、走査対象は全アカウント
+  // なので、人が増えるほどこの1リクエストの間だけイベントループが素で止まる
+  // （投票側の battle.js:716 が先に踏んだのと同じ轍。あちらは db.users を見ない
+  //  residentGuildTag に逃がして解決済みで、ランキングだけが古いままだった）。
+  // `taken` を作るこの1周で「名前 → ギルドタグ」の索引も一緒に作り、ゴースト行は
+  // それを引くだけにする。索引に無い名前（＝実プレイヤーではない住人）だけ
+  // ghostGuildOfResident へ落とす。これで走査は1回、O(ユーザー数 + 行数) になる。
+  const taken = new Set();
+  const tagByName = new Map();
+  for (const u of Object.values(db.users)) {
+    taken.add(u.username);
+    const g = u.guildId ? db.guilds[u.guildId] : null;
+    if (g) tagByName.set(u.username, g.tag);
+  }
+  const ghostTagOf = (name) => {
+    if (tagByName.has(name)) return tagByName.get(name);
+    const g = ghostGuildOfResident(name);
+    return g ? g.tag : null;
+  };
   const rows = realRows
-    .concat(ghostRows(board, week, taken).map(r => ({ ...r, guildTag: tagOfName(db, r.username, null) })))
+    .concat(ghostRows(board, week, taken).map(r => ({ ...r, guildTag: ghostTagOf(r.username) })))
     .sort((a, b) => board === 'rating' ? b.rating - a.rating
       : board === 'dungeon' ? b.dungeonMax - a.dungeonMax
       : board === 'weekly' ? b.weeklyBest - a.weeklyBest
@@ -3306,6 +3457,11 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     // ローテーション具合。
     dbBytes: persist.dbBytes,
     saveMs: persist.saveMs,
+    // 💾 復元の天井（バイト）と、db.json がそれを越えていないか。越えていると
+    // 「自分で取ったバックアップを自分で戻せない」大きさに育っている（書き出し側
+    // は塊を落として収めるが、事前に気づけるよう管理画面へフラグを出す）。
+    restoreLimitBytes: RESTORE_MAX_BYTES,
+    dbOverRestoreLimit: persist.dbBytes != null && persist.dbBytes > RESTORE_MAX_BYTES,
     persistError: lastPersistError(),
     txLive: Array.isArray(db.transactions) ? db.transactions.length : 0,
     txArchived: Number(db.meta.revenueCount) || 0,
@@ -3637,6 +3793,9 @@ setContext({
   postRealFeed, adminLog, ADMIN_LOG_MAX, BUGREPORT_CAP,
   // 運営まわりの語彙
   RESERVED_NAMES, ADMIN_KNOWN_BADGES,
+  // 💾 復元の天井（MB）。routes/admin.js のバックアップ書き出しが同じ天井を
+  // 共有するために読む（載っていなければ向こうの既定値4にフォールバック）。
+  RESTORE_LIMIT_MB,
 });
 initShopRoutes();
 initMissionRoutes();

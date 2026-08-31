@@ -8,6 +8,7 @@ const DEFAULTS = {
   sfxVol: 0.9,
   musicVol: 0.6,
   shake: true,
+  flash: true,           // full-screen white flash on big clears / chains / boss hits
   particles: 'normal',   // 'low' | 'normal' | 'high'
   chatTranslate: true,   // show foreign-language chat in your language
   bgmTrack: null,        // jukebox pin: track id to loop everywhere (null = auto per screen)
@@ -30,6 +31,7 @@ if (!hadSaved) {
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
         && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       settings.shake = false;
+      settings.flash = false;
       settings.particles = 'low';
     }
   } catch { /* matchMedia 非対応環境 -> 既定のまま */ }

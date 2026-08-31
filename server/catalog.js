@@ -262,20 +262,58 @@ export const COLLECTION_SETS = [
     'エフェクト全種', 'Effect Collection', '消去エフェクトをすべて集める', 'Own every clear effect', 5000, 40),
   cset('set_ult',   '⚡', 'item', normalGear('ult'),
     '奥義全種', 'Arts Collection', 'アルティメットをすべて集める', 'Own every ultimate skill', 8000, 70, 'ultcollector'),
+  // ⚠️ set_boost は kind:'boost' ＝ 在庫>0 で達成扱い。引き継ぎ由来や配布分の
+  // 在庫だけでも解錠できてしまうので、報酬はコインのみにして💎を外す（0）。
+  // 他セット（item/badge/title）は「減らない実績」なので💎付きのままでよい。
   cset('set_boost', '🎒', 'boost', BOOST_ITEMS.filter(i => !i.adminOnly).map(i => i.id),
-    '道具棚コンプ', 'Booster Shelf', 'ブースターを1個以上ずつ持つ', 'Hold at least one of every booster', 1500, 12),
+    '道具棚コンプ', 'Booster Shelf', 'ブースターを1個以上ずつ持つ', 'Hold at least one of every booster', 1500, 0),
+  // 💎の額はセットによって重みが違う。「通貨を1円も払わずに達成済みになる」
+  // 4セット（gacha / throne / trial / slayer）は、図鑑が増えた日に古参が
+  // 全部まとめて解錠する ── ここに大きな💎を置くと、更新当日に最大の課金パック
+  // より多い💎が無条件で配られてしまう。コインは据え置き、💎だけ絞ってある。
   cset('set_gacha', '🎰', 'item', SHOP_ITEMS.filter(i => i.gachaOnly).map(i => i.id),
-    'ガチャ限定コンプ', 'Gacha Exclusives', 'ガチャ限定の装備をすべて集める', 'Own all gacha-exclusive gear', 10000, 90, 'rainbowtrio'),
+    'ガチャ限定コンプ', 'Gacha Exclusives', 'ガチャ限定の装備をすべて集める', 'Own all gacha-exclusive gear', 10000, 30, 'rainbowtrio'),
   cset('set_throne', '👑', 'item', THRONE_ITEMS.map(i => i.id),
-    '王座の宝物庫コンプ', 'The Throne Vault', '👑王座の欠片で交換できる品をすべて集める', 'Own every item from the 👑 vault', 15000, 150, 'thronekeeper'),
+    '王座の宝物庫コンプ', 'The Throne Vault', '👑王座の欠片で交換できる品をすべて集める', 'Own every item from the 👑 vault', 15000, 50, 'thronekeeper'),
   cset('set_trial', '⚔️', 'badge', ['oni', 'kami', 'souzou'],
-    '三難関の証', 'Marks of the Three Trials', '鬼・神・創造神のバッジを集める', 'Earn the Oni, Kami and Creator God badges', 5000, 40),
+    '三難関の証', 'Marks of the Three Trials', '鬼・神・創造神のバッジを集める', 'Earn the Oni, Kami and Creator God badges', 5000, 12),
   cset('set_slayer', '🗡️', 'title', ['bosshunt', 'maoslayer', 'rushhero'],
-    '討伐者の称号', 'Slayer Titles', 'ボス討伐の称号をすべて得る', 'Earn every boss-slaying title', 4000, 30),
+    '討伐者の称号', 'Slayer Titles', 'ボス討伐の称号をすべて得る', 'Earn every boss-slaying title', 4000, 10),
   // 図鑑そのもの。管理者専用だけを除いた全装備（ガチャ限定・王座限定も含む）。
   cset('set_master', '📕', 'item', SHOP_ITEMS.filter(i => !i.adminOnly).map(i => i.id),
     '図鑑コンプリート', 'Full Catalog', 'カタログの装備をすべて集める', 'Own every item in the catalog', 30000, 300, 'curator'),
 ];
+
+// 📕 図鑑の報酬は「1日に1セットまで」。
+//
+// 全セットの合計は数万🪙＋数百💎ある。id:'*' の一括受け取りは、それを
+// **1リクエストで満額**払う ── 図鑑にセットを足した日は、古参プレイヤー全員が
+// 更新直後に最大の課金パックを超える額を無条件で受け取ることになる
+// （4セットは通貨を払わずに達成済みになるので、なおさら効く）。
+// 受け取れる権利は消えない（明日また受け取れる）ので、数日に均すだけ。
+export const COLLECTION_CLAIM_PER_DAY = 1;
+
+// JST 0時区切り。missions.js の todayId と同じ計算（catalog.js は依存を持たない）。
+function collectionDayKey(ts = Date.now()) {
+  return new Date(ts + 9 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+// きょう何セット受け取ったか。user を書き換える（受け取り時にだけ呼ぶ）。
+function collectionQuota(user) {
+  const day = collectionDayKey();
+  let c = user.collectionClaims;
+  if (!c || typeof c !== 'object' || c.day !== day) c = user.collectionClaims = { day, n: 0 };
+  const n = Number(c.n);
+  c.n = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  return c;
+}
+
+// 画面向け（書き換えない）。きょうあと何セット受け取れるか。
+function collectionClaimsLeft(user) {
+  const c = user && user.collectionClaims;
+  const used = (c && c.day === collectionDayKey() && Number(c.n) > 0) ? Math.floor(Number(c.n)) : 0;
+  return Math.max(0, COLLECTION_CLAIM_PER_DAY - used);
+}
 
 // セットのうち、いま所持している id。純粋関数。
 function collectionOwnedIds(user, set) {
@@ -335,6 +373,9 @@ export function collectionView(user) {
     // 収集率（全セットの合計。図鑑の見出しに出す用）
     owned, slots: total,
     rate: total ? Math.round((owned / total) * 100) : 0,
+    // 🎁 受け取りのペース配分（1日に受け取れるセット数と、きょうの残り）。
+    claimPerDay: COLLECTION_CLAIM_PER_DAY,
+    claimsLeftToday: collectionClaimsLeft(user),
   };
 }
 
@@ -349,9 +390,18 @@ export function claimCollection(user, id) {
   if (!ready.length) {
     return { error: id === '*' ? '受け取れるセットがありません' : 'まだコンプしていないか、受け取り済みです' };
   }
+  // 1日に受け取れるのは COLLECTION_CLAIM_PER_DAY セットまで。'*' でも
+  // 単品でも同じ枠を使う（片方だけ数えると素通りできてしまう）。
+  const quota = collectionQuota(user);
+  const left = Math.max(0, COLLECTION_CLAIM_PER_DAY - quota.n);
+  if (left <= 0) {
+    return { error: '図鑑の報酬は1日1セットまでです（残りはまた明日）' };
+  }
+  const paid = ready.slice(0, left);
+  quota.n += paid.length;
   let coins = 0, gems = 0;
   const titles = [];
-  for (const r of ready) {
+  for (const r of paid) {
     user.collections.push(r.id);
     coins += r.coins;
     gems += r.gems;
@@ -359,7 +409,12 @@ export function claimCollection(user, id) {
   }
   user.coins = (user.coins || 0) + coins;
   user.gems = (user.gems || 0) + gems;
-  return { coins, gems, titles, ids: ready.map(r => r.id) };
+  return {
+    coins, gems, titles, ids: paid.map(r => r.id),
+    // まだ受け取れるぶんが残っているか（画面は「また明日」を出せる）。
+    pending: ready.length - paid.length,
+    claimsLeftToday: Math.max(0, COLLECTION_CLAIM_PER_DAY - quota.n),
+  };
 }
 
 export function earnedTitles(user) {

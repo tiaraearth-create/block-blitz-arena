@@ -273,7 +273,10 @@ function questContributions(event = {}) {
     lines: event.lines,
     bossWin: isBoss && won ? 1 : 0,
     perfect: event.perfectClears,
-    games: 1,
+    // 'games' は空の結果を連投しても進んでしまう唯一のトラックだった。
+    // index.js が実プレイ判定を event.realPlay で渡すので、偽プレイ(false)は
+    // 0 に落とす。realPlay 未指定の呼び出しは従来どおり 1（後方互換）。
+    games: event.realPlay === false ? 0 : 1,
     ults: event.ults,
     floors: event.floors,
     pvpWin: isPvp && won ? 1 : 0,

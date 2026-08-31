@@ -227,6 +227,7 @@ const SERVER_MSG_EN = {
   // ---- 📕 コレクション図鑑（catalog.js の claimCollection）----
   '受け取れるセットがありません': 'No collection sets ready to claim',
   'まだコンプしていないか、受け取り済みです': 'Not complete yet, or already claimed',
+  '図鑑の報酬は1日1セットまでです（残りはまた明日）': 'You can claim one collection set per day — the rest are waiting tomorrow',
   // ---- 🔔 挑戦状（friends.js）----
   '挑戦状を送れませんでした': 'The challenge could not be sent',
   '自分には送れません': 'You cannot send that to yourself',

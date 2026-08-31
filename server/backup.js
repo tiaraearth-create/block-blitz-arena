@@ -295,7 +295,7 @@ function mergeEarned(winner, loser) {
   // 📚 collections は「図鑑のセットコンプ報酬を受け取った印」で、二重受取を
   // 止めているのはこの配列だけ（catalog.js の claimCollection）。落とすと
   // 復元のたびに同じセットの報酬をもう一度受け取れる。
-  for (const k of ['achievements', 'badges', 'owned', 'friends', 'blocked', 'collections']) {
+  for (const k of ['achievements', 'badges', 'owned', 'friends', 'blocked', 'collections', 'wsLiked']) {
     const a = Array.isArray(winner[k]) ? winner[k] : (winner[k] = []);
     for (const v of (Array.isArray(loser[k]) ? loser[k] : [])) if (!a.includes(v)) a.push(v);
   }
@@ -425,6 +425,62 @@ function mergeEarned(winner, loser) {
       wst.guestImport = lst.guestImport;
     }
   }
+
+  // 📕 図鑑の「1日1セット受け取り枠」(catalog.js collectionQuota / claimCollection)。
+  // user.collectionClaims = { day:'YYYY-MM-DD', n } で、その日に何セット受け取った
+  // かを持つ。二重受取を止めているのは n だけなので、落とすと復元後にその日ぶんを
+  // もう一度受け取れる（collections と同じ性格の止め金）。
+  //   ・同じ日なら n の大きいほう（迷ったら閉じる）
+  //   ・勝った側に無ければ負けた側のものを引き継ぐ
+  //   ・日が違うときは新しい日のほう。古い日は collectionQuota が次の受け取りで
+  //     作り直す＝止め金にならないので残しても意味がない。
+  const okDay = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d));
+  const lcc = loser.collectionClaims;
+  if (isPlainObj(lcc) && okDay(lcc.day)) {
+    const wcc = winner.collectionClaims;
+    const ln = Math.max(0, Math.floor(Number(lcc.n) || 0));
+    if (!isPlainObj(wcc) || !okDay(wcc.day) || String(lcc.day) > String(wcc.day)) {
+      winner.collectionClaims = { day: String(lcc.day), n: ln };
+    } else if (String(wcc.day) === String(lcc.day)) {
+      wcc.n = Math.max(Math.floor(Number(wcc.n) || 0), ln);
+    }
+  }
+
+  // 🎁 ショップの1日1回の無料ギフト受領印 (routes/shop.js giftClaimedDay)。
+  // user.stats.shopGiftDay = 'YYYY-MM-DD'。二重受取を止めているのはこの印だけ
+  // なので、落とすと同じ日にもう一度ギフトを受け取れる。新しい日付（＝いま
+  // 閉じている日）のほうを残す ── 古い日付は次の受け取りで上書きされるだけで
+  // 止め金にならない。
+  const lsg = loser.stats && loser.stats.shopGiftDay;
+  if (okDay(lsg)) {
+    const wst2 = winner.stats || (winner.stats = {});
+    if (!okDay(wst2.shopGiftDay) || String(lsg) > String(wst2.shopGiftDay)) {
+      wst2.shopGiftDay = String(lsg);
+    }
+  }
+
+  // 🎲 ミッションの引き直し使用回数 (missions.js rerollCounts)。
+  // user.missions.rerolls = { '<日付キー>':{daily,weekly}, '<週キー W35>':{daily,weekly} }
+  // の2階建てで、無料＋有料の引き直し回数を数える唯一の rate-limit 記録。落とすと
+  // 復元後に回数がリセットされ、余分に引き直せる。キーごと・スコープごとに多いほう
+  // （迷ったら閉じる）。古いキーは syncMissions / rerollCounts が当日・今週ぶん以外を
+  // 捨てるので溜まらない。勝った側に missions がまだ無いときは触らない ── day/week の
+  // 文脈が無いと syncMissions が次回に丸ごと作り直すので、片端の rerolls を足しても
+  // 意味がなく、壊れた missions を残す危険だけが増える（実害は次の期に0回に戻るだけ）。
+  const lms = loser.missions;
+  if (isPlainObj(lms) && isPlainObj(lms.rerolls) && isPlainObj(winner.missions)) {
+    const wm = winner.missions;
+    const wrr2 = isPlainObj(wm.rerolls) ? wm.rerolls : (wm.rerolls = {});
+    for (const [key, lc] of Object.entries(lms.rerolls)) {
+      if (unsafeKey(key) || !isPlainObj(lc)) continue;
+      // 日付キー（YYYY-MM-DD）か週キー（W＋数字）だけ通す。細工した巨大キーを弾く。
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(key) && !/^W\d+$/.test(key)) continue;
+      const wc = isPlainObj(wrr2[key]) ? wrr2[key] : (wrr2[key] = { daily: 0, weekly: 0 });
+      for (const s of ['daily', 'weekly']) {
+        wc[s] = Math.max(Math.floor(Number(wc[s]) || 0), Math.floor(Number(lc[s]) || 0), 0);
+      }
+    }
+  }
 }
 
 // --- snapshots ------------------------------------------------------------
@@ -507,9 +563,16 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
       // すると次の起動で同梱 seed が「未適用」と判定されて再適用され、
       // 復元したばかりのデータの上に古い seed が被さる。
       const keepSeedHash = db.meta ? db.meta.seedHash : undefined;
+      // 🛠 メンテナンスも同じ理由でこの機体のもの。README の更新手順が
+      // 「🛠メンテナンス → 💾バックアップDL」の順なので、ファイル側はほぼ必ず
+      // true を持っている。それを被せると、復元は成功しているのに
+      // プレイヤーだけが締め出されたまま復帰する（merge 側も同じ扱い）。
+      const keepMaintenance = db.meta ? db.meta.maintenance : undefined;
       db.meta = { ...db.meta, ...data.meta };
       if (keepSeedHash === undefined) delete db.meta.seedHash;
       else db.meta.seedHash = keepSeedHash;
+      if (keepMaintenance === undefined) delete db.meta.maintenance;
+      else db.meta.maintenance = keepMaintenance;
     }
     report.added = Object.keys(db.users).length;
     report.tokens = Object.keys(db.tokens).length;
@@ -659,9 +722,9 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
   }
 
   // db.meta: a fresh post-deploy instance holds only trivial meta — adopt the
-  // backup's world state (event, poll+votes, crowd scale/config, maintenance,
-  // season override, throne progress) for every key the live side hasn't set
-  // since boot.
+  // backup's world state (event, poll+votes, crowd scale/config, season
+  // override, throne progress) for every key the live side hasn't set
+  // since boot. メンテナンススイッチだけは持ち込まない（下記）。
   if (data.meta && typeof data.meta === 'object') {
     db.meta = db.meta || {};
     // ここは以前「持ち込んでよいキーの一覧」だった。「新しい db.meta のキーを
@@ -680,6 +743,16 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     //                           値で巻き戻すと次の起動で古い seed が再適用される
     //   lastRankRewardWeek    … 復元後に消すのが目的（すぐ下でそうしている）
     //   backupAt/backupVersion … バックアップファイル自身の情報で、世界の状態ではない
+    //   backupTrimmed         … 同上（4MB の復元上限に収めるために書き出し側が
+    //                           何を落としたかの記録。db に持ち込む意味は無い）
+    //   maintenance           … 「今この機体を止めているか」の運用スイッチで、世界の
+    //                           状態ではない。README が案内する更新手順が
+    //                           「🛠メンテナンス → 💾バックアップDL」の順なので、
+    //                           正規の手順で取ったファイルはほぼ必ず true を含む。
+    //                           持ち込むと、復元は成功して管理画面も正常に見えるのに
+    //                           プレイヤーだけがメンテナンス表示で入れなくなる
+    //                           （復元の応答にもログにも出ないので気づけない）。
+    //                           止めたいなら復元後に管理画面から入れ直す。
     //
     // 🏛 hallOfFame（歴代シーズンの永久記録）と seasonMark（シーズン切替の検知印）は
     // **わざとここに入れない**。hallOfFame が落ちれば、この機構が存在する理由その
@@ -690,7 +763,7 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     // 殿堂入りはしない ── index.js 側に
     // `hallOfFame.some(e => e.season === prev.id)` の重複チェックがあり、
     // 記録済みのシーズンなら印を進めるだけで戻る（報酬もそこで止まる）。
-    const META_NOT_RESTORED = new Set(['seedHash', 'lastRankRewardWeek', 'backupAt', 'backupVersion']);
+    const META_NOT_RESTORED = new Set(['seedHash', 'lastRankRewardWeek', 'backupAt', 'backupVersion', 'backupTrimmed', 'maintenance']);
     // 🧩 workshop と 🎞 dailyReplays は「片方だけを採る」では守れない。
     // 既定の規則は『live 側がまだ値を持っていないキーだけ採用する』なので、
     // 復元までの窓で誰か1人がステージを投稿しただけで、バックアップ側の

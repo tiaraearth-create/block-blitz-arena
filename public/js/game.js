@@ -16,11 +16,33 @@ import { getSettings, particleFactor } from './settings.js';
 // withColorMarks ラッパ）とは二重にならない ── 氷は色 index を持たないため
 // 記号を重ねる対象でもなく、包む順序に関係なく通常色だけに記号が付く。
 
+// グラデーションは「セルサイズごとに1本」だけ作って使い回す。氷は盤面に
+// 乗っているマスの数だけ毎フレーム描かれるので、ここで createLinearGradient を
+// 毎回作ると一番重い部分を毎フレーム作り直すことになる（themes.js の
+// markFont / withColorMarks と同じ「毎フレーム生成しない」方針にそろえた）。
+// 座標はセル原点へ translate してから描くので、見た目は以前と同一。
+const _iceGrads = new WeakMap();   // ctx -> Map(size -> CanvasGradient)
+function iceGradient(ctx, size, pad, bs) {
+  let bySize = _iceGrads.get(ctx);
+  if (!bySize) { bySize = new Map(); _iceGrads.set(ctx, bySize); }
+  let g = bySize.get(size);
+  if (!g) {
+    g = ctx.createLinearGradient(pad, pad, pad, pad + bs);
+    g.addColorStop(0, 'rgba(236,251,255,0.72)');
+    g.addColorStop(0.55, 'rgba(170,226,247,0.50)');
+    g.addColorStop(1, 'rgba(112,182,222,0.62)');
+    if (bySize.size > 8) bySize.clear();   // リサイズを繰り返しても膨らませない
+    bySize.set(size, g);
+  }
+  return g;
+}
+
 export function drawIceBlock(ctx, x, y, s, cracked, alpha = 1) {
   const a = Math.max(0, Math.min(1, Number(alpha) >= 0 ? Number(alpha) : 1));
   if (a <= 0.02 || !(s > 0)) return;
   const pad = s * 0.06;
-  const bx = x + pad, by = y + pad, bs = s - pad * 2;
+  // 以下はセル原点 (0,0) からの相対座標。ctx.translate(x, y) 済み。
+  const bx = pad, by = pad, bs = s - pad * 2;
   const rad = s * 0.16;
   const body = () => {
     ctx.beginPath();
@@ -28,12 +50,9 @@ export function drawIceBlock(ctx, x, y, s, cracked, alpha = 1) {
     else ctx.rect(bx, by, bs, bs);
   };
   ctx.save();
+  ctx.translate(x, y);
   ctx.globalAlpha = a;
-  const g = ctx.createLinearGradient(bx, by, bx, by + bs);
-  g.addColorStop(0, 'rgba(236,251,255,0.72)');
-  g.addColorStop(0.55, 'rgba(170,226,247,0.50)');
-  g.addColorStop(1, 'rgba(112,182,222,0.62)');
-  ctx.fillStyle = g;
+  ctx.fillStyle = iceGradient(ctx, s, pad, bs);
   body(); ctx.fill();
   // 厚みのある透明に見せる斜めのハイライト2本
   ctx.globalAlpha = a * 0.55;
@@ -105,6 +124,7 @@ export class GameView {
     this.flashes = [];              // {kind:'row'|'col', index, t}
     this.floatTexts = [];           // {x,y,text,color,t,life,size}
     this.shake = 0;
+    this._screenFlash = 0;          // 実体。読み書きは下のアクセサ経由（設定でゲート）
     this.time = 0;
     this.deco = [];                 // background decorations (stars etc.)
 
@@ -146,6 +166,19 @@ export class GameView {
     this.running = false;
     window.removeEventListener('resize', this._resize);
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
+  }
+
+  // ✨ 全画面フラッシュ（白）は設定「画面フラッシュ」で完全に切れる。
+  // 連鎖・ボス・スキルなど view.screenFlash へ直接代入する経路が各所にあるので、
+  // 代入側を触らずに済むようアクセサで一括して受ける（揺れの getSettings().shake
+  // ゲートと同じ扱い）。OS の「視差効果を減らす」が ON の人は初回既定で false。
+  get screenFlash() { return this._screenFlash || 0; }
+  set screenFlash(v) {
+    const n = Number(v);
+    if (!(n > 0)) { this._screenFlash = 0; return; }
+    let on = true;
+    try { on = getSettings().flash !== false; } catch { /* 設定が読めなければ従来どおり */ }
+    this._screenFlash = on ? n : 0;
   }
 
   setEngine(engine) {

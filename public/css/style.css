@@ -540,7 +540,10 @@ body {
   box-shadow: 0 24px 60px rgba(0,0,0,0.6);
 }
 @keyframes modalIn { from { opacity: 0; transform: scale(0.85) translateY(20px); } }
-.modal h2 { margin-bottom: 14px; font-size: 22px; text-align: center; }
+/* 見出しには工房の作品名など「他人が付けた文字列」が入る。空白の無い
+   ラテン文字だと折り返し場所が無く、.modal は overflow-y:auto なので
+   横スクロールが生えてしまう。どこでも折る保険を1行だけ入れておく。 */
+.modal h2 { margin-bottom: 14px; font-size: 22px; text-align: center; overflow-wrap: anywhere; }
 .modal .form-col { display: flex; flex-direction: column; gap: 10px; }
 .modal input {
   background: rgba(0,0,0,0.3); border: 1px solid var(--line); border-radius: 12px;
@@ -1379,7 +1382,9 @@ body[data-screen="game"] #topbar { display: none; }
 .ms-row.claimed { opacity: 0.55; }
 .ms-row.bonus { border-style: dashed; }
 .ms-info { flex: 1; min-width: 0; }
-.ms-name { font-weight: 800; font-size: 14px; margin-bottom: 5px; }
+/* 工房の作品名（他人が付けた最大24文字）もここに入る。空白の無い長い名前で
+   カードから溢れないよう、どこでも折れるようにしておく。 */
+.ms-name { font-weight: 800; font-size: 14px; margin-bottom: 5px; overflow-wrap: anywhere; }
 .ms-bar { height: 7px; border-radius: 4px; background: rgba(0,0,0,0.35); overflow: hidden; }
 .ms-bar > div {
   height: 100%; border-radius: 4px;
@@ -1391,6 +1396,11 @@ body[data-screen="game"] #topbar { display: none; }
 .ms-reward { font-size: 12px; font-weight: 800; color: var(--gold); white-space: nowrap; }
 .ms-check { color: var(--green); font-size: 20px; font-weight: 900; width: 54px; text-align: center; }
 .ms-empty { text-align: center; padding: 40px 20px; display: flex; flex-direction: column; gap: 16px; align-items: center; color: var(--muted); }
+/* 🔁 ミッションの引き直し。すぐ右隣（gap 8px）が「受取」なので、小さいままだと
+   達成済みミッションを誤って引き直してしまう ── 報酬が消えて取り返せない。
+   44px は指で押せる最低ライン（.seg button と同じ基準）。screens.js が
+   インラインで padding を潰しているが、min-width / min-height は残るので効く。 */
+.ms-row [data-reroll] { min-width: 44px; min-height: 44px; }
 
 .ach-cats { display: flex; gap: 6px; flex-wrap: wrap; }
 .ach-cat {
@@ -2163,7 +2173,7 @@ body[data-screen="game"] #topbar { display: none; }
 /* 44px は指で押せる最低ライン。フレンド操作は取り消しにくいものが多いので、
    小さくして誤爆させない。 */
 .fr-b {
-  min-height: 34px; padding: 6px 9px; border-radius: 8px; cursor: pointer;
+  min-height: 44px; padding: 6px 9px; border-radius: 8px; cursor: pointer;
   border: 1px solid var(--line); background: rgba(255,255,255,.06);
   color: var(--ink, #e7e9f2); font-family: inherit; font-size: 11px; font-weight: 700;
 }
@@ -2591,6 +2601,35 @@ body[data-screen="game"] .pt-peek { opacity: 1; }
   .land-bar { margin: 0 6px 4px; }
   .ws-edit-grid { width: min(268px, 82vw); }
 }
+
+/* ============ ↑ ここまでは「まだ誰も使っていない」用意ぶん ============ */
+/* 上の .blp-* / .land-* / .replay-* / .ice-* / .ws-edit-* / .ws-swatch は
+   第3波の新画面用に先に書いた版で、実装（modes.js）はまだ CellOverlay や
+   インライン style / 別のクラス名（.ws-grid / .ws-sw / #replayBar）で
+   出している ── つまり今は1つも当たっていない。すぐ上の
+   @media (max-width: 520px) も同じ理由で1行も効かない。
+   実装をこのクラス名に寄せるまでのあいだ、実際に効かせたい指定はここから下に
+   書く（実装側のクラス名・id を直接狙う）。消していないのは、寄せる作業が
+   入ったときに丸ごと使えるようにしておくため。 */
+
+/* ---- 🛠️ 工房エディタの色パレット（実体は modes.js の .ws-sw） ---- */
+/* 中身が空の <button> にインラインの padding だけが当たっていたので、実寸が
+   18×14px しかなく、9個が gap:6px で並ぶため隣を誤爆していた。44px は指で
+   押せる最低ライン（.seg button と同じ基準）。width / height を持たせれば、
+   インラインの padding が残ったままでも box-sizing:border-box で実寸は
+   44px になる（インラインの min-width:0 とも取り合わない）。 */
+.ws-sw {
+  width: 44px; height: 44px; flex: 0 0 auto;
+  border-radius: 10px; transition: transform .12s;
+}
+.ws-sw:active { transform: scale(0.92); }
+
+/* ---- 👻 リプレイ再生バー × 👥 パーティー棚 ---- */
+/* どちらも position:fixed の z-index:60 で画面下に出るので、375px 幅では
+   横も縦も重なる。試合中の #partyDock は pointer-events:none の細い帯
+   （見えるだけ）なので、再生しているあいだだけ引っ込めるのが一番静か。
+   :has() を解さないブラウザではこの1行が無視されるだけで、今までどおり。 */
+body:has(#replayBar) #partyDock { display: none; }
 
 /* ============ ♿ prefers-reduced-motion ============ */
 /* 端末で「視差効果を減らす」を入れている人向け。止めるのは

@@ -31,9 +31,9 @@ import { ctx } from '../context.js';
 
 // index.js のモジュールスコープにしか無いもの。値は起動時に一度だけ
 // 流し込む（init… は server.listen より前・battle 生成より後に呼ばれる）。
-let db, migrateUser, fmtNum, publicUser, postRealFeed, rateLimit, currentEvent;
+let db, migrateUser, fmtNum, publicUser, postRealFeed, rateLimit, currentEvent, GEMDROP_DAILY_CAP;
 export function initShopRoutes() {
-  ({ db, migrateUser, fmtNum, publicUser, postRealFeed, rateLimit, currentEvent } = ctx);
+  ({ db, migrateUser, fmtNum, publicUser, postRealFeed, rateLimit, currentEvent, GEMDROP_DAILY_CAP } = ctx);
 }
 
 // ミドルウェアだけは上の遅延束縛にできない ── ハンドラ本体と違って、
@@ -115,6 +115,49 @@ function rotateTransactions() {
     // ここで投げると購入処理そのものが 500 になる。書庫は補助なので握りつぶす。
     console.error('[tx] ローテーションに失敗:', err.message);
   }
+}
+
+// 書庫（transactions-YYYY.jsonl）の読み戻し。
+//
+// 書き出す口（rotateTransactions）だけがあって読む口がどこにも無かったので、
+// TX_KEEP を超えて書庫に移った取引は「管理画面から消えた ＝ どこにも無い」に
+// 見えていた（バックアップにも入らない）。ここが唯一の読み口。
+// 直近 limit 件を **新しい順** で返す。壊れた行は黙って飛ばす。
+export function archivedTransactions(limit = 100) {
+  const want = Math.max(0, Math.min(2000, Math.floor(Number(limit) || 0)));
+  if (!want) return [];
+  const out = [];
+  try {
+    const files = fs.readdirSync(DATA_DIR)
+      .map(name => {
+        const m = /^transactions-(\d{4})\.jsonl$/.exec(name);
+        return m ? { name, year: Number(m[1]) } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.year - a.year);   // 新しい年から
+    for (const f of files) {
+      if (out.length >= want) break;
+      let text;
+      try {
+        text = fs.readFileSync(path.join(DATA_DIR, f.name), 'utf8');
+      } catch (err) {
+        console.error(`[tx] ${f.name} を読めません:`, err.message);
+        continue;
+      }
+      const lines = text.split('\n');
+      for (let i = lines.length - 1; i >= 0 && out.length < want; i--) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        try {
+          const row = JSON.parse(line);
+          if (row && typeof row === 'object') out.push(row);
+        } catch { /* 壊れた行は飛ばす（書庫は補助なので止めない） */ }
+      }
+    }
+  } catch (err) {
+    console.error('[tx] 書庫を読めません:', err.message);
+  }
+  return out;
 }
 
 function grantPack(user, pack, status, extId = null) {
@@ -221,8 +264,17 @@ purchaseRouter.post('/api/stripe/webhook', (req, res) => {
   }
 });
 
+const TX_PAGE = 100;
+
 purchaseRouter.get('/api/admin/transactions', requireAuth, requireAdmin, (_req, res) => {
-  const tx = db.transactions.slice(-100).reverse();
+  const live = db.transactions.slice(-TX_PAGE).reverse();
+  // db に残っているぶんだけでは 100件に届かないとき（＝ローテーション済み）は
+  // 書庫から足りないぶんを補う。「誰がいつ何を買ったか」が管理画面から
+  // 消えてしまわないように、必ずここで書庫も見る。
+  const fromArchive = live.length < TX_PAGE
+    ? archivedTransactions(TX_PAGE - live.length).map(t => ({ ...t, archived: true }))
+    : [];
+  const tx = live.concat(fromArchive);
   // 合計は「書庫に移したぶん(db.meta) ＋ db に残っているぶん」。ローテーションで
   // 売上と件数が減って見えないように、必ず両方を足す。
   const archivedJpy = Number(db.meta.revenueTotal) || 0;
@@ -236,6 +288,8 @@ purchaseRouter.get('/api/admin/transactions', requireAuth, requireAdmin, (_req, 
     liveCount: db.transactions.length,
     archivedCount,
     archivedJpy,
+    // このページのうち、書庫から読み戻した件数。
+    archivedShown: fromArchive.length,
   });
 });
 
@@ -423,7 +477,17 @@ const GACHA_COST_10 = 4500;
 // ガチャ2.0: floor で下限レアリティを底上げできる（87=SSR以上確定、72=SR以上確定）。
 const GACHA_PITY = 40;   // 天井 — 40連以内にSSR以上が必ず出る
 
-function gachaPull(user, lucky = false, floor = 0) {
+function gachaPull(user, lucky = false, floor = 0, gemBudget = null) {
+  // 💎ジェムは全産出源で1日の総額(GEMDROP_DAILY_CAP)を共有する。ガチャの💎も
+  // その残額(gemBudget.room)からしか出さない ── コインで確実に💎を買える
+  // 両替機にしないため。予算が尽きていれば 0💎 になる（＝配りきり）。
+  const takeGems = (want) => {
+    if (!gemBudget) { user.gems += want; return want; }
+    const give = Math.max(0, Math.min(want, gemBudget.room));
+    user.gems += give;
+    gemBudget.room -= give;
+    return give;
+  };
   // 🍀 Lucky Day skews every roll upward (exponent < 1), so the rare tiers at
   // the top of the range come up more often: N 50%→37%, SSR+ 13%→18%.
   const roll = floor + (lucky ? Math.pow(Math.random(), 0.7) : Math.random()) * (100 - floor);
@@ -439,28 +503,40 @@ function gachaPull(user, lucky = false, floor = 0) {
     return { type: 'item', id: it.id, name: it.name, icon: it.icon, rarity: 'R' };
   }
   if (roll < 87) {   // SR: gems
-    const amount = 15 + Math.floor(Math.random() * 6) * 5;
-    user.gems += amount;
+    const amount = takeGems(15 + Math.floor(Math.random() * 6) * 5);
     return { type: 'gems', amount, rarity: 'SR' };
   }
-  if (roll < 97) {   // SSR: unowned cosmetic (or big gems when complete)
+  if (roll < 97) {   // SSR: unowned cosmetic (or a booster bundle when complete)
     // adminOnly gear must never drop; gachaOnly gear drops ONLY here.
     // throneOnly をここに混ぜると「イベントでしか手に入らない」が嘘になる。
     const unowned = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly && !user.owned.includes(i.id));
     if (unowned.length === 0) {
-      user.gems += 50;
-      return { type: 'gems', amount: 50, rarity: 'SSR', complete: true };
+      // 図鑑コンプ済み。ここで💎を確実に配ると、コイン→💎の両替レートが
+      // 固定される（22.8🪙/💎）＝実質の両替機になる。通貨は配らず、
+      // 非通貨のブースター束を代わりに配る。
+      const pool = BOOST_ITEMS.filter(i => !i.adminOnly);
+      const it = pool[Math.floor(Math.random() * pool.length)];
+      const qty = 3;
+      user.items = user.items || {};
+      user.items[it.id] = (user.items[it.id] || 0) + qty;
+      return { type: 'item', id: it.id, name: it.name, icon: it.icon, amount: qty, rarity: 'SSR', complete: true };
     }
     const it = unowned[Math.floor(Math.random() * unowned.length)];
     user.owned.push(it.id);
     return { type: 'cosmetic', id: it.id, name: it.name, cat: it.cat, rarity: 'SSR', limited: !!it.gachaOnly };
   }
   // UR: jackpot gems
-  user.gems += 150;
-  return { type: 'gems', amount: 150, rarity: 'UR' };
+  const amount = takeGems(150);
+  return { type: 'gems', amount, rarity: 'UR' };
 }
 
 shopRouter.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
+  // ここには意図的に回数レート制限を置かない。ガチャの唯一の悪用は「💎の
+  // 印刷」だが、それは (1) 💎産出を GEMDROP_DAILY_CAP に相乗りさせた takeGems()
+  // と (2) 図鑑コンプ時のフォールバックを非通貨（ブースター束）にした2点で
+  // 既に塞いである。ガチャ自体はコイン消費＝経済のシンクなので、速く回すほど
+  // 自分のコインが減るだけで、貯めたコインを一気に使いたい人を毎時上限で止める
+  // 副作用のほうが大きい（分布・天井のテストも機械速度では上限に当たる）。
   const count = Number(req.body.count) === 10 ? 10 : 1;
   const bonus = eventBonus(currentEvent());
   const base = count === 10 ? GACHA_COST_10 : GACHA_COST_1;
@@ -472,6 +548,14 @@ shopRouter.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
   }
   user.items = user.items || {};
   migrateUser(user);
+  // 💎の産出は「1日に湧く総額」を全経路で共有する（通常ドロップ／お宝ラッシュと
+  // 同じ user.stats.eventGemDay / GEMDROP_DAILY_CAP）。ガチャの💎もこの残額から
+  // しか出さないことで、コイン→💎の両替機化を塞ぐ。
+  const st = user.stats;
+  const today = jstDayKey();
+  if (!st.eventGemDay || st.eventGemDay.day !== today) st.eventGemDay = { day: today, got: 0 };
+  const gemBudget = { room: Math.max(0, GEMDROP_DAILY_CAP - st.eventGemDay.got) };
+  const startRoom = gemBudget.room;
   // ガチャ2.0: 天井（40連でSSR以上確定）＋ 10連はSR以上1枠確定。
   const isSRplus = r => r.rarity === 'SR' || r.rarity === 'SSR' || r.rarity === 'UR';
   const results = [];
@@ -479,10 +563,12 @@ shopRouter.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
     let floor = 0;
     if ((user.gachaPity || 0) >= GACHA_PITY - 1) floor = 87;                       // 天井到達: SSR以上
     else if (count === 10 && i === 9 && !results.some(isSRplus)) floor = 72;      // 10連保証: SR以上
-    const r = gachaPull(user, !!bonus.gachaLuck, floor);
+    const r = gachaPull(user, !!bonus.gachaLuck, floor, gemBudget);
     user.gachaPity = (r.rarity === 'SSR' || r.rarity === 'UR') ? 0 : (user.gachaPity || 0) + 1;
     results.push(r);
   }
+  // 今回ガチャで払い出した💎を日次予算に記帳（通常ドロップと合算される）。
+  st.eventGemDay.got += (startRoom - gemBudget.room);
   user.stats.gachaPulls = (user.stats.gachaPulls || 0) + count;
   user.stats.gachaSSR = (user.stats.gachaSSR || 0) + results.filter(r => r.rarity === 'SSR' || r.rarity === 'UR').length;
   saveDb();
