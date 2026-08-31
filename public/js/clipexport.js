@@ -61,9 +61,12 @@ let clip = null;          // 録画中の状態。同時に1本だけ。
 // 逆に Worker と setInterval が両方動くと送出が二重になって映像が倍速に詰まるので、
 // 退避するときは必ず先に terminate する。
 function makeTicker(onTick) {
-  let worker = null, timer = 0, ticked = 0;
+  let worker = null, timer = 0, ticked = 0, stopped = false;
   const fallback = () => {
-    if (timer) return;
+    // stop() のあとに保険が発火すると、timer===0 を「まだ張っていない」と
+    // 読んで **止める手段の無い** setInterval を新しく張ってしまう
+    // （録画を数百ms で取り消すたびに1本ずつ増える）。停止済みなら何もしない。
+    if (stopped || timer) return;
     if (worker) { try { worker.terminate(); } catch { /* ignore */ } worker = null; }
     timer = setInterval(() => { ticked++; onTick(); }, 33);
   };
@@ -75,9 +78,11 @@ function makeTicker(onTick) {
     worker.onmessage = () => { ticked++; onTick(); };
     worker.onerror = fallback;
   } catch { fallback(); }
-  setTimeout(() => { if (ticked === 0) fallback(); }, 300);
+  const guard = setTimeout(() => { if (ticked === 0) fallback(); }, 300);
   return {
     stop() {
+      stopped = true;
+      clearTimeout(guard);
       if (worker) { try { worker.terminate(); } catch { /* ignore */ } worker = null; }
       if (timer) { clearInterval(timer); timer = 0; }
     },
@@ -199,6 +204,7 @@ function removeBar() {
 
 function cleanup(state) {
   state.gone = true;
+  if (state.hintTimer) { clearTimeout(state.hintTimer); state.hintTimer = null; }
   if (state.ticker) { state.ticker.stop(); state.ticker = null; }
   if (state.onVis) { document.removeEventListener('visibilitychange', state.onVis); state.onVis = null; }
   if (state.screenObs) { state.screenObs.disconnect(); state.screenObs = null; }
@@ -296,6 +302,13 @@ export function startClip(seconds) {
   }
 
   state.rec.ondataavailable = ev => { if (ev.data && ev.data.size) state.chunks.push(ev.data); };
+  // 端末側でレコーダが落ちることがある。拾わないと「空だった」「尻切れ」だけが
+  // 残り、あとから原因を絞れない。
+  state.rec.onerror = ev => {
+    console.error('[clip] recorder:', (ev && ev.error) || ev);
+    toast(t('録画中にエラーが起きました', 'The recorder hit an error'), 'err', 3200);
+    stopClip(state);
+  };
   state.rec.onstop = () => {
     const blob = new Blob(state.chunks, { type: 'video/webm' });
     state.chunks.length = 0;
@@ -305,12 +318,22 @@ export function startClip(seconds) {
       toast(t('録画データが空でした', 'The recording came out empty'), 'err', 3200);
       return;
     }
-    showClipResult(blob, title);
+    deliver(blob, title);
   };
 
-  clip = state;
+  // start() も try の中に入れる。ここで投げると、外からは「録画中(clip 非null)」
+  // なのに帯もタイマーも張られていない ── ボタンが死んだように見えるうえ、
+  // 音のタップとトラックを握ったままになる。
   state.startedAt = Date.now();
-  state.rec.start(1000);
+  try {
+    state.rec.start(1000);
+  } catch {
+    if (state.tap) { try { audio.limiter.disconnect(state.tap); } catch { /* ignore */ } }
+    try { stream.getTracks().forEach(tr => tr.stop()); } catch { /* ignore */ }
+    toast(t('録画を開始できませんでした', 'Could not start recording'), 'err', 3000);
+    return;
+  }
+  clip = state;          // 成功してから「録画中」にする
   showBar(state);
   takeWakeLock(state);
 
@@ -340,15 +363,73 @@ export function startClip(seconds) {
   // 上下が大きく余る。同じ操作でも縦画面のほうが見栄えが段違いなので、
   // 1回だけ教える（毎回言うとうるさいので、この端末で一度きり）。
   if (view.sideTray && !localStorage.getItem('bba_clip_hint')) {
-    try { localStorage.setItem('bba_clip_hint', '1'); } catch { /* ignore */ }
-    setTimeout(() => toast(t('💡 スマホの縦画面で録ると、盤面が画面いっぱいに映ります',
-      '💡 Recording on a portrait phone fills the frame much better'), '', 4200), 2200);
+    // 「一度きり」の権利は、実際に案内が出たときに使う。先に立ててしまうと、
+    // 開始直後に録画をやめた回で権利だけ消えて、本当に見せたい長い録画の
+    // ときにはもう出ない。タイマーも録画終了で必ず畳む。
+    state.hintTimer = setTimeout(() => {
+      try { localStorage.setItem('bba_clip_hint', '1'); } catch { /* ignore */ }
+      toast(t('💡 スマホの縦画面で録ると、盤面が画面いっぱいに映ります',
+        '💡 Recording on a portrait phone fills the frame much better'), '', 4200);
+    }, 2200);
   }
 }
 
 // ---------------------------------------------------------------------------
 // できあがったクリップ
 // ---------------------------------------------------------------------------
+
+// 録れたクリップの渡し方。
+//
+// 素直に結果モーダルを出すと2つの事故が起きる:
+//  ・**まだ遊んでいる最中**に、操作を全部遮るモーダルが盤面の上に落ちる。
+//    30秒クリップなら30秒後。タイムアタックやオンライン対戦では、その間の
+//    持ち時間がそのまま溶ける（録画は「遊びながら」使う機能なのに）。
+//  ・showModal は先頭で無条件に closeModal する（dom.js）。ゲームオーバーの
+//    結果モーダルと鉢合わせると、後から出たほうが先のものを黙って消す。
+//    クリップが保存前に消えることも、結果画面が消えて動かない盤面に
+//    取り残されることもある。
+//
+// なので「ゲームが生きている間は出さない」。代わりに小さな帯で知らせ、
+// 押されたとき、または画面を離れたときに初めてモーダルを出す。
+let pending = null;      // 受け取り待ちのクリップ（常に1本）
+
+function readyBar(blob, mode) {
+  pending = { blob, mode };
+  removeBar();
+  const bar = document.createElement('div');
+  bar.id = 'clipBar';
+  const label = t('🎬 クリップができました', '🎬 Clip ready');
+  const view = t('見る', 'View');
+  bar.innerHTML = '<span id="clipLeft">' + label + '</span>'
+    + '<button class="btn btn-sm btn-primary" id="clipOpen">' + view + '</button>';
+  document.body.appendChild(bar);
+  bar.querySelector('#clipOpen').onclick = () => { removeBar(); flushPending(); };
+}
+
+function flushPending() {
+  if (!pending) return;
+  const { blob, mode } = pending;
+  pending = null;
+  showClipResult(blob, mode);
+}
+
+function gameIsLive() {
+  if (document.body.dataset.screen !== 'game') return false;
+  const m = getCurrentMode();
+  return !!(m && !m.ended);
+}
+
+function deliver(blob, mode) {
+  if (!gameIsLive()) { showClipResult(blob, mode); return; }
+  readyBar(blob, mode);
+  // 画面を離れた（＝遊び終わった）ら、そこで初めて出す。
+  const obs = new MutationObserver(() => {
+    if (document.body.dataset.screen === 'game') return;
+    obs.disconnect();
+    if (pending) { removeBar(); flushPending(); }
+  });
+  obs.observe(document.body, { attributes: true, attributeFilter: ['data-screen'] });
+}
 
 function showClipResult(blob, mode) {
   const url = URL.createObjectURL(blob);
@@ -368,7 +449,16 @@ function showClipResult(blob, mode) {
       <button class="btn btn-primary" id="clipSave">${t('⬇ 保存', '⬇ Save')}</button>
     </div>`, { dismissable: false });
 
-  m.querySelector('#clipClose').onclick = () => { URL.revokeObjectURL(url); closeModal(); };
+  // 解放を「閉じるボタン」だけに頼らない。showModal は先頭で closeModal を
+  // 呼ぶので、他のモーダル（ゲームオーバー等）が横から出るとこのDOMは黙って
+  // 消える ── そのとき onclick は永遠に来ず、Blob が解放されないまま残る。
+  let freed = false;
+  const free = () => { if (freed) return; freed = true; URL.revokeObjectURL(url); };
+  const gone = new MutationObserver(() => {
+    if (!document.body.contains(m)) { gone.disconnect(); free(); }
+  });
+  gone.observe(document.body, { childList: true, subtree: true });
+  m.querySelector('#clipClose').onclick = () => { free(); closeModal(); };
   m.querySelector('#clipSave').onclick = () => {
     const a = document.createElement('a');
     a.href = url;

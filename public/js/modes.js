@@ -321,13 +321,19 @@ function drawShareCard(s) {
 
   // 背景に薄くブロックを散らす（このゲームらしさ）。決定的に並べるので毎回同じ絵。
   const cols = ['#4f8cff', '#ffd93d', '#6bd968', '#ff6b6b', '#b06bff', '#3ecfd5'];
+  // roundRect は比較的新しいAPI。無い環境で呼ぶと例外が出て、canvasToBlob が
+  // null になり「シェアできませんでした」だけが出る（本文コピーにも進まない）。
+  // 角丸は飾りなので、無ければ四角で描く。
+  const roundOk = typeof g.roundRect === 'function';
   for (let i = 0; i < 22; i++) {
     const x = ((i * 137) % (W - 90)) + 20;
     const y = ((i * 271) % (H - 90)) + 20;
     const sz = 34 + (i % 3) * 16;
     g.globalAlpha = 0.09;
     g.fillStyle = cols[i % cols.length];
-    g.beginPath(); g.roundRect(x, y, sz, sz, 8); g.fill();
+    g.beginPath();
+    if (roundOk) g.roundRect(x, y, sz, sz, 8); else g.rect(x, y, sz, sz);
+    g.fill();
   }
   g.globalAlpha = 1;
 
@@ -394,7 +400,11 @@ async function doShare() {
     }
   } catch { /* 下で案内する */ }
   const intent = `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
-  const w = window.open(intent, '_blank', 'noopener,noreferrer');
+  // 'noopener' を features に渡すと、開けた場合でも戻り値が null になる仕様。
+  // それを「開けなかった」と読んでいたので、正常に開いた回にも失敗の案内が出ていた。
+  // 代わりに rel と opener の手当てを自前で行い、戻り値で成否を判断する。
+  const w = window.open(intent, '_blank');
+  if (w) { try { w.opener = null; } catch { /* クロスオリジンでは触れないが害は無い */ } }
   if (!w) {
     toast(copied
       ? t('📋 シェア文をコピーしました。好きな場所に貼り付けてください', '📋 Copied — paste it anywhere')
@@ -3650,6 +3660,9 @@ class DailyMode {
         <div class="rs-row"><span>${t('🎫 パスXP', '🎫 Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
         <div class="rs-row"><span>${t('⭐ アカウントXP', '⭐ Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>`
         : `<div class="rs-row"><span>${t('💡 記録とランキングにはログイン', '💡 Log in for records & the ranking')}</span></div>`}
+        ${/* デイリーだけ報酬欄を自前で組んでいるので、rewardsRows() を通らず
+             シェアが出ていなかった。毎日みんなが同じ盤面で競う回こそ
+             見せ合いたいのに、ここだけ導線が無いのは惜しい。 */ shareRow()}
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>

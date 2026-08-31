@@ -193,8 +193,20 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
 // itch.io 等に出すために必要だが、既定で開けると誰にでも枠の中に置かれる。
 {
   const src = read('server/index.js');
-  check('埋め込み許可はホワイトリスト方式（* を受け付けない）',
-    /s !== '\*'/.test(src), '');
+  // 埋め込み許可の検証。ここが緩むと「誰でも枠に入れられる」状態になり、
+  // しかも許可先を1つでも書くと X-Frame-Options を落とす作りなので被害が二重。
+  // 実際、最初の実装は `https://*`（全サイト許可）を通していた。
+  const hostRe = (src.match(/const HOST_OK = (\/\^.*\$\/);/) || [])[1];
+  check('埋め込み許可にホスト名の検証がある', !!hostRe, hostRe ? '' : '見つからない');
+  if (hostRe) {
+    const re = new RegExp(hostRe.slice(1, -1));
+    const mustReject = ['*', 'https://*', 'http://*', 'https://*.*', 'https://a*.com'];
+    const mustAccept = ['https://itch.io', 'https://*.itch.io', 'https://html-classic.itch.zone'];
+    const leaked = mustReject.filter(v => re.test(v));
+    const blocked = mustAccept.filter(v => !re.test(v));
+    check('危険な形（全サイト許可・部分ワイルドカード）を落とす', leaked.length === 0, leaked.join(', '));
+    check('itch.io の正しい指定は通す', blocked.length === 0, blocked.join(', '));
+  }
   check('未設定なら X-Frame-Options を今までどおり出す',
     /if \(!FRAME_ANCESTORS\.length\) res\.setHeader\('X-Frame-Options'/.test(src), '');
   check('許可先は frame-ancestors に載る', /frame-ancestors 'self'\$\{FRAME_ANCESTORS/.test(src), '');
@@ -278,6 +290,34 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
     .filter(m => !/default: true|gachaOnly|throneOnly|adminOnly|eventOnly/.test(m[0]))
     .map(m => m[1]);
   check('通常販売品に0円が混ざっていない', freeNormal.length === 0, freeNormal.join(', '));
+}
+
+
+// --- 13. お知らせの整形と画像 ---
+{
+  const ui = read('public/js/screens.js');
+  const srv = read('server/index.js');
+  // 本文の装飾。全部エスケープしたままだと、書いた <b> がタグの文字で出る
+  // （実際に seed の7箇所がそうなっていた）。
+  check('お知らせ本文は escapeHtml を通している', /function newsHtml[\s\S]{0,200}escapeHtml\(String/.test(ui), '');
+  check('<b> だけは太字として戻している', /&lt;b&gt;[\s\S]{0,120}<b>/.test(ui), '');
+  check('** 強調 ** も太字にしている', ui.includes("'<b>$1</b>'"), '');
+  check('本文をそのまま innerHTML に流していない',
+    !/news-body">\$\{(?!newsHtml)/.test(ui), '');
+
+  // 画像は自分のサイトの /img/ 配下だけ（CSP img-src 'self' のため、外部URLは
+  // 管理画面では見えてもプレイヤーには壊れた枠になる）。
+  check('画像の検証がクライアントにある',
+    ui.includes('function newsImage') && ui.includes("/img/"), '');
+  check('画像の検証がサーバーにもある', srv.includes('const image = ') && srv.includes('img/'), '');
+  check('画像フィールドが API の返り値に載っている', /image: n\.image \|\| null/.test(srv),
+    'newsView に足さないと保存できても画面に出ない');
+  check('seed のお知らせも画像を運べる', /image: p\.image \|\| null/.test(srv), '');
+
+  // 画像を指しているお知らせのファイルが実在するか（404 の枠を出さない）。
+  const refs = [...srv.matchAll(/image: '(\/img\/[^']+)'/g)].map(m => m[1]);
+  const missing = refs.filter(r => !fs.existsSync(path.join(root, 'public', r.replace(/^\//, ''))));
+  check('お知らせが指す画像が実在する', missing.length === 0, missing.join(', ') || `${refs.length}件`);
 }
 
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

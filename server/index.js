@@ -305,9 +305,30 @@ app.use((err, req, res, next) => {
 // X-Frame-Options には複数オリジンを書く文法が無い（ALLOW-FROM は廃止済み）ので、
 // 許可先を指定したときは CSP の frame-ancestors 一本に任せて XFO は落とす
 // ── 両方出すと、古いブラウザが XFO を優先して結局埋め込めない。
+// 許可先の形を厳密に見る。
+//
+// 以前は /^https?:\/\/[A-Za-z0-9.*\-:[\]]+$/ で通していたが、これは
+// `https://*`（＝どのサイトからでも埋め込み可）も `https://*.*` も通した。
+// しかも許可先を1つでも指定すると X-Frame-Options を落とす作りなので、
+// 打ち間違い1つで「誰でも枠に入れられる」状態に開いてしまう。
+//
+// 通すのは「実在しうるホスト名」だけにする:
+//   ・スキームは http/https のどちらか
+//   ・ラベルは英数字とハイフン、最低2ラベル（example.com）
+//   ・ワイルドカードは **先頭ラベル全体** のみ（*.itch.io は可、a*.com や
+//     *.* や 裸の * は不可）── CSP の frame-ancestors もこの形しか解さない
+//   ・末尾に :ポート を1つだけ許す
+const HOST_OK = /^https?:\/\/(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+(:\d{1,5})?$/;
 const FRAME_ANCESTORS = String(process.env.FRAME_ANCESTORS || '')
   .split(/\s+/).map(s => s.trim())
-  .filter(s => s && s !== '*' && /^https?:\/\/[A-Za-z0-9.*\-:[\]]+$/.test(s));
+  .filter(s => {
+    if (!s) return false;
+    if (!HOST_OK.test(s)) {
+      console.warn('[csp] FRAME_ANCESTORS の値を無視しました（ホスト名の形になっていません）:', s);
+      return false;
+    }
+    return true;
+  });
 if (FRAME_ANCESTORS.length) {
   console.log('[csp] 外部サイトからの埋め込みを許可:', FRAME_ANCESTORS.join(' '));
 }
@@ -2454,6 +2475,20 @@ const SEED_NEWS = [
     bodyEn: '[🎬 Export your gameplay as a video] A new <b>🎬</b> button appears in the in-game HUD. Tap it for a 30-second clip, or long-press to choose 15 / 30 / 60 seconds. What you get is a <b>vertical video ready to post</b>, with your score, the mode and your name burned in. Perfect for that all-clear moment or a last-second comeback.\n' +
       '[📣 Share your score from the results screen] After a run you will see "📣 Share your score". A score card image is generated for you, ready to send to friends. <b>You do not need an account.</b>\n' +
       '[✨ Also in this update] Fixed an issue that could stop new players from connecting. Also fixed a rare problem where global chat could go silent, an event progression bug, and several smaller issues.' },
+  { id: 'seed-v230', pinned: true,
+    image: '/img/news/v230-skins.svg',
+    imageAlt: '新しいブロック5種（アイス・ウッド・ゼリー・スチール・スターダスト）',
+    imageAltEn: 'Five new block skins: Ice, Wood, Jelly, Steel and Stardust',
+    title: '🛍 ショップに17品が入荷しました',
+    titleEn: '🛍 17 new items in the shop',
+    body: '【🧱 ブロック5種】🧊アイス（霜のひびが走る氷塊）／🪵ウッド（年輪の浮かぶ木彫り）／🫧ゼリー（ぷるんと透ける厚み）／⚙️スチール（リベット打ちの鋼鉄）／🌌スターダスト（夜空を閉じ込めた粒）。\n' +
+      '【🎨 ステージ8種】深海／砂漠の夜／ミントの森／真夜中／ルビー／マトリクス／夜明け／星雲。ブロックとの組み合わせで、同じ盤面がまるで別のゲームに見えます。\n' +
+      '【✨ 消去エフェクト4種】❄️スノウ（粉雪が舞い落ちる）／🍃リーフ（木の葉がひらひら）／💠プリズム（虹色の光片が弾ける）／🫧フォーム（泡が立ちのぼる）。\n' +
+      '【👑 それと、ひとつお知らせ】アリーナでいちばん強いのは <b>ちゃちゃまる</b> です。ランキングの頂点で待っています — 挑んでみてください。',
+    bodyEn: '[🧱 Five new block skins] 🧊 Ice (frost cracks), 🪵 Wood (visible grain), 🫧 Jelly (wobbly and translucent), ⚙️ Steel (riveted plating), 🌌 Stardust (a night sky inside each block).\n' +
+      '[🎨 Eight new stages] Deep Sea, Desert Night, Mint Forest, Midnight, Ruby, Matrix, Sunrise and Nebula. Paired with a skin, the same board can feel like a different game.\n' +
+      '[✨ Four new clear effects] ❄️ Snow, 🍃 Leaf, 💠 Prism and 🫧 Foam.\n' +
+      '[👑 One more thing] The strongest player in the arena is <b>ちゃちゃまる</b>. They are waiting at the top of the ranking — come and take the crown.' },
 ];
 
 // ニュース本文の改訂番号。SEED_NEWS の文面を書き直したら1つ増やすと、
@@ -2462,7 +2497,7 @@ const SEED_NEWS = [
 // これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
 // 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
 // v2.11.1 の本文を差し替えるのに必要になった。
-const NEWS_BODY_REV = 9;   // v2.28: プレイ動画とシェアのお知らせを追加
+const NEWS_BODY_REV = 10;  // v2.30: ショップ入荷のお知らせ＋本文の <b> が文字で出ていたのを修正
 
 // id で引いたユーザー。`__proto__` や `constructor` を渡されると
 // Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
@@ -2483,6 +2518,12 @@ function seedNews() {
       // 既存の日本語のみの投稿に英語を後から補完（本番が自己修復する）
       if (!existing.titleEn) existing.titleEn = p.titleEn;
       if (!existing.bodyEn) existing.bodyEn = p.bodyEn;
+      // 画像は後から足すことが多い（文面が先、絵は後）。公開済みでも補完する。
+      if (!existing.image && p.image) {
+        existing.image = p.image;
+        existing.imageAlt = p.imageAlt || null;
+        existing.imageAltEn = p.imageAltEn || null;
+      }
       // 文面の改訂。投稿日時（at）は変えない — 「新着」に戻して
       // 全員に赤い印を出し直すのは、直しただけなのに騒がしい。
       // 英語面も比較に入れる。日本語の body/title だけを見ていたので、
@@ -2503,6 +2544,7 @@ function seedNews() {
     if (['seed-1', 'seed-2', 'seed-3', 'seed-4'].includes(p.id) && hadNews) continue;
     db.news.push({
       id: p.id, title: p.title, titleEn: p.titleEn, body: p.body, bodyEn: p.bodyEn,
+      image: p.image || null, imageAlt: p.imageAlt || null, imageAltEn: p.imageAltEn || null,
       pinned: !!p.pinned, by: 'るみまき', at: Date.now(),
     });
   }
@@ -2715,7 +2757,14 @@ function newsView() {
     // 📌が最上部に来なくなる。真偽値に落としてから引く。
     .sort((a, b) => ((b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)) || (b.at - a.at))
     .slice(0, 40)
-    .map(n => ({ id: n.id, title: n.title, titleEn: n.titleEn || null, body: n.body, bodyEn: n.bodyEn || null, pinned: !!n.pinned, at: n.at, by: n.by }));
+    // ⚠️ ここに書き足さないとクライアントへ届かない。画像を足したとき、
+    //    保存はできているのに画面に出ず、原因がここだと気づくのに手間取った。
+    .map(n => ({
+      id: n.id, title: n.title, titleEn: n.titleEn || null,
+      body: n.body, bodyEn: n.bodyEn || null,
+      image: n.image || null, imageAlt: n.imageAlt || null, imageAltEn: n.imageAltEn || null,
+      pinned: !!n.pinned, at: n.at, by: n.by,
+    }));
 }
 
 app.get('/api/news', (_req, res) => {
@@ -2727,7 +2776,16 @@ app.post('/api/admin/news', requireAuth, requireAdmin, (req, res) => {
   const title = String(req.body.title || '').trim().replace(/[<>]/g, '').slice(0, 60);
   const body = String(req.body.body || '').trim().replace(/[<>]/g, '').slice(0, 2000);
   if (!title || !body) return res.status(400).json({ error: 'タイトルと本文を入力してください' });
-  const n = { id: crypto.randomUUID(), title, body, pinned: !!req.body.pinned, by: req.user.username, at: Date.now() };
+  // 画像は「自分のサイトの /img/ 配下」だけ。CSP が img-src 'self' なので
+  // 外部URLはプレイヤー側で読み込めず、管理画面でだけ見える壊れた枠になる。
+  const rawImg = String(req.body.image || '').trim();
+  const image = /^\/img\/[\w./-]+\.(png|jpe?g|webp|svg|gif)$/i.test(rawImg) ? rawImg : null;
+  if (rawImg && !image) {
+    return res.status(400).json({ error: '画像は /img/ 配下のパスで指定してください（例: /img/news/xxx.png）' });
+  }
+  const n = { id: crypto.randomUUID(), title, body, image,
+    imageAlt: String(req.body.imageAlt || '').replace(/[<>]/g, '').slice(0, 120) || null,
+    pinned: !!req.body.pinned, by: req.user.username, at: Date.now() };
   db.news.push(n);
   // 英語版を自動翻訳で補完（外部エンジン設定時は高品質、なければ辞書）。
   translateChat(title).then(tr2 => { if (tr2 && tr2.lang === 'en') { n.titleEn = tr2.text; saveDb(); } }).catch(() => {});

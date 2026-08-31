@@ -2651,7 +2651,8 @@ export async function openAdmin() {
       ${statCard(eventLoopText(stats), 'イベントループ遅延(P99)')}
       ${statCard(perfRssText(stats), 'メモリ(RSS)')}
       ${statCard(stats.persistError ? '⚠️' : null, `保存エラー: ${String(stats.persistError || '').slice(0, 60)}`, 'border-color:var(--red)')}
-      ${statCard(stats.clientErrors && stats.clientErrors.open != null ? fmt(stats.clientErrors.open) : null, 'クライアントエラー(未解決)')}`;
+      ${statCard(stats.clientErrors && stats.clientErrors.open != null ? fmt(stats.clientErrors.open) : null, 'クライアントエラー(未解決)')}
+      ${connCards(stats.conn)}`;
     renderLivePlayers(stats.livePlayers || []);
     $('#btnMaintenance').textContent = stats.maintenance ? '✅ メンテ解除' : '🛠 メンテナンス開始';
     renderAdminUsers(usersData.users);
@@ -2760,6 +2761,25 @@ async function countWorkshopStagesBy(uid) {
     const r = await api('/api/admin/workshop/stages');
     return (r.stages || []).filter(s => s && s.by === uid).length;
   } catch { return null; }
+}
+
+// 🔌 接続の上限と、そこで断った回数。
+//
+// 数字を返すようにしただけで画面に出していなかった（＝誰も見られなかった）。
+// いちばん見たいのは distinctIps ── 人数のわりにここが極端に小さいときは、
+// 前段プロキシの見え方がずれていて「みんな同じIP」に潰れている合図で、
+// そのまま放っておくと新規プレイヤーが接続上限で弾かれる。
+function connCards(c) {
+  if (!c) return '';
+  const rejected = c.rejectedTotal || 0;
+  const ipWarn = c.open >= 6 && c.distinctIps <= 1;
+  return `
+    <div class="stat-card"><b>${fmt(c.open)}/${fmt(c.max)}</b><span>WS接続</span></div>
+    <div class="stat-card" style="${ipWarn ? 'border-color:var(--yellow)' : ''}" title="接続元IPの種類数。人数に対して極端に少ないときは前段プロキシの設定（TRUST_PROXY）を疑う">
+      <b>${fmt(c.distinctIps ?? 0)}</b><span>${ipWarn ? '⚠️ IPが1つに潰れている' : '接続元IPの種類'}</span></div>
+    <div class="stat-card" style="${rejected ? 'border-color:var(--red)' : ''}" title="全体上限 ${c.rejectedMax || 0} ／ IPごと ${c.rejectedPerIp || 0} ／ アカウントごと ${c.rejectedPerUser || 0}">
+      <b>${fmt(rejected)}</b><span>上限で断った回数</span></div>
+    ${c.chatChainErrors ? `<div class="stat-card" style="border-color:var(--red)"><b>${fmt(c.chatChainErrors)}</b><span>チャット処理の失敗</span></div>` : ''}`;
 }
 
 // 👥 いま本当につないでいる人の一覧。
@@ -4883,6 +4903,37 @@ function showGuildSettingsModal(g, d) {
 // News (お知らせ)
 // ---------------------------------------------------------------------------
 
+// お知らせ本文の整形。
+//
+// 本文は運営が書く前提だが、それでも素の innerHTML には流さない（管理者の
+// 入力経路が1つでも増えれば、そこが穴になる）。全部エスケープしてから、
+// 意図した装飾だけを戻す:
+//   ・<b>…</b> だけを許可 ── これまで全部エスケープしていたので、本文に
+//     書いた <b> が **タグの文字のまま** プレイヤーに見えていた（実際に
+//     seed のお知らせ7箇所がそうなっていた）
+//   ・改行は <br>
+function newsHtml(text) {
+  return escapeHtml(String(text || ''))
+    .replace(/&lt;b&gt;/g, '<b>')
+    .replace(/&lt;\/b&gt;/g, '</b>')
+    // 過去のお知らせは **強調** の書き方も使っている（断罪の回など）。
+    // これも太字にしないと、アスタリスクがそのまま画面に出る。
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+    .replace(/\n/g, '<br>');
+}
+
+// お知らせに添える画像。
+//
+// CSP は img-src 'self' data: blob: なので、外部URLは読み込めない（読めない
+// 画像を貼れてしまうと「管理画面では見えるのにプレイヤーには壊れた枠」に
+// なる）。自分のサイトの /img/ 配下だけを通す。
+function newsImage(n) {
+  const src = String(n.image || '');
+  if (!/^\/img\/[\w./-]+\.(png|jpe?g|webp|svg|gif)$/i.test(src)) return '';
+  const alt = escapeHtml(LANG === 'en' && n.imageAltEn ? n.imageAltEn : (n.imageAlt || ''));
+  return `<img class="news-img" src="${escapeHtml(src)}" alt="${alt}" loading="lazy" decoding="async">`;
+}
+
 export async function openNews() {
   showScreen('news');
   const gen = ++viewGen;
@@ -4901,7 +4952,8 @@ export async function openNews() {
         <h3>${n.pinned ? '📌 ' : ''}${escapeHtml(LANG === 'en' && n.titleEn ? n.titleEn : n.title)}</h3>
         <span class="news-date">${new Date(n.at).toLocaleDateString(LANG === 'en' ? 'en-US' : 'ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })}</span>
       </div>
-      <p class="news-body">${escapeHtml(LANG === 'en' && n.bodyEn ? n.bodyEn : n.body).replace(/\n/g, '<br>')}</p>
+      ${newsImage(n)}
+      <p class="news-body">${newsHtml(LANG === 'en' && n.bodyEn ? n.bodyEn : n.body)}</p>
       <div class="news-foot"><span class="muted">— ${escapeHtml(n.by || '運営')}</span>
         ${isAdmin ? `<span><button class="btn btn-sm btn-ghost" data-pin="${escapeHtml(n.id)}">${n.pinned ? '📌解除' : '📌固定'}</button> <button class="btn btn-sm btn-ghost" data-del="${escapeHtml(n.id)}" style="color:var(--red)">削除</button></span>` : ''}
       </div>

@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" width="720" height="300" role="img" aria-label="新しいブロック5種">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#141a2e"/><stop offset="1" stop-color="#0b0e1f"/>
+    </linearGradient>
+    <linearGradient id="iceR" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff5d5d"/><stop offset=".55" stop-color="#c22f3d"/><stop offset="1" stop-color="#ff5d5d"/>
+    </linearGradient>
+    <linearGradient id="iceY" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe14d"/><stop offset=".55" stop-color="#dfa11f"/><stop offset="1" stop-color="#ffe14d"/>
+    </linearGradient>
+    <linearGradient id="iceC" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#43d9e8"/><stop offset=".55" stop-color="#1a8fb8"/><stop offset="1" stop-color="#43d9e8"/>
+    </linearGradient>
+    <linearGradient id="jelR" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#c22f3d"/><stop offset="1" stop-color="#ff5d5d"/>
+    </linearGradient>
+    <linearGradient id="jelY" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#dfa11f"/><stop offset="1" stop-color="#ffe14d"/>
+    </linearGradient>
+    <linearGradient id="jelC" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#1a8fb8"/><stop offset="1" stop-color="#43d9e8"/>
+    </linearGradient>
+    <radialGradient id="stR" cx=".5" cy=".5" r=".72">
+      <stop offset="0" stop-color="#ff5d5d"/><stop offset="1" stop-color="#c22f3d"/>
+    </radialGradient>
+    <radialGradient id="stY" cx=".5" cy=".5" r=".72">
+      <stop offset="0" stop-color="#ffe14d"/><stop offset="1" stop-color="#dfa11f"/>
+    </radialGradient>
+    <radialGradient id="stC" cx=".5" cy=".5" r=".72">
+      <stop offset="0" stop-color="#43d9e8"/><stop offset="1" stop-color="#1a8fb8"/>
+    </radialGradient>
+    <clipPath id="cw"><rect x="0" y="0" width="64" height="64" rx="8"/></clipPath>
+  </defs>
+  <rect width="720" height="300" fill="url(#bg)"/>
+  <g font-family="system-ui, sans-serif" font-size="15" font-weight="600" fill="#9fb0d0" text-anchor="middle">
+    <text x="98" y="34">アイス</text>
+    <text x="238" y="34">ウッド</text>
+    <text x="378" y="34">ゼリー</text>
+    <text x="518" y="34">スチール</text>
+    <text x="658" y="34">スターダスト</text>
+  </g>
+
+  <!-- 🧊 アイス: 斜めグラデーション＋霜のひび -->
+  <g>
+    <rect x="66" y="52" width="64" height="64" rx="9" fill="url(#iceR)"/>
+    <rect x="66" y="132" width="64" height="64" rx="9" fill="url(#iceY)"/>
+    <rect x="66" y="212" width="64" height="64" rx="9" fill="url(#iceC)"/>
+    <g stroke="#fff" stroke-opacity=".45" stroke-width="2.2" fill="none" stroke-linecap="round">
+      <path d="M84 63 L99 86 L90 104 M106 71 L99 86"/>
+      <path d="M84 143 L99 166 L90 184 M106 151 L99 166"/>
+      <path d="M84 223 L99 246 L90 264 M106 231 L99 246"/>
+    </g>
+  </g>
+
+  <!-- 🪵 ウッド: 年輪 -->
+  <g>
+    <rect x="206" y="52" width="64" height="64" rx="8" fill="#c22f3d"/>
+    <rect x="206" y="132" width="64" height="64" rx="8" fill="#dfa11f"/>
+    <rect x="206" y="212" width="64" height="64" rx="8" fill="#1a8fb8"/>
+    <g fill="none" stroke-width="3" stroke-linecap="round" stroke-opacity=".38">
+      <g clip-path="url(#cw)" transform="translate(206 52)" stroke="#ff5d5d">
+        <circle cx="12" cy="56" r="18"/><circle cx="12" cy="56" r="33"/><circle cx="12" cy="56" r="48"/>
+      </g>
+      <g clip-path="url(#cw)" transform="translate(206 132)" stroke="#ffe14d">
+        <circle cx="12" cy="56" r="18"/><circle cx="12" cy="56" r="33"/><circle cx="12" cy="56" r="48"/>
+      </g>
+      <g clip-path="url(#cw)" transform="translate(206 212)" stroke="#43d9e8">
+        <circle cx="12" cy="56" r="18"/><circle cx="12" cy="56" r="33"/><circle cx="12" cy="56" r="48"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- 🫧 ゼリー: 下に落ちるハイライトと艶 -->
+  <g>
+    <rect x="346" y="52" width="64" height="64" rx="19" fill="url(#jelR)" opacity=".93"/>
+    <rect x="346" y="132" width="64" height="64" rx="19" fill="url(#jelY)" opacity=".93"/>
+    <rect x="346" y="212" width="64" height="64" rx="19" fill="url(#jelC)" opacity=".93"/>
+    <g opacity=".45">
+      <rect x="356" y="94" width="44" height="18" rx="9" fill="#ff5d5d"/>
+      <rect x="356" y="174" width="44" height="18" rx="9" fill="#ffe14d"/>
+      <rect x="356" y="254" width="44" height="18" rx="9" fill="#43d9e8"/>
+    </g>
+    <g fill="#fff" opacity=".6">
+      <ellipse cx="369" cy="70" rx="10" ry="6" transform="rotate(-28 369 70)"/>
+      <ellipse cx="369" cy="150" rx="10" ry="6" transform="rotate(-28 369 150)"/>
+      <ellipse cx="369" cy="230" rx="10" ry="6" transform="rotate(-28 369 230)"/>
+    </g>
+  </g>
+
+  <!-- ⚙️ スチール: ヘアラインとリベット -->
+  <g>
+    <rect x="486" y="52" width="64" height="64" rx="7" fill="url(#iceR)"/>
+    <rect x="486" y="132" width="64" height="64" rx="7" fill="url(#iceY)"/>
+    <rect x="486" y="212" width="64" height="64" rx="7" fill="url(#iceC)"/>
+    <g stroke="#fff" stroke-opacity=".18" stroke-width="1.8">
+      <g clip-path="url(#cw)" transform="translate(486 52)"><path d="M-20 0 L12 64 M0 0 L32 64 M20 0 L52 64 M40 0 L72 64"/></g>
+      <g clip-path="url(#cw)" transform="translate(486 132)"><path d="M-20 0 L12 64 M0 0 L32 64 M20 0 L52 64 M40 0 L72 64"/></g>
+      <g clip-path="url(#cw)" transform="translate(486 212)"><path d="M-20 0 L12 64 M0 0 L32 64 M20 0 L52 64 M40 0 L72 64"/></g>
+    </g>
+    <g fill="#fff" opacity=".55">
+      <circle cx="499" cy="65" r="3.5"/><circle cx="537" cy="65" r="3.5"/><circle cx="499" cy="103" r="3.5"/><circle cx="537" cy="103" r="3.5"/>
+      <circle cx="499" cy="145" r="3.5"/><circle cx="537" cy="145" r="3.5"/><circle cx="499" cy="183" r="3.5"/><circle cx="537" cy="183" r="3.5"/>
+      <circle cx="499" cy="225" r="3.5"/><circle cx="537" cy="225" r="3.5"/><circle cx="499" cy="263" r="3.5"/><circle cx="537" cy="263" r="3.5"/>
+    </g>
+  </g>
+
+  <!-- 🌌 スターダスト: 中心から広がる光と星屑 -->
+  <g>
+    <rect x="626" y="52" width="64" height="64" rx="13" fill="url(#stR)"/>
+    <rect x="626" y="132" width="64" height="64" rx="13" fill="url(#stY)"/>
+    <rect x="626" y="212" width="64" height="64" rx="13" fill="url(#stC)"/>
+    <g fill="#fff">
+      <circle cx="644" cy="71" r="2.7" opacity=".85"/><circle cx="666" cy="66" r="1.8" opacity=".55"/><circle cx="654" cy="87" r="2.7" opacity=".85"/><circle cx="673" cy="92" r="1.8" opacity=".55"/><circle cx="645" cy="100" r="2.7" opacity=".85"/>
+      <circle cx="644" cy="151" r="2.7" opacity=".85"/><circle cx="666" cy="146" r="1.8" opacity=".55"/><circle cx="654" cy="167" r="2.7" opacity=".85"/><circle cx="673" cy="172" r="1.8" opacity=".55"/><circle cx="645" cy="180" r="2.7" opacity=".85"/>
+      <circle cx="644" cy="231" r="2.7" opacity=".85"/><circle cx="666" cy="226" r="1.8" opacity=".55"/><circle cx="654" cy="247" r="2.7" opacity=".85"/><circle cx="673" cy="252" r="1.8" opacity=".55"/><circle cx="645" cy="260" r="2.7" opacity=".85"/>
+    </g>
+  </g>
+</svg>

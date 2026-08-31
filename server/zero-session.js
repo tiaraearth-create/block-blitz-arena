@@ -614,8 +614,12 @@ function executeResident(s, run, deps, random) {
 //
 // 副作用を持たない（run を書き換えない）ことも大事 ── stateView は「画面に送る
 // 形を作るだけ」の関数で、そこが共有状態の最初の書き手になってはいけない。
+// 同時にアリーナへ入れる人数（席の上限）。申込がこれを超えても、実際に殴れる
+// 火力はここで頭打ちになるので、基準だけが青天井に伸びると「誰も割れない段」に
+// なる。SEATS_MAX と同じ数を上限にして、目標と火力の物差しを合わせる。
+const MAX_BASIS = SEATS_MAX;
 function danBasis(s, run) {
-  const signed = Math.max(0, (run && run.entrants) | 0);
+  const signed = Math.min(MAX_BASIS, Math.max(0, (run && run.entrants) | 0));
   if (signed >= 1) return signed;
   // 申込数を持たない run（テストからの直接呼び出しなど）だけ、部屋の人数に頼る。
   return Math.max(1, (s && s.humans) | 0);

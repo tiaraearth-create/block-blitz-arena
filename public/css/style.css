@@ -186,10 +186,25 @@ body {
    画面の下にだけ出す。iPhone のホームバーを避けて safe-area を足す。 */
 #clipBar {
   position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
-  z-index: 60; display: flex; align-items: center; gap: 10px;
+  /* 手札の帯（canvas 下端、最大 130px）と物理的に重ならない高さへ逃がす。
+     下端 14px に置いていたときは、REC ピルが手札の中央スロットに被っていた。 */
+  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+  /* モーダル（.modal-backdrop は z-index:50）より下、HUD より上。
+     60 にしていたときは、録画中に開いたモーダルのボタンにピルが重なっていた。 */
+  z-index: 45; display: flex; align-items: center; gap: 10px;
   padding: 8px 14px; border-radius: 999px;
   background: rgba(18, 22, 36, 0.92); border: 1px solid #3a4568;
+  /* ⚠️ 帯そのものは指を吸わないこと。#partyDock が同じ理由で pointer-events:none に
+     している（style.css の「試合中は素通しにする」の注記を参照）── 触れる棚を
+     盤面の手前に置くと、ピースを掴もうとした指がそこで止まる。しかも録画には
+     合成canvasを使っていて帯は映らないので、本人にも原因が分からない。
+     停止ボタンにだけ pointer-events を戻す。 */
+  pointer-events: none;
+}
+#clipBar #clipStop { pointer-events: auto; }
+/* 狭い画面では手札の帯がさらに高くなるので、もう一段持ち上げる。 */
+@media (max-width: 520px) {
+  #clipBar { bottom: calc(168px + env(safe-area-inset-bottom, 0px)); }
 }
 #clipBar #clipLeft {
   color: #ff6b6b; font-weight: 700; font-size: 13px;
@@ -2844,4 +2859,13 @@ body:has(#replayBar) #partyDock { display: none; }
 @media (max-width: 520px) {
   .live-row { grid-template-columns: 20px minmax(0, 1fr); }
   .live-sub { grid-column: 2; }
+}
+
+/* 📰 お知らせに添える画像。本文の前に置き、幅いっぱいで見せる。
+   高さを制限するのは、縦長の画像1枚で本文が画面外へ押し出されないため。 */
+.news-img {
+  display: block; width: 100%; height: auto;
+  max-height: 42vh; object-fit: contain;
+  border-radius: 10px; margin: 2px 0 10px;
+  background: rgba(255, 255, 255, 0.03);
 }
