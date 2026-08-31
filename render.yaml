@@ -33,7 +33,7 @@ services:
       # 本番の処理系を CI（.github/workflows/*.yml）と Dockerfile に合わせて固定する。
       # 未指定だと Render 側の既定が使われ、その既定が上がった日に無言で変わる。
       - key: NODE_VERSION
-        value: "20"
+        value: "22"
       - key: SESSION_SECRET
         generateValue: true        # long random string; keeps logins across deploys
       - key: ADMIN_PASSWORD

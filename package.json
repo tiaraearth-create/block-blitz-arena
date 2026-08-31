@@ -12,7 +12,7 @@
     "test:serial": "node test/run-all.mjs --jobs 1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "license": "MIT",
   "dependencies": {

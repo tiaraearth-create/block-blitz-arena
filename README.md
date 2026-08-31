@@ -2,7 +2,7 @@
 
 ブロックブラスト風パズルゲーム — オンライン対戦・AI対戦・ランキング・ショップ・バトルパス・管理者パネルを備えたフルスタック実装です。
 
-![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-green) ![License](https://img.shields.io/badge/license-MIT-blue)
+![Node](https://img.shields.io/badge/Node.js-%E2%89%A522-green) ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ## ✨ 特徴
 

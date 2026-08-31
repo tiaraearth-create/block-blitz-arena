@@ -12,7 +12,7 @@
 #              -e ADMIN_PASSWORD=... -p 3000:3000 block-blitz-arena
 #
 # SESSION_SECRET を渡さないと、再起動のたびに全員ログアウトする。
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
