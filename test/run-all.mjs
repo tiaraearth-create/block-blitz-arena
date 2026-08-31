@@ -45,14 +45,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 
 // 速い順。直列で回すときに、安いテストから落ちてくれたほうが早く気づける。
-// 上の10本はサーバーを立てない純ロジック（合計でも数秒）。
+// 上の14本はサーバーを立てない純ロジック（合計でも数秒）。
 const TESTS = [
   'engine.test.mjs',
   'modes-structure.test.mjs',
+  'mode-registry.test.mjs',
   'workshop.test.mjs',
   'viewresize.test.mjs',
   'i18n.test.mjs',
   'clientwiring.test.mjs',
+  'persist-registry.test.mjs',
+  'api-contract.test.mjs',
   'ytexport.test.mjs',
   'resultclamp.test.mjs',
   'zero.test.mjs',

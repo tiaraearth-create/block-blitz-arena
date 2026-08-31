@@ -11,6 +11,21 @@ import { ultIcon, ultColor } from './skills.js';
 import { showYouTubeStudio } from './ytexport.js';
 
 // ---------------------------------------------------------------------------
+// 英語UIに日本語の約物を出さないための小さなヘルパ。
+// 中黒（・）や全角括弧・全角疑問符は Latin フォントに無いことが多く、
+// 英文の中でその1文字だけ書体と字送りが変わってしまう。t() の外側にある
+// 区切り・括弧はここを通すこと（t() の中は英語側に直接 · と () を書く）。
+// LANG は読み込み時に確定する定数（setLang は再読み込みで効く）ので、
+// モジュール定数にしてよい。
+// ---------------------------------------------------------------------------
+const MID = LANG === 'en' ? '·' : '・';   // 区切りの記号そのもの（前後の空白は呼び出し側で足す）
+const SEP = ` ${MID} `;                   // 前後に空白を付けた区切り
+// 直前の語に続けて置く括弧。英語は半角括弧＋前に半角スペース、日本語は
+// 全角括弧のまま（全角括弧は前に空白を入れない）。
+const paren = inner => (LANG === 'en' ? ` (${inner})` : `（${inner}）`);
+const UNKNOWN = LANG === 'en' ? '???' : '？？？';
+
+// ---------------------------------------------------------------------------
 // A11y: ボタンではない要素（カード）を押せる形にしている箇所を、キーボードからも
 // 押せるようにする。role と tabindex を足し、Enter / Space で同じハンドラを呼ぶ。
 // DOM構造も CSS も触らないので見た目は今のまま、Tab で到達できるようになる。
@@ -35,39 +50,67 @@ function bindActivate(el, handler) {
 // Auth modal
 // ---------------------------------------------------------------------------
 
-export function showAuthModal() {
+// このモーダルを開くのは「まだログインしていない人」だけ（ログイン済みなら
+// プロフィールへ逃がしている）。そのうち大多数はアカウントを持っていないので、
+// 既定タブは 新規登録。ログイン既定にしていた頃は、新規の人が名前と
+// パスワードを入れて送ると必ず /api/login の 401 で行き止まりになっていた。
+export function showAuthModal(initialMode) {
   if (session.user) return showProfileModal();
+  let mode = initialMode === 'login' ? 'login' : 'register';
+  const submitLabel = k => (k === 'login' ? tr('ログイン', 'Log in') : tr('登録する', 'Sign up'));
   const m = showModal(`
     <h2>${tr('アカウント', 'Account')}</h2>
     <div class="tabs" style="justify-content:center">
-      <button class="tab active" data-auth="login">${tr('ログイン', 'Log in')}</button>
-      <button class="tab" data-auth="register">${tr('新規登録', 'Sign up')}</button>
+      <button class="tab${mode === 'register' ? ' active' : ''}" data-auth="register">${tr('新規登録', 'Sign up')}</button>
+      <button class="tab${mode === 'login' ? ' active' : ''}" data-auth="login">${tr('ログイン', 'Log in')}</button>
     </div>
     <div class="form-col">
       <input id="authUser" type="text" placeholder="${tr('ユーザー名', 'Username')}" maxlength="16" autocomplete="username">
-      <input id="authPass" type="password" placeholder="${tr('パスワード（6文字以上）', 'Password (6+ characters)')}" autocomplete="current-password">
+      <input id="authPass" type="password" placeholder="${tr('パスワード（6文字以上）', 'Password (6+ characters)')}" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}">
       <div class="form-error" id="authError"></div>
-      <button class="btn btn-primary" id="authSubmit">${tr('ログイン', 'Log in')}</button>
+      <button class="btn btn-ghost" id="authSwitch" style="display:none"></button>
+      <button class="btn btn-primary" id="authSubmit">${submitLabel(mode)}</button>
       <p class="muted center" style="font-size:12px">${tr('登録するとランキング・報酬・オンラインレートが有効になります', 'Sign up to unlock rankings, rewards and online rating')}</p>
     </div>`);
 
-  let mode = 'login';
+  const switchBtn = m.querySelector('#authSwitch');
+  const hideSwitch = () => { switchBtn.style.display = 'none'; switchBtn.onclick = null; };
+  const setMode = next => {
+    mode = next === 'login' ? 'login' : 'register';
+    m.querySelectorAll('[data-auth]').forEach(t => t.classList.toggle('active', t.dataset.auth === mode));
+    m.querySelector('#authSubmit').textContent = submitLabel(mode);
+    m.querySelector('#authPass').setAttribute('autocomplete', mode === 'login' ? 'current-password' : 'new-password');
+    m.querySelector('#authError').textContent = '';
+    hideSwitch();
+  };
   m.querySelectorAll('[data-auth]').forEach(tab => {
-    tab.onclick = () => {
-      m.querySelectorAll('[data-auth]').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      mode = tab.dataset.auth;
-      m.querySelector('#authSubmit').textContent = mode === 'login' ? tr('ログイン', 'Log in') : tr('登録する', 'Sign up');
-    };
+    tab.onclick = () => setMode(tab.dataset.auth);
   });
+
+  // 行き止まりを作らないための逃げ道。ログインの 401 は「その名前のアカウントが
+  // 無い」ときも「パスワード違い」のときも同じ文面（サーバーが区別を出さない）
+  // なので、どちらでも押せるように登録タブへの案内を添える。
+  // 逆に登録の 409（名前が使用中）は「もう持っている人」なのでログインへ。
+  const offerSwitch = (to, label) => {
+    switchBtn.textContent = label;
+    switchBtn.style.display = '';
+    switchBtn.onclick = () => {
+      setMode(to);
+      const pass = m.querySelector('#authPass');
+      pass.value = '';
+      pass.focus();
+    };
+  };
 
   const submit = async () => {
     const username = m.querySelector('#authUser').value.trim();
     const password = m.querySelector('#authPass').value;
     const errEl = m.querySelector('#authError');
     errEl.textContent = '';
+    hideSwitch();
+    const sent = mode;
     try {
-      const data = await api(`/api/${mode}`, { method: 'POST', body: { username, password } });
+      const data = await api(`/api/${sent}`, { method: 'POST', body: { username, password } });
       setToken(data.token);
       session.user = data.user;
       updateTopbar();
@@ -76,7 +119,7 @@ export function showAuthModal() {
       reconnectChat();
       refreshMissionDot();
       refreshPollBanner();
-      toast(mode === 'login' ? tr(`おかえりなさい、${data.user.username}さん！`, `Welcome back, ${data.user.username}!`) : tr(`ようこそ、${data.user.username}さん！`, `Welcome, ${data.user.username}!`), 'ok');
+      toast(sent === 'login' ? tr(`おかえりなさい、${data.user.username}さん！`, `Welcome back, ${data.user.username}!`) : tr(`ようこそ、${data.user.username}さん！`, `Welcome, ${data.user.username}!`), 'ok');
       if (data.dailyBonus) {
         const st = data.dailyBonus.streak || 1;
         setTimeout(() => toast(tr(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? `（🔥${st}日連続！）` : ''}`,
@@ -88,6 +131,14 @@ export function showAuthModal() {
     } catch (err) {
       errEl.textContent = err.message;
       audio.error();
+      const name = username || tr('この名前', 'this name');
+      if (sent === 'login' && err.status === 401) {
+        offerSwitch('register', tr(`「${name}」で新規登録する`, `Sign up as “${name}”`));
+      } else if (sent === 'register' && err.status === 409 && /既に使われています|already taken/.test(err.message || '')) {
+        // 409 は「住人と同名」「予約語」でも返る ── そちらでログインを勧めると
+        // 存在しないアカウントへ送ることになるので、名前が埋まっている時だけ。
+        offerSwitch('login', tr(`「${name}」でログインする`, `Log in as “${name}”`));
+      }
     }
   };
   m.querySelector('#authSubmit').onclick = submit;
@@ -267,7 +318,7 @@ function showStatsModal() {
 function showRenameModal() {
   const m = showModal(`
     <h2>${tr('✏️ 名前変更', '✏️ Change name')}</h2>
-    <p class="muted center" style="margin-bottom:10px">${tr('2〜16文字（英数字・日本語）・1日1回まで', '2–16 characters ・ once per day')}</p>
+    <p class="muted center" style="margin-bottom:10px">${tr('2〜16文字（英数字・日本語）・1日1回まで', '2–16 characters · once per day')}</p>
     <div class="form-col">
       <input id="rnName" type="text" maxlength="16" value="${escapeHtml(session.user.username)}" autocomplete="off">
       <div class="form-error" id="rnError"></div>
@@ -285,7 +336,7 @@ function showRenameModal() {
       reconnectChat();
       closeModal();
       audio.coin();
-      toast(tr(`名前を「${data.user.username}」に変更しました！`, `Renamed to "${data.user.username}"!`), 'ok', 3000);
+      toast(tr(`名前を「${data.user.username}」に変更しました！`, `Renamed to “${data.user.username}”!`), 'ok', 3000);
     } catch (err) {
       m.querySelector('#rnError').textContent = err.message;
       audio.error();
@@ -342,7 +393,7 @@ function showCreditsModal() {
       <div class="rs-row"><span>${tr('グラフィック', 'Graphics')}</span><b>${tr('Canvas 手描きレンダリング', 'Hand-drawn Canvas rendering')}</b></div>
       <div class="rs-row"><span>Special Thanks</span><b>${tr('遊んでくれるキミ！', 'YOU, for playing!')}</b></div>
     </div>
-    <p class="muted center" style="font-size:11px;margin-top:10px">© 2026 Block Blitz Arena ・ Made with 🧱 & ❤️</p>
+    <p class="muted center" style="font-size:11px;margin-top:10px">© 2026 Block Blitz Arena${SEP}Made with 🧱 & ❤️</p>
     <div class="modal-buttons">
       <button class="btn btn-primary" id="crClose">${tr('閉じる', 'Close')}</button>
     </div>`);
@@ -561,7 +612,7 @@ export function showSettingsModal() {
     if (!name) return;
     localStorage.setItem('bba_guest_name', name);
     reconnectChat();
-    toast(tr(`ゲスト名を「${name}」にしました`, `Guest name set to "${name}"`), 'ok', 2000);
+    toast(tr(`ゲスト名を「${name}」にしました`, `Guest name set to “${name}”`), 'ok', 2000);
   };
 
   m.querySelector('#setSfxOn').onchange = e => { updateSettings({ sfxOn: e.target.checked }); audio.click(); };
@@ -638,7 +689,7 @@ export function showSettingsModal() {
   if (delBtn) delBtn.onclick = () => {
     const c = showModal(`
       <h2>${tr('⚠️ アカウント削除', '⚠️ Delete account')}</h2>
-      <p class="muted center" style="margin-bottom:14px">${tr(`「${escapeHtml(session.user.username)}」を完全に削除します。`, `This will permanently delete "${escapeHtml(session.user.username)}".`)}<br>${tr('コイン・スコア・購入アイテムはすべて失われ、元に戻せません。', 'All coins, scores and purchases will be lost — this cannot be undone.')}</p>
+      <p class="muted center" style="margin-bottom:14px">${tr(`「${escapeHtml(session.user.username)}」を完全に削除します。`, `This will permanently delete “${escapeHtml(session.user.username)}”.`)}<br>${tr('コイン・スコア・購入アイテムはすべて失われ、元に戻せません。', 'All coins, scores and purchases will be lost — this cannot be undone.')}</p>
       <div class="form-col">
         <input id="delPass" type="password" placeholder="${tr('パスワードを入力して確認', 'Enter password to confirm')}" autocomplete="current-password">
         <div class="form-error" id="delError"></div>
@@ -709,7 +760,7 @@ export function showJukeboxModal() {
           <span class="jb-icon">${t.icon}</span>
           <span class="jb-meta">
             <b>${escapeHtml(tr(t.name, t.nameEn))}${lock && sel === t.id ? ' <span class="jb-pin">🔁</span>' : ''}</b>
-            <small>${escapeHtml(tr(t.where, t.whereEn))} ・ ${t.bpm} BPM</small>
+            <small>${escapeHtml(tr(t.where, t.whereEn))}${SEP}${t.bpm} BPM</small>
           </span>
           ${now === t.id ? '<span class="jb-eq"><i></i><i></i><i></i></span>' : '<span class="jb-play">▶</span>'}
         </button>`).join('')}
@@ -821,7 +872,7 @@ export async function openLeaderboard(board = 'score') {
         <div class="lb-name ${r.crowns ? `crowned${Math.min(3, r.crowns)}` : ''}">${r.throne ? `<span class="lb-crown" title="${tr('現王者', 'Reigning champion')}">👑</span>` : ''}${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
           <span class="lb-badges">${(r.badges || []).map(b => seasonBadgeNo(b) ? '🏛' : badgeIcons[b] || '').join('')}</span>
           ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.id ? catName(r.title) : r.title.name)}》</span>` : ''}
-          <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? ` ・ ${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}${board === 'sprint' && r.sprint180 ? ` ・ ${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? ` ・ 🌑A${fmt(r.abyssMax)}` : ''}</div>
+          <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? `${SEP}${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}${board === 'sprint' && r.sprint180 ? `${SEP}${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? `${SEP}🌑A${fmt(r.abyssMax)}` : ''}</div>
         </div>
         <div class="lb-score">${board === 'dungeon' ? `F${fmt(r.dungeonMax || 0)}`
           : board === 'weekly' ? fmt(r.weeklyBest || 0)
@@ -981,7 +1032,7 @@ function renderHofBody(body) {
       <div class="inv-sec-head">
         <span>${s.number ? `S${s.number}` : ''} ${escapeHtml(s.name)}</span>
         <span class="muted">${s.endedAt ? new Date(s.endedAt).toLocaleDateString(LANG === 'en' ? 'en-US' : 'ja-JP') : ''}${
-          n ? ` ・ ${tr(`${fmt(n)}人中`, `of ${fmt(n)}`)}` : ''}</span>
+          n ? `${SEP}${tr(`${fmt(n)}人中`, `of ${fmt(n)}`)}` : ''}</span>
       </div>
       ${s.boards[hofBoard].map((e, i) => `
         <div class="lb-row ${session.user && e.username === session.user.username ? 'me' : ''}">
@@ -1167,7 +1218,7 @@ function appendGiftBanner(grid) {
     <b>🎁 ${tr('本日の無料ギフト', 'Today\'s free gift')}</b>
     <span class="muted" style="font-size:12px">${tr('中身は開けてのお楽しみ（1日1回）', 'A surprise every day — once per day')}</span>
     ${g.claimed
-      ? `<span class="muted">✓ ${tr('受取済み', 'Claimed')}${g.nextAt > Date.now() ? ` ・ ${tr(`次は${fmtResetIn(g.nextAt - Date.now())}後`, `next in ${fmtResetIn(g.nextAt - Date.now())}`)}` : ''}</span>`
+      ? `<span class="muted">✓ ${tr('受取済み', 'Claimed')}${g.nextAt > Date.now() ? `${SEP}${tr(`次は${fmtResetIn(g.nextAt - Date.now())}後`, `next in ${fmtResetIn(g.nextAt - Date.now())}`)}` : ''}</span>`
       : `<button class="btn btn-sm btn-gold" id="shopGiftClaim">${tr('受け取る', 'Claim')}</button>`}`;
   grid.appendChild(el);
   const btn = el.querySelector('#shopGiftClaim');
@@ -1710,7 +1761,7 @@ async function renderInvDex() {
       : `<div class="inv-pv" style="display:flex;align-items:center;justify-content:center;font-size:26px${owned ? '' : ';filter:grayscale(1) brightness(.25) contrast(.6)'}">${escapeHtml(info.icon || '❓')}</div>`;
     return `<div class="inv-card"${owned ? ' style="cursor:default"' : ` style="opacity:.75" data-dexgo="${escapeHtml(kind)}|${escapeHtml(id)}"`}>
       ${pv}
-      <div class="inv-name"${owned ? '' : ' style="color:var(--dim)"'}>${owned ? escapeHtml(info.name) : '？？？'}</div>
+      <div class="inv-name"${owned ? '' : ' style="color:var(--dim)"'}>${owned ? escapeHtml(info.name) : UNKNOWN}</div>
       <div class="inv-eq"${owned ? '' : ' style="background:none;color:var(--muted);font-size:10px;font-weight:600"'}>${
         owned ? `✅ ${tr('所持', 'Owned')}` : escapeHtml(info.how)}</div>
     </div>`;
@@ -1719,7 +1770,7 @@ async function renderInvDex() {
   body.innerHTML = `
     <div class="inv-sec-head">
       <span>📚 ${tr('コレクション図鑑', 'Collection')}</span>
-      <span class="muted">${fmt(got)} / ${fmt(slots)}（${rate}%）</span>
+      <span class="muted">${fmt(got)} / ${fmt(slots)}${paren(`${rate}%`)}</span>
     </div>
     <span class="inv-bar"><span style="width:${rate}%"></span></span>
     <p class="muted center inv-note">${tr('灰色はまだ持っていない品です。入手できる場所を各マスに書いています',
@@ -1734,7 +1785,7 @@ async function renderInvDex() {
       <div class="inv-sec">
         <div class="inv-sec-head">
           <span>${escapeHtml(s.icon)} ${escapeHtml(s.name)}</span>
-          <span class="muted">${fmt(s.owned)} / ${fmt(s.total)}（${pct}%）</span>
+          <span class="muted">${fmt(s.owned)} / ${fmt(s.total)}${paren(`${pct}%`)}</span>
         </div>
         ${s.desc ? `<p class="muted inv-note" style="margin:0">${escapeHtml(s.desc)}</p>` : ''}
         <span class="inv-bar"><span style="width:${pct}%"></span></span>
@@ -1746,7 +1797,7 @@ async function renderInvDex() {
             <div class="ms-info">
               <div class="ms-name">🎁 ${tr('セットコンプ報酬', 'Set completion reward')}</div>
               <div class="ms-prog">${s.titleName
-                ? tr(`全部そろえると受け取れます ・ 称号《${s.titleName}》つき`, `Claimable once the set is complete — includes the title 《${s.titleName}》`)
+                ? tr(`全部そろえると受け取れます ・ 称号《${s.titleName}》つき`, `Claimable once the set is complete — includes the title “${s.titleName}”`)
                 : tr('全部そろえると受け取れます', 'Claimable once the set is complete')}</div>
             </div>
             ${rewardChip(s.coins, s.gems)}
@@ -1916,7 +1967,7 @@ export function openGacha() {
       <button class="btn btn-primary" id="gcPull1">${tr('1回', '1 pull')} <span id="gcCost1">🪙${fmt(GACHA_BASE_1)}</span></button>
       <button class="btn btn-gold" id="gcPull10">${tr('10連', '10 pulls')} <span id="gcCost10">🪙${fmt(GACHA_BASE_10)}</span><small style="display:block;font-size:9px">${tr('SR以上1枠確定', '1 SR+ guaranteed')}</small></button>
     </div>
-    <p class="muted center" style="font-size:10px;margin-top:8px">${tr('N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム150 3%', 'N Coins 50% ・ R Items 22% ・ SR Gems 15% ・ SSR Cosmetics 10% ・ UR 150 Gems 3%')}<br>${tr(`✨ ${pityMax}連以内にSSR以上が必ず出ます（天井） ・ 🌈 ガチャ限定装備はSSRからのみ入手`, `✨ SSR+ guaranteed within ${pityMax} pulls (pity) ・ 🌈 Gacha-exclusive gear drops only from SSR`)}<br>${tr('スキン等をコンプ済みの場合はジェムに変換されます', 'Duplicate cosmetics are converted to gems')}</p>`);
+    <p class="muted center" style="font-size:10px;margin-top:8px">${tr('N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム150 3%', 'N Coins 50% · R Items 22% · SR Gems 15% · SSR Cosmetics 10% · UR 150 Gems 3%')}<br>${tr(`✨ ${pityMax}連以内にSSR以上が必ず出ます（天井） ・ 🌈 ガチャ限定装備はSSRからのみ入手`, `✨ SSR+ guaranteed within ${pityMax} pulls (pity) · 🌈 Gacha-exclusive gear drops only from SSR`)}<br>${tr('スキン等をコンプ済みの場合はジェムに変換されます', 'Duplicate cosmetics are converted to gems')}</p>`);
   m.querySelector('#gcClose').onclick = closeModal;
   const setBars = (pity, collection) => {
     if (pity) {
@@ -1949,7 +2000,7 @@ export function openGacha() {
     }
     if (d.lucky) notes.push(tr('✨ レア排出率アップ中', '✨ Rare rates boosted'));
     const ev = m.querySelector('#gcEvent');
-    ev.textContent = notes.join(' ・ ');
+    ev.textContent = notes.join(SEP);
     ev.classList.toggle('hidden', notes.length === 0);
   };
   if (freePull) setPrices({});
@@ -2132,7 +2183,7 @@ function renderMissions() {
         <b>${daily ? tr('デイリーミッション', 'Daily Missions') : tr('ウィークリーミッション', 'Weekly Missions')}</b>
         <div class="muted" style="font-size:12px">
           ${tr(`達成 ${doneCount} / ${rows.length}`, `Claimed ${doneCount} / ${rows.length}`)}
-          ・ ${daily
+          ${SEP}${daily
             ? tr(`リセットまで ${fmtResetIn(data.dailyResetIn)}`, `Resets in ${fmtResetIn(data.dailyResetIn)}`)
             : tr('毎週月曜リセット', 'Resets every Monday')}
           <br>${rrHint}
@@ -2259,7 +2310,7 @@ function renderAchievements() {
       <div>
         <b>🏅 ${tr('実績', 'Achievements')}</b>
         <div class="muted" style="font-size:12px">${tr(`解除 ${data.unlocked} / ${data.total} ・ 受取済 ${data.claimedCount}`,
-          `Unlocked ${data.unlocked} / ${data.total} ・ Claimed ${data.claimedCount}`)}</div>
+          `Unlocked ${data.unlocked} / ${data.total} · Claimed ${data.claimedCount}`)}</div>
       </div>
       ${claimable.length && session.user
         ? `<button class="btn btn-sm btn-gold" id="achAll">${tr(`✨ ${claimable.length}件まとめて受取`, `✨ Claim all (${claimable.length})`)}</button>`
@@ -2331,12 +2382,12 @@ export function showRankRewardsModal(force = false) {
     <div class="rank-reward-list">
       ${pending.map(r => `
         <div class="rank-reward-row">
-          <span><b>${medal(r)} ${tr(`${r.rank}位`, `#${r.rank}`)}</b> <small class="muted">/ ${r.of}${tr('人中', ' players')} ・ ${escapeHtml(r.week)} ・ ${fmt(r.best)}${tr('点', ' pts')}</small></span>
+          <span><b>${medal(r)} ${tr(`${r.rank}位`, `#${r.rank}`)}</b> <small class="muted">/ ${r.of}${tr('人中', ' players')}${SEP}${escapeHtml(r.week)}${SEP}${fmt(r.best)}${tr('点', ' pts')}</small></span>
           <b>+${fmt(r.coins)}🪙 +${fmt(r.gems)}💎${r.badge ? ` +${(badgeInfoOf(r.badge) || { icon: '🏅' }).icon}` : ''}</b>
         </div>`).join('')}
     </div>
     <div class="modal-buttons">
-      <button class="btn btn-primary" id="rkClaim">🎁 ${tr('受け取る', 'Claim')}（+${fmt(total.coins)}🪙 +${fmt(total.gems)}💎）</button>
+      <button class="btn btn-primary" id="rkClaim">🎁 ${tr('受け取る', 'Claim')}${paren(`+${fmt(total.coins)}🪙 +${fmt(total.gems)}💎`)}</button>
       <button class="btn btn-ghost" id="rkLater">${tr('あとで', 'Later')}</button>
     </div>`);
   m.querySelector('#rkLater').onclick = closeModal;
@@ -2700,6 +2751,16 @@ function renderModUsers(users) {
   });
 }
 
+// その人が工房に投稿しているステージ数。削除の確認文で「何が道連れになるか」を
+// 数で見せるためだけに使う。数えられなかったときは null（確認文は件数なしの
+// 文面に落ちる）── ここで失敗しても削除の導線は止めない。
+async function countWorkshopStagesBy(uid) {
+  try {
+    const r = await api('/api/admin/workshop/stages');
+    return (r.stages || []).filter(s => s && s.by === uid).length;
+  } catch { return null; }
+}
+
 function renderAdminUsers(users) {
   const usersEl = $('#adminUsers');
   usersEl.innerHTML = users
@@ -2720,13 +2781,18 @@ function renderAdminUsers(users) {
         ${u.role !== 'admin' ? `
           <button class="btn btn-sm btn-ghost" data-a="mute" title="チャット禁止の切替">${u.muted ? '🔈' : '🔇'}</button>
           <button class="btn btn-sm btn-ghost" data-a="ban">${u.banned ? '解除' : '凍結'}</button>
-          <button class="btn btn-sm btn-ghost" data-a="del" style="color:var(--red)">削除</button>` : ''}
+          <button class="btn btn-sm btn-ghost" data-a="del" style="color:var(--red)" title="アカウントを完全に削除（復元でも戻りません）">削除</button>` : ''}
       </span>
     </div>`).join('');
 
   usersEl.querySelectorAll('.admin-user-row').forEach(row => {
     const uid = row.dataset.uid;
     const user = users.find(u => u.id === uid);
+    // 「削除」だけは2回押し（隣が確認なしの「凍結」で、押し間違いの距離が
+    //  1クリックしかないため）。復元の ♻️ と同じ作法にそろえてある。
+    let delArmed = false;
+    let delTimer = null;
+    let delLabel = null;
     row.querySelectorAll('[data-a]').forEach(btn => {
       btn.onclick = async () => {
         try {
@@ -2777,7 +2843,41 @@ function renderAdminUsers(users) {
             await api(`/api/admin/users/${uid}`, { method: 'POST', body: { banned: !user.banned } });
             toast(user.banned ? '凍結を解除しました' : 'アカウントを凍結しました', 'ok');
           } else if (act === 'del') {
-            if (!confirm(`${user.username} を完全に削除しますか？`)) return;
+            // このゲームで唯一「バックアップから復元しても戻らない」操作。
+            // サーバーが db.deleted に墓標を立て、復元のマージがその id を
+            // 弾き続ける（server/backup.js）。工房ステージも道連れで消える。
+            const disarm = () => {
+              clearTimeout(delTimer);
+              delArmed = false;
+              if (delLabel !== null) btn.textContent = delLabel;
+              btn.classList.remove('btn-gold');
+            };
+            if (!delArmed) {
+              delArmed = true;
+              if (delLabel === null) delLabel = btn.textContent;
+              btn.textContent = 'もう一度押す';
+              btn.classList.add('btn-gold');
+              clearTimeout(delTimer);
+              delTimer = setTimeout(disarm, 6000);
+              return;   // 1回目は何もしない（再描画もしない）
+            }
+            disarm();
+            const stages = await countWorkshopStagesBy(uid);
+            const stageLine = stages === null
+              ? '・工房に投稿したステージも一緒に消えます（件数を取得できませんでした）'
+              : stages > 0
+                ? `・工房に投稿したステージ ${stages} 件も一緒に消えます`
+                : '・工房に投稿したステージはありません';
+            if (!confirm([
+              `${user.username} を完全に削除します。`,
+              '',
+              '⚠️ バックアップから復元しても元に戻りません（削除の記録が残るため、復元しても復活しません）。',
+              stageLine,
+              '',
+              '※ 一時的に止めたいだけなら「凍結」を使ってください（こちらは元に戻せます）。',
+              '',
+              'よろしいですか？',
+            ].join('\n'))) return;
             await api(`/api/admin/users/${uid}`, { method: 'DELETE' });
             toast('削除しました', 'ok');
           }
@@ -3982,7 +4082,7 @@ function renderPollModal(poll) {
       ${closed
         ? tr('この投票は終了しました', 'This poll has closed')
         : tr(`残り ${pollRemainText(poll.endsAt - Date.now())} ・ ${poll.voterCount}人が投票済み`,
-             `${pollRemainText(poll.endsAt - Date.now())} left ・ ${poll.voterCount} voted`)}
+             `${pollRemainText(poll.endsAt - Date.now())} left · ${poll.voterCount} voted`)}
       ${!session.user && !closed ? `<br><b style="color:var(--yellow)">${tr('投票にはログインが必要です', 'Log in to vote')}</b>` : ''}
       ${!poll.reveal ? `<br><small>${tr('投票すると結果が見られます', 'Results appear once you vote')}</small>` : ''}
     </p>
@@ -4437,7 +4537,7 @@ function guildCard(g, { rank = null, clickable = true } = {}) {
       <div class="guild-info">
         <div class="guild-name"><span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)} <small class="muted">Lv.${g.level}</small></div>
         <div class="guild-meta">${escapeHtml(g.desc || '')}</div>
-        <div class="guild-meta">👥 ${g.memberCount}/${g.maxMembers} ・ ${g.open ? tr('🔓 公開', '🔓 Open') : tr('🔒 招待制', '🔒 Invite only')} ・ 🪙+${g.bonusPct}%</div>
+        <div class="guild-meta">👥 ${g.memberCount}/${g.maxMembers}${SEP}${g.open ? tr('🔓 公開', '🔓 Open') : tr('🔒 招待制', '🔒 Invite only')}${SEP}🪙+${g.bonusPct}%</div>
       </div>
       <div class="guild-pts"><b>${fmt(g.weeklyPoints)}</b><small>${tr('週間pt', 'weekly pts')}</small></div>
     </div>`;
@@ -4477,7 +4577,7 @@ function renderMyGuild() {
       <div>
         <b>${tr('🗡️ 週間クエスト', '🗡️ Weekly quests')}</b>
         <div class="muted" style="font-size:12px">${tr(`達成 ${q.doneCount} / ${q.total}`, `Done ${q.doneCount} / ${q.total}`)}${
-          q.badgeEarned ? tr(' ・ 🎖️ ギルドの誉れ 獲得済み', ' ・ 🎖️ Guild Honors earned') : ''}<br>${
+          q.badgeEarned ? tr(' ・ 🎖️ ギルドの誉れ 獲得済み', ' · 🎖️ Guild Honors earned') : ''}<br>${
           tr('達成したクエストの金庫は、メンバーが1人1回ずつ開けられます', 'Each completed quest is a vault every member can open once')}</div>
       </div>
     </div>
@@ -4518,7 +4618,7 @@ function renderMyGuild() {
       ${g.members.map(mb => `
         <div class="ms-row">
           <div class="ms-info"><div class="ms-name">${mb.role === 'owner' ? '👑 ' : ''}${escapeHtml(mb.username)}${mb.id === me ? tr('（あなた）', ' (you)') : ''}</div>
-            <div class="ms-prog">Lv.${mb.level} ・ R${fmt(mb.rating)} ・ ${tr('今週', 'this week')} ${fmt(mb.weeklyPts)}pt</div></div>
+            <div class="ms-prog">Lv.${mb.level}${SEP}R${fmt(mb.rating)}${SEP}${tr('今週', 'this week')} ${fmt(mb.weeklyPts)}pt</div></div>
           ${isOwner && mb.role !== 'owner' ? `<button class="btn btn-sm btn-ghost" data-kick="${escapeHtml(mb.id)}" style="color:var(--red)">${tr('除名', 'Kick')}</button>` : ''}
         </div>`).join('')}
     </div>
@@ -4614,7 +4714,7 @@ async function showGuildModal(id) {
     <p class="muted center" style="margin-bottom:8px">${escapeHtml(g.desc || '')}</p>
     <div class="guild-hero-stats" style="justify-content:center;margin-bottom:10px"><span>Lv.<b>${g.level}</b></span><span>${tr('週間', 'Weekly')} <b>${fmt(g.weeklyPoints)}</b>pt</span><span>👥 <b>${g.memberCount}</b>/${g.maxMembers}</span><span>🪙<b>+${g.bonusPct}%</b></span></div>
     <div class="ms-list" style="max-height:40vh;overflow-y:auto">
-      ${(g.members || []).map(mb => `<div class="ms-row"><div class="ms-info"><div class="ms-name">${mb.role === 'owner' ? '👑 ' : ''}${escapeHtml(mb.username)}</div><div class="ms-prog">Lv.${mb.level} ・ R${fmt(mb.rating)} ・ ${fmt(mb.weeklyPts)}pt</div></div></div>`).join('')}
+      ${(g.members || []).map(mb => `<div class="ms-row"><div class="ms-info"><div class="ms-name">${mb.role === 'owner' ? '👑 ' : ''}${escapeHtml(mb.username)}</div><div class="ms-prog">Lv.${mb.level}${SEP}R${fmt(mb.rating)}${SEP}${fmt(mb.weeklyPts)}pt</div></div></div>`).join('')}
     </div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="gmClose">${tr('閉じる', 'Close')}</button>
@@ -4633,7 +4733,7 @@ async function joinGuildBy(body) {
     const res = await api('/api/guilds/join', { method: 'POST', body });
     session.user = res.user; updateTopbar();
     audio.coin(); confettiBurst(30);
-    toast(tr(`${res.guild.icon} 「${res.guild.name}」に参加しました！`, `${res.guild.icon} Joined "${res.guild.name}"!`), 'ok', 3000);
+    toast(tr(`${res.guild.icon} 「${res.guild.name}」に参加しました！`, `${res.guild.icon} Joined “${res.guild.name}”!`), 'ok', 3000);
     openGuild('mine');
   } catch (err) { audio.error(); toast(err.message, 'err'); }
 }
@@ -4660,7 +4760,7 @@ function showGuildCreateModal(d) {
       const res = await api('/api/guilds/create', { method: 'POST', body: { name: m.querySelector('#gcName').value, tag: m.querySelector('#gcTag').value, desc: m.querySelector('#gcDesc').value, icon, open: m.querySelector('#gcOpen').checked } });
       session.user = res.user; updateTopbar();
       closeModal(); audio.coin(); confettiBurst(50);
-      toast(tr(`${res.guild.icon} ギルド「${res.guild.name}」を設立しました！`, `${res.guild.icon} Founded "${res.guild.name}"!`), 'ok', 3500);
+      toast(tr(`${res.guild.icon} ギルド「${res.guild.name}」を設立しました！`, `${res.guild.icon} Founded “${res.guild.name}”!`), 'ok', 3500);
       openGuild('mine');
     } catch (err) { m.querySelector('#gcErr').textContent = err.message; audio.error(); }
   };
@@ -4892,8 +4992,8 @@ function wsCardHtml(st) {
       <div class="ms-info">
         <div class="ms-name">${escapeHtml(st.name)}</div>
         <div class="ms-prog"><span style="white-space:nowrap">👤 ${escapeHtml(st.author)}</span>${
-          st.pieceCount ? ` <span style="white-space:nowrap">・ 🧩 ${tr(`${st.pieceCount}ピース`, `${st.pieceCount} pieces`)}</span>` : ''}</div>
-        <div class="ms-prog"><span style="white-space:nowrap">❤️ ${fmt(st.likes)}</span> <span style="white-space:nowrap">・ ▶ ${tr(`${fmt(st.plays)}回`, `${fmt(st.plays)} plays`)}</span> <span style="white-space:nowrap">・ <b style="letter-spacing:.1em">${code}</b></span></div>
+          st.pieceCount ? ` <span style="white-space:nowrap">${MID} 🧩 ${tr(`${st.pieceCount}ピース`, `${st.pieceCount} pieces`)}</span>` : ''}</div>
+        <div class="ms-prog"><span style="white-space:nowrap">❤️ ${fmt(st.likes)}</span> <span style="white-space:nowrap">${MID} ▶ ${tr(`${fmt(st.plays)}回`, `${fmt(st.plays)} plays`)}</span> <span style="white-space:nowrap">${MID} <b style="letter-spacing:.1em">${code}</b></span></div>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;flex:0 0 auto">
         <button class="btn btn-sm btn-primary" data-ws-play="${code}">▶ ${tr('遊ぶ', 'Play')}</button>
@@ -5056,7 +5156,7 @@ function showWorkshopStageModal(st) {
   const m = showModal(`
     <h2>🧩 ${escapeHtml(st.name)}</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:8px">👤 ${escapeHtml(st.author)}${
-      st.pieceCount ? ` ・ 🧩 ${tr(`${st.pieceCount}ピース`, `${st.pieceCount} pieces`)}` : ''}</p>
+      st.pieceCount ? `${SEP}🧩 ${tr(`${st.pieceCount}ピース`, `${st.pieceCount} pieces`)}` : ''}</p>
     <div style="display:flex;justify-content:center;margin-bottom:10px">${wsPreviewHtml(st.grid, 16)}</div>
     <div class="guild-hero-stats" style="justify-content:center;margin-bottom:10px">
       <span>❤️ <b>${fmt(st.likes)}</b></span><span>▶ <b>${fmt(st.plays)}</b></span>

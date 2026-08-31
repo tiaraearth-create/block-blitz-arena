@@ -25,6 +25,33 @@ const args = process.argv.slice(2);
 const urlIdx = args.indexOf('--url');
 const BASE = (urlIdx >= 0 && args[urlIdx + 1] ? args[urlIdx + 1] : DEFAULT_URL).replace(/\/$/, '');
 
+// 送り先を検証する。ここから先で /api/login に**管理者パスワードを本文へ
+// そのまま載せた POST** を投げるので、http:// のまま走らせるとパスワードが
+// 平文で回線に乗る。そのパスワードは seed-backup.json の復号鍵そのものなので、
+// 漏れると過去のバックアップまで全部読まれる。
+// GitHub Actions は secrets.PROD_URL をそのまま --url に渡すため、secret の
+// 書き間違い（https を付け忘れる等）を止められるのはここだけ。
+// 開発中の http://localhost:3000 は今までどおり通す。
+{
+  let u;
+  try {
+    u = new URL(BASE);
+  } catch {
+    console.error(`[backup:pull] 対象URLとして読めません: ${BASE}`);
+    console.error('[backup:pull] 例: node scripts/pull-backup.mjs --url https://<サービス名>.onrender.com');
+    process.exit(1);
+  }
+  const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(u.hostname);
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) {
+    console.error(`[backup:pull] 中止しました: ${BASE} は https:// ではありません。`);
+    console.error('[backup:pull] このスクリプトは管理者パスワードを送信します。暗号化されていない');
+    console.error('[backup:pull] 経路には出せません（http は localhost / 127.0.0.1 のときだけ許可）。');
+    console.error('[backup:pull] GitHub Actions で失敗している場合は、secrets.PROD_URL を');
+    console.error('[backup:pull] https://<サービス名>.onrender.com の形に直してください。');
+    process.exit(1);
+  }
+}
+
 // パスワードを伏せ字で読む。
 //
 // 前の実装は readline に入力を任せたまま、echo された文字の上から * を
@@ -177,8 +204,18 @@ async function main() {
   const loginRes = await req(`${BASE}/api/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    // fetch の既定は redirect:'follow'。307/308 が返ると、Node は
+    // **本文（＝管理者パスワード）ごと**転送先へ送り直す（Authorization
+    // ヘッダは落とすが、本文は落とさない）。転送先が誰であっても、だ。
+    // 正規の本番は /api/login を転送しないので、実運用の挙動は変わらない。
+    redirect: 'manual',
     body: JSON.stringify({ username: ADMIN_NAME, password }),
   }, { label: 'ログイン' });
+  if (loginRes.status >= 300 && loginRes.status < 400) {
+    console.error(`[backup:pull] 中止しました: ${BASE}/api/login が転送（HTTP ${loginRes.status}）を返しました。`);
+    console.error('[backup:pull] 転送先へパスワードを送り直すことはしません。URLが正しいか確認してください。');
+    process.exit(1);
+  }
   const login = await loginRes.json().catch(() => ({}));
   if (!loginRes.ok || !login.token) {
     console.error(`ログインに失敗しました: ${login.error || loginRes.status}`);
@@ -201,13 +238,47 @@ async function main() {
   const users = data.users ? Object.keys(data.users).length : 0;
   if (!users) { console.error('ユーザー0件のバックアップは保存しません。'); process.exit(1); }
 
-  // The repo is public — the seed is encrypted with the admin password
-  // (scrypt → AES-256-GCM). The server decrypts it at boot with the
-  // ADMIN_PASSWORD environment variable, which must therefore be set on the
-  // hosting dashboard and match this password.
+  // サーバーは db.json が復元上限（4MB）を越えると、収まるまで中身を削ってから
+  // 返す。削ったことは X-Backup-Trimmed ヘッダと meta.backupTrimmed で知らせて
+  // くれるが、これまで見ていたのは管理画面の手動ダウンロードだけだった。
+  // 毎晩の自動バックアップが黙って「欠けたもの」を積み続けるのを止める。
+  const trimHeader = bakRes.headers.get('x-backup-trimmed');
+  const trimMeta = data.meta && data.meta.backupTrimmed;
+  const dropped = trimHeader
+    || (trimMeta && Array.isArray(trimMeta.dropped) ? trimMeta.dropped.join(',') : '');
+  const bakBytes = Number(bakRes.headers.get('x-backup-bytes')) || 0;
+  const bakLimit = Number(bakRes.headers.get('x-backup-limit-bytes')) || 0;
+  const warnings = [];
+  if (dropped) {
+    warnings.push(`バックアップが上限に収まらず、次の中身が削られています: ${dropped}`
+      + '（workshop.likedBy が入っていると、復元後に工房の♡が二重に押せるようになります）');
+  } else if (bakLimit && bakBytes > bakLimit * 0.8) {
+    warnings.push(`バックアップが上限の8割を越えました（${Math.round(bakBytes / 1024)}KB / 上限 ${Math.round(bakLimit / 1024)}KB）。`
+      + 'このまま増えると、中身が削られたバックアップになります。');
+  }
+  // GitHub Actions では注釈として実行画面に残る。手元では普通の警告として出す。
+  const notify = msg => {
+    if (process.env.GITHUB_ACTIONS) console.log(`::warning::[backup:pull] ${msg}`);
+    else console.warn(`[backup:pull] ⚠ ${msg}`);
+  };
+  for (const w of warnings) notify(w);
+
+  // The repo is public — the seed is encrypted (scrypt → AES-256-GCM).
+  //
+  // 鍵の選び方はサーバー側（server/index.js の起動時復元）と同じ順序でなければ
+  // ならない: BACKUP_PASSPHRASE があればそれ、無ければ ADMIN_PASSWORD。
+  // サーバーは既に BACKUP_PASSPHRASE を優先して読むので、こちら側が常に
+  // 管理者パスワードで固めていると、専用の合言葉を設定した機体では**復号に
+  // 失敗して黙って復元されない**（気づくのは起動ログの console.warn 1行だけ）。
+  const passphrase = process.env.BACKUP_PASSPHRASE;
+  if (passphrase) {
+    console.log(`[backup:pull] 環境変数 BACKUP_PASSPHRASE で暗号化します（${passphrase.length} 文字）`);
+    console.log('[backup:pull] ※ 本番の環境変数にも同じ BACKUP_PASSPHRASE が必要です。');
+  }
+  const secret = passphrase || password;
   const salt = crypto.randomBytes(16);
   const iv = crypto.randomBytes(12);
-  const key = crypto.scryptSync(password, salt, 32, { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  const key = crypto.scryptSync(secret, salt, 32, { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   const enc = Buffer.concat([cipher.update(JSON.stringify(data), 'utf8'), cipher.final()]);
   fs.writeFileSync(OUT_FILE, JSON.stringify({
@@ -219,7 +290,11 @@ async function main() {
   const kb = Math.round(fs.statSync(OUT_FILE).size / 1024);
   console.log(`[backup:pull] 暗号化して保存しました → ${path.relative(process.cwd(), OUT_FILE)}（${users}人 / ${kb}KB）`);
   console.log('[backup:pull] このファイルをコミットして push すれば、デプロイ後に自動で復元されます。');
-  console.log('[backup:pull] ※ Render の Environment に ADMIN_PASSWORD（今入力したものと同じ）が必要です。');
+  console.log(passphrase
+    ? '[backup:pull] ※ Render の Environment に BACKUP_PASSPHRASE（今使ったものと同じ）が必要です。'
+    : '[backup:pull] ※ Render の Environment に ADMIN_PASSWORD（今入力したものと同じ）が必要です。');
+  // 最後にもう一度出す。取得ログの途中に埋もれると気づけない。
+  for (const w of warnings) notify(w);
 }
 
 main().catch(err => { console.error('[backup:pull] エラー:', err.message); process.exit(1); });

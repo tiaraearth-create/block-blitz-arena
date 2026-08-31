@@ -32,6 +32,32 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="stylesheet" href="css/style.css">
+<!-- 入口は js/main.js の1本だけ。ブラウザは main.js を読み終えるまで
+     その import 先を知らず、modes.js → game.js → particles.js と最大4段の
+     「発見待ち」が直列に入る（無料枠のコールドスタートはこの前に乗る）。
+     ここで先に教えておくと、全部が最初から並列で降ってくる。
+     ※ 実際に読まれるURL（/js/*.js）と綴りを合わせること。ファイルを足したら
+       ここにも1行足す（足し忘れても遅くなるだけで壊れはしない）。 -->
+<link rel="modulepreload" href="js/modes.js">
+<link rel="modulepreload" href="js/screens.js">
+<link rel="modulepreload" href="js/game.js">
+<link rel="modulepreload" href="js/dom.js">
+<link rel="modulepreload" href="js/net.js">
+<link rel="modulepreload" href="js/i18n.js">
+<link rel="modulepreload" href="js/catalog-en.js">
+<link rel="modulepreload" href="js/audio.js">
+<link rel="modulepreload" href="js/settings.js">
+<link rel="modulepreload" href="js/engine.js">
+<link rel="modulepreload" href="js/ai.js">
+<link rel="modulepreload" href="js/particles.js">
+<link rel="modulepreload" href="js/themes.js">
+<link rel="modulepreload" href="js/skills.js">
+<link rel="modulepreload" href="js/chat.js">
+<link rel="modulepreload" href="js/party.js">
+<link rel="modulepreload" href="js/friends.js">
+<link rel="modulepreload" href="js/adminevent.js">
+<link rel="modulepreload" href="js/admintools.js">
+<link rel="modulepreload" href="js/ytexport.js">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='8' width='38' height='38' rx='8' fill='%235b8bff'/><rect x='54' y='8' width='38' height='38' rx='8' fill='%23ff5d5d'/><rect x='8' y='54' width='38' height='38' rx='8' fill='%23ffe14d'/><rect x='54' y='54' width='38' height='38' rx='8' fill='%235ee86e'/></svg>">
 </head>
 <body>
@@ -398,6 +424,22 @@
     </div>
   </div>
   <button id="chatToggle" class="chat-toggle" aria-label="全体チャットを開く" title="全体チャット">💬<span id="chatUnread" class="chat-unread hidden">0</span></button>
+</div>
+
+<!-- 起動中の目隠し。
+     #screen-menu は hidden 無しで書いてあるので、CSS が届いた瞬間に
+     16個のモードボタンが「完成形」で描かれる。ところが onclick が付くのは
+     モジュール22本を評価し終えたあと ── その間、押せる見た目のまま完全に
+     無反応だった。さらに英語のプレイヤーには、applyStaticI18n() が走るまで
+     日本語のメニューが一度描かれてしまう。
+     この1枚を最初から被せておき、main.js が配線を終えたら外す。
+     文字はゲーム名だけ（言語に依らない）なので、どちらの言語でも嘘にならない。
+     main.js が落ちても CSS 側の保険で 12 秒後に必ず消える。 -->
+<div id="bootVeil" class="boot-veil" aria-hidden="true">
+  <div class="ts-blocks">
+    <span style="background:#ff5d5d"></span><span style="background:#5b8bff"></span><span style="background:#ffe14d"></span><span style="background:#5ee86e"></span>
+  </div>
+  <div class="ts-title">BLOCK BLITZ ARENA</div>
 </div>
 
 <!-- Tap-to-start splash: guarantees music from the very first moment -->

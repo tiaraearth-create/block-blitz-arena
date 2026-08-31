@@ -39,7 +39,7 @@ import {
 } from './guilds.js';
 import { TRANSLATE_ENGINE, translateChat } from './translate.js';
 import {
-  validateBackup, applyRestore, snapshot,
+  validateBackup, applyRestore, snapshot, healGuildRosters,
 } from './backup.js';
 import {
   EVENT_TYPES, makeEvent, eventBonus,
@@ -179,12 +179,23 @@ const jsonParser = express.json({
 // 61KB のファイルが約63MB に膨らみ、20並列でメモリが 2.6GB まで伸びた
 // （Render starter は 512MB）。実在しうる規模から充分離れた位置に下げ、
 // 圧縮の自動展開も止める（正規の復元は素の JSON を送っている）。
-// 実在する復元ファイルは実測で 61KB 前後。12MB は2桁ぶん余裕がありすぎた。
-// 4MB にしたのは backup.js の MAX_RESTORE_USERS（20,000件）と噛み合わせるため —
-// これより絞ると「件数の上限」に到達する前にバイト数で落ちてしまい、
-// 「ユーザー数が多すぎます」という具体的な案内が誰にも届かなくなる。
-// なお OOM を止めているのは主にこの数字ではなく、下の同時実行数の上限。
-const RESTORE_LIMIT_MB = 4;
+// 実在する復元ファイルは実測で 61KB 前後。
+//
+// 4MB だったが、それは「この機体が育てるデータの大きさ」と噛み合っていなかった。
+// 1人あたりの実測は 新規1,351B / 遊び込み2,403B / 全解放6,152B、ユーザー以外の
+// 土台が約48KB なので、4MB に収まるのは 遊び込みで約1,700人。つまり
+//   ・そこを越えると「自分で取ったバックアップを自分で戻せない」
+//   ・書き出し側(routes/admin.js)は天井に収めるため中身を削り始める
+// という壁に、1,700人という現実的な人数で当たる。しかも backup.js 側の
+// MAX_RESTORE_USERS（当時20,000件）は最も軽い見積りでも27MBに相当するので、
+// 「ユーザー数が多すぎます」という親切な案内は一度も出せなかった。
+//
+// そこで天井を 12MB（遊び込みで約5,000人ぶん）に上げ、件数の上限は
+// backup.js 側でこの天井の内側に降ろした（あちらのコメント参照）。
+// メモリは下の3枚の門で守る ── 特に同時実行数(RESTORE_MAX_INFLIGHT=2)と
+// inflate:false が効いていて、以前 OOM を起こした「61KB の gzip が63MBに
+// 展開されるのを20並列」は今は起こらない（12MB × 2本ぶんが最悪ケース）。
+const RESTORE_LIMIT_MB = 12;
 const restoreParser = express.json({ limit: `${RESTORE_LIMIT_MB}mb`, inflate: false });
 
 // 大きい本文を読む前に立てる門。
@@ -443,7 +454,12 @@ function newUser(username, password, role = 'user') {
   const user = {
     id, username, salt, passHash: hash, role,
     banned: false, createdAt: Date.now(),
-    coins: 500, gems: 50, xp: 0,
+    // 登録直後の所持金。500🪙 では 🛍ショップの外観カテゴリで買える品が
+    // 1つも無かった（最安の盤面が1,000🪙、スキン1,200🪙、エフェクト1,800🪙。
+    // 買えるのは消耗品の🧹クリーナー250🪙だけ）。ソロ1戦の実入りは
+    // 20 + score/100 なので、初心者の3,000点＝約50🪙 ── 最初の1品まで約10戦。
+    // 「登録した日にショップで何か買える」ところまでは持たせる。
+    coins: 1000, gems: 50, xp: 0,
     shards: 0,          // 👑 王座の欠片。管理者イベントでしか増えない
     // 🤝 フレンド。db.friends のような新しい入れ物ではなく user の上に置く ──
     // 復元はトップレベルの未知のキーを黙って落とすので、別の入れ物にすると
@@ -458,17 +474,28 @@ function newUser(username, password, role = 'user') {
       sprintPlays: 0, coopPlays: 0, coopBest: 0, sprint: {},
       meltdownBest: 0, chimeraBest: 0,
       dailycPlays: 0, dailycBestStreak: 0,
+      // 下の lastDaily を null にしたので、初回ログインボーナスは登録直後の
+      // /api/me で出る。その1回目を数えるのはあちらなので、ここは0から始める
+      //（1 にしておくと初日だけ2回ぶん数えてしまう）。
+      dailyLogins: 0,
       history: [],
     },
     owned: [...DEFAULT_OWNED],
-    items: { item_bomb: 1, item_cleaner: 1, item_fever: 1 },   // starter boosters
+    // スターターのブースター。ゲスト（modes.js）は item_mini を含む4種を持って
+    // 遊べるので、登録すると種類が1つ減る逆転が起きていた。そろえる。
+    items: { item_bomb: 1, item_cleaner: 1, item_fever: 1, item_mini: 1 },
     equipped: { ...DEFAULT_EQUIPPED },
     equippedTitle: null,
     battlePass: { season: currentSeason().id, xp: 0, premium: false, claimed: [] },
     badges: [],
     achievements: [],
     missions: null,   // generated on first access (syncMissions)
-    lastDaily: jstDayKey(),   // grantDaily と同じJST基準で揃える
+    // 登録日を「もう受け取り済み」として作っていたので、登録初日だけ
+    // ログインボーナス(100🪙+5💎)が出なかった ── 初日の手取りがいちばん薄いのに、
+    // そこだけ支給を飛ばしていたことになる。null にすると、登録直後の
+    // /api/me（クライアントが必ず呼ぶ）で初日ぶんが出る。連続ログインの計算は
+    // 「lastDaily が昨日か」で見ているので、null でも streak は 1 から始まる。
+    lastDaily: null,
   };
   db.users[id] = user;
   saveDb();
@@ -560,6 +587,25 @@ function migrateUser(user) {
 // 何年も前に作って一度も遊んでいないアカウントが、その「初回」1回だけ
 // スコア上限まで通せてしまう。
 const FIRST_RESULT_GRACE_MS = 30 * 60 * 1000;
+// 生涯の初回送信だけに効く、スコアの追加の頭押さえ。
+//
+// 上の「持ち時間」は 最大30分＋猶予90秒 ＝ 1,890秒。v2.14 で1秒あたりの上限
+// (rateCap)を 500→2000 に上げたので、1,890 × 2,000 = 3,780,000 となり、
+// 初回送信では壁時計クランプが**絶対上限(1,000,000)より先に効かなくなった**。
+// つまり「まだ一度も結果を送っていないアカウント」── 登録から約7分経った
+// 新規、あるいはバックアップから戻ってきて lastResultAt を持たない人 ── は、
+// 1リクエストで100万点＝全ボードの首位を取れた。
+//
+// 持ち時間そのものを縮めると「初めての1回が長かった人」を切り詰めてしまう
+// （それが理由で一律300秒をやめた経緯がある）ので、縮めるのは持ち時間では
+// なく「初回1回で載せられるスコア」のほうにする。2回目以降は直前送信からの
+// 実経過時間で縛られるので、この頭押さえは初回にだけ必要。
+// 300,000 は、この世界の実在プレイヤーの生涯ベスト（500戦で300,000）と同じ
+// 高さ。正直な初回プレイがここに触ることはまず無く、触っても記録は残る。
+const FIRST_RESULT_SCORE_CAP = 300_000;
+// 🧩 パズル遺跡の「その日そのステージ番号の勝利は1回まで」の印が覚える件数。
+// backup.js の合流にも同名の頭押さえがある（あちらは細工したファイル対策）。
+const PUZ_WIN_DAY_KEEP = 200;
 function seedLastResultAt(user) {
   const s = user.stats;
   if (Number.isFinite(s.lastResultAt) && s.lastResultAt > 0) return s.lastResultAt;
@@ -771,8 +817,12 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 経過時間が 0 になり、duration が猶予の 90秒 に落ちる。すると報酬計算の
   // スコアが必ず 90×500 = 45,000点 で頭打ちになり、どれだけ長く上手に
   // 遊んでもコインもXPもミッション進捗も 90秒ぶんしか付かなかった。
+  // このアカウントが「まだ一度も結果を送っていない」か。seedLastResultAt は
+  // 呼ぶと基準を書き込んでしまうので、その前に見ておく（下の初回上限で使う）。
+  let firstEverResult = false;
   if (!preClamped) {
     const now = Date.now();
+    firstEverResult = !(Number.isFinite(user.stats.lastResultAt) && user.stats.lastResultAt > 0);
     const last = seedLastResultAt(user);
     // +90s of slack: a run can start before the previous one is submitted
     // (menus, result screens), and clocks drift.
@@ -809,6 +859,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // exactly the ceiling the arena residents sit just under.
   const rateCap = mode === 'sprint' ? 1000 : mode === 'meltdown' ? 2000 : mode === 'chimera' ? 1000 : mode === 'dig' ? 2000 : 2000;
   if (score > duration * rateCap) score = Math.floor(duration * rateCap);
+  // 生涯の初回だけ、さらに低い天井をかぶせる（FIRST_RESULT_SCORE_CAP のコメント）。
+  // 持ち時間 1,890秒 × rateCap 2,000/秒 は絶対上限の 1,000,000 を上回るので、
+  // ここが無いと「一度も送っていないアカウント」は1リクエストで首位を取れる。
+  if (firstEverResult && score > FIRST_RESULT_SCORE_CAP) score = FIRST_RESULT_SCORE_CAP;
 
   // 「1プレイの実体があった」判定。score も duration もここで確定するので、
   // 以降どこからでも使える。💎ドロップ・累積カウンタ（下）に加えて、
@@ -828,6 +882,34 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     if (won) {
       if (user.stats.bpDay.cleared) won = false;
       else user.stats.bpDay.cleared = true;
+    }
+  }
+  // 🧩パズル遺跡も同じ性質。盤面は seed = ステージ番号だけで決まる決定論的な
+  // 生成なので、ステージ1は誰にとっても毎回まったく同じ ── 手順を覚えれば
+  // 十数秒で won:true を送り続けられる。💎とバッジは「自己ベスト更新のときだけ」
+  // (下の puzzle ブロック)で守られているが、勝利の上積み（+50🪙 / bpXp+100 /
+  // accXp+80 / ギルド週間pt+25 / totalWins / ミッションの 'win'）は素通しだった。
+  // 結果送信の上限は250件/時なので、bpXp だけで約37,500/時＝バトルパス1シーズン
+  // ぶん(30段×500=15,000)が30分弱で埋まる。
+  // クライアントは既に stage を送っているので、ブループリントと同型のガードを
+  // サーバー側だけで置ける: 同じステージ番号の勝利計上はJSTの1日1回まで。
+  // 2回目以降も普通に遊べて、汎用ミッション（games/lines/score）も★も進行も
+  // 今までどおり通る（練習で解き直す遊び方は壊さない）。
+  if (mode === 'puzzle' && won) {
+    const today = jstDayKey();
+    let pw = user.stats.puzWinDay;
+    if (!pw || pw.day !== today || !Array.isArray(pw.stages)) {
+      pw = user.stats.puzWinDay = { day: today, stages: [] };
+    }
+    const st = Math.max(0, Math.min(999, Math.floor(stage) || 0));
+    if (pw.stages.includes(st)) won = false;
+    else {
+      pw.stages.push(st);
+      // 覚えておく数の上限。1日に200ステージを正直に解く人は現実にはいないが、
+      // 細工した送信で配列を無限に伸ばされないように頭を押さえる（あふれたら
+      // 古いほうから忘れる ── 忘れるまでに200ステージぶんの間隔が要るので、
+      // 同じステージの連投という本題は塞がったまま）。
+      if (pw.stages.length > PUZ_WIN_DAY_KEEP) pw.stages.splice(0, pw.stages.length - PUZ_WIN_DAY_KEEP);
     }
   }
   // 🛠️工房も同型（自作の1〜2手ステージを公開して自分で回せる）。本筋は
@@ -1966,12 +2048,19 @@ app.post('/api/admin/weekly/reset', requireAuth, requireAdmin, (req, res) => {
   // Pay out any finished week first — deleting stale records here would
   // otherwise silently destroy the ranking rewards they still owe.
   finalizeWeeklyRankings();
+  // 全員の週間記録をその場で消す破壊的な操作なのに、退避も記録も無かった。
+  // 復元・巻き戻しの経路は必ず pre-restore / pre-rollback を撮ってから走る
+  // のに、この経路だけ押した直後に「取り消す」手段が存在しなかった。
+  // 撮れなかったとき(null)は応答でそう伝える ── 管理画面は「元に戻せません」を
+  // 出せるし、少なくとも運営が知らないまま進むことはなくなる。
+  const snap = snapshot(db, 'pre-weeklyreset');
   let affected = 0;
   for (const u of Object.values(db.users)) {
     if (u.stats && u.stats.weekly) { delete u.stats.weekly; affected++; }
   }
+  adminLog(req, 'weekly_reset', null, { affected, snapshot: snap || '(失敗)' });   // adminLog が saveDb もする
   saveDb();
-  res.json({ affected });
+  res.json({ affected, snapshot: snap });
 });
 
 // ---------------------------------------------------------------------------
@@ -3541,6 +3630,19 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
       lagWarnMs: PERF_LAG_WARN_MS,
       rssWarnMb: PERF_RSS_WARN_MB,
     },
+    // 🐛 プレイヤーからの報告箱（バグ報告・工房通報・パーティー通報が全部ここに
+    // 落ちる）。届いたことを知らせる仕組みが1つも無く、未処理件数を知れるのは
+    // 「管理者パネルを開いてモーダルを押したあとの見出し」だけだった。しかも
+    // cap に達すると、処理済みが1件も無ければ新規報告を 503 で断る ──
+    // 「運営が数日開かない → 箱が埋まる → 以後の通報が全部拒否される」が、
+    // どこにも出ないまま起きる。clientErrors と同じ形で件数を出しておけば、
+    // 管理画面のカードにもボタンのバッジにも出せる。
+    // full は「あと1件も入らない」（＝新規報告が断られる）状態。
+    bugreports: (() => {
+      const rows = Array.isArray(db.bugreports) ? db.bugreports : [];
+      const open = rows.filter(b => b && b.status !== 'done').length;
+      return { open, total: rows.length, cap: BUGREPORT_CAP, full: rows.length >= BUGREPORT_CAP && open === rows.length };
+    })(),
     // 💥 クライアント側のJSエラー（未処理の件数だけ。中身は /api/admin/clienterrors）
     clientErrors: {
       rows: Array.isArray(db.meta.clientErrors) ? db.meta.clientErrors.length : 0,
@@ -3854,8 +3956,33 @@ refreshThrones();
 battle.crowd.restampCrowns();
 console.log(`[chat] 自動翻訳エンジン: ${TRANSLATE_ENGINE === 'api' ? '外部API (TRANSLATE_URL)' : '内蔵フレーズ辞書'}`);
 
+// 🏰 ギルド名簿の幽霊掃除。復元/マージ経路（backup.js）と同じ関数をここでも
+// 1回通す ── すでに幽霊を抱えている本番の db は、復元が走らない限り自動では
+// 直らないため（満員判定は名簿の生の length を見るので、幽霊が枠を占めたまま
+// 「20/20 なのに誰も居ない」が続く）。
+{
+  const gf = healGuildRosters(db);
+  if (gf.ghosts || gf.disbanded || gf.owners || gf.pointers) {
+    console.log(`[guild] 名簿を整理: 幽霊${gf.ghosts} 解散${gf.disbanded} 代替わり${gf.owners} 所属${gf.pointers}`);
+    saveDb();
+  }
+}
+
 // A boot snapshot means a bad restore is always one click away from undo.
 if (Object.keys(db.users).length > 0) snapshot(db, 'boot');
+
+// 自動のスナップショットは起動時のこの1回だけで、定期実行が無かった。
+// 永続ディスクのプランでプロセスが数週間上がりっぱなしになると、最新の
+// 復旧点は数週間前のものになる（その間に db.json が壊れたら、そのぶん丸ごと
+// 失う）。1時間ごとに1枚撮っておけば、失うのは最大1時間ぶんで済む。
+// 保持は backup.js の prune がラベルごとの枠で面倒を見る（hourly は6枚まで
+// なので、退避(pre-*/manual)を押し出さない）。
+const SNAPSHOT_INTERVAL_MS = 60 * 60 * 1000;
+setInterval(() => {
+  try {
+    if (Object.keys(db.users).length > 0) snapshot(db, 'hourly');
+  } catch (err) { console.error('[backup] 定期スナップショットに失敗:', err && err.message); }
+}, SNAPSHOT_INTERVAL_MS).unref?.();
 
 // ---------------------------------------------------------------------------
 // 🚚 切り出したルーターへ共有依存を渡す

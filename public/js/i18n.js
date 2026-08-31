@@ -145,16 +145,17 @@ const SERVER_MSG_EN = {
   '報酬がありません': 'No reward here',
   'ティアが見つかりません': 'Tier not found',
   'アイテムが見つかりません': 'Item not found',
-  'アイテムを持っていません': "You don't have that item",
-  '所持していないアイテムです': "You don't own that item",
+  // 'アイテムを持っていません' / '所持していないアイテムです' /
+  // 'まだ獲得していない称号です' / '連投しすぎです。少し待ってください' は
+  // この表の上（v2.12 の追加ぶん）に既にある。オブジェクトリテラルの重複キーは
+  // 後勝ちなので、ここに二重に書くと上の訳が黙って死ぬ。増やすときは必ず
+  // 既にあるか確かめること（表全体は非短縮形で揃えてある）。
   '不正なアイテムです': 'Invalid item',
   '不正なスロットです': 'Invalid slot',
   '称号が見つかりません': 'Title not found',
-  'まだ獲得していない称号です': "You haven't earned that title yet",
   'ルームが見つかりません': 'Room not found',
   'ルームが満員です': 'The room is full',
   'ホストのみ開始できます': 'Only the host can start',
-  '連投しすぎです。少し待ってください': "You're sending too fast — wait a moment",
   '🔇 管理者によりチャットが制限されています': '🔇 Chat restricted by an admin',
   '💳 課金機能は製作中です。もうしばらくお待ちください！': '💳 Payments are coming soon!',
   '決済サービスに接続できません': 'Could not reach the payment service',

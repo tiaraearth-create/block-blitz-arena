@@ -721,17 +721,25 @@ class AudioEngine {
 
   clearLines(count, streak) {
     const base = [523, 659, 784, 1047];
+    // ピッチ上げの頭打ちが streak 6 と早すぎて、長い連鎖が短い連鎖と同じに
+    // 聞こえていた。10 まで開ける（上げ幅は 0.06→0.05 に緩めて音程の暴れを抑える）。
+    const lift = 1 + 0.05 * Math.min(streak, 10);
     for (let i = 0; i < Math.min(count + 1, 4); i++) {
-      this.tone({ freq: base[i] * (1 + 0.06 * Math.min(streak, 6)), dur: 0.22, type: 'triangle', vol: 0.22, delay: i * 0.05 });
+      this.tone({ freq: base[i] * lift, dur: 0.22, type: 'triangle', vol: 0.22, delay: i * 0.05 });
     }
     this.noise({ dur: 0.25, vol: 0.18, freq: 2000 });
     if (count >= 2) this.tone({ freq: 1568, dur: 0.4, type: 'sine', vol: 0.15, delay: 0.15 });
   }
 
   combo(streak) {
-    const f = 440 * Math.pow(1.12, Math.min(streak, 10));
+    // 以前は Math.min(streak, 10) で頭打ち ── streak 10 と 25 が同じ音だった。
+    // 16 まで開け、さらに上の段では倍音を1本足して「まだ伸びている」を耳で返す。
+    // 上の段は上げ幅を緩める（1.12 のまま 16 まで伸ばすと耳に刺さる）。
+    const n = Math.max(0, Math.min(Number(streak) || 0, 16));
+    const f = 440 * Math.pow(1.12, Math.min(n, 10)) * Math.pow(1.06, Math.max(0, n - 10));
     this.tone({ freq: f, dur: 0.15, type: 'sine', vol: 0.2 });
     this.tone({ freq: f * 1.5, dur: 0.2, type: 'sine', vol: 0.12, delay: 0.06 });
+    if (streak >= 10) this.tone({ freq: f * 2, dur: 0.24, type: 'triangle', vol: 0.09, delay: 0.12 });
   }
 
   gameOver() {

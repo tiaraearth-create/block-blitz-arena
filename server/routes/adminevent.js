@@ -18,9 +18,9 @@ import { ctx } from '../context.js';
 
 // index.js のモジュールスコープにしか無いもの。値は起動時に一度だけ
 // 流し込む（init… は server.listen より前・battle 生成より後に呼ばれる）。
-let db, seedLastResultAt, publicUser, GEMDROP_DAILY_CAP, applyGameResult, pickResultFields, rateLimit, battle;
+let db, seedLastResultAt, publicUser, GEMDROP_DAILY_CAP, applyGameResult, pickResultFields, rateLimit, battle, adminLog;
 export function initAdminEventRoutes() {
-  ({ db, seedLastResultAt, publicUser, GEMDROP_DAILY_CAP, applyGameResult, pickResultFields, rateLimit, battle } = ctx);
+  ({ db, seedLastResultAt, publicUser, GEMDROP_DAILY_CAP, applyGameResult, pickResultFields, rateLimit, battle, adminLog } = ctx);
 }
 
 // ミドルウェアだけは上の遅延束縛にできない ── ハンドラ本体と違って、
@@ -315,6 +315,16 @@ adminEventRouter.post('/api/admin/adminevent', requireAuth, requireAdmin, (req, 
     db.meta.adminEventRun = null;
   }
   saveDb();
+  // 🧾 週次イベントの日程変更。schedule.updatedBy は「最後に触った人」しか
+  // 残らない（上書きされる）ので、履歴としては操作ログのほうに残す。
+  adminLog(req, 'adminevent_schedule', r.schedule.enabled ? (occ ? occ.dayKey : 'enabled') : 'off', {
+    enabled: !!r.schedule.enabled,
+    rotation: r.schedule.rotation || null,
+    modeId: occ ? occ.modeId : null,
+    weekday: r.schedule.weekday,
+    slots: Array.isArray(r.schedule.slots) ? r.schedule.slots.join('/') : null,
+    runCleared: db.meta.adminEventRun === null && !!run,
+  });
 
   if (r.schedule.enabled && !wasEnabled && occ) {
     const mode = aeModeById(occ.modeId);
@@ -346,5 +356,8 @@ throneAdminRouter.post('/api/admin/throne', requireAuth, requireAdmin, (req, res
   db.meta.throneMax = Math.trunc(n);
   saveDb();
   console.log(`[throne] ${req.user.username} が世界の到達段を ${before} → ${db.meta.throneMax} に変更`);
+  // 🧾 宝物庫の棚は世界全体に効く。console.log はプロセスが死ねば消えるので、
+  // 「事故で巻き戻ったときに戻す」ための証跡は操作ログのほうに残す。
+  adminLog(req, 'throne_set', String(db.meta.throneMax), { before, after: db.meta.throneMax });
   res.json({ throneMax: db.meta.throneMax, before });
 });

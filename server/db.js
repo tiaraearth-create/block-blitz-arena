@@ -45,7 +45,13 @@ let lastWriteBytes = null;
 // 保存＝イベントループが止まる時間としてじわじわ効いてくる（工房の♡一覧が
 // まさにその形）。閾値を越えた保存だけをログに出す。毎回出すと 250ms おきに
 // 同じ行が流れて肝心なときに埋もれるので、間隔を空けて1本だけ出す。
-const SLOW_SAVE_MS = 20;
+// 閾値は 20ms だった。実測（遊び込みユーザー 2.4KB 想定・ローカルNVMe）では
+//   100人 0.27MB/2.3ms ・ 1,000人 2.28MB/11.0ms ・ 2,000人 4.53MB/20.5ms
+// なので、20ms は「約2,000人」＝復元の天井（index.js の RESTORE_LIMIT_MB）に
+// 迫ってから初めて鳴る＝警告として一手遅かった。10ms なら約1,000人で鳴る。
+// ログは下の間隔で1本にまとめるので、鳴りやすくしても流れっぱなしにはならない。
+// なお Render のディスクはネットワーク越しなので、実機はこれより遅い側に出る。
+const SLOW_SAVE_MS = 10;
 const SLOW_SAVE_LOG_INTERVAL = 10 * 60 * 1000;
 let lastSlowSaveLogAt = 0;
 
@@ -93,6 +99,23 @@ function writeAtomic(file, text) {
   }
 }
 
+// 壊れた db.json は捨てずに `db.json.corrupt-<時刻>` として残す（手で救出できる
+// ように）。ただしこれはフルサイズの写しで、しかも消すコードがどこにも無かった。
+// 破損の最有力原因は「書き込み途中の中断」＝ディスク逼迫なので、無期限に積むのは
+// 逆向きに効く。救出に使うのは実際には直近のものだけなので、新しい数件だけ残す。
+const KEEP_CORRUPT = 2;
+function pruneCorrupt() {
+  try {
+    const base = path.basename(DB_FILE);
+    const files = fs.readdirSync(DATA_DIR)
+      .filter(f => f.startsWith(`${base}.corrupt-`))
+      .sort();                       // 名前は ISO 時刻なので辞書順＝時系列順
+    for (const f of files.slice(0, Math.max(0, files.length - KEEP_CORRUPT))) {
+      try { fs.unlinkSync(path.join(DATA_DIR, f)); } catch { /* best effort */ }
+    }
+  } catch { /* 読めなくても復旧は続ける */ }
+}
+
 // db.json が壊れていたときの最後の砦。起動ごとに撮っている
 // snapshots/ の中で、いちばん新しく中身のあるものを採用する。
 // スナップショットは db 全体の写しなので meta.seedHash も一緒に戻る。
@@ -129,6 +152,7 @@ export function loadDb() {
         const kept = `${DB_FILE}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
         fs.renameSync(DB_FILE, kept);
         console.error(`[db] 壊れたファイルは ${path.basename(kept)} として残しました（手動で救出できます）`);
+        pruneCorrupt();   // 古い写しは畳む（残すのは新しい KEEP_CORRUPT 件だけ）
       } catch { /* 残せなくても復旧は続ける */ }
       db = recoverFromSnapshot();
       if (db) recovered = true;

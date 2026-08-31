@@ -7,7 +7,7 @@
 // 断りの文言はサーバー側でどの理由でも同じにしてある ── 理由を出し分けると、
 // この窓口が「あの人にブロックされているか」を調べる道具になるので。
 
-import { $, showScreen, showModal, closeModal, toast } from './dom.js';
+import { $, showScreen, showModal, closeModal, toast, fmt } from './dom.js';
 import { t } from './i18n.js';
 import { audio } from './audio.js';
 import { session, api } from './net.js';
@@ -61,9 +61,12 @@ let boardData = null;
 let boardLoading = false;
 let boardError = null;    // 'na'（未実装） | 文字列（メッセージ） | null
 
+// 桁区切りは他の画面と同じ fmt()（dom.js）に寄せる。ここだけ引数なしの
+// toLocaleString() だったので、ブラウザの既定ロケールが de-DE などだと
+// ライバル表の数字だけ "1.000"、他の画面は "1,000" と割れて見えていた。
 function num(v) {
   const n = Number(v);
-  return isFinite(n) ? n.toLocaleString() : null;
+  return isFinite(n) ? fmt(n) : null;
 }
 
 function cdLabel(ms) {

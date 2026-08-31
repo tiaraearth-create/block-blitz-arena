@@ -202,14 +202,22 @@ export function initBattle(server, deps) {
     return null;
   };
 
+  // autoTr: 素材にネイティブ対訳が無いとき、translate.js の部分文字列置換で
+  // 埋め合わせるかどうか。住人の自動発言では **必ず false**（既定）――
+  // 置換テーブルは英語でも日本語でもない文字列を作り、それが
+  // 「auto-translated」の札つきで英語プレイヤーに届く。壊れた英語より原文の
+  // ままのほうが読み手には親切で、「翻訳が無い」ことも正しく伝わる。
+  // true にするのは運営が自由文で打った台詞（zeroChat / postAmbient）だけ。
   function postChat(name, text, extra = {}) {
-    const entry = { type: 'chat', id: crypto.randomUUID(), from: name, role: 'user', text, at: Date.now(), tag: tagOf(name, null), ...extra };
+    const { autoTr = false, ...rest } = extra;
+    const entry = { type: 'chat', id: crypto.randomUUID(), from: name, role: 'user', text, at: Date.now(), tag: tagOf(name, null), ...rest };
     // 👑 王座を持つ住人（AIプレイヤー）の発言にも王冠（名前は一意・なりすまし不可）
     const crowns = db.meta.thrones ? Object.values(db.meta.thrones).filter(t => t && t.username === name).length : 0;
     if (crowns) entry.crown = crowns;
     // 翻訳: 会話エンジンが「人間が書いたネイティブ対訳」を同梱してきたら
-    // それを最優先。無い素材（旧ja-only行など）だけ辞書翻訳で補う。
-    if (!entry.tr) {
+    // それを最優先。対訳の無い素材は翻訳を付けずに原文のまま出す
+    // （autoTr を立てた運営の自由文だけ、辞書翻訳で埋め合わせる）。
+    if (!entry.tr && autoTr) {
       const tr = translateLocal(text, detectLang(text) === 'ja' ? 'en' : 'ja');
       if (tr) entry.tr = tr;
     }
@@ -506,6 +514,9 @@ export function initBattle(server, deps) {
     // 英語面でゼロの発言だけ翻訳が出ていなかった。
     return postChat(ZERO_NAME, String(text).slice(0, 300), {
       role: 'zero',
+      // 憑依（運営の自由文）には対訳が無い。ここだけは辞書翻訳でも出したほうが
+      // 英語側に何も届かないよりましなので、自動翻訳を許す。
+      autoTr: !en,
       ...(en ? { tr: { lang: 'en', text: String(en).slice(0, 300), engine: 'native' } } : {}),
     });
   }
@@ -618,7 +629,10 @@ export function initBattle(server, deps) {
   // Legacy entry point (admin "say"): a resident says `text`, or improvises.
   function postAmbient(text) {
     const line = residentLine();
-    return postChat(line.name, text || line.text, !text && line.tr ? { tr: line.tr } : {});
+    // 運営が文面を指定したときだけ辞書翻訳を許す（住人の自動発言は素材の
+    // ネイティブ対訳だけを使う）。
+    return postChat(line.name, text || line.text,
+      text ? { autoTr: true } : (line.tr ? { tr: line.tr } : {}));
   }
 
   // Run a scripted list of [{ resident|name, text, delay }] with its timing.

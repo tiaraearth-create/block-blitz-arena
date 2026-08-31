@@ -302,6 +302,33 @@ export function reservationOf(user, dayKey) {
   return r;
 }
 
+// 予約が指している枠を引き当てる。
+//
+// slotId は slotsOf が振る **配列の添字** で、slots は保存のたび HH:MM 昇順に
+// 並べ直される。だから運営が枠を1つ足す／消すだけで、既存の予約がまるごと
+// 別の時刻へ黙ってずれていた（18:00 を取った人が 17:00 の枠に移り、18:00 に
+// 来ても「いまはあなたの枠の時間ではありません」で弾かれる）。
+//
+// そこで予約には時刻そのもの（slotTime）を持たせ、引き当てはこれを正とする。
+// 枠の並びが変わっても 18:00 は 18:00 のままで、その枠自体が消えたときだけ
+// 「枠なし」になる（消えた枠の人を勝手に別の時刻へ移さない）。
+//
+// 古い予約（slotTime を持たない）は従来どおり添字で引き、見つけた時刻を
+// 書き戻して以後ずれないようにする。逆に slotTime があって添字だけ古い場合は
+// 添字を貼り替える —— 運営画面の予約者一覧など、まだ slotId を見ている側も
+// これで正しい時刻を出せる。
+export function reservedSlot(occ, r) {
+  if (!r || !occ) return null;
+  if (r.slotTime) {
+    const byTime = occ.slots.find(s => s.time === r.slotTime) || null;
+    if (byTime && r.slotId !== byTime.id) r.slotId = byTime.id;
+    return byTime;
+  }
+  const byId = occ.slots.find(s => s.id === r.slotId) || null;
+  if (byId) r.slotTime = byId.time;
+  return byId;
+}
+
 export function reserve(user, occ, slotId, now = Date.now()) {
   const slot = occ.slots.find(s => s.id === slotId);
   if (!slot) return { error: 'その時間枠は存在しません' };
@@ -312,7 +339,9 @@ export function reserve(user, occ, slotId, now = Date.now()) {
   // いちど遊んだあとに別の枠へ移ると、お宝ラッシュの倍率つき枠を二重に消化できる。
   // 移り先が開催中でも、前の枠が終わったあとでも同じ抜け道になるので、
   // 「まだ遊んでいない同日内の乗り換え」だけを許し、プレイ済みなら一律に断る。
-  if (prev && prev.slotId !== slotId && prev.playedAt) {
+  // 同じ枠かどうかは（添字ではなく）時刻で見る。添字は枠の編集でずれる。
+  const sameSlot = prev && (prev.slotTime ? prev.slotTime === slot.time : prev.slotId === slotId);
+  if (prev && !sameSlot && prev.playedAt) {
     return { error: 'すでに参加した日は枠を変更できません' };
   }
   user.adminEvent = {
@@ -323,6 +352,8 @@ export function reserve(user, occ, slotId, now = Date.now()) {
     ...(prev || {}),
     dayKey: occ.dayKey,
     slotId,
+    // 枠の同定はこちらが正（slotId は表示・並べ替え用の添字）。
+    slotTime: slot.time,
     modeId: occ.modeId,
     reservedAt: now,
     // Progress inside the slot survives a reslot within the same day.
@@ -370,7 +401,7 @@ export function liveSlotFor(schedule, user, now = Date.now(), graceMs = 0) {
   }
   const r = reservationOf(user, occ.dayKey);
   if (!r) return null;
-  const slot = occ.slots.find(s => s.id === r.slotId);
+  const slot = reservedSlot(occ, r);
   if (!slot) return null;
   if (now < slot.startsAt || now >= slot.endsAt + graceMs) return null;
   return { occ, slot, reservation: r };
@@ -577,6 +608,7 @@ export function playerView(db, user, now = Date.now(), counts = null) {
   if (!occ) return null;
   const mode = aeMode(occ.modeId) || AE_MODES[0];
   const r = reservationOf(user, occ.dayKey);
+  const mySlot = reservedSlot(occ, r);
   const live = liveSlotFor(schedule, user, now);
   // The stored run only appears once somebody FINISHES a play. Without a
   // fallback the very first player of the week saw no boss bar and no gauge —
@@ -602,7 +634,13 @@ export function playerView(db, user, now = Date.now(), counts = null) {
     slots: occ.slots.map(s => slotView(s, now, counts ? counts[s.id] : 0)),
     opensAt: occ.opensAt,
     closesAt: occ.closesAt,
-    mine: r ? { slotId: r.slotId, runs: r.runs || 0, best: r.best || 0, chests: r.chests || 0, claimedTiers: r.claimedTiers || [] } : null,
+    // 予約中の枠は時刻から引き直す。枠が編集で消えていたら slotId は null に
+    // なり、画面は「予約なし」として扱える（存在しない添字を返さない）。
+    mine: r ? {
+      slotId: mySlot ? mySlot.id : null,
+      slotTime: mySlot ? mySlot.time : (r.slotTime || null),
+      runs: r.runs || 0, best: r.best || 0, chests: r.chests || 0, claimedTiers: r.claimedTiers || [],
+    } : null,
     live: live ? { slotId: live.slot.id, endsAt: live.slot.endsAt, viaAdmin: !!live.viaAdmin } : null,
     world: run ? {
       total: run.total,
@@ -620,7 +658,11 @@ export function slotCounts(db, occ) {
   const counts = {};
   for (const u of Object.values(db.users || {})) {
     const r = u && u.adminEvent;
-    if (r && r.dayKey === occ.dayKey) counts[r.slotId] = (counts[r.slotId] || 0) + 1;
+    if (!r || r.dayKey !== occ.dayKey) continue;
+    // 時刻で引き直してから数える（添字のままだと枠を編集した週に、
+    // 誰もいない枠が「3人います」と出る）。消えた枠の予約はどこにも数えない。
+    const slot = reservedSlot(occ, r);
+    if (slot) counts[slot.id] = (counts[slot.id] || 0) + 1;
   }
   return counts;
 }

@@ -13,6 +13,7 @@ const DEFAULTS = {
   chatTranslate: true,   // show foreign-language chat in your language
   bgmTrack: null,        // jukebox pin: track id to loop everywhere (null = auto per screen)
   colorMarks: false,     // colorblind aid: overlay a shape mark per block color
+  haptics: true,         // 📳 短い振動で「置いた／消えた／置けなかった」を返す
 };
 
 let settings = { ...DEFAULTS };
@@ -33,6 +34,7 @@ if (!hadSaved) {
       settings.shake = false;
       settings.flash = false;
       settings.particles = 'low';
+      settings.haptics = false;   // 振動も「余計な刺激」の側に入れておく
     }
   } catch { /* matchMedia 非対応環境 -> 既定のまま */ }
 }

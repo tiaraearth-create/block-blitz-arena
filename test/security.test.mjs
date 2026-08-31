@@ -338,11 +338,21 @@ try {
   // Content-Length を見て、本文を読む前に落とすこと。
   // ---------------------------------------------------------------------
   {
-    const big = '{"users":{},"pad":"' + 'a'.repeat(6 * 1024 * 1024) + '"}';
+    // ⚠ 上限は実装から読む。ここに数値を書き写すと、上限が上がった日に
+    // 「上限内の本文」を送ってしまい、2枚目の門（レート制限=429）に当たって
+    // 落ちる ── 実際そうなった（4MB→12MB に上がったのにテストは6MBのまま）。
+    const srcIndex = fs.readFileSync(path.join(process.cwd(), 'server', 'index.js'), 'utf8');
+    const limMatch = srcIndex.match(/const RESTORE_LIMIT_MB = (\d+)/);
+    check('復元の上限(RESTORE_LIMIT_MB)を実装から読めた', !!limMatch,
+      limMatch ? `${limMatch[1]}MB` : 'RESTORE_LIMIT_MB が見つからない — このテストを実装に合わせて直すこと');
+    const limitMb = limMatch ? Number(limMatch[1]) : 12;
+    // 上限を確実に超える大きさ（+2MB）。Content-Length で読む前に落ちるので
+    // 実際に転送されるわけではない。
+    const big = '{"users":{},"pad":"' + 'a'.repeat((limitMb + 2) * 1024 * 1024) + '"}';
     const codes = await Promise.all(Array.from({ length: 6 }, () =>
       fetch(BASE + '/api/admin/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: big })
         .then(r => r.status).catch(() => 0)));
-    check('上限超えの本文は全部 413 で断られる', codes.every(c => c === 413), codes.join(','));
+    check('上限超えの本文は全部 413 で断られる', codes.every(c => c === 413), `上限${limitMb}MB / ${codes.join(',')}`);
     const alive = await fetch(BASE + '/api/status');
     check('連投してもサーバーは生きている', alive.ok, `status=${alive.status}`);
   }

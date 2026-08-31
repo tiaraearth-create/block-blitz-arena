@@ -4,6 +4,12 @@
 # 落ちたら GitHub からメールが飛ぶ。
 name: test
 
+# このジョブは checkout したうえで npm ci / npm test を回す＝リポジトリの
+# 外から来たコードを実行する段。既定のトークン権限をそのまま継承させず、
+# 読み取りだけに絞っておく（ここでは何も書き込まないので read で足りる）。
+permissions:
+  contents: read
+
 on:
   push:
     branches: ['**']
@@ -19,9 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -36,3 +42,14 @@ jobs:
         env:
           TEST_JOBS: 2
         run: npm test
+
+      # 依存に既知の脆弱性が出たことを知らせる唯一の口。
+      # インストールは3系統とも npm ci（＝package-lock.json のとおり）なので、
+      # 上流が直した版を出しても lock を更新するまで古いままになる。ここが
+      # 赤くなった日が「lock を引き直す合図」。
+      # テストのあとに置いてあるのは、audit が落ちてもテスト結果は先に
+      # 見えるようにするため。本番に入るのは dev 依存を除いたぶんだけなので
+      # --omit=dev、閾値は high 以上（moderate まで拾うと日常的に赤くなり、
+      # 誰も見なくなる）。
+      - name: 依存の脆弱性チェック
+        run: npm audit --omit=dev --audit-level=high

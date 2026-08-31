@@ -72,6 +72,32 @@ export function initAdminRoutes() {
 // 呼び出しを1枚かぶせて、実体の解決をリクエスト時まで遅らせる。
 const requireMod = (req, res, next) => ctx.requireMod(req, res, next);
 
+// 🧩 退会の後始末（UGC と履歴）── **削除経路が2本あるので1本にまとめてある**。
+//
+// レコードを消しただけだと、工房のステージ・📅デイリーのゴースト・💎購入履歴が
+// 「投稿時の表示名スナップショット」で名前を出し続ける（どれも db.users から
+// 引けないときの控えを持っている）。とくに作者不在のステージは
+// WS_MAX_STAGES のグローバル枠を永久に食うのに、表示は byName へ
+// フォールバックして壊れて見えないので、減っていることに誰も気づけない。
+//
+// 呼ぶのは DELETE /api/admin/users/:id（下）と DELETE /api/me（server/index.js）の
+// 2本。以前は前者だけが3本を直接呼んでいて、実際に多いほうの経路（本人の退会）が
+// 素通りしていた。次に後始末が1本増えたときに同じ非対称が再発しないよう、
+// **足すのはこの関数の中だけ**にすること。
+// （凍結 banned=true は別。あちらは workshop.js が公開面から隠すだけなので
+//  ここは触らず、凍結解除でそのまま戻す。）
+// レコードの削除より前でも後でもよい（どれも id で照合するだけ）。saveDb は
+// しない ── 呼び出し側がレコード削除まで済ませてから1回だけ保存する。
+export function purgeUserContent(userId, username) {
+  const id = String(userId || '');
+  if (!id) return { stages: 0, likes: 0, replays: 0, transactions: 0 };
+  const ws = purgeUserWorkshop(id);
+  if (ws.stages) console.log(`[workshop] 退会に伴い ${username || id} のステージ ${ws.stages} 件を削除しました`);
+  const replays = purgeUserDailyReplays(id);
+  const transactions = anonymizeUserTransactions(id);
+  return { stages: ws.stages, likes: ws.likes, replays, transactions };
+}
+
 export const adminRouter = express.Router();
 
 // ---------------------------------------------------------------------------
@@ -447,16 +473,9 @@ adminRouter.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res)
   leaveGuild(db, target);   // same reason as DELETE /api/me — before the record goes
   unfriendAll(db, target);  // フレンド側も同じ（DELETE /api/me と同じ理由）
   if (battleReady && battle.party) battle.party.ejectUser(target.id);
-  // 🧩 UGC と履歴の後始末。レコードを消しただけだと、工房のステージ・
-  // 📅デイリーのゴースト・💎購入履歴が「投稿時の表示名スナップショット」で
-  // 名前を出し続ける（どれも db.users から引けないときの控えを持っている）。
-  // DELETE /api/me も同じ3本を呼ぶ（coordination 参照）。
-  // （凍結 banned=true は別。あちらは workshop.js が公開面から隠すだけなので
-  //  ここでは触らず、凍結解除でそのまま戻す。）
-  const ws = purgeUserWorkshop(target.id);
-  if (ws.stages) console.log(`[workshop] 退会に伴い ${target.username} のステージ ${ws.stages} 件を削除しました`);
-  purgeUserDailyReplays(target.id);
-  anonymizeUserTransactions(target.id);
+  // 🧩 UGC と履歴の後始末。DELETE /api/me もこの同じ1本を呼ぶ
+  // （purgeUserContent のコメント参照）。
+  purgeUserContent(target.id, target.username);
   if (Object.prototype.hasOwnProperty.call(db.users, String(req.params.id))) delete db.users[String(req.params.id)];
   db.deleted[req.params.id] = Date.now();
   saveDb();
@@ -479,6 +498,10 @@ adminRouter.post('/api/admin/season/new', requireAuth, requireAdmin, (req, res) 
     endsAt: Date.now() + SEASON_MS,
   };
   saveDb();
+  // 🧾 全員のバトルパスが飛ぶ操作なので必ず残す（adminLog が saveDb もする）。
+  adminLog(req, 'season_new', db.meta.seasonOverride.name || null, {
+    number: currentSeason().number, gen: db.meta.seasonOverride.gen,
+  });
   res.json({ season: currentSeason() });
 });
 
@@ -504,6 +527,8 @@ adminRouter.post('/api/admin/season/set', requireAuth, requireAdmin, (req, res) 
     endsAt: b.days ? Date.now() + days * 24 * 60 * 60 * 1000 : (keepProgress ? (o.endsAt || null) : Date.now() + SEASON_MS),
   };
   saveDb();
+  // 🧾 keepProgress:false は全員のバトルパスを飛ばす。どちらにせよ世界に効く。
+  adminLog(req, 'season_set', name, { number, days: b.days ? days : null, keepProgress });
   res.json({ season: currentSeason(), progressKept: keepProgress });
 });
 
@@ -842,6 +867,12 @@ adminRouter.post('/api/admin/snapshots/restore', requireAuth, requireAdmin, (req
   db.season = null;
   setLiveScale(db.meta.popScale ?? 1);
   setCustom(db.meta.ambient);
+  // 🧾 DB丸ごとの巻き戻し。/api/admin/restore と同じ破壊力なのに、こちらだけ
+  // 無記録だった。記録は **適用後** に置く ── replace は db.meta ごと差し替わる
+  // ので、先に積んだ行はそのまま消える（この直後の flushDb でディスクへ）。
+  adminLog(req, 'snapshot_restore', String(req.body.name || ''), {
+    users: check.stats.users, snapshot: snap || null,
+  });
   if (!flushDb()) {
     console.error('[snapshot-restore] メモリには適用したが保存に失敗:', lastPersistError());
     return res.status(500).json({
@@ -862,6 +893,8 @@ adminRouter.post('/api/admin/snapshots/create', requireAuth, requireAdmin, (_req
 adminRouter.post('/api/admin/maintenance', requireAuth, requireAdmin, (req, res) => {
   db.meta.maintenance = !!req.body.on;
   saveDb();
+  // 🧾 全プレイヤーの締め出し。「昨日誰が入れっぱなしにしたか」を追える形に。
+  adminLog(req, 'maintenance', db.meta.maintenance ? 'on' : 'off', { on: db.meta.maintenance });
   battle.broadcastAll({
     type: 'announce',
     message: db.meta.maintenance ? '🛠 まもなくメンテナンスを開始します' : '✅ メンテナンスが終了しました',
@@ -899,6 +932,8 @@ adminRouter.post('/api/admin/broadcast', requireAuth, requireAdmin, async (req, 
     } catch { /* dictionary fallback failed — ship the original */ }
   }
   battle.broadcastAll({ type: 'announce', message, messageEn, from: req.user.username });
+  // 🧾 運営名義で全員に届いた文面。何を流したかが残らないと後から追えない。
+  adminLog(req, 'broadcast', null, { message: message.slice(0, 80) });
   res.json({ ok: true, delivered: battle.clients.size });
 });
 
@@ -921,11 +956,15 @@ adminRouter.post('/api/mod/mute', requireAuth, requireMod, (req, res) => {
   }
   target.muted = !!req.body.muted;
   saveDb();
+  // 🧾 モデレーターの処分行為。mod 権限は付与できるのに、mod にできる処分だけ
+  // 無記録なのは非対称だった（chat/clear も同じ理由で下に残している）。
+  adminLog(req, 'mute', target.username, { muted: target.muted });
   res.json({ ok: true, muted: target.muted });
 });
 
-adminRouter.post('/api/mod/chat/clear', requireAuth, requireMod, (_req, res) => {
+adminRouter.post('/api/mod/chat/clear', requireAuth, requireMod, (req, res) => {
   battle.chatOps.clear();
+  adminLog(req, 'chat_clear', 'mod', {});
   res.json({ ok: true });
 });
 
@@ -1044,6 +1083,16 @@ adminRouter.post('/api/admin/pop', requireAuth, requireAdmin, (req, res) => {
     db.meta.ambient = getCustom();   // persist the sanitized version
   }
   saveDb();
+  // 🧾 にぎわい設定。とくに reseed は住人600人を総入れ替えする（＝世界の見た目が
+  // 別物になる）ので、いつ誰が引き直したかが残らないと後から説明できない。
+  adminLog(req, 'crowd_pop', b.preset || null, {
+    scale: b.scale !== undefined ? db.meta.popScale : undefined,
+    reseed: b.reseed ? true : undefined,
+    addResident: b.addResident && b.addResident.name ? String(b.addResident.name).slice(0, 24) : undefined,
+    removeResident: b.removeResident || undefined,
+    restoreResident: b.restoreResident || undefined,
+    removeExtra: b.removeExtra || undefined,
+  });
   // Scale / ghost-toggle / roster changes alter throne ELIGIBILITY — recompute
   // now, or the 5s memo serves a stale champion map to the next request.
   refreshThrones(true);
@@ -1069,8 +1118,9 @@ adminRouter.post('/api/admin/crowd/test', requireAuth, requireAdmin, (req, res) 
 });
 
 // Wipe the global chat for everyone (history + connected clients).
-adminRouter.post('/api/admin/chat/clear', requireAuth, requireAdmin, (_req, res) => {
+adminRouter.post('/api/admin/chat/clear', requireAuth, requireAdmin, (req, res) => {
   battle.chatOps.clear();
+  adminLog(req, 'chat_clear', 'admin', {});
   res.json({ ok: true });
 });
 

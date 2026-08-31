@@ -15,7 +15,18 @@ import { DATA_DIR } from './db.js';
 import { GUILD_ICONS } from './guilds.js';
 
 const SNAP_DIR = path.join(DATA_DIR, 'snapshots');
-const KEEP_SNAPSHOTS = 12;
+// 保持は「全体で12件」だけだった。ところが自動で撮られるのは起動時の1件で、
+// デプロイのたびに1枠を食う。実際、この機体の snapshots は12件すべてが _boot
+// （うち2件は90秒差）になっていて、復元前(pre-restore)・巻き戻し前(pre-rollback)・
+// 手動(manual) の退避は1件も残っていなかった ── いちばん要るときに戻れない。
+//
+// そこで「自動で増える種類」にだけ枠を切り、残りを退避のために空けておく。
+// 全体の枠も少し広げる（1件あたり db.json 1本ぶんなので、いまの規模で数百KB）。
+const KEEP_SNAPSHOTS = 16;
+// ラベルごとの上限。ここに載っているものだけが「自動で増える」種類で、
+// 全体の枠が足りなくなったときも先に捨てられる側。pre-restore / pre-rollback /
+// manual は載せない（＝押し出されるのは最後）。
+const LABEL_KEEP = { boot: 3, hourly: 6 };
 
 export const BACKUP_VERSION = 2;
 
@@ -23,7 +34,21 @@ export const BACKUP_VERSION = 2;
 
 // Returns { ok: true, stats } or { ok: false, error }.
 // 復元で受け付けるユーザー数の上限。
-export const MAX_RESTORE_USERS = 20_000;
+//
+// ここは 20,000 だった。だがこの門より手前に「本文のバイト数」の門があり
+// （index.js の RESTORE_LIMIT_MB）、1人あたりの実測は
+//   新規 1,351B / 遊び込み 2,403B / 全解放 6,152B
+// なので、20,000人ぶんは最も軽い見積りでも 27MB になる。つまり件数の上限には
+// 決して到達せず、『ユーザー数が多すぎます』という具体的な案内は一度も
+// 表示されなかった（必ず先に 413 のバイト数エラーで落ちる）。
+//
+// この上限が本来守っているのは**メモリではなく CPU** ── 復元の後段には
+// ユーザー1人あたり pbkdf2（1回13ms前後）が回り、Node は1本の処理列なので、
+// その間サーバー全体が何も応答できない。20,000件なら260秒。バイト数の門
+// （12MB ≒ 最も軽い見積りで約9,300人）より内側に置いて初めて意味を持つので、
+// 「実際に到達しうる件数」まで下げる。8,000件でも pbkdf2 だけで約100秒 ——
+// これ以上を1回で流し込ませない、が意図。
+export const MAX_RESTORE_USERS = 8_000;
 
 export function validateBackup(data) {
   if (!data || typeof data !== 'object') return { ok: false, error: 'バックアップの形式が不正です' };
@@ -100,6 +125,11 @@ const WS_LIKE_MAX = 3000;                 // index.js の WS_LIKE_MAX
 const WS_AUTHOR_COIN_DAY_CAP = 300;       // index.js の WS_AUTHOR_COIN_DAY_CAP
 const DAILY_REPLAY_KEEP = 60;             // index.js の DAILY_REPLAY_KEEP
 const DAILY_REPLAY_DAYS = 2;              // index.js の DAILY_REPLAY_DAYS
+// 🧩 パズル遺跡の「その日その番号は勝利1回まで」の印が覚えるステージ数。
+// index.js の PUZ_WIN_DAY_KEEP と同じ意味。ここは合流時の頭押さえにしか
+// 使わないので、実装側と多少ずれても止め金としての性質は変わらない
+// （細工したファイルで配列を無限に伸ばさせない、が目的）。
+const PUZ_WIN_DAY_KEEP = 200;
 
 // 共有コードが空いているものを引く（衝突した作品の引っ越し先）。
 function freeWorkshopCode(stages) {
@@ -446,6 +476,27 @@ function mergeEarned(winner, loser) {
     }
   }
 
+  // 🧩 パズル遺跡の「同じステージの勝利はJST1日1回まで」の印
+  // (index.js applyGameResult の puzWinDay = { day, stages:[番号] })。
+  // ステージは番号だけで決まる決定論的な盤面なので、手順を覚えれば何度でも
+  // won:true を送れる。それを止めているのはこの配列だけなので、落とすと
+  // 復元後に同じステージぶんの勝利報酬をもう一度受け取れる。
+  //   ・同じ日なら和集合（迷ったら閉じる）
+  //   ・勝った側に無ければ負けた側のものを引き継ぐ
+  //   ・日が違うときは新しい日のほう（古い日は次の勝利で作り直される＝止め金にならない）
+  const lpw = loser.stats && loser.stats.puzWinDay;
+  if (isPlainObj(lpw) && okDay(lpw.day)) {
+    const wst3 = winner.stats || (winner.stats = {});
+    const lstg = (Array.isArray(lpw.stages) ? lpw.stages : []).filter(n => Number.isFinite(n));
+    const wpw = wst3.puzWinDay;
+    if (!isPlainObj(wpw) || !okDay(wpw.day) || String(lpw.day) > String(wpw.day)) {
+      wst3.puzWinDay = { day: String(lpw.day), stages: [...new Set(lstg)].slice(-PUZ_WIN_DAY_KEEP) };
+    } else if (String(wpw.day) === String(lpw.day)) {
+      const cur = Array.isArray(wpw.stages) ? wpw.stages.filter(n => Number.isFinite(n)) : [];
+      wpw.stages = [...new Set([...cur, ...lstg])].slice(-PUZ_WIN_DAY_KEEP);
+    }
+  }
+
   // 🎁 ショップの1日1回の無料ギフト受領印 (routes/shop.js giftClaimedDay)。
   // user.stats.shopGiftDay = 'YYYY-MM-DD'。二重受取を止めているのはこの印だけ
   // なので、落とすと同じ日にもう一度ギフトを受け取れる。新しい日付（＝いま
@@ -483,6 +534,69 @@ function mergeEarned(winner, loser) {
   }
 }
 
+// --- 🏰 ギルド名簿の整合 -----------------------------------------------------
+//
+// user.guildId と guild.members は同じ事実の二重持ちで、これまで直していたのは
+// 片方向（users→guilds）だけだった。名簿に死んだ id が残っても誰も落とさない
+// のに、読み手は生の length を見ている:
+//   ・guilds.js の満員判定は `guild.members.length >= GUILD_MAX_MEMBERS`(=20)
+//     ── 幽霊がそのまま1枠を占め、「20/20 なのに誰も居ない」ギルドができる
+//   ・所有権の委譲は生存者が尽きると `|| guild.members[0]` に落ちる
+//     ── 死んだ id がオーナーになると、そのギルドは誰にも触れなくなる
+// これは index.js の DELETE /api/me のコメントが「一度やらかしている事故」と
+// して記録している形そのもの。削除の経路は塞がれたが、復元／マージ経路と、
+// すでに幽霊を抱えている本番の db は塞がれていなかった。
+//
+// db を書き換えて { ghosts, disbanded, owners, pointers } を返す。
+// 起動時にも呼べる（同じ関数を通せば、既存の壊れた名簿も次の再起動で直る）。
+export function healGuildRosters(db) {
+  const out = { ghosts: 0, disbanded: 0, owners: 0, pointers: 0 };
+  if (!db || !isPlainObj(db.guilds)) return out;
+  const users = isPlainObj(db.users) ? db.users : {};
+  for (const [gid, g] of Object.entries(db.guilds)) {
+    if (!isPlainObj(g)) { delete db.guilds[gid]; out.disbanded++; continue; }
+    const before = Array.isArray(g.members) ? g.members : [];
+    // 幽霊（db.users に居ない id）と重複を落とす。
+    const seen = new Set();
+    const members = [];
+    for (const id of before) {
+      if (!id || seen.has(id) || !users[id]) continue;
+      seen.add(id);
+      members.push(id);
+    }
+    out.ghosts += before.length - members.length;
+    g.members = members;
+    if (!members.length) {
+      // 名簿が空になったギルドは解散扱い（guilds.js の leaveGuild と同じ）。
+      delete db.guilds[gid];
+      out.disbanded++;
+      continue;
+    }
+    // オーナーが幽霊なら、いちばん古株の生存者に引き継ぐ（leaveGuild と同型）。
+    if (!g.ownerId || !users[g.ownerId] || !members.includes(g.ownerId)) {
+      g.ownerId = members
+        .map(id => users[id]).filter(Boolean)
+        .sort((a, b) => (a.guildJoinedAt || 0) - (b.guildJoinedAt || 0))[0]?.id || members[0];
+      out.owners++;
+    }
+    if (Array.isArray(g.applicants)) {
+      g.applicants = [...new Set(g.applicants.filter(id => id && users[id]))];
+    }
+  }
+  // ポインタ側（従来の処理）。名簿を掃除したあとにやる。
+  const memberOf = {};
+  for (const g of Object.values(db.guilds)) {
+    for (const id of (Array.isArray(g.members) ? g.members : [])) memberOf[id] = g.id;
+  }
+  for (const u of Object.values(users)) {
+    if (!u) continue;
+    const want = memberOf[u.id] || null;
+    if (u.guildId && !db.guilds[u.guildId]) { u.guildId = want; out.pointers++; }
+    else if (!u.guildId && want) { u.guildId = want; out.pointers++; }
+  }
+  return out;
+}
+
 // --- snapshots ------------------------------------------------------------
 
 export function snapshot(db, label = 'auto') {
@@ -499,11 +613,34 @@ export function snapshot(db, label = 'auto') {
   }
 }
 
+// ファイル名は `${ISO時刻}_${label}.json`。ラベルは最後の '_' の後ろ
+//（'pre-restore' のように '-' を含むものがあるので '-' では割らない）。
+function labelOf(file) {
+  const m = /_([^_]+)\.json$/.exec(file);
+  return m ? m[1] : '';
+}
+
 function prune() {
   try {
+    // 名前の頭は ISO 時刻なので、辞書順＝時系列順（古い順）。
     const files = fs.readdirSync(SNAP_DIR).filter(f => f.endsWith('.json')).sort();
-    for (const f of files.slice(0, Math.max(0, files.length - KEEP_SNAPSHOTS))) {
-      fs.unlinkSync(path.join(SNAP_DIR, f));
+    const drop = new Set();
+    // ① 自動で増える種類は、種類ごとの枠を越えたぶんを古い順に落とす。
+    for (const [label, keep] of Object.entries(LABEL_KEEP)) {
+      const mine = files.filter(f => labelOf(f) === label);
+      for (const f of mine.slice(0, Math.max(0, mine.length - keep))) drop.add(f);
+    }
+    // ② それでも全体の枠を越えるなら、古いものから落とす。①で自動ぶんは
+    //    すでに頭を押さえてあるので、ここで消えるのは本当に古い退避だけ。
+    const left = files.filter(f => !drop.has(f));
+    let remaining = left.length;
+    for (const f of left) {
+      if (remaining <= KEEP_SNAPSHOTS) break;
+      drop.add(f);
+      remaining--;
+    }
+    for (const f of drop) {
+      try { fs.unlinkSync(path.join(SNAP_DIR, f)); } catch { /* best effort */ }
     }
   } catch { /* best effort */ }
 }
@@ -817,15 +954,10 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     }
   }
 
-  // Members' guild pointers must agree with the guild roster after a merge.
-  if (db.guilds) {
-    const memberOf = {};
-    for (const g of Object.values(db.guilds)) for (const id of g.members || []) memberOf[id] = g.id;
-    for (const u of Object.values(db.users)) {
-      if (u.guildId && !db.guilds[u.guildId]) u.guildId = memberOf[u.id] || null;
-      else if (!u.guildId && memberOf[u.id]) u.guildId = memberOf[u.id];
-    }
-  }
+  // 🏰 ギルド名簿とメンバーのポインタを突き合わせる。以前はポインタ側
+  //（users→guilds）しか直しておらず、名簿に残った幽霊 id は誰も落とさなかった。
+  const guildFix = healGuildRosters(db);
+  if (guildFix.ghosts || guildFix.disbanded || guildFix.owners) report.guilds = guildFix;
 
   // Purchase history is append-only: union by transaction id.
   if (Array.isArray(data.transactions)) {

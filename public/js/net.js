@@ -29,19 +29,65 @@ function isMyUser(u) {
   return !session.user || u.id === session.user.id;
 }
 
-export async function api(path, { method = 'GET', body } = {}) {
+// ---------------------------------------------------------------------------
+// 通信の待ち時間の上限。
+//
+// fetch は既定でタイムアウトを持たない。接続だけ張れて返ってこない回線
+// （電波が弱い・プロキシで詰まる）だと、ブラウザのソケットタイムアウトまで
+// 何分でも await が返らない ── いちばん効くのが結果送信で、最後の1手のあと
+// 盤面が固まったまま結果モーダルも出ず、「フリーズした」と読める。
+// WebSocket 側は connect() が 8 秒の上限を持っている（下）ので、REST 側にも
+// 同じ守りを付ける。切れたら通常のエラー経路（modes.js の rewards:{failed:true}
+// ＋トースト）にそのまま落ちる。
+const API_TIMEOUT_MS = 12000;
+// 重い管理操作だけ別枠。復元は数MBの本文を送るし、スナップショット作成と
+// 更新準備はサーバー側で数十秒かかることがある ── ここに 12 秒を当てると
+// 正常な操作を途中で切ってしまう。
+const SLOW_PATHS = /^\/api\/admin\/(restore|snapshots|prepare-update|backup)/;
+const SLOW_TIMEOUT_MS = 180000;
+
+function timeoutFor(path, given) {
+  if (given !== undefined) return Number(given) || 0;   // 0 / 負数 = 無制限
+  return SLOW_PATHS.test(String(path || '')) ? SLOW_TIMEOUT_MS : API_TIMEOUT_MS;
+}
+
+function netError(msg) {
+  const e = new Error(trServer(msg));
+  e.status = 0;
+  if (msg === '接続タイムアウト') e.timeout = true;
+  return e;
+}
+
+export async function api(path, { method = 'GET', body, timeout } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (session.token) headers.Authorization = `Bearer ${session.token}`;
+  const ms = timeoutFor(path, timeout);
+  // AbortController が無い環境（かなり古いブラウザ）では今までどおり無制限。
+  const ctrl = (ms > 0 && typeof AbortController === 'function') ? new AbortController() : null;
+  let timer = ctrl ? setTimeout(() => { try { ctrl.abort(); } catch { /* ignore */ } }, ms) : null;
+  const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  const aborted = () => !!(ctrl && ctrl.signal.aborted);
   let res;
   try {
-    res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    res = await fetch(path, {
+      method, headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: ctrl ? ctrl.signal : undefined,
+    });
   } catch {
-    const e = new Error(trServer('サーバーに接続できません'));
-    e.status = 0;
-    throw e;
+    const to = aborted();
+    clear();
+    throw netError(to ? '接続タイムアウト' : 'サーバーに接続できません');
   }
+  // 本文を読み終わるまでタイマーは止めない。ヘッダだけ返ってきて本文が
+  // 来ない回線があるので、ここを外すと結局そこで固まる。
   let data = {};
-  try { data = await res.json(); } catch { /* empty body */ }
+  let bodyFailed = false;
+  try { data = await res.json(); } catch { bodyFailed = true; /* empty body */ }
+  // 空ボディ（204 など）は今までどおり data={} で通す。中断されたときだけ
+  // エラーにする ── ここを黙って通すと「報酬ゼロの成功」に化ける。
+  if (bodyFailed && aborted()) { clear(); throw netError('接続タイムアウト'); }
+  clear();
   if (!res.ok) {
     if (data.season) session.season = data.season;   // /api/me sends it even when logged out
     const e = new Error(trServer(data.error) || `Error (${res.status})`);

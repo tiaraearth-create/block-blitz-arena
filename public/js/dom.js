@@ -306,12 +306,53 @@ function attachPeekButton(root, backdrop, modal) {
   modal.appendChild(btn);
 }
 
+// ---------------------------------------------------------------------------
+// モーダルの退場アニメ。
+//
+// 開くときは modalIn（バネ）で気持ちよく出るのに、閉じるときだけ一瞬で消えて
+// いた（トーストには .out の退場があるのに、モーダルだけ入退場が非対称）。
+//
+// ただし「本物を残したままフェードさせる」のは危ない ── 消えたことを見張って
+// いる側が何人もいる（録画スタジオの MutationObserver、パーティーの待ち行列、
+// 各画面の $('#…')）。同じ id の要素が180ms だけ2つ並ぶと、閉じて開き直す
+// パターンで新しいモーダルの配線が古いほうに刺さる。
+// なので踊らせるのは「見た目の写し」だけにして、本物はこれまでどおり同じ行で
+// #modal-root ごと消す。写しは id を全部剥がし、当たり判定も持たせない。
+// ---------------------------------------------------------------------------
+function ghostOut(node) {
+  try {
+    if (!node || node.nodeType !== 1 || typeof node.cloneNode !== 'function') return;
+    const ghost = node.cloneNode(true);
+    ghost.removeAttribute('id');
+    for (const el of ghost.querySelectorAll('[id]')) el.removeAttribute('id');
+    // 読み上げにも渡さない（本物はもう無い）。
+    ghost.setAttribute('aria-hidden', 'true');
+    const dst = ghost.querySelector('.modal');
+    if (dst) {
+      dst.removeAttribute('role');
+      dst.removeAttribute('aria-modal');
+      dst.removeAttribute('tabindex');
+    }
+    // 👁 は遅れて出る作りなので、写しでは消しておく（点滅して見える）。
+    const peek = ghost.querySelector('.modal-peek-btn');
+    if (peek) peek.remove();
+    ghost.classList.remove('peeking');   // 覗き見中に閉じても、写しは普通に出す
+    ghost.classList.add('closing');
+    document.body.appendChild(ghost);
+    // スクロールしていた位置を合わせる（写しは先頭に戻っているので飛んで見える）。
+    const src = node.querySelector('.modal');
+    if (src && dst) { try { dst.scrollTop = src.scrollTop; } catch { /* ignore */ } }
+    setTimeout(() => ghost.remove(), 260);
+  } catch { /* 見た目だけの飾り。閉じる動作そのものは絶対に止めない */ }
+}
+
 export function closeModal(opts) {
   const root = $('#modal-root');
   if (!root) return;
   // 覗き見中に閉じた場合の保険（透けたままの印を残さない）。
   root.classList.remove('peeking');
   const had = !!root.firstChild;
+  for (const el of [...root.children]) ghostOut(el);
   root.innerHTML = '';
   // 開いたボタンへフォーカスを返す。返さないと <body> に落ちて、
   // 次の Tab がページの先頭（トップバー）からやり直しになる。
@@ -391,6 +432,9 @@ export function confettiBurst(count = 40) {
     s.style.width = s.style.height = `${6 + Math.random() * 8}px`;
     s.style.animationDuration = `${1.6 + Math.random() * 1.4}s`;
     s.style.animationDelay = `${Math.random() * 0.5}s`;
+    // 落ちながら左右に振れる幅（style.css の confFall が --sway で読む）。
+    // 粒ごとに幅と向きを散らさないと、全部が同じ形で揺れて機械に見える。
+    s.style.setProperty('--sway', `${(Math.random() < 0.5 ? -1 : 1) * (10 + Math.random() * 26)}px`);
     if (Math.random() < 0.4) s.style.borderRadius = '50%';
     root.appendChild(s);
   }

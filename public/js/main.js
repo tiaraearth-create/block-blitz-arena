@@ -7,7 +7,7 @@ import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } fr
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openInventory, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
 import { confettiBurst } from './dom.js';
 import { AI_LEVELS } from './ai.js';
-import { applySettings } from './settings.js';
+import { applySettings, getSettings } from './settings.js';
 import { initChat, reconnectChat, showFeedModal, setMood, updateNewsDot } from './chat.js';
 import { setAdminEvent } from './adminevent.js';
 import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
@@ -396,6 +396,60 @@ window.addEventListener('keydown', e => {
 $('#btnAdminCmd').onclick = () => showAdminPalette();
 startGodLoop();
 
+// ---------------------------------------------------------------------------
+// 📳 触覚フィードバック（navigator.vibrate）
+//
+// このゲームは縦固定の standalone PWA で、入力は canvas の上の指ドラッグひとつ。
+// なのに手応えは音と絵だけで、音は Web Audio の合成音のみ ── iPhone の
+// サイレントスイッチや音量0では「置いた／消えた／置けなかった」の確認が
+// 画面しか無かった。
+//
+// 鳴らし分けは効果音の呼び出し点とまったく同じなので、各所に手を入れるより
+// audio の該当メソッドに1枚かぶせるほうが漏れない（modes.js から鳴らす
+// ぶんも同じ経路を通る）。元の実装はそのまま呼ぶので音は1ミリも変わらない。
+//
+// iOS Safari は vibrate 非対応。存在チェックで丸ごと no-op に落ちる。
+// ---------------------------------------------------------------------------
+{
+  const canBuzz = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
+  let lastBuzz = 0;
+  const buzz = pattern => {
+    if (!canBuzz || !pattern) return;
+    if (!getSettings().haptics) return;
+    // 同じ瞬間に2つ鳴る場面（ライン消去＋コンボ）で後の1本が前を打ち消さない
+    // ように、ごく短い間隔は捨てる。先に来た＝強いほうが残る。
+    const now = Date.now();
+    if (now - lastBuzz < 30) return;
+    lastBuzz = now;
+    try { navigator.vibrate(pattern); } catch { /* 端末が拒んでも遊びは続く */ }
+  };
+  const withHaptic = (name, pattern) => {
+    const orig = audio[name];
+    if (typeof orig !== 'function') return;          // 名前が変わったら黙って何もしない
+    audio[name] = function (...args) {
+      try { buzz(typeof pattern === 'function' ? pattern(...args) : pattern); } catch { /* ignore */ }
+      return orig.apply(this, args);
+    };
+  };
+  if (canBuzz) {
+    withHaptic('pickup', 8);                          // つまむ
+    withHaptic('place', 12);                          // 置けた
+    withHaptic('putback', [10, 40, 10]);              // 置けずに戻った
+    withHaptic('invalid', [10, 40, 10]);              // そもそも触れない
+    // 消えた本数ぶんだけ強くする（1本=30ms 〜 4本=60ms）。
+    withHaptic('clearLines', count => Math.min(60, 18 + (Math.max(1, Number(count) || 1)) * 12));
+    // 連鎖は「本数」ではなく「回数」で返す。段が上がるほど刻みが増える。
+    withHaptic('combo', streak => {
+      const n = Math.max(1, Math.min(3, Math.ceil((Number(streak) || 1) / 3)));
+      const p = [];
+      for (let i = 0; i < n; i++) p.push(14, 50);
+      p.pop();                                        // 末尾の休みは要らない
+      return p;
+    });
+    withHaptic('gameOver', [60, 60, 120]);            // おしまい
+  }
+}
+
 // ---- audio boot: autoplay if allowed, otherwise tap-to-start splash ----
 function startAudioNow() {
   audio.ensure();
@@ -425,6 +479,13 @@ function dismissSplash(e) {
   // First launch: pick a language before anything else.
   if (!localStorage.getItem('bba_lang')) {
     splash.querySelector('.ts-tap').classList.add('hidden');
+    // ⚠️ この画面は「ここで」＝モジュール本体の同期実行中に出しきること。
+    // 下の async ブロックまで待つと sleep(250) ぶんの窓が空き、その間は
+    // メニューのボタンだけが生きている状態になる。そこでソロを押されると
+    // 試合が始まった上に全画面のピッカーが降ってきて、しかもこの画面は
+    // 言語を選ぶまでタップでは閉じない ── 唯一の脱出（英語を選ぶ）は
+    // location.reload() なので、始まったばかりの1戦目が消えてしまう。
+    // 同期のうちに出しておけば、ボタンが有効になる瞬間にはもう塞がっている。
     const pick = document.createElement('div');
     pick.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:22px;align-items:center';
     pick.innerHTML = `
@@ -443,6 +504,7 @@ function dismissSplash(e) {
         dismissSplash();
       });
     });
+    splash.classList.remove('hidden');
   }
   // Block every pointer/click event on the splash from bubbling through.
   splash.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); });
@@ -457,6 +519,9 @@ function dismissSplash(e) {
       if (splash.classList.contains('ts-out')) window.removeEventListener('keydown', onKey);
       return;
     }
+    // 初回（言語未選択）は打鍵で閉じない ── ここでリスナーを外してしまうと、
+    // 言語を選んだあとキーボードで閉じられなくなる。
+    if (!localStorage.getItem('bba_lang')) return;
     dismissSplash();
     window.removeEventListener('keydown', onKey);
   });
@@ -467,13 +532,13 @@ function dismissSplash(e) {
 (async () => {
   // Try silent autoplay first — succeeds on repeat visits where the browser
   // has granted audio permission; otherwise show the tap-to-start splash.
-  // First launch (no language chosen yet): ALWAYS show the splash — it
-  // doubles as the language picker.
+  // First launch (no language chosen yet) は上のブロックが既に出しているので、
+  // ここは 250ms の判定を待たずに何もしない（待つと、その間だけメニューが
+  // 生きた状態になってしまう）。
   audio.ensure();
+  if (!localStorage.getItem('bba_lang')) return;
   await new Promise(r => setTimeout(r, 250));
-  if (!localStorage.getItem('bba_lang')) {
-    $('#tapStart').classList.remove('hidden');
-  } else if (audio.ctx && audio.ctx.state === 'running') {
+  if (audio.ctx && audio.ctx.state === 'running') {
     startAudioNow();
   } else {
     $('#tapStart').classList.remove('hidden');
@@ -1340,3 +1405,20 @@ function showRestoreFailedModal() {
     banner.classList.remove('hidden');
   }
 })();
+
+// ---------------------------------------------------------------------------
+// 🎬 起動中の目隠し(#bootVeil)を外す。
+//
+// ここはモジュール本体のいちばん最後 ── つまり、メニューの onclick が全部
+// 付き終わったあと。ここまで来てから外すので、「押せる見た目なのに無反応」な
+// 時間がプレイヤーの側には残らない（英語面の applyStaticI18n() も済んでいる
+// ので、日本語メニューが一瞬だけ見えることも無い）。
+// 万一ここに到達できなくても、CSS 側の 12 秒の保険が同じ目隠しを剥がす。
+// ---------------------------------------------------------------------------
+{
+  const veil = document.getElementById('bootVeil');
+  if (veil) {
+    veil.classList.add('bv-out');
+    setTimeout(() => veil.remove(), 320);   // フェードが終わってから DOM ごと捨てる
+  }
+}

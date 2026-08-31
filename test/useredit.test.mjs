@@ -94,7 +94,15 @@ try {
 
   const me = await j('/api/me', {}, vtok);
   const u = me.user;
-  check('コイン/ジェムが絶対値で入る', u.coins === 50000 && u.gems === 1000, `🪙${u.coins} 💎${u.gems}`);
+// 🎁 /api/me は初回アクセス時にログインボーナス（100🪙+5💎）を配ることがある
+// （登録初日にも出るよう lastDaily を null 始まりにした）。ここで見たいのは
+// 「set* が加算ではなく **絶対値** で入るか」なので、ボーナス1回ぶんだけ
+// 許容する。加算バグならこの幅では収まらない（元の値ごと足されるため）。
+const DAILY_BONUS_COINS = 100, DAILY_BONUS_GEMS = 5;
+const absSet = (got, want, slack) => got === want || got === want + slack;
+check('コイン/ジェムが絶対値で入る',
+  absSet(u.coins, 50000, DAILY_BONUS_COINS) && absSet(u.gems, 1000, DAILY_BONUS_GEMS),
+  `🪙${u.coins} 💎${u.gems}（50000/1000 ＋ログインボーナスぶんまで許容）`);
   check('レベルが設定される', u.level === 5, `Lv.${u.level} (xp=${u.xp})`);
   check('アイテムが個別に入る', (u.items || {}).item_bomb === 9 && (u.items || {}).item_fever === 3, JSON.stringify(u.items));
   check('所持品が入る（既定品も維持）', u.owned.includes(skin.id) && u.owned.includes(board.id) && u.owned.includes('skin_default'), `${u.owned.length}件`);
@@ -130,7 +138,7 @@ try {
 
   // 拒否されたあとも、元の値が壊れていないこと（部分適用されていないこと）
   const after = (await j('/api/me', {}, vtok)).user;
-  check('拒否後もデータが壊れていない', after.coins === 50000 && after.badges.length === 2 && after.stats.bestScore === 123456,
+  check('拒否後もデータが壊れていない', absSet(after.coins, 50000, DAILY_BONUS_COINS) && after.badges.length === 2 && after.stats.bestScore === 123456,
     `🪙${after.coins} badges=${after.badges.length} best=${after.stats.bestScore}`);
 
   // 保存されたJSONにNaNが混ざっていないこと（混ざると以後ずっと壊れる）

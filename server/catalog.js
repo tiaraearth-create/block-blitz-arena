@@ -1,5 +1,10 @@
 // Shop catalog + battle pass definition. Served to the client via /api/shop and /api/battlepass.
 
+// 称号の英語名は id 引きの表にある（依存ゼロのファイルなのでサーバーからも
+// 読める）。図鑑のセット報酬行だけ日本語の称号名がそのまま英文に挿さっていた
+// ので、英語面も一緒に返せるようにする。
+import { enName } from '../public/js/catalog-en.js';
+
 export const SHOP_ITEMS = [
   // ---- Block skins ----
   { id: 'skin_default',  cat: 'skin', name: 'クラシック',       desc: 'スタンダードなブロック', price: 0,    currency: 'coins', default: true },
@@ -362,7 +367,10 @@ export function collectionProgress(user) {
       done: ownedIds.length >= set.ids.length && set.ids.length > 0,
       claimed: claimed.has(set.id),
       coins: set.coins, gems: set.gems,
+      // titleName は日本語名。英語画面がそのまま埋め込めるよう英語名も返す
+      // （画面側で id から引き直す手間を残さない）。
       title: set.title, titleName: title ? title.name : null,
+      titleNameEn: title ? enName(title) : null,
     };
   });
 }

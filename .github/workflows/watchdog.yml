@@ -16,6 +16,11 @@
 #     未設定なら backup.yml と同じく ::error:: で即止める。
 name: watchdog
 
+# curl で外から叩くだけで、リポジトリには一切触らない（checkout もしない）。
+# 既定のトークン権限を継承させる理由が無いので読み取りに絞る。
+permissions:
+  contents: read
+
 on:
   schedule:
     - cron: '*/30 * * * *'

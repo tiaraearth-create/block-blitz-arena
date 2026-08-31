@@ -6,6 +6,14 @@ import { audio } from './audio.js';
 import { getSettings, particleFactor } from './settings.js';
 import { t } from './i18n.js';
 
+// 🔥 コンボの段位 0=streak 2-4 / 1=5-9 / 2=10-19 / 3=20+ ごとの演出強度。
+// スコアの comboMult は上限なしで伸びるのに、演出側は揺れも音も文字も
+// streak 7 前後で全部天井に当たっていた。段ごとに開ける値をここにまとめる。
+const COMBO_SHAKE_CAP = [14, 17, 20, 22];
+const COMBO_FLASH = [0.15, 0.26, 0.38, 0.5];
+const COMBO_SIZE = [1.8, 2.1, 2.45, 2.8];
+const COMBO_COLOR = ['#ffe14d', '#ffa93d', '#ff5b5b', '#ff7bf0'];
+
 // 🧊 氷が割れる音。audio.js 側に氷用の一発物が無いので、公開されている
 // tone/noise だけで組み立てる（どちらも sfxOn と ensure() を自分で見るので、
 // 音量ゼロ・音OFF・AudioContext 未生成でも安全に空振りする）。
@@ -143,7 +151,7 @@ export class GameView {
     this.dying = [];                // {r,c,color,t}
     this.flashes = [];              // {kind:'row'|'col', index, t}
     this.floatTexts = [];           // {x,y,text,color,t,life,size}
-    this.shake = 0;
+    this._shake = 0;                // 実体。読み書きは下のアクセサ経由（設定でゲート）
     this._screenFlash = 0;          // 実体。読み書きは下のアクセサ経由（設定でゲート）
     this.time = 0;
     this.deco = [];                 // background decorations (stars etc.)
@@ -203,6 +211,21 @@ export class GameView {
     let on = true;
     try { on = getSettings().flash !== false; } catch { /* 設定が読めなければ従来どおり */ }
     this._screenFlash = on ? n : 0;
+  }
+
+  // 💥 画面の揺れも同じ形で一括ゲートする。モード・スキル側には
+  // view.shake = N の直接代入が38箇所あり（modes.js 33 / skills.js 5）、
+  // そのどれもが設定「画面の揺れ」を素通りしていた ── OS の「視差効果を減らす」で
+  // 既定 false になっている人でも、ボス攻撃では 24 の最大級の揺れが出ていた。
+  // フラッシュだけ消えて揺れだけ残ると、スイッチが壊れて見える。
+  // 代入側は一切触らず、ここで受けて 0 に落とす。
+  get shake() { return this._shake || 0; }
+  set shake(v) {
+    const n = Number(v);
+    if (!(n > 0)) { this._shake = 0; return; }
+    let on = true;
+    try { on = getSettings().shake !== false; } catch { /* 設定が読めなければ従来どおり */ }
+    this._shake = on ? n : 0;
   }
 
   setEngine(engine) {
@@ -600,11 +623,21 @@ export class GameView {
       for (const c of result.fullCols) {
         this.particles.ring(this.boardX + (c + 0.5) * this.cell, this.boardY + this.boardSize / 2, this.boardSize * 0.55, '#ffffff');
       }
-      // full-screen flash on multi-line clears / hot streaks
-      if (result.lineCount >= 2) this.screenFlash = Math.min(0.45, 0.18 + result.lineCount * 0.09);
-      else if (result.streak >= 3) this.screenFlash = 0.15;
+      // 🔥 コンボの段位。加点側（engine.js の comboMult）は青天井なのに、
+      // 演出は streak 7 前後でほぼ全部が天井に当たっていた ── streak 8 と
+      // streak 25 が音も画面も同じで、いちばん盛り上がる所で演出が黙る。
+      // 段（2-4 / 5-9 / 10-19 / 20+）ごとに揺れ・フラッシュ・文字を伸ばす。
+      const tier = result.streak >= 20 ? 3 : result.streak >= 10 ? 2 : result.streak >= 5 ? 1 : 0;
 
-      if (getSettings().shake) this.shake = Math.min(14, 4 + result.lineCount * 3 + result.streak);
+      // full-screen flash on multi-line clears / hot streaks
+      // 以前は streak 側が 0.15 固定で、どれだけ繋いでも明るくならなかった。
+      const lineFlash = result.lineCount >= 2 ? Math.min(0.45, 0.18 + result.lineCount * 0.09) : 0;
+      const comboFlash = result.streak >= 3 ? COMBO_FLASH[tier] : 0;
+      const flash = Math.max(lineFlash, comboFlash);
+      if (flash > 0) this.screenFlash = flash;
+
+      // 揺れの上限も段で開ける（14 → 22）。1ライン消しだと streak 7 で天井だった。
+      if (getSettings().shake) this.shake = Math.min(COMBO_SHAKE_CAP[tier], 4 + result.lineCount * 3 + result.streak);
       audio.clearLines(result.lineCount, result.streak);
       // 🧊 ヒビの入った氷(11)が実際に砕けた回だけ、通常のライン音に
       // 高い破砕音を重ねる。「割った → 砕いた」の2段階が耳でも分かる。
@@ -615,12 +648,20 @@ export class GameView {
       const centerY = this.boardY + this.boardSize * 0.4;
       this.addFloatText(centerX, centerY, `+${result.gained}`, '#ffffff', 1.4);
       if (result.streak >= 2) {
-        this.addFloatText(centerX, centerY - this.cell * 1.3, `${result.streak} COMBO!`, '#ffe14d', 1.8);
+        // 文字も段で大きく・熱く（黄→橙→赤→桃）。以前はサイズ1.8固定だった。
+        this.addFloatText(centerX, centerY - this.cell * 1.3, `${result.streak} COMBO!`, COMBO_COLOR[tier], COMBO_SIZE[tier]);
         audio.combo(result.streak);
         this.particles.confetti(centerX, centerY, this.cell, 10 + result.streak * 6);
       }
-      const praise = result.lineCount >= 4 ? 'LEGENDARY!' : result.lineCount === 3 ? 'AMAZING!' : result.lineCount === 2 ? 'GREAT!' : null;
-      if (praise) this.addFloatText(centerX, centerY + this.cell, praise, '#43d9e8', 1.5);
+      // 称号は lineCount だけで決まっていたので、長く繋いでも一言も出なかった。
+      // 高い段では streak 側の称号を優先して出す。
+      const streakPraise = tier >= 3 ? 'UNREAL!' : tier >= 2 ? 'UNSTOPPABLE!' : null;
+      const praise = streakPraise
+        || (result.lineCount >= 4 ? 'LEGENDARY!' : result.lineCount === 3 ? 'AMAZING!' : result.lineCount === 2 ? 'GREAT!' : null);
+      if (praise) {
+        this.addFloatText(centerX, centerY + this.cell, praise,
+          streakPraise ? COMBO_COLOR[tier] : '#43d9e8', streakPraise ? 1.8 : 1.5);
+      }
     } else {
       const [r, c] = result.placedCells[0];
       this.addFloatText(

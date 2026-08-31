@@ -572,6 +572,19 @@ body {
   box-shadow: 0 24px 60px rgba(0,0,0,0.6);
 }
 @keyframes modalIn { from { opacity: 0; transform: scale(0.85) translateY(20px); } }
+/* 退場。開くときだけアニメがあって閉じるときは一瞬で消えていたので、
+   トースト(.toast.out)と同じ形をモーダルにも入れる。付くのは dom.js が
+   body に置く「見た目の写し」だけで、本物はこれまでどおり即座に消える。 */
+.modal-backdrop.closing {
+  pointer-events: none;
+  /* 「閉じて即ひらく」経路では、写しは新しいモーダル(z-index:50)より
+     後ろに置く。前に置くと、退場のあいだ新しい中身が古い暗幕越しになる。 */
+  z-index: 49;
+  animation: fadeOut .2s ease forwards;
+}
+.modal-backdrop.closing .modal { animation: modalOut .2s ease forwards; }
+@keyframes fadeOut { to { opacity: 0; } }
+@keyframes modalOut { to { opacity: 0; transform: scale(0.92) translateY(14px); } }
 /* 見出しには工房の作品名など「他人が付けた文字列」が入る。空白の無い
    ラテン文字だと折り返し場所が無く、.modal は overflow-y:auto なので
    横スクロールが生えてしまう。どこでも折る保険を1行だけ入れておく。 */
@@ -848,10 +861,20 @@ body[data-screen="game"] #toast-root { top: auto; bottom: 96px; }
 .dom-confetti { position: fixed; inset: 0; pointer-events: none; z-index: 95; overflow: hidden; }
 .dom-confetti span {
   position: absolute; top: -20px;
+  --sway: 18px;                      /* dom.js が粒ごとに散らす（未設定でも動く） */
   animation: confFall linear forwards;
 }
+/* 等速直線落下だと「降っている」ようには見えない。
+   縦は時間の2乗で進めて重力を出し（canvas 側の confetti と同じ気持ち）、
+   横は --sway で左右に振り、最後の2割で消えていく。
+   タイミング関数は linear のまま ── 加速は下の y の刻みが作っている。 */
 @keyframes confFall {
-  to { transform: translateY(110vh) rotate(720deg); opacity: 0.85; }
+  0%   { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 1; }
+  25%  { transform: translate3d(var(--sway), 7vh, 0) rotate(180deg); }
+  50%  { transform: translate3d(0, 27.5vh, 0) rotate(360deg); }
+  75%  { transform: translate3d(calc(var(--sway) * -1), 62vh, 0) rotate(540deg); }
+  80%  { opacity: 1; }
+  100% { transform: translate3d(0, 110vh, 0) rotate(720deg); opacity: 0; }
 }
 
 /* ============ Global chat drawer ============ */
@@ -1173,6 +1196,21 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
   75% { opacity: 1; }
   100% { transform: translateY(-70px) scale(0.9); opacity: 0; }
 }
+
+/* ============ Boot veil（起動中の目隠し） ============ */
+/* z-index はタップ待ちスプラッシュ(200)のすぐ下。順番に重なるので、
+   初回起動でも「目隠し → 言語ピッカー」の並びが崩れない。 */
+.boot-veil {
+  position: fixed; inset: 0; z-index: 190;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+  background: radial-gradient(120% 100% at 50% 0%, #1c2547, #0b0e1f 70%);
+  transition: opacity .28s ease;
+  /* 🧯 保険: main.js がどこかで落ちても、12秒後には必ず自分で消える。
+     これが無いと、1本の構文エラーで永久に目隠しのまま何も触れなくなる。 */
+  animation: bootVeilFail .4s ease 12s forwards;
+}
+.boot-veil.bv-out { opacity: 0; pointer-events: none; }
+@keyframes bootVeilFail { to { opacity: 0; visibility: hidden; } }
 
 /* ============ Tap-to-start splash ============ */
 .tap-start {

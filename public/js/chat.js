@@ -186,8 +186,13 @@ const THRONE_LABELS = {
 async function showProfileCard(name) {
   audio.click();
   let p;
+  // api() を通していないのは 404 を「エラー」ではなく普通の案内にしたいから。
+  // そのぶんタイムアウトも自前で持つ ── 付けていなかった頃は、返らない回線で
+  // 名前をタップしても何も出ないまま無反応だった（net.js の api() と同じ話）。
+  const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => { try { ctrl.abort(); } catch { /* ignore */ } }, 10000) : null;
   try {
-    const res = await fetch(`/api/profile/${encodeURIComponent(name)}`);
+    const res = await fetch(`/api/profile/${encodeURIComponent(name)}`, { signal: ctrl ? ctrl.signal : undefined });
     if (res.status === 404) {
       // 未登録のゲストプレイヤー — エラーではなく普通の案内にする。
       toast(t(`${name} はゲストプレイヤーです`, `${name} is a guest player`), '', 2000);
@@ -198,6 +203,8 @@ async function showProfileCard(name) {
   } catch {
     toast(t('プロフィールを取得できません', 'Could not load the profile'), 'err', 1600);
     return;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   if (p.kind === 'guest') {
     toast(t(`${p.name} はゲストプレイヤーです`, `${p.name} is a guest player`), '', 2000);
@@ -212,7 +219,14 @@ async function showProfileCard(name) {
           <b class="${(p.thrones || []).length ? `crowned${Math.min(3, p.thrones.length)}` : ''}">${p.guildTag ? `<span class="lb-tag">[${escapeHtml(p.guildTag)}]</span>` : ''}${escapeHtml(p.name)}</b>
           ${p.title ? `<span class="pc-title" style="color:${escapeHtml(p.title.color || '#fff')}">《${escapeHtml(p.title.id ? catName(p.title) : p.title.name)}》</span>` : ''}
           <small class="muted">${p.kind === 'resident'
-            ? `${escapeHtml((LANG === 'en' && p.archLabelEn) || p.archLabel || '')} ・ ${p.online ? t('🟢 オンライン', '🟢 online') : t(`⚫ ${p.hours ? `${p.hours[0]}時〜${p.hours[1] % 24}時に出現` : 'オフライン'}`, `⚫ ${p.hours ? `appears ${p.hours[0]}:00–${p.hours[1] % 24}:00` : 'offline'}`)}`
+            ? `${escapeHtml((LANG === 'en' && p.archLabelEn) || p.archLabel || '')} ・ ${p.online
+              ? t('🟢 オンライン', '🟢 online')
+              // 出現時間帯もチャットのタイムスタンプと同じ時計で出す（fmtClockHM）。
+              // 英語だけ 24時間制で残っていたので、同じ画面の中で時計が2種類あった。
+              : (p.hours
+                ? t(`⚫ ${fmtClockHM(p.hours[0])}〜${fmtClockHM(p.hours[1])}に出現`,
+                  `⚫ appears ${fmtClockHM(p.hours[0])}–${fmtClockHM(p.hours[1])}`)
+                : t('⚫ オフライン', '⚫ offline'))}`
             : t(`Lv.${p.level} プレイヤー`, `Level ${p.level} player`)}</small>
         </div>
       </div>
@@ -232,6 +246,41 @@ async function showProfileCard(name) {
 
 function fmtNum(n) { return Number(n || 0).toLocaleString('ja-JP'); }
 
+// ---------------------------------------------------------------------------
+// 🕐 時計の書式は必ずここを通す。
+//
+// 画面ごとに 12時間制と 24時間制が混ざっていて、同じアプリを行き来しながら
+// どちらの時計を読んでいるのか分からなくなっていた（チャットのタイムスタンプと
+// 住人の出現時間帯は 24時間制、イベント予告だけ 12時間制）。しかも予告側は
+// `hour:'2-digit'` を渡していたので en-US でも "08:00 PM" とゼロ埋めされていて、
+// 英語としては読まない書き方だった（"8:00 PM" が普通）。
+//
+// 決めごと: 日本語は 24時間制の HH:MM、英語は 12時間制の "8:00 PM"。
+// サーバー側の内部表現（server/adminevent.js の分単位・"HH:MM"）はそのまま
+// 24時間制でよい ── 表示の直前にこれを通すこと。
+export function fmtClockHM(hour, minute = 0) {
+  const h = ((Math.floor(Number(hour) || 0) % 24) + 24) % 24;
+  const raw = Math.floor(Number(minute) || 0);
+  const mm = String(Math.max(0, Math.min(59, raw))).padStart(2, '0');
+  if (LANG === 'en') {
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${mm} ${h < 12 ? 'AM' : 'PM'}`;
+  }
+  return `${String(h).padStart(2, '0')}:${mm}`;
+}
+// Date（またはミリ秒）から。
+export function fmtClock(when) {
+  const d = when instanceof Date ? when : new Date(when);
+  if (isNaN(d.getTime())) return '';
+  return fmtClockHM(d.getHours(), d.getMinutes());
+}
+// サーバーが返す "HH:MM"（管理者イベントの枠時刻など）から。
+// 読めない形はそのまま返す ── 表示のために落ちるほうが困る。
+export function fmtClockStr(s) {
+  const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(String(s == null ? '' : s));
+  return m ? fmtClockHM(Number(m[1]), Number(m[2])) : String(s == null ? '' : s);
+}
+
 // box を差し替えられるようにしてある。パーティー欄へ流すために、
 // 同じ描画をもう1本書き写すのを避ける。
 function appendMsg(msg, scroll = true, box = $('#chatMsgs')) {
@@ -244,14 +293,12 @@ function appendMsg(msg, scroll = true, box = $('#chatMsgs')) {
   const isZero = msg.role === 'zero';
   el.className = `chat-msg ${me ? 'mine' : ''} ${isAdmin ? 'admin-msg' : ''} ${isZero ? 'zero-msg' : ''}`;
   if (msg.id) el.dataset.id = msg.id;
-  const time = new Date(msg.at || Date.now());
-  const hh = String(time.getHours()).padStart(2, '0');
-  const mm = String(time.getMinutes()).padStart(2, '0');
+  const clock = fmtClock(msg.at || Date.now());
   const useTr = getSettings().chatTranslate && msg.tr && msg.tr.lang === LANG && msgLang(msg.text) !== LANG && !me;
   const tag = msg.tag ? `<span class="cm-tag">[${escapeHtml(msg.tag)}]</span>` : '';
   const reply = msg.reply ? `<span class="cm-reply">↩ <b>${escapeHtml(msg.reply.from)}</b> ${escapeHtml(msg.reply.text)}</span>` : '';
   el.innerHTML = `
-    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''} ${isZero ? 'cm-zero' : ''} ${Number(msg.crown) ? `crowned${Math.min(3, Number(msg.crown))}` : ''}">${msg.crown ? '👑' : ''}${isZero ? '👁️' : isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${hh}:${mm}</span>
+    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''} ${isZero ? 'cm-zero' : ''} ${Number(msg.crown) ? `crowned${Math.min(3, Number(msg.crown))}` : ''}">${msg.crown ? '👑' : ''}${isZero ? '👁️' : isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${clock}</span>
     ${reply}
     <span class="cm-bubble">${escapeHtml(useTr ? msg.tr.text : msg.text)}</span>
     ${useTr ? `<button class="cm-tr" title="${t('原文を表示', 'Show original')}">🌐 ${msg.tr.engine !== 'table' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}</button>` : ''}

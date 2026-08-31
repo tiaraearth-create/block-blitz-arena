@@ -9,12 +9,21 @@
 # 手で回したいときは Actions タブから「Run workflow」。
 #
 # 必要な Secrets（Settings → Secrets and variables → Actions）:
-#   ADMIN_PASSWORD … 管理者パスワード。本番の環境変数と同じもの。必須。
-#   PROD_URL       … 本番のURL。未設定なら scripts/pull-backup.mjs の既定値。
+#   ADMIN_PASSWORD    … 管理者パスワード。本番の環境変数と同じもの。必須。
+#   PROD_URL          … 本番のURL。未設定なら scripts/pull-backup.mjs の既定値。
+#   BACKUP_PASSPHRASE … 任意。バックアップ専用の暗号鍵（32文字以上を推奨）。
+#                       本番の環境変数と同じ値にすること。片方だけ設定/変更すると
+#                       復号できず、起動時の自動復元が黙って止まる。
 #
-# ※ seed-backup.json は ADMIN_PASSWORD で暗号化されて保存される
-#   （scripts/pull-backup.mjs / scrypt → AES-256-GCM）。リポジトリが公開でも
-#   中身は読めない。
+# ※ seed-backup.json は BACKUP_PASSPHRASE（未設定なら ADMIN_PASSWORD）で
+#   暗号化されて保存される（scripts/pull-backup.mjs / scrypt → AES-256-GCM）。
+#   リポジトリが公開でも中身は読めない。
+#
+# ※ db.json が復元上限（4MB）を越えると、サーバー側が
+#   dailyReplays → clientErrors → txArchive → workshop.likedBy の順に中身を
+#   削ってから返す。そのときは scripts/pull-backup.mjs が ::warning:: を出すので、
+#   このワークフローの実行画面に注釈として残る。出ていたら db を減らすこと
+#   （放っておくと、毎晩そこが欠けたバックアップが積まれ続ける）。
 name: backup
 
 on:
@@ -33,9 +42,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -43,6 +52,10 @@ jobs:
         env:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           PROD_URL: ${{ secrets.PROD_URL }}
+          # 任意。設定するとログイン用パスワードではなくこちらが暗号鍵になる
+          # （サーバー側も BACKUP_PASSPHRASE を優先して復号する）。未設定なら
+          # 今までどおり ADMIN_PASSWORD が鍵。※本番の環境変数と同じ値にすること。
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           set -e
           # パスワードが無いまま走らせると、スクリプトが標準入力から

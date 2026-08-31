@@ -110,7 +110,7 @@ npm start
 
 ### テスト
 ```bash
-npm test          # test/*.test.mjs（28本）をまとめて実行。既定は同時2本
+npm test          # test/*.test.mjs（29本）をまとめて実行。既定は同時2本
 npm run test:serial   # 直列で1本ずつ（並列が疑わしいとき・非力なマシン）
 node test/session.test.mjs   # 1本だけ回す
 ```
@@ -129,6 +129,7 @@ node test/session.test.mjs   # 1本だけ回す
 | `ROYALE_SECS` | 180 | バトルロイヤル1試合の長さ（秒・最低30） |
 | `POP_SCALE` | 1 | にぎわい人口の基本倍率。住人のチャット・フィード・ランキング・ボットの量を調整（`0`で完全オフ）。管理者パネルの「🎭にぎわい設定 2.0」でゲーム内からも **×0〜×500**・プリセット・機能ON/OFFを調整可能（住人の実数は ×88 で600人の上限に達し、それより上は表示人数だけが増えます） |
 | `ADMIN_PASSWORD` | （自動生成） | 設定すると管理者「るみまき」のパスワードを固定（8文字以上）。再デプロイしても変わらなくなる |
+| `BACKUP_PASSPHRASE` | （未設定＝`ADMIN_PASSWORD`） | `server/seed-backup.json` の暗号鍵。32文字以上のランダム値を推奨。**取得側（`npm run backup:pull` / backupワークフロー）と本番の両方に同じ値**を入れること。片方だけだと復号できず、起動時の自動復元が黙って止まります |
 | `SESSION_SECRET` | （起動ごとにランダム） | **ログイン状態をデプロイ/再起動後も維持**するための署名鍵（16文字以上の長いランダム文字列）。設定すると、データが消えている間もプレイヤーはログアウトされず、復元が終わった瞬間に自動でログイン状態に戻る。未設定だと再デプロイのたびに全員ログアウト |
 | `TRANSLATE_URL` / `TRANSLATE_KEY` | なし | LibreTranslate互換APIのURL（と必要ならキー）。設定するとチャット翻訳が本格エンジンになる |
 | `DATA_DIR` | `server/data` | データ保存先ディレクトリ（永続ディスクを別パスにマウントした場合やテスト用）。**Dockerイメージでは既定が `/data`**（Dockerfileが `ENV DATA_DIR=/data` を焼いている）ので、ボリュームは `/data` に当てること |
@@ -195,12 +196,16 @@ git push -u origin master
 1. [render.com](https://render.com) で「New → Web Service」→ GitHubリポジトリを接続
 2. Build Command: `npm ci --omit=dev` / Start Command: `npm start`
    （`npm install` だと lock を無視して CI が一度も試していない依存の組み合わせで起動しうる。
-   `render.yaml` でデプロイすればこの設定と `NODE_VERSION=20` が自動で入ります）
+   `render.yaml` でデプロイすればこの設定と `NODE_VERSION=22` が自動で入ります）
 3. **「Disks」で永続ディスクを追加**し、Mount Path を `/opt/render/project/src/server/data` に
    （無料プランでは選べません。これが無いと再起動のたびにセーブデータが消えます）
-4. デプロイが終わったら、GitHub の Settings → Secrets → Actions に **`PROD_URL`**（例
-   `https://<あなたのサービス名>.onrender.com`）を登録する。30分おきの外形監視
-   （`.github/workflows/watchdog.yml`）はこれが無いと動きません
+4. デプロイが終わったら、GitHub の Settings → Secrets and variables → Actions に
+   **2つとも**登録する（片方だけだと、そちらのワークフローが毎回赤くなります）:
+   - **`PROD_URL`** … 本番URL（例 `https://<あなたのサービス名>.onrender.com`）。
+     30分おきの外形監視（`.github/workflows/watchdog.yml`）と毎日のバックアップが使う
+   - **`ADMIN_PASSWORD`** … Render の Environment に入れたものと**同じ文字列**。
+     毎日のバックアップ（`.github/workflows/backup.yml`）がこれでログインし、
+     取れたデータをこのパスワードで暗号化する
 
 **Railway / Fly.io** も同様（`PORT` は自動注入、対応済み）。**Docker** も可:
 ```bash
@@ -259,6 +264,55 @@ npm run backup:pull
 - HTTPSはホスティング側が終端します（クライアントは自動で `wss://` を使用）
 - 認証エンドポイントにはレート制限（20回/5分/IP）を内蔵
 - 更新をデプロイする前に管理者パネルの「🛠 メンテナンス」→「💾 バックアップDL」の利用を推奨
+
+## 🗓 運営（日次・週次）— 引き継ぐ人はここを読む
+
+### 自動で回っているもの（GitHub Actions）
+| ワークフロー | いつ | 何をする | 必要な Secret |
+|---|---|---|---|
+| `.github/workflows/watchdog.yml` | 30分おき | `/api/status` を叩き、応答が無いか `persistError` が出ていたら失敗させる（GitHubがメールで知らせる） | `PROD_URL` |
+| `.github/workflows/backup.yml` | 毎日 18:10 UTC（JST 翌03:10） | 本番のデータを取得し、暗号化して `server/seed-backup.json` にコミットする。**事実上これが唯一の自動バックアップ** | `ADMIN_PASSWORD` / `PROD_URL`（任意で `BACKUP_PASSPHRASE`） |
+| `.github/workflows/ci.yml` | push / PR のたび | `npm test`（29本）と `npm audit --audit-level=high` | なし |
+
+> Secret が足りないと、そのワークフローは**毎回赤くなり続けます**。Actions タブが
+> 赤いまま放置されると、本番が本当に死んだ日に誰も気づけません。まず赤を消すこと。
+
+### 毎日
+1. 管理者パネル → **🐛 バグ報告** … 未処理のものを確認し、直したら ✅ で処理済みに
+2. 管理者パネル → **⚠️ クライアントエラー** … 未解決の件数が急に増えていたら、その日の更新を疑う
+3. Actions タブの **backup** が緑か（赤なら本番かパスワードの問題。放置するとバックアップが止まる）
+
+### 毎週
+1. 管理者パネル → **👑 管理者イベント** … 開催曜日と時間枠（JST・最大6個）を設定
+   - ⚠️ **枠を減らす／時刻を変えると、そこを予約済みの人の予約がずれます。** 週の途中では触らないこと
+   - 新しいモードを試すときは「試運転 ON」にすると、一般プレイヤーには見えないまま自分だけ確認できます
+2. `server/seed-backup.json` の更新コミットが1週間ぶん積まれているか（積まれていない＝バックアップが止まっている）
+
+### 🔑 管理者パスワードを変えるとき（手順を守らないと復旧できなくなります）
+`server/seed-backup.json` は **`BACKUP_PASSPHRASE`（未設定なら `ADMIN_PASSWORD`）で
+AES-256-GCM 暗号化**されています。つまりこの値は「バックアップの復号鍵そのもの」で、
+変えると**リポジトリにコミット済みの過去の seed が全部開けなくなります**。
+しかも復号に失敗しても、出るのは起動ログの `[seed] …復号に失敗しました` という
+1行だけで、`/api/status` にも管理者パネルにも出ません（**災害復旧の当日に初めて分かる**）。
+
+正しい順番:
+1. ホスティング（Render）の Environment の `ADMIN_PASSWORD` を変えて再デプロイ
+2. GitHub の Secret `ADMIN_PASSWORD` を**同じ値**に更新する（忘れると翌日からバックアップが止まる）
+3. すぐに `npm run backup:pull` を1回実行し、新しいパスワードで seed を焼き直してコミットする
+
+- **管理者パスワードは、管理者パネルの 🔑 ではなく `ADMIN_PASSWORD` 環境変数で変えてください。**
+  🔑 で変えても、次の再起動で `pinAdminPassword()` が環境変数の値に**書き戻し、
+  発行済みトークンを全部失効させます**（画面はこれを警告しません）。
+- バックアップの鍵を管理者パスワードから切り離したいときは `BACKUP_PASSPHRASE`
+  （32文字以上のランダム値）を、**本番の環境変数と GitHub Secret の両方に同じ値で**設定します。
+  片方だけだと復号できず、自動復元が黙って止まります。
+
+### バックアップが「削られた」とき
+`db.json` が復元上限（4MB）を越えると、サーバーは収まるまで
+`dailyReplays` → `clientErrors` → `txArchive` → `workshop.likedBy` の順に中身を削ってから返します。
+`npm run backup:pull` と backup ワークフローは、削られた場合に警告（Actions では注釈）を出します。
+出ていたら db を減らしてください。放置すると、**工房の「いいね済み」名簿を欠いたバックアップ**が
+毎晩積まれ続けます（復元後に♡を二重に押せるようになります）。
 
 ## 💳 本物の課金を有効にする（Stripe）
 
