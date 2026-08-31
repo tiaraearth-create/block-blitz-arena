@@ -84,13 +84,16 @@ try {
   const meMid = await j('/api/me', {}, b.token);
   check('no reward mid-week', meMid.status === 200 && meMid.user.rankRewards.length === 0);
 
-  // ---- crowd scale cap: ×500 allowed (v2.11), above is clamped ----
+  // ---- にぎわい倍率の上限 ----
+  // 数字を直書きすると、上限を広げるたびにここだけ古くなる（実際そうなった）。
+  // サーバーの定数を読んで「上限まで通り、その上はクランプされる」ことだけを見る。
+  const { MAX_LIVE_SCALE } = await import('../server/ambient.js');
   const pop100 = await j('/api/admin/pop', { method: 'POST', body: { scale: 100 } }, admin.token);
   check('admin can set にぎわい ×100', pop100.status === 200 && pop100.scale === 100, `scale=${pop100.scale}`);
-  const pop500 = await j('/api/admin/pop', { method: 'POST', body: { scale: 500 } }, admin.token);
-  check('admin can set にぎわい ×500', pop500.status === 200 && pop500.scale === 500, `scale=${pop500.scale}`);
-  const pop999 = await j('/api/admin/pop', { method: 'POST', body: { scale: 999 } }, admin.token);
-  check('scale above 500 is clamped', pop999.status === 200 && pop999.scale === 500, `scale=${pop999.scale}`);
+  const popMax = await j('/api/admin/pop', { method: 'POST', body: { scale: MAX_LIVE_SCALE } }, admin.token);
+  check(`admin can set にぎわい ×${MAX_LIVE_SCALE}`, popMax.status === 200 && popMax.scale === MAX_LIVE_SCALE, `scale=${popMax.scale}`);
+  const popOver = await j('/api/admin/pop', { method: 'POST', body: { scale: MAX_LIVE_SCALE * 2 + 1 } }, admin.token);
+  check('上限を超えた倍率はクランプされる', popOver.status === 200 && popOver.scale === MAX_LIVE_SCALE, `scale=${popOver.scale}`);
   // 住人の実数が倍率でどう伸びるかは crowd.test.mjs 側で検証する
   // （このサーバーは POP_SCALE=0 で起動しているので、ここでは常に基本64人）。
   await j('/api/admin/pop', { method: 'POST', body: { scale: 0 } }, admin.token);

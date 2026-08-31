@@ -3691,6 +3691,11 @@ export function bindAdminActions() {
   $('#btnEvent').onclick = () => showEventModal();
   $('#btnAdminEvent').onclick = () => showAdminEventModal();
   $('#btnAdminLog').onclick = () => showAdminLogModal();
+  // 🧩 工房の管理。index.html にボタンはあったのに、ここへの配線が
+  // 一度も無く、押しても**何も起きない**ボタンになっていた（運営からの報告で発覚）。
+  // 工房モーダルの中にも同じ入口はあるが、そちらは「ステージを探す」まで
+  // 進まないと出てこないので、管理画面から直接開けるほうが素直。
+  $('#btnWorkshopManage').onclick = () => showWorkshopAdminModal();
 
   // 🔧 デプロイ直前に人を安全に逃がす。Render では SIGTERM で自動的に同じ
   // 処理が走るが、押しておけば「いつ落ちるか」を管理者が選べる。
@@ -4451,7 +4456,7 @@ async function showCrowdModal(tab = 'basic') {
       <div class="settings-row" style="margin-top:12px"><label>👥 人口倍率 <b>×${st.scale}</b></label></div>
       <p class="muted" style="font-size:11px;margin:-4px 0 6px">住人の実数は ×88 で上限（600人）。それより上は表示人数だけが増えます</p>
       <div class="seg seg-wrap" id="popSeg" style="justify-content:center">
-        ${[0, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7, 10, 15, 20, 25, 35, 50, 65, 88, 120, 150, 200, 300, 400, 500].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
+        ${[0, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7, 10, 15, 20, 25, 35, 50, 65, 88, 120, 150, 200, 300, 400, 500, 700, 1000, 1500, 2000].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
       </div>
       <div class="settings-row" style="margin-top:10px"><label>💬 チャット頻度<br><span class="muted" style="font-size:10px">住人の発言とライブフィードの速さ</span></label><div class="seg" id="paceSeg">
         ${[[0.1, 'ほぼ無言'], [0.25, 'しずか'], [0.5, 'ひかえめ'], [0.75, 'ゆるめ'], [1, '標準'], [1.5, '活発'], [2, 'おしゃべり'], [3, '賑やか'], [4, '大騒ぎ'], [6, '爆速'], [8, '限界'], [12, '祭り'], [16, '過密']].map(([v, l]) =>

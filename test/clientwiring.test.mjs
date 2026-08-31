@@ -320,4 +320,21 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
   check('お知らせが指す画像が実在する', missing.length === 0, missing.join(', ') || `${refs.length}件`);
 }
 
+
+// --- 14. 押しても何も起きないボタンが無いか ---
+// index.html にボタンを足したのに、配線を忘れると「見えているのに押せない」
+// ボタンになる。例外も出ず、CIも通り、誰かが押して報告するまで分からない。
+// 実際 #btnWorkshopManage（管理画面の「工房の管理」）が、置かれてから一度も
+// 配線されないまま公開されていた。
+{
+  const html = read('public/index.html');
+  const names = ['main', 'screens', 'modes', 'chat', 'party', 'friends', 'adminevent',
+    'admintools', 'dom', 'clipexport', 'ytexport', 'audio', 'game', 'i18n', 'settings', 'themes', 'net'];
+  const js = names.map(n => { try { return read(`public/js/${n}.js`); } catch { return ''; } }).join('\n');
+  const ids = [...html.matchAll(/<button[^>]*\bid="([\w-]+)"/g)].map(m => m[1]);
+  const dead = ids.filter(id => !js.includes(id));
+  check('HTMLのボタンが全部コードから参照されている', dead.length === 0,
+    dead.length ? `配線されていない: ${dead.join(', ')}` : `${ids.length}個`);
+}
+
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

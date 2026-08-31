@@ -201,7 +201,10 @@ body {
      停止ボタンにだけ pointer-events を戻す。 */
   pointer-events: none;
 }
-#clipBar #clipStop { pointer-events: auto; }
+/* 帯の中の押せるものには当たりを戻す。id で名指しすると、ボタンが
+   増えたときに必ず取りこぼす ── 実際「⏹停止」だけを戻していたせいで、
+   録画後に出る「見る」ボタンが押せなくなっていた。 */
+#clipBar button, #clipBar a { pointer-events: auto; }
 /* 狭い画面では手札の帯がさらに高くなるので、もう一段持ち上げる。 */
 @media (max-width: 520px) {
   #clipBar { bottom: calc(168px + env(safe-area-inset-bottom, 0px)); }

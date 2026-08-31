@@ -21,7 +21,13 @@ export const POP_SCALE = process.env.POP_SCALE === undefined ? 1 : Math.max(0, N
 
 // 表示人数の倍率上限。住人の実数は MAX_ROSTER（×88 相当）で頭打ちになるので、
 // そこから先は「表示される人数」だけが増える — お祭り演出用の見た目の数字。
-export const MAX_LIVE_SCALE = 500;
+// 表示人数の倍率上限。×2000 でピーク時（21時台）に約136万人まで出せる。
+// 100万人台を出したいという運営の要望で 500 から引き上げた。
+//
+// 上げても増えるのは **表示の数字だけ**。住人の実数は MAX_ROSTER=600 で
+// 頭打ちなので、チャットの流量も王座の計算量もここから先は一切増えない
+// （＝サーバーの負荷は ×88 のときと変わらない）。
+export const MAX_LIVE_SCALE = 2000;
 
 let liveScale = 1;
 export function setLiveScale(x) {
