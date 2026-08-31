@@ -36,10 +36,22 @@ const pickProfile = () => {
   return (cores <= 4 || mem <= 4) ? PROFILES.lo : PROFILES.hi;
 };
 
+// 出力形式。**iPhone を落とさないこと**が肝心。
+//
+// WebKit（Safari と、iOSでは Chrome も中身は WebKit）の MediaRecorder は
+// webm を持たず mp4 系しか対応しない。候補を webm だけにしていたので、
+// iOS では MIME が null → canRecordClip() が false → 🎬ボタンが永久に hidden、
+// つまり **主戦場のスマホで機能があること自体に気づけない** 状態だった。
+// mp4 を後ろに足す（対応環境では今までどおり webm が選ばれる）。
 const MIME = (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported)
-  ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+  ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm',
+     'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1', 'video/mp4']
     .find(x => MediaRecorder.isTypeSupported(x)) || null
   : null;
+// 選ばれた形式に合わせた拡張子と MIME。ここを1箇所に集めておかないと、
+// 「録れるのにファイル名だけ .webm」のような片側だけの取りこぼしが起きる。
+const CLIP_EXT = MIME && MIME.startsWith('video/mp4') ? 'mp4' : 'webm';
+const CLIP_TYPE = CLIP_EXT === 'mp4' ? 'video/mp4' : 'video/webm';
 
 export const canRecordClip = () =>
   !!MIME && typeof HTMLCanvasElement !== 'undefined'
@@ -310,7 +322,7 @@ export function startClip(seconds) {
     stopClip(state);
   };
   state.rec.onstop = () => {
-    const blob = new Blob(state.chunks, { type: 'video/webm' });
+    const blob = new Blob(state.chunks, { type: CLIP_TYPE });
     state.chunks.length = 0;
     const title = modeTitle(mode);
     cleanup(state);
@@ -440,7 +452,7 @@ function showClipResult(blob, mode) {
     <video src="${url}" controls playsinline autoplay muted loop
       style="width:100%;max-height:50vh;border-radius:12px;background:#000"></video>
     <p class="muted center" style="font-size:12px;margin:8px 0">
-      ${mode} ・ ${mb}MB ・ webm<br>
+      ${mode} ・ ${mb}MB ・ ${CLIP_EXT}<br>
       ${t('Shorts / TikTok にそのまま上げられます', 'Ready for Shorts / TikTok')}
     </p>
     <div class="modal-buttons">
@@ -462,7 +474,7 @@ function showClipResult(blob, mode) {
   m.querySelector('#clipSave').onclick = () => {
     const a = document.createElement('a');
     a.href = url;
-    a.download = `block-blitz-${Date.now()}.webm`;
+    a.download = `block-blitz-${Date.now()}.${CLIP_EXT}`;
     document.body.appendChild(a);      // 挿してから click することを要求する環境がある
     a.click();
     a.remove();
@@ -473,7 +485,7 @@ function showClipResult(blob, mode) {
       `Block Blitz Arena の${mode}！\n無料・登録なしでブラウザで遊べます 👇\n${location.origin}/?ref=clip\n#BlockBlitzArena`,
       `${mode} on Block Blitz Arena!\nFree in your browser, no signup 👇\n${location.origin}/?ref=clip\n#BlockBlitzArena`);
     try {
-      const file = new File([blob], 'block-blitz-clip.webm', { type: 'video/webm' });
+      const file = new File([blob], `block-blitz-clip.${CLIP_EXT}`, { type: CLIP_TYPE });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], text, title: 'Block Blitz Arena' });
         return;

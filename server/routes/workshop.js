@@ -309,7 +309,14 @@ function workshopView(stage, viewer, opts = {}) {
   // 英語のステージ名。プレイヤーの投稿には無い欄なので、持っているものだけ出す
   // （画面側 normalizeWorkshopStage は nameEn/titleEn を見て英語表示に使う）。
   if (stage.titleEn) out.titleEn = String(stage.titleEn);
-  if (opts.board) out.board = stage.board;
+  // 🧩 一覧のプレビュー。
+  //
+  // これまで board は詳細（opts.board）でしか返しておらず、一覧のカードは
+  // 描くものが無いので **常に🧩のプレースホルダ**になっていた。どのステージも
+  // 同じ見た目で並ぶので、選ぶ手がかりが題名しか無い。
+  // 盤面は 8×8＝64 マスの小さい配列なので、一覧に載せても実害のある重さには
+  // ならない（1件あたり数十バイト）。常に返す。
+  out.board = stage.board;
   if (opts.board) out.targets = stage.board.reduce((a, v, i) => (v !== 0 ? (a.push(i), a) : a), []);
   if (mine || (viewer && viewer.role === 'admin')) out.solution = stage.solution;
   return out;

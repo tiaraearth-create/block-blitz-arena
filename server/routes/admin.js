@@ -1066,6 +1066,10 @@ const CROWD_PRESETS = {
   carnival:  { scale: 120,  chatPace: 12,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
   // 💥 上限の上限。負荷の当たりを見るための極端値（常用しないこと）。
   overload:  { scale: 500,  chatPace: 16,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  // 🌍 世界規模。表示だけが伸びる帯（住人の実数は 600 で頭打ちなので負荷は同じ）。
+  world:     { scale: 1000, chatPace: 8,    toggles: { ...DEFAULT_TOGGLES }, quiet: null },
+  // 🌎 100万人。数字を見せるためのプリセット。
+  million:   { scale: 2000, chatPace: 10,   toggles: { ...DEFAULT_TOGGLES }, quiet: null },
 };
 
 function crowdStatus() {

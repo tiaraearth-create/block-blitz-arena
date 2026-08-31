@@ -1,5 +1,5 @@
 // REST API client + WebSocket battle client.
-import { trServer } from './i18n.js';
+import { trServer, LANG } from './i18n.js';
 
 const TOKEN_KEY = 'bba_token';
 
@@ -90,7 +90,11 @@ export async function api(path, { method = 'GET', body, timeout } = {}) {
   clear();
   if (!res.ok) {
     if (data.season) session.season = data.season;   // /api/me sends it even when logged out
-    const e = new Error(trServer(data.error) || `Error (${res.status})`);
+    // サーバーは errorEn を添えてくることがある（そのために作った）のに、
+    // ここで一度も読んでいなかったので、英語面に日本語のエラーが出ていた。
+    // errorEn を第一候補にし、無い旧経路は今までどおり辞書（trServer）に落とす。
+    const e = new Error((LANG === 'en' && data.errorEn)
+      || trServer(data.error) || `Error (${res.status})`);
     e.status = res.status;
     e.code = data.code || null;   // e.g. NO_USER (restore pending) / SESSION_ENDED
     e.settled = !!data.settled;   // NO_USER + settled: the restore ran and the account isn't in it

@@ -171,7 +171,7 @@ function badgeInfoOf(id) {
 
 function showProfileModal() {
   const u = session.user;
-  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅', guildquest: '🎖️' };
+  const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', zero7: '🌗', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅', guildquest: '🎖️' };
   const m = showModal(`
     <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
@@ -216,6 +216,10 @@ function showProfileModal() {
 // ---------------------------------------------------------------------------
 
 const MODE_LABEL = {
+  // 👑 管理者イベントの4種。無いと戦績ダッシュボードに 'ae_invasion' のような
+  // 生のIDがそのまま出る。
+  ae_invasion: ['👑 襲来', '👑 Invasion'], ae_roulette: ['🎰 ルーレット', '🎰 Roulette'],
+  ae_communal: ['🏛️ 共同作業', '🏛️ Communal'], ae_zero: ['👁️ 断罪', '👁️ Judgement'],
   solo: ['ソロ', 'Solo'], survival: ['サバイバル', 'Survival'], boss: ['ボス', 'Boss'],
   boss_rush: ['ボスラッシュ', 'Boss Rush'], weekly: ['ウィークリー', 'Weekly'], daily: ['デイリー', 'Daily'],
   chaos: ['カオス', 'Chaos'], pvp: ['オンライン', 'Online'], tournament: ['トーナメント', 'Tournament'],
@@ -865,7 +869,7 @@ export async function openLeaderboard(board = 'score') {
       }).join('');
       rewardHead = `<div class="lb-rewards">🎁 <b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
     }
-    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅', guildquest: '🎖️' };
+    const badgeIcons = { bronze: '🥉', silver: '🥈', gold: '🥇', oni: '👹', kami: '🔱', maou: '😈', souzou: '🌌', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', zero: '👁️', zero7: '🌗', tourney: '🏆', royale: '💯', adminevent: '👑', abyss: '🌑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅', guildquest: '🎖️' };
     list.innerHTML = hofLink + rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${i === 0 ? 'top1' : ''}">${medal(i)}</div>
@@ -1330,6 +1334,7 @@ const BADGE_INFO = {
   heaven:     { icon: '☁️', ja: '天界踏破',      en: 'Ascent Conqueror', cja: '天国ダンジョンH100を制覇',         cen: 'Conquer floor H100 of the Ascent' },
   abyss:      { icon: '🌑', ja: '深淵踏破',      en: 'Abyss Conqueror', cja: '深淵ダンジョンA100を制覇',          cen: 'Conquer floor A100 of the Abyss' },
   zero:       { icon: '👁️', ja: '断罪',          en: 'Condemned',       cja: '👁️断罪で段を割った回に参加する', cen: 'Be present when a stage falls in Condemned' },
+  zero7:      { icon: '🌗', ja: '七冠奪還',      en: 'Seven Crowns',    cja: '👁️断罪で七段すべてが陥落した回に居合わせる', cen: 'Be present when all seven stages fall in Condemned' },
   tourney:    { icon: '🏆', ja: '大会優勝',      en: 'Tournament Champ', cja: 'オンライントーナメントで優勝',     cen: 'Win an online tournament' },
   royale:     { icon: '💯', ja: '百人の頂点',    en: 'Apex of 100',     cja: 'バトルロイヤルで1位',               cen: 'Take #1 in Battle Royale' },
   adminevent: { icon: '👑', ja: '管理者イベント制覇', en: 'Admin Event', cja: '管理者イベントの目標を達成',        cen: 'Complete an Admin Event objective' },
@@ -1349,7 +1354,7 @@ const BADGE_INFO = {
 };
 // 🏛 シーズン刻印（s{N}champ）はシーズンごとに増えるのでここには並べない。
 // 持っているぶんだけ renderInvBadges が末尾に足す（seasonBadgeInfo 参照）。
-const BADGE_ORDER = ['oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'under', 'heaven', 'abyss', 'zero', 'tourney', 'royale', 'adminevent', 'weekly1', 'daily7', 'guildquest', 'puzzle', 'dig', 'ghost', 'bronze', 'silver', 'gold', 'crown2', 'crown3', 'crown5', 'crown7'];
+const BADGE_ORDER = ['oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'under', 'heaven', 'abyss', 'zero', 'zero7', 'tourney', 'royale', 'adminevent', 'weekly1', 'daily7', 'guildquest', 'puzzle', 'dig', 'ghost', 'bronze', 'silver', 'gold', 'crown2', 'crown3', 'crown5', 'crown7'];
 // 👑 王座のボード名は [日本語, English] のペアで持つ。
 // 以前は日本語だけの表で、引くときに tr(THRONE_LABEL[b], THRONE_LABEL[b]) と
 // 第2引数にも同じ日本語を渡していたため、英語表示でもここだけ日本語のまま出ていた。
@@ -1703,7 +1708,9 @@ function normalizeDexSets(data) {
       claimed: !!s.claimed,
       coins: Number(s.coins) || 0,
       gems: Number(s.gems) || 0,
-      titleName: s.titleName || '',
+      // name/desc と同じ作法に揃える。ここだけ英語を読んでおらず、
+      // 英語面でセット報酬の称号だけ日本語が出ていた。
+      titleName: (LANG === 'en' && s.titleNameEn ? s.titleNameEn : s.titleName) || '',
     };
   }).filter(s => s.ids.length);
   return out.length ? out : null;
@@ -1967,7 +1974,7 @@ export function openGacha() {
       <button class="btn btn-primary" id="gcPull1">${tr('1回', '1 pull')} <span id="gcCost1">🪙${fmt(GACHA_BASE_1)}</span></button>
       <button class="btn btn-gold" id="gcPull10">${tr('10連', '10 pulls')} <span id="gcCost10">🪙${fmt(GACHA_BASE_10)}</span><small style="display:block;font-size:9px">${tr('SR以上1枠確定', '1 SR+ guaranteed')}</small></button>
     </div>
-    <p class="muted center" style="font-size:10px;margin-top:8px">${tr('N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム150 3%', 'N Coins 50% · R Items 22% · SR Gems 15% · SSR Cosmetics 10% · UR 150 Gems 3%')}<br>${tr(`✨ ${pityMax}連以内にSSR以上が必ず出ます（天井） ・ 🌈 ガチャ限定装備はSSRからのみ入手`, `✨ SSR+ guaranteed within ${pityMax} pulls (pity) · 🌈 Gacha-exclusive gear drops only from SSR`)}<br>${tr('スキン等をコンプ済みの場合はジェムに変換されます', 'Duplicate cosmetics are converted to gems')}</p>`);
+    <p class="muted center" style="font-size:10px;margin-top:8px">${tr('N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム最大150 3%', 'N Coins 50% · R Items 22% · SR Gems 15% · SSR Cosmetics 10% · UR up to 150 Gems 3%')}<br>${tr(`✨ ${pityMax}連以内にSSR以上が必ず出ます（天井） ・ 🌈 ガチャ限定装備はSSRからのみ入手`, `✨ SSR+ guaranteed within ${pityMax} pulls (pity) · 🌈 Gacha-exclusive gear drops only from SSR`)}<br>${tr('スキン等をコンプ済みのときはブースターが3個届きます ・ 💎には1日の獲得上限があります', 'Once cosmetics are complete you get a 3× booster bundle instead · gem payouts have a daily cap')}</p>`);
   m.querySelector('#gcClose').onclick = closeModal;
   const setBars = (pity, collection) => {
     if (pity) {
@@ -4386,6 +4393,8 @@ const PRESET_GROUPS = [
     ['rushhour', '🏙️ 夕方の駅前', '人口×20・1人あたりは静か'],
     ['carnival', '🎊 カーニバル', '人口×120・会話×12'],
     ['overload', '💥 限界試験', '人口×500・会話×16（常用しない）'],
+    ['world', '🌍 世界規模', '人口×1000・表示58万人'],
+    ['million', '🌎 100万人', '人口×2000・表示116万人'],
   ]],
   ['時間帯と空気', [
     ['commute', '🌅 朝の通勤帯', '人口×1.5・会話×0.5・挨拶多め'],
@@ -4431,7 +4440,7 @@ async function showCrowdModal(tab = 'basic') {
     </div>
     <div id="crBody"></div>
     <div class="modal-buttons" style="margin-top:12px"><button class="btn btn-ghost" id="crClose">閉じる</button></div>`);
-  // プリセット25個・住人600人の一覧を出す画面なので、標準の400px幅では
+  // プリセット30個・住人600人の一覧を出す画面なので、標準の400px幅では
   // 縦に伸びすぎる。この画面だけ600pxに広げる（狭い端末では 94vw が効くので
   // 見た目は変わらない）。style.css の .modal.crowd-modal を参照。
   m.classList.add('crowd-modal');
@@ -4456,7 +4465,7 @@ async function showCrowdModal(tab = 'basic') {
       <div class="settings-row" style="margin-top:12px"><label>👥 人口倍率 <b>×${st.scale}</b></label></div>
       <p class="muted" style="font-size:11px;margin:-4px 0 6px">住人の実数は ×88 で上限（600人）。それより上は表示人数だけが増えます</p>
       <div class="seg seg-wrap" id="popSeg" style="justify-content:center">
-        ${[0, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7, 10, 15, 20, 25, 35, 50, 65, 88, 120, 150, 200, 300, 400, 500, 700, 1000, 1500, 2000].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
+        ${[0, 0.1, 0.2, 0.25, 0.35, 0.5, 0.7, 0.75, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 25, 35, 50, 65, 88, 120, 150, 200, 300, 400, 500, 700, 1000, 1500, 2000].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
       </div>
       <div class="settings-row" style="margin-top:10px"><label>💬 チャット頻度<br><span class="muted" style="font-size:10px">住人の発言とライブフィードの速さ</span></label><div class="seg" id="paceSeg">
         ${[[0.1, 'ほぼ無言'], [0.25, 'しずか'], [0.5, 'ひかえめ'], [0.75, 'ゆるめ'], [1, '標準'], [1.5, '活発'], [2, 'おしゃべり'], [3, '賑やか'], [4, '大騒ぎ'], [6, '爆速'], [8, '限界'], [12, '祭り'], [16, '過密']].map(([v, l]) =>

@@ -113,7 +113,11 @@ body {
 
 .menu-content { position: relative; display: flex; flex-direction: column; align-items: center; gap: 22px; padding: 20px; margin: auto 0; }
 /* いちばん下のボタンがホームバーに隠れないように（env 非対応なら 20px のまま）。 */
-.menu-content { padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+/* いちばん下のボタンがホームバーに隠れないように（env 非対応なら 20px のまま）。
+   右下の💬丸ボタン（.chat-toggle 60px ＋ 擬似要素 5px）ぶんも空ける ──
+   足りないと、最下部の📡ライブフィードの右端をタップしたときに
+   フィードではなくチャットが開く。 */
+.menu-content { padding-bottom: calc(86px + env(safe-area-inset-bottom, 0px)); }
 .logo { text-align: center; line-height: 1.15; }
 .logo-block {
   display: inline-block; font-size: clamp(40px, 9vw, 72px); font-weight: 900;
@@ -1345,7 +1349,7 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
   /* ---- menu fits a phone: smaller logo/buttons, scroll if needed ---- */
   #screen-menu { overflow-y: auto; justify-content: flex-start; }
   .menu-content { gap: 14px; padding: 14px 12px 24px; }
-  .menu-content { padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+  .menu-content { padding-bottom: calc(90px + env(safe-area-inset-bottom, 0px)); }
   .logo-block { font-size: 34px; padding: 2px 7px; margin: 0 2px; border-radius: 10px; }
   .logo-sub { font-size: 14px; letter-spacing: 0.4em; }
   .menu-buttons { gap: 8px; }
@@ -2345,8 +2349,13 @@ body[data-screen="game"] #topbar { display: none; }
 /* .chat-drawer の中には入れない ── あれはメニュー画面でしか出ないので、
    試合中にパーティーが見えなくなる。だから独立した棚にしてある。
    接頭辞は .pt-*（[data-mood="party"] が別物として既に存在するため）。 */
+/* ⚠️ z-index はモーダル(.modal-backdrop = 50)より必ず後ろにすること。
+   60 にしていたときは、パーティー中にモーダルを開くと棚が前面に来て、
+   モーダル下部の左側（＝「やめる」「キャンセル」）が押せなくなっていた。
+   指の下に見えているのはボタンなので、原因が分からない類の不具合。
+   同じ型を #clipBar でも踏んでいる（そちらも 60 → 45 に下げた）。 */
 #partyDock {
-  position: fixed; left: 8px; bottom: 8px; z-index: 60;
+  position: fixed; left: 8px; bottom: 8px; z-index: 44;
   width: min(300px, calc(100vw - 16px));
   border-radius: 14px; overflow: hidden;
   background: rgba(10,13,30,0.94); border: 1px solid rgba(91,139,255,.35);
@@ -2756,7 +2765,13 @@ body[data-screen="game"] .pt-peek { opacity: 1; }
 /* 上の .blp-* / .land-* / .replay-* / .ice-* / .ws-edit-* / .ws-swatch は
    第3波の新画面用に先に書いた版で、実装（modes.js）はまだ CellOverlay や
    インライン style / 別のクラス名（.ws-grid / .ws-sw / #replayBar）で
-   出している ── つまり今は1つも当たっていない。すぐ上の
+   出している。
+   ⚠️ ただし **.ws-edit-grid と .ws-edit-cell だけは例外で、実際に使われている**
+   （modes.js の wsBoardHtml() が 8×8 の <i class="ws-edit-cell"> を
+   <div class="ws-edit-grid"> で包んで出している）。ここを「未使用」と信じて
+   消すと工房のステージ作成が壊れる ── とくに touch-action:none が消えると、
+   なぞってまとめて塗る操作がページスクロールに取られ、1マスずつしか
+   塗れなくなる（例外は出ないので気づけない）。他のクラスは今も未使用。すぐ上の
    @media (max-width: 520px) も同じ理由で1行も効かない。
    実装をこのクラス名に寄せるまでのあいだ、実際に効かせたい指定はここから下に
    書く（実装側のクラス名・id を直接狙う）。消していないのは、寄せる作業が

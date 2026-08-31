@@ -337,4 +337,33 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
     dead.length ? `配線されていない: ${dead.join(', ')}` : `${ids.length}個`);
 }
 
+
+// --- 15. バッジが全部の表に載っているか ---
+// サーバーが配るバッジが、絵の表・名前の表・管理画面の一覧のどれかから
+// 漏れると、その人の実績だけ画面から静かに消える（例外は出ない）。
+// 実際 zero7（七段すべて陥落に居合わせた証）が5つの表から漏れていた。
+{
+  const battle = read('server/battle.js');
+  const catalog = read('server/catalog.js');
+  const ui = read('public/js/screens.js');
+  const names = read('server/crowd.js');
+  const srv = read('server/index.js');
+
+  // 実際に配られているバッジID（push と、称号の has() 判定の両方から集める）
+  const granted = new Set([
+    ...[...battle.matchAll(/badges\.push\('([\w]+)'\)/g)].map(m => m[1]),
+    ...[...srv.matchAll(/badges\.push\('([\w]+)'\)/g)].map(m => m[1]),
+    ...[...catalog.matchAll(/has\('([\w]+)'\)/g)].map(m => m[1]),
+  ]);
+  // シーズン殿堂バッジ（season1 など連番）は表に持たず別処理なので除く
+  const ids = [...granted].filter(b => !/^season\d*$/.test(b) && b.length > 2);
+
+  const noIcon = ids.filter(b => !ui.includes(`${b}:`));
+  const noName = ids.filter(b => !names.includes(`${b}:`));
+  const noAdmin = ids.filter(b => !srv.includes(`'${b}'`));
+  check('全バッジに絵がある（画面で🎖️に潰れない）', noIcon.length === 0, noIcon.join(', ') || `${ids.length}種`);
+  check('全バッジに名前がある（フィード・お知らせ用）', noName.length === 0, noName.join(', '));
+  check('全バッジが管理画面から付与できる', noAdmin.length === 0, noAdmin.join(', '));
+}
+
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

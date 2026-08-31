@@ -823,7 +823,7 @@ const BUGREPORT_CAP = 300;
 // サーバーが配りうるバッジの全一覧。管理画面の編集欄（routes/admin.js）と、
 // 起動時に運営アカウントへ全部持たせる unlockEverythingForStaff の両方が読む。
 // どちらか一方の持ち物にすると、もう片方が必ず取りこぼす。
-const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7', 'guildquest'];
+const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'zero7', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7', 'guildquest'];
 const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']);
 
 function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, trusted, preClamped }) {

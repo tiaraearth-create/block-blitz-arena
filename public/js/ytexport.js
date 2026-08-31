@@ -190,10 +190,17 @@ export function showYouTubeStudio() {
   // 「ある」だけでは足りない ── Safari は両方あるのに webm を録れないので、
   // ボタンが押せてしまい、押すとコンストラクタが例外を投げて何も起きない。
   // しかもそのとき音楽は強制ONにされたまま残っていた。
+  // mp4 も候補に入れる。WebKit（Safari / iOS の全ブラウザ）の MediaRecorder は
+  // webm を持たないので、webm だけだと iPhone では canRecord が false のまま
+  // 「このブラウザは録画に対応していません」で終わっていた。
   const MIME = (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported)
-    ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+    ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm',
+       'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1', 'video/mp4']
         .find(x => MediaRecorder.isTypeSupported(x)) || null
     : null;
+  // 拡張子と type を1箇所から出す（片方だけ webm のまま、を防ぐ）。
+  const EXT = MIME && MIME.startsWith('video/mp4') ? 'mp4' : 'webm';
+  const OUT_TYPE = EXT === 'mp4' ? 'video/mp4' : 'video/webm';
   const canRecord = !!MIME && !!HTMLCanvasElement.prototype.captureStream;
   const tracks = TRACK_INFO.filter(x => !x.hidden || ghostUnlocked());
 
@@ -461,9 +468,9 @@ export function showYouTubeStudio() {
         if (studioState.onVis) { document.removeEventListener('visibilitychange', studioState.onVis); studioState.onVis = null; }
       }
       audio.lookahead = 0.35;
-      const blob = new Blob(chunks, { type: 'video/webm' });
+      const blob = new Blob(chunks, { type: OUT_TYPE });
       if (blob.size > 0) {
-        download(blob, `bba-ost-${sel}-${FMT === FORMATS.short ? 'short-' : ''}${dur}s.webm`);
+        download(blob, `bba-ost-${sel}-${FMT === FORMATS.short ? 'short-' : ''}${dur}s.${EXT}`);
         toast(t('🎬 動画を保存しました！このままYouTubeにアップできます', '🎬 Video saved — upload it to YouTube as-is!'), 'ok', 4500);
       } else {
         // 空だったことを伝える。黙って終わると「保存できたのに
