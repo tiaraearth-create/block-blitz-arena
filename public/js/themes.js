@@ -129,6 +129,70 @@ export const BOARDS = {
     accent: '#8b6cff',
     nebula: true,
   },
+  // --- v2.30 追加ステージ -----------------------------------------------------
+  // 装飾フラグ（stars / bubbles / fireflies / nebula / petals / embers / snow /
+  // digital / aurora / holy）は既存の描画をそのまま使う。新しい絵を足すのでは
+  // なく、配色と装飾の組み合わせで「別の場所」を作る ── 描画を増やすと低スペック
+  // 端末の負荷が増えるが、配色だけなら追加コストがゼロで済む。
+  board_deepsea: {
+    bg: ['#021d33', '#000a14'],
+    cell: 'rgba(90,190,255,0.07)',
+    cellLine: 'rgba(90,190,255,0.10)',
+    accent: '#3aa0e8',
+    bubbles: true,
+  },
+  board_desert: {
+    bg: ['#5a3d18', '#1c1206'],
+    cell: 'rgba(255,214,150,0.09)',
+    cellLine: 'rgba(255,214,150,0.12)',
+    accent: '#e8b25c',
+    embers: true,
+  },
+  board_mint: {
+    bg: ['#123f3a', '#061715'],
+    cell: 'rgba(160,255,235,0.08)',
+    cellLine: 'rgba(160,255,235,0.11)',
+    accent: '#5fe8cf',
+    fireflies: true,
+  },
+  board_midnight: {
+    bg: ['#161a2e', '#05060d'],
+    cell: 'rgba(190,200,255,0.06)',
+    cellLine: 'rgba(190,200,255,0.09)',
+    accent: '#8f9dff',
+    stars: true,
+    snow: true,
+  },
+  board_ruby: {
+    bg: ['#4a0f2c', '#170410'],
+    cell: 'rgba(255,140,190,0.09)',
+    cellLine: 'rgba(255,140,190,0.12)',
+    accent: '#ff5d8f',
+    petals: true,
+  },
+  board_matrix: {
+    bg: ['#04140a', '#010603'],
+    cell: 'rgba(80,255,140,0.07)',
+    cellLine: 'rgba(80,255,140,0.14)',
+    accent: '#3cff8a',
+    digital: true,
+    stars: true,
+  },
+  board_sunrise: {
+    bg: ['#5c3410', '#1f1206'],
+    cell: 'rgba(255,200,140,0.10)',
+    cellLine: 'rgba(255,200,140,0.13)',
+    accent: '#ffb35c',
+    holy: true,
+  },
+  board_nebula: {
+    bg: ['#1d0e42', '#070316'],
+    cell: 'rgba(180,140,255,0.08)',
+    cellLine: 'rgba(180,140,255,0.12)',
+    accent: '#a06bff',
+    nebula: true,
+    aurora: true,
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -472,6 +536,140 @@ function drawZeroEye(ctx, x, y, s, colorIndex, alpha = 1) {
   ctx.globalAlpha = 1;
 }
 
+// --- v2.30 追加スキン ---------------------------------------------------------
+// 既存と同じ約束: (ctx, x, y, s, ci, alpha) を受け、PALETTE[ci] の [light, dark]
+// だけで色を作る。パレットを直に書かないのは、色覚サポート（colorMarks）や
+// テーマ切り替えが PALETTE 側で効くようにするため。
+
+// 🧊 氷塊。角が透けて、内側に霜のひび。
+function drawIce(ctx, x, y, s, ci, alpha = 1) {
+  const [light, dark] = PALETTE[ci];
+  const pad = s * 0.06, r = s * 0.14;
+  ctx.globalAlpha = alpha;
+  const g = ctx.createLinearGradient(x, y, x + s, y + s);
+  g.addColorStop(0, light); g.addColorStop(0.55, dark); g.addColorStop(1, light);
+  ctx.fillStyle = g;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+  ctx.lineWidth = Math.max(1, s * 0.035);
+  ctx.beginPath();
+  ctx.moveTo(x + s * 0.28, y + s * 0.18);
+  ctx.lineTo(x + s * 0.52, y + s * 0.54);
+  ctx.lineTo(x + s * 0.38, y + s * 0.82);
+  ctx.moveTo(x + s * 0.62, y + s * 0.3);
+  ctx.lineTo(x + s * 0.52, y + s * 0.54);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+// 🪵 木彫り。年輪が浅く入った、あたたかい面。
+function drawWood(ctx, x, y, s, ci, alpha = 1) {
+  const [light, dark] = PALETTE[ci];
+  const pad = s * 0.06, r = s * 0.12;
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = dark;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  ctx.save();
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.clip();
+  ctx.strokeStyle = light;
+  ctx.globalAlpha = alpha * 0.35;
+  ctx.lineWidth = Math.max(1, s * 0.05);
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.arc(x + s * 0.18, y + s * 0.85, s * (0.28 + i * 0.24), -0.9, 0.35);
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.globalAlpha = alpha * 0.9;
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = Math.max(1, s * 0.03);
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+// 🫧 ゼリー。ぷるんとした厚みと、下に落ちるハイライト。
+function drawJelly(ctx, x, y, s, ci, alpha = 1) {
+  const [light, dark] = PALETTE[ci];
+  const pad = s * 0.07, r = s * 0.3;
+  ctx.globalAlpha = alpha * 0.92;
+  const g = ctx.createLinearGradient(x, y + s, x, y);
+  g.addColorStop(0, dark); g.addColorStop(1, light);
+  ctx.fillStyle = g;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  ctx.globalAlpha = alpha * 0.5;
+  ctx.fillStyle = light;
+  roundRect(ctx, x + pad * 1.8, y + s * 0.52, s - pad * 3.6, s * 0.3, r * 0.7);
+  ctx.fill();
+  ctx.globalAlpha = alpha * 0.75;
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.beginPath();
+  ctx.ellipse(x + s * 0.36, y + s * 0.3, s * 0.16, s * 0.1, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+// ⚙️ 鋼鉄。斜めのヘアラインと、四隅のリベット。
+function drawSteel(ctx, x, y, s, ci, alpha = 1) {
+  const [light, dark] = PALETTE[ci];
+  const pad = s * 0.05, r = s * 0.1;
+  ctx.globalAlpha = alpha;
+  const g = ctx.createLinearGradient(x, y, x + s, y + s);
+  g.addColorStop(0, light); g.addColorStop(0.5, dark); g.addColorStop(1, light);
+  ctx.fillStyle = g;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  ctx.save();
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.clip();
+  ctx.globalAlpha = alpha * 0.18;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Math.max(1, s * 0.025);
+  for (let i = -1; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(x + s * (i * 0.3), y);
+    ctx.lineTo(x + s * (i * 0.3 + 0.5), y + s);
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.globalAlpha = alpha * 0.7;
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  const rv = s * 0.055;
+  for (const [dx, dy] of [[0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]]) {
+    ctx.beginPath();
+    ctx.arc(x + s * dx, y + s * dy, rv, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// 🌌 星屑。夜空を閉じ込めた、粒の浮かぶ面。粒の位置は色ごとに固定（毎フレーム
+// 抽選すると盤面がチカチカして酔う）。
+const STARDUST_PTS = [[0.28, 0.3], [0.62, 0.22], [0.44, 0.55], [0.74, 0.62], [0.3, 0.74]];
+function drawStardust(ctx, x, y, s, ci, alpha = 1) {
+  const [light, dark] = PALETTE[ci];
+  const pad = s * 0.05, r = s * 0.2;
+  ctx.globalAlpha = alpha;
+  const g = ctx.createRadialGradient(x + s * 0.5, y + s * 0.5, s * 0.05, x + s * 0.5, y + s * 0.5, s * 0.7);
+  g.addColorStop(0, light); g.addColorStop(1, dark);
+  ctx.fillStyle = g;
+  roundRect(ctx, x + pad, y + pad, s - pad * 2, s - pad * 2, r);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  for (let i = 0; i < STARDUST_PTS.length; i++) {
+    const [px, py] = STARDUST_PTS[(i + ci) % STARDUST_PTS.length];
+    ctx.globalAlpha = alpha * (i % 2 ? 0.55 : 0.85);
+    ctx.beginPath();
+    ctx.arc(x + s * px, y + s * py, s * (i % 2 ? 0.028 : 0.042), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
 export const SKINS = {
   skin_default: drawClassic,
   skin_neon: drawNeon,
@@ -487,6 +685,11 @@ export const SKINS = {
   skin_admin: drawAdminRainbow,
   skin_verdict: drawVerdict,
   skin_zero: drawZeroEye,
+  skin_ice: drawIce,
+  skin_wood: drawWood,
+  skin_jelly: drawJelly,
+  skin_steel: drawSteel,
+  skin_stardust: drawStardust,
 };
 
 // fx ids map to particle presets handled in particles.js

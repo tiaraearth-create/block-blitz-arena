@@ -241,4 +241,43 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
   check('プリセットのチャット頻度が上限を超えていない', Math.max(...pPaces) <= maxPace, `最大 ×${Math.max(...pPaces)}`);
 }
 
+
+// --- 12. ショップの品揃えと実装の対応 ---
+// カタログに並べただけで実装が無いと、買えるのに見た目が変わらない（既定に
+// 落ちる）。例外は出ないので、買った人が「損した」と気づくまで誰も分からない。
+{
+  const cat = read('server/catalog.js');
+  const th = read('public/js/themes.js');
+  const par = read('public/js/particles.js');
+  const en = read('public/js/catalog-en.js');
+
+  const idsOf = c => [...cat.matchAll(new RegExp(`id: '(${c}_\\w+)'`, 'g'))].map(m => m[1]);
+  const skins = idsOf('skin'), boards = idsOf('board'), fxs = idsOf('fx');
+
+  const drawn = [...th.matchAll(/^  (skin_\w+):/gm)].map(m => m[1]);
+  const noDraw = skins.filter(id => !drawn.includes(id));
+  check('全スキンに描画関数がある', noDraw.length === 0, noDraw.join(', ') || `${skins.length}種`);
+
+  const stages = [...th.matchAll(/^  (board_\w+): \{/gm)].map(m => m[1]);
+  const noStage = boards.filter(id => !stages.includes(id));
+  check('全ボードにステージ定義がある', noStage.length === 0, noStage.join(', ') || `${boards.length}種`);
+
+  // fx_default は「既定＝分岐なし」なので対象外。
+  const cases = [...par.matchAll(/case '(fx_\w+)'/g)].map(m => m[1]);
+  const noFx = fxs.filter(id => id !== 'fx_default' && !cases.includes(id));
+  check('全エフェクトに粒子の実装がある', noFx.length === 0, noFx.join(', ') || `${fxs.length}種`);
+
+  // 逆向き（実装はあるのに売り場に無い）は在庫漏れ。特殊用途の board_* は
+  // 買えなくてよいので、カタログにある id だけを対象にする上の検査で足りる。
+  const missEn = [...skins, ...boards, ...fxs].filter(id => !new RegExp(`\\b${id}:`).test(en));
+  check('全ての見た目に英語名がある', missEn.length === 0, missEn.join(', '));
+
+  // 価格の帯。0円は default/ガチャ限定/王座/管理者だけのはずで、通常品に
+  // 0円が混ざると「無料で全部揃う」になる。
+  const freeNormal = [...cat.matchAll(/\{ id: '((?:skin|board|fx)_\w+)',[^}]*?price: 0,[^}]*?\}/g)]
+    .filter(m => !/default: true|gachaOnly|throneOnly|adminOnly|eventOnly/.test(m[0]))
+    .map(m => m[1]);
+  check('通常販売品に0円が混ざっていない', freeNormal.length === 0, freeNormal.join(', '));
+}
+
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

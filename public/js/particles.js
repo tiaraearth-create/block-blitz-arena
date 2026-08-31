@@ -53,6 +53,10 @@ export class ParticleSystem {
       case 'fx_seal': this.sealBreak(x, y, size); break;
       case 'fx_crown': this.crown(x, y, size); break;
       case 'fx_admin': this.rainbow(x, y, size); break;
+      case 'fx_snow': this.snowfall(x, y, size); break;
+      case 'fx_leaf': this.leaves(x, y, size); break;
+      case 'fx_prism': this.prism(x, y, size); break;
+      case 'fx_foam': this.foam(x, y, size); break;
       default: this.spark(x, y, size, light, dark);
     }
     this.trim();
@@ -154,6 +158,75 @@ export class ParticleSystem {
         kind: 'bubble', phase: Math.random() * Math.PI * 2,
       });
     }
+  }
+
+  // --- v2.30 追加エフェクト ---------------------------------------------------
+  // 新しい描画種別（kind）は増やさない。既存の bubble / glow / petal / sparkle /
+  // square の組み合わせと初速・重力・寿命だけで別物を作る ── kind を足すと
+  // draw() の分岐が増え、粒子1つあたりの判定が全エフェクトに乗るため。
+
+  // ❄️ 雪あられ。ゆっくり落ちて、横に流れる。
+  snowfall(x, y, size) {
+    for (let i = 0; i < this.n(9); i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.6;
+      const sp = (0.3 + Math.random() * 0.6) * size * 3;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp + (Math.random() - 0.5) * size, vy: Math.sin(a) * sp,
+        g: size * 2.2, life: 1, decay: 0.7 + Math.random() * 0.4,
+        size: size * (0.07 + Math.random() * 0.09),
+        color: Math.random() < 0.4 ? '#dff1ff' : '#ffffff',
+        kind: 'sparkle', rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 3,
+      });
+    }
+    this.trim();
+  }
+
+  // 🍃 木の葉。ひらひらと舞って、ゆっくり落ちる。
+  leaves(x, y, size) {
+    for (let i = 0; i < this.n(7); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.4 + Math.random() * 0.8) * size * 3;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - size,
+        g: size * 3, life: 1, decay: 0.8 + Math.random() * 0.5,
+        size: size * (0.12 + Math.random() * 0.1),
+        color: ['#7ad46b', '#4fae52', '#c8d94f'][Math.floor(Math.random() * 3)],
+        kind: 'petal', rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 7,
+      });
+    }
+    this.trim();
+  }
+
+  // 💠 プリズム。四角い光片が勢いよく散る。
+  prism(x, y, size) {
+    for (let i = 0; i < this.n(10); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.8 + Math.random() * 1.4) * size * 6;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        g: size * 6, life: 1, decay: 1.6 + Math.random(),
+        size: size * (0.08 + Math.random() * 0.1),
+        color: ['#8ef0ff', '#ff9ee8', '#fff2a0', '#a8ffcf'][Math.floor(Math.random() * 4)],
+        kind: 'square', rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 10,
+      });
+    }
+    this.trim();
+  }
+
+  // 🫧 泡沫。ふわりと上がって消える、静かな消去。
+  foam(x, y, size) {
+    for (let i = 0; i < this.n(8); i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.2;
+      const sp = (0.4 + Math.random() * 0.9) * size * 3.5;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        g: -size * 1.2, life: 1, decay: 1.0 + Math.random() * 0.6,
+        size: size * (0.1 + Math.random() * 0.14),
+        color: 'rgba(210,240,255,0.85)',
+        kind: 'bubble', rot: 0, vr: 0,
+      });
+    }
+    this.trim();
   }
 
   stars(x, y, size) {

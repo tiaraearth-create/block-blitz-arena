@@ -35,6 +35,28 @@ export const SHOP_ITEMS = [
   { id: 'fx_bubble',     cat: 'fx', name: 'バブル',             desc: 'シャボン玉がはじける',   price: 1800, currency: 'coins' },
   { id: 'fx_star',       cat: 'fx', name: 'スターダスト',       desc: '星屑がきらめき散る',     price: 220,  currency: 'gems' },
   { id: 'fx_flame',      cat: 'fx', name: 'フレイム',           desc: '炎が燃え上がる消去エフェクト', price: 2400, currency: 'coins' },
+  // --- v2.30 ラインナップ拡充 -------------------------------------------------
+  // 品揃えが「買うものが無い」状態になっていた（コインが貯まっても使い道が
+  // 尽きる）。価格は既存の帯に合わせる ── コイン 1,200〜3,000 / ジェム 150〜260。
+  { id: 'skin_ice',      cat: 'skin', name: 'アイス',           desc: '霜のひびが走る氷塊ブロック', price: 1600, currency: 'coins' },
+  { id: 'skin_wood',     cat: 'skin', name: 'ウッド',           desc: '年輪が浮かぶ木彫りブロック', price: 1400, currency: 'coins' },
+  { id: 'skin_jelly',    cat: 'skin', name: 'ゼリー',           desc: 'ぷるんと透けるゼリーブロック', price: 1800, currency: 'coins' },
+  { id: 'skin_steel',    cat: 'skin', name: 'スチール',         desc: 'リベット打ちの重厚な鋼鉄', price: 2600, currency: 'coins' },
+  { id: 'skin_stardust', cat: 'skin', name: 'スターダスト',     desc: '夜空を閉じ込めたブロック', price: 200,  currency: 'gems' },
+
+  { id: 'board_deepsea',  cat: 'board', name: '深海',       desc: '光の届かない海の底',       price: 1800, currency: 'coins' },
+  { id: 'board_desert',   cat: 'board', name: '砂漠の夜',   desc: '砂と熱の残る夜の荒野',     price: 1600, currency: 'coins' },
+  { id: 'board_mint',     cat: 'board', name: 'ミントの森', desc: '蛍が舞う涼やかな森',       price: 1700, currency: 'coins' },
+  { id: 'board_midnight', cat: 'board', name: '真夜中',     desc: '星と粉雪の静かな夜',       price: 2000, currency: 'coins' },
+  { id: 'board_ruby',     cat: 'board', name: 'ルビー',     desc: '紅い花びらの舞う舞台',     price: 2200, currency: 'coins' },
+  { id: 'board_matrix',   cat: 'board', name: 'マトリクス', desc: '流れる緑のコードの中',     price: 2400, currency: 'coins' },
+  { id: 'board_sunrise',  cat: 'board', name: '夜明け',     desc: '朝日が差し込む黄金の空',   price: 210,  currency: 'gems' },
+  { id: 'board_nebula',   cat: 'board', name: '星雲',       desc: 'オーロラと星雲が重なる宇宙', price: 240,  currency: 'gems' },
+
+  { id: 'fx_snow',  cat: 'fx', name: 'スノウ',     desc: '粉雪が舞い落ちる消去エフェクト',   price: 1900, currency: 'coins' },
+  { id: 'fx_leaf',  cat: 'fx', name: 'リーフ',     desc: '木の葉がひらひら舞う',             price: 1700, currency: 'coins' },
+  { id: 'fx_prism', cat: 'fx', name: 'プリズム',   desc: '虹色の光片が弾け飛ぶ',             price: 2600, currency: 'coins' },
+  { id: 'fx_foam',  cat: 'fx', name: 'フォーム',   desc: '泡がふわりと立ちのぼる',           price: 190,  currency: 'gems' },
   // ---- Ultimate skills (装備スロット: ult) ----
   // ゲージが満タンになると発動できる必殺技。1つだけ装備できる。
   { id: 'ult_blast',     cat: 'ult', icon: '💥', name: '破壊の衝撃波',   desc: 'いちばん埋まった2行2列を強制消去', price: 0,    currency: 'coins', default: true },
