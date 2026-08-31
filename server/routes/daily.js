@@ -95,6 +95,7 @@ weeklyDailyRouter.get('/api/daily', (req, res) => {
 // 完走の提出はこの attemptId を添えたものだけがスコアを確定できるので、
 // 「提出前にリロードして同じシードを何度でもやり直す」抜け道が消える —
 // 開始した瞬間に、その日は（放棄すれば0点のまま）挑戦済みになる。
+// 再送は冪等: 同じ attemptId を添えて呼び直すと同じ予約が返る（下を参照）。
 weeklyDailyRouter.post('/api/daily/start', requireAuth, maintenanceGuard, (req, res) => {
   if (!rateLimit(`dstart:${req.user.id}`, 10, 60 * 1000)) {
     return res.status(429).json({ error: '開始の連打はできません。少し待ってください' });
@@ -106,13 +107,30 @@ weeklyDailyRouter.post('/api/daily/start', requireAuth, maintenanceGuard, (req, 
   // 記録できないので、開き直してもらう。
   if (claimed && claimed !== today) return res.json({ ok: false, stale: true, day: today });
   const s = req.user.stats;
+  // 冪等キー。クライアントが控えている attemptId を添えて再送すると、同じ
+  // 予約をそのまま返す ── 応答だけがネットワークで落ちた1タップで、その日の
+  // 挑戦が0点のまま焼けてしまうのを防ぐ。id が一致しないときは従来どおり
+  // practice なので、「提出前にリロードして引き直す」抜け道は塞がったまま
+  // （新しい予約は作らないし、既存の pending も教えない）。
+  const claimedAttempt = String((req.body || {}).attemptId || '').slice(0, 64);
+  const resumeId = /^[0-9A-Za-z_-]{8,64}$/.test(claimedAttempt) ? claimedAttempt : '';
   if (s.dailyc && s.dailyc.day === today) {
-    return res.json({ ok: true, practice: true, day: today });
+    if (resumeId && s.dailyc.pending && s.dailyc.pending === resumeId) {
+      return res.json({ ok: true, practice: false, day: today, attemptId: s.dailyc.pending, resumed: true, startedAt: s.dailyc.at || 0 });
+    }
+    // なぜ今日はもう練習なのかを画面に出せるように、理由を日英で添える。
+    return res.json({
+      ok: true, practice: true, day: today,
+      reason: 'already-started',
+      note: 'きょうの挑戦はすでに開始済みです（記録に残るのは最初の1回だけ）',
+      noteEn: 'You already started today’s challenge — only the first run is recorded',
+      startedAt: s.dailyc.at || 0,
+    });
   }
   // 昨日ぶんのストリークは、pending を作る時点で控えておく（上書きで消えるので）。
   const yst = jstDayKey(Date.now() - 86400000);
   const prevStreak = s.dailyc && s.dailyc.day === yst && s.dailyc.cleared ? (s.dailyc.streak || 0) : 0;
-  const pending = crypto.randomUUID();
+  const pending = resumeId || crypto.randomUUID();
   s.dailyc = { day: today, score: 0, cleared: false, streak: 0, pending, prevStreak, at: Date.now() };
   saveDb();
   res.json({ ok: true, practice: false, day: today, attemptId: pending });
@@ -228,6 +246,27 @@ export function captureDailyReplay(user, body, rewards) {
   store[rec.day] = pruneDailyReplayRows(rows);
   saveDb();
   return true;
+}
+
+// 退会・管理者削除の後始末。控えの name は「db から引けないとき」の
+// フォールバックなので、レコードを消しただけだと退会した人の表示名が
+// /api/daily/replays（ログイン不要で読める）に残り続ける。両方の削除経路が
+// ここを呼んで、その人のゴーストごと落とす。戻り値は消した行数。
+export function purgeUserDailyReplays(userId) {
+  const id = String(userId || '');
+  const store = id ? dailyReplayStore() : null;
+  if (!store) return 0;
+  let removed = 0;
+  for (const day of Object.keys(store)) {
+    const rows = store[day];
+    if (!Array.isArray(rows)) continue;
+    const kept = rows.filter(r => !r || r.uid !== id);
+    if (kept.length !== rows.length) {
+      removed += rows.length - kept.length;
+      store[day] = kept;
+    }
+  }
+  return removed;
 }
 
 // 保存した行 → 配信する形。名前は送るときに db から読む（改名しても古い名前で

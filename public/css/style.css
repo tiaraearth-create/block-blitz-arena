@@ -63,14 +63,24 @@ body {
   font-size: 14px; font-weight: 600; cursor: pointer;
   backdrop-filter: blur(6px);
   transition: background .15s, transform .1s;
+  /* 指で押す部品。実測で 31px しかなく、.seg button に書いてある
+     「44px は最低ライン」を自分で割っていた（試合中の ✕ 🔄 ⚙️ もこれ）。 */
+  min-height: 44px;
 }
 .chip:hover { background: var(--panel2); }
 .chip:active { transform: scale(0.95); }
 .currency { display: flex; gap: 6px; align-items: center; }
 .coin-chip b { color: var(--gold); }
 .gem-chip b { color: var(--cyan); }
-.icon-btn { padding: 6px 10px; }
+.icon-btn { padding: 6px 10px; min-width: 44px; justify-content: center; }
 .icon-btn.off { opacity: 0.4; }
+/* 圏外表示。通常は hidden（display:none）なので、並びには影響しない。 */
+.offline-tag {
+  font-size: 12px; font-weight: 800; white-space: nowrap;
+  color: #ffb3b3; background: rgba(255,93,93,0.14);
+  border: 1px solid var(--red); border-radius: 999px; padding: 5px 10px;
+  overflow: hidden; text-overflow: ellipsis;
+}
 .lvl {
   background: linear-gradient(135deg, var(--blue), var(--purple));
   border-radius: 999px; font-size: 11px; padding: 2px 8px; color: #fff;
@@ -137,17 +147,25 @@ body {
 .btn:hover { filter: brightness(1.12); transform: translateY(-2px); }
 .btn:active { transform: scale(0.96); }
 .btn-big { padding: 16px 24px; font-size: 19px; }
+/* 白文字＋明るいグラデーションは、明るい端でコントラストが足りない
+   （#fff 対 #4de0a8 で 1.67:1）。.btn-weekly が既に持っている影と同じものを
+   足して、文字の輪郭を背景から引き剥がす。 */
 .btn-primary {
   background: linear-gradient(135deg, #6a9bff, #3f63e0);
   box-shadow: 0 6px 0 #2a3f96, 0 10px 26px rgba(63,99,224,0.45);
+  text-shadow: 0 2px 4px rgba(0,0,0,0.45);
 }
 .btn-ai {
   background: linear-gradient(135deg, #ff8a5c, #e0483f);
   box-shadow: 0 6px 0 #96302a, 0 10px 26px rgba(224,72,63,0.4);
+  text-shadow: 0 2px 4px rgba(0,0,0,0.45);
 }
+/* 🌐オンライン対戦だけは影だけでは足りなかった（文字が乗る中間色で 2.22:1、
+   大きい文字に要る 3:1 に届かない）。緑のまま2段落として中間で 3.5:1 にする。 */
 .btn-online {
-  background: linear-gradient(135deg, #4de0a8, #1fa876);
-  box-shadow: 0 6px 0 #146e4d, 0 10px 26px rgba(31,168,118,0.4);
+  background: linear-gradient(135deg, #2bb98a, #0e7a52);
+  box-shadow: 0 6px 0 #0a5439, 0 10px 26px rgba(14,122,82,0.4);
+  text-shadow: 0 2px 4px rgba(0,0,0,0.45);
 }
 .btn-ghost {
   background: var(--panel); border: 1px solid var(--line); color: var(--text);
@@ -158,7 +176,9 @@ body {
   box-shadow: 0 5px 0 #96690f; color: #40300a;
 }
 .btn:disabled { opacity: 0.45; pointer-events: none; }
-.btn-sm { padding: 7px 14px; font-size: 13px; border-radius: 10px; }
+/* 小さいボタンも指で押す（実測32px）。<button> は中身を縦中央に置くので、
+   min-height を足すだけで見た目の重心は変わらない。 */
+.btn-sm { padding: 7px 14px; font-size: 13px; border-radius: 10px; min-height: 44px; }
 
 .menu-nav { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; max-width: 94vw; }
 .nav-btn {
@@ -301,8 +321,13 @@ body {
   background: var(--panel); border: 1px solid var(--line); color: var(--muted);
   border-radius: 999px; padding: 8px 18px; font-weight: 700; font-size: 14px; cursor: pointer;
   font-family: inherit; transition: all .15s;
+  /* 実測35px（狭い画面では31px）。丸いので縦に伸びても見た目は保たれる。 */
+  min-height: 44px;
 }
-.tab.active { background: linear-gradient(135deg, var(--blue), #3f63e0); color: #fff; border-color: transparent; }
+/* 14px の白文字にグラデーションだと明るい端で 3.19:1 しか出ない（要 4.5:1）。
+   暗い側の単色にすると 5.16:1。どのタブが開いているかは主要な手がかりなので、
+   ここは影で誤魔化さず色で通す。 */
+.tab.active { background: #3f63e0; color: #fff; border-color: transparent; }
 
 /* ============ Leaderboard ============ */
 .lb-list { display: flex; flex-direction: column; gap: 8px; }
@@ -371,7 +396,14 @@ body {
   padding: 4px 10px; font-size: 11px; color: var(--muted);
 }
 .chat-reply-bar span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-reply-bar button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; }
+/* 返信取り消しの ✕。padding が無く 13×15px しか無かった（WCAG 2.2 AA の
+   24px も割る）。負のマージンで行の高さはほぼ据え置きにしたまま、
+   当たり判定だけを 44px に広げる。 */
+.chat-reply-bar button {
+  background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; min-height: 44px; padding: 0; margin: -9px 0; flex: none;
+}
 .profile-card .pc-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .profile-card .pc-avatar { font-size: 40px; }
 .profile-card .pc-id b { font-size: 17px; display: block; }
@@ -511,8 +543,8 @@ body {
 .admin-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; align-items: center; }
 .admin-broadcast { display: flex; gap: 8px; flex: 1; min-width: 260px; }
 .admin-broadcast input {
-  flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-  color: var(--text); padding: 10px 14px; font-size: 14px; font-family: inherit;
+  flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  color: var(--text); padding: 10px 14px; font-size: 16px; font-family: inherit;
 }
 .admin-users { display: flex; flex-direction: column; gap: 8px; }
 .admin-user-row {
@@ -545,11 +577,19 @@ body {
    横スクロールが生えてしまう。どこでも折る保険を1行だけ入れておく。 */
 .modal h2 { margin-bottom: 14px; font-size: 22px; text-align: center; overflow-wrap: anywhere; }
 .modal .form-col { display: flex; flex-direction: column; gap: 10px; }
+/* 文字を打つ欄は 16px を下回らせない。ピンチズームを解禁した（index.html の
+   viewport）ぶん、iOS Safari は 16px 未満の入力欄に触れるとページごと勝手に
+   拡大してしまう ── そのままだと画面がずれたまま戻らない。 */
 .modal input {
   background: rgba(0,0,0,0.3); border: 1px solid var(--line); border-radius: 12px;
-  color: var(--text); padding: 12px 14px; font-size: 15px; font-family: inherit;
+  color: var(--text); padding: 12px 14px; font-size: 16px; font-family: inherit;
 }
 .modal input:focus { outline: none; border-color: var(--blue); }
+/* モーダル自体はフォーカスの受け皿（tabindex="-1"）なので枠は出さない。
+   代わりに、キーボードで辿っている人にだけ見える枠を全体に足す
+   （:focus-visible なのでタップ・クリックでは出ない）。 */
+.modal:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .form-error { color: var(--red); font-size: 13px; font-weight: 700; min-height: 18px; text-align: center; }
 
 .result-banner { text-align: center; font-size: 44px; font-weight: 900; margin-bottom: 8px; letter-spacing: 0.06em; }
@@ -600,9 +640,12 @@ body[data-screen="game"] #toast-root { top: auto; bottom: 96px; }
   border-radius: 12px; padding: 11px 14px; font-weight: 700; font-size: 14px;
 }
 .settings-row label { flex: 1; }
+/* 22px は WCAG 2.2 の Target Size (Minimum) AA=24px を割っていた。
+   showModal() が <label> を for で結ぶので、行のラベル側も当たり判定になる。 */
 .settings-row input[type="checkbox"] {
-  width: 22px; height: 22px; accent-color: var(--blue); cursor: pointer;
+  width: 24px; height: 24px; accent-color: var(--blue); cursor: pointer; flex: none;
 }
+.settings-row label[for] { cursor: pointer; }
 .settings-row input[type="range"] {
   width: 130px; accent-color: var(--cyan); cursor: pointer;
 }
@@ -614,7 +657,8 @@ body[data-screen="game"] #toast-root { top: auto; bottom: 96px; }
   border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 800;
   cursor: pointer; font-family: inherit;
 }
-.seg button.active { background: linear-gradient(135deg, var(--blue), #3f63e0); color: #fff; border-color: transparent; }
+/* .tab.active と同じ理由（12px の白文字に 4.5:1 が要る）。単色で 5.16:1。 */
+.seg button.active { background: #3f63e0; color: #fff; border-color: transparent; }
 
 /* ============ HUD extras ============ */
 .hud-left { display: flex; gap: 6px; align-items: center; }
@@ -881,7 +925,8 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
 .chat-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--line); }
 .chat-input-row input {
   flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--line); border-radius: 10px;
-  color: var(--text); padding: 9px 12px; font-size: 13px; font-family: inherit;
+  color: var(--text); padding: 9px 12px; font-size: 16px; font-family: inherit;
+  min-width: 0;   /* 16px にしたぶん、狭い画面で送信ボタンを押し出さない */
 }
 .chat-input-row input:focus { outline: none; border-color: var(--blue); }
 
@@ -1551,7 +1596,7 @@ body[data-screen="game"] #topbar { display: none; }
 .poll-pick-item:hover { background: var(--panel2); }
 .modal textarea {
   background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: var(--text);
-  border-radius: 10px; padding: 10px; font: inherit; font-size: 13px; resize: vertical;
+  border-radius: 10px; padding: 10px; font: inherit; font-size: 16px; resize: vertical;
 }
 .modal textarea:focus { outline: none; border-color: var(--blue); }
 .modal input[type="file"] {
@@ -1646,7 +1691,7 @@ body[data-screen="game"] #topbar { display: none; }
 .cast-arch { background: rgba(176,107,255,0.18); color: #d9b8ff; border-radius: 999px; padding: 1px 8px; font-size: 10px; font-weight: 800; white-space: nowrap; }
 .cast-meta { flex: 1; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cast-retired { display: flex; gap: 6px; flex-wrap: wrap; }
-.modal select { background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; }
+.modal select { background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 16px; }
 .test-out { margin-top: 12px; background: rgba(0,0,0,0.3); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 12px; min-height: 44px; display: flex; flex-direction: column; gap: 4px; }
 
 @media (max-width: 520px) {

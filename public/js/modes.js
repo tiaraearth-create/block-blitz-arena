@@ -7305,6 +7305,10 @@ window.__bbaSaveNow = () => {
   const m = currentMode;
   if (!m || m.ended) return;
   if (m.mode === 'pvp') return;   // 対戦(pvp)はサーバーが引き分けで畳む。AE等のクライアント完結モードは下で finish() 送信する
+  // 送る run を持たないモード（👻再生・🛠️作者の試遊）は finish() が
+  // 「完走した結果モーダル」や「クリア失敗」を出すだけで、救えるものが何も無い。
+  // モード名の羅列にせず、noItems と同じ流儀のフラグで見る。
+  if (m.savable === false) return;
   try {
     if (view) view.inputLocked = true;
     if (typeof m.finish === 'function') m.finish();
@@ -7746,24 +7750,98 @@ class Tutorial {
   }
 }
 
+// ---------------------------------------------------------------------------
+// game.js の applyResult() は「ラインが消える＝ごほうび」を前提に音を鳴らす
+// （冒頭の置いた音、消えたときの上昇音とコンボ音）。その前提が成り立たない
+// 呼び出しが2つある:
+//   ⛓️ 連鎖の各波 … ピースを1つも置いていない合成 result なのに置いた音が鳴る
+//   🏗️ 崩壊      … 揃えてはいけないモードなので、消去のごほうび音は真逆の合図
+// game.js に分岐を増やさず、この1回の呼び出しの間だけ鳴らしたくない音を黙らせる。
+// applyResult は同期なので、finally で必ず元に戻る。
+function applyResultMuted(v, result, keys) {
+  const saved = keys.map(k => [k, Object.prototype.hasOwnProperty.call(audio, k) ? audio[k] : null]);
+  for (const k of keys) audio[k] = () => {};
+  try {
+    v.applyResult(result);
+  } finally {
+    for (const [k, own] of saved) {
+      if (own) audio[k] = own; else delete audio[k];   // 元はプロトタイプ側のメソッド
+    }
+  }
+}
+
 // ===========================================================================
 // ⛓️ I3 連鎖カスケード
 // ===========================================================================
 // 盤面に「重力」がある専用モード。1手ごとに残ったブロックが下へ落ち、
 // 落下で行が揃えばそれも自動で消え、また落ちる ── これを繰り返すのが「連鎖」。
 //
-// エンジンには何も足していない（第3波前半の結論どおり）。
-// compactDown() + resolveLines() を guard 付きのループで回すだけ。
-// 連鎖数のカウントと倍率はこのモードの責務。
+// エンジンには何も足していない。compactDown() を guard 付きのループで回し、
+// 消去だけをこのモード専用の resolveOneLine()（1波1ライン）に差し替える。
+// 差し替えるのは ChainMode が持つ engine インスタンスのプロパティだけなので、
+// engine.js も他モードも1ミリも変わらない。
+//
+// なぜ1波1ラインなのか（ここがこのモードの心臓部）:
+//   engine の resolveLines() は揃った線をまとめて全部消す。全下詰めのあとの
+//   盤面には穴が無いので、満杯の行は必ず「下から min(列の高さ) 段」ちょうど。
+//   それを全部まとめて消すと、いちばん浅い列が空になって新しい満杯行は
+//   原理的に作れず、連鎖は必ず2で止まっていた（×4以上が到達不能な死に倍率）。
+//   1本ずつ消すと「下の1本が消える→全部が1段落ちる→次の1本がまた揃う」が
+//   続き、n段ぶん積んで揃えた手は n連鎖になる。縦5ラインを1列だけ空けた
+//   壁に落とせば5連鎖(×16)まで届く（検証済み）。
 //
 // 倍率: 1連鎖 ×1 / 2連鎖 ×2 / 3連鎖 ×4 …（2のべき乗、×64 で頭打ち）。
 // 「置いた瞬間の消去」を1連鎖目と数えるので、置いた手が何も消さずに
 // 落下してはじめて揃った回は 1連鎖（×1）── 落ちただけで倍率は付かない。
 // ---------------------------------------------------------------------------
 
-const CHAIN_GUARD = 16;                 // 無限ループよけ（仕様書の雛形どおり）
+const CHAIN_GUARD = 16;                 // 無限ループよけ（1波1ラインなので最大16本）
 const CHAIN_STEP_MS = 420;              // 1連鎖ぶんの見せ時間
 const CHAIN_COLORS = ['#ffffff', '#ffe14d', '#ffa93d', '#ff6bd4', '#43d9e8', '#9be3ff'];
+
+// 揃った線を1本だけ消す（⛓️専用）。engine.resolveLines() と同じ形を返すので、
+// engine.place() の中の消去もそのままこれを通せる。
+// 選ぶ順は「いちばん下の満杯行 → いちばん左の満杯列」。下から消すと、
+// 上に載っているものが必ず落ちるので雪崩が続く。
+// ❄️氷結(ICE) は⛓️では盤に置かれないため、凍結の欄は常に空で返す。
+function resolveOneLine(grid) {
+  const none = { frozenRows: [], frozenCols: [], frozenCount: 0, crackedCells: [] };
+  for (let r = 7; r >= 0; r--) {
+    let full = true;
+    for (let c = 0; c < 8; c++) if (!grid[r * 8 + c]) { full = false; break; }
+    if (!full) continue;
+    const clearedCells = [];
+    for (let c = 0; c < 8; c++) {
+      const k = r * 8 + c;
+      clearedCells.push([r, c, grid[k]]);
+      grid[k] = 0;
+    }
+    return { fullRows: [r], fullCols: [], clearedCells, lineCount: 1, ...none };
+  }
+  for (let c = 0; c < 8; c++) {
+    let full = true;
+    for (let r = 0; r < 8; r++) if (!grid[r * 8 + c]) { full = false; break; }
+    if (!full) continue;
+    const clearedCells = [];
+    for (let r = 0; r < 8; r++) {
+      const k = r * 8 + c;
+      clearedCells.push([r, c, grid[k]]);
+      grid[k] = 0;
+    }
+    return { fullRows: [], fullCols: [c], clearedCells, lineCount: 1, ...none };
+  }
+  return { fullRows: [], fullCols: [], clearedCells: [], lineCount: 0, ...none };
+}
+
+// 連鎖専用の音。audio.combo() は streak 10 で音程が頭打ちになるので、
+// 連鎖の階段には使えない（見た目だけ盛り上がって音がついてこない）。
+// 既存の audio.tone() だけで組む ── audio.js には何も足していない。
+function chainHit(chainNo) {
+  const f = 392 * Math.pow(1.09, Math.min(chainNo, 12));
+  const dur = Math.max(0.07, 0.17 - chainNo * 0.008);
+  audio.tone({ freq: f, dur, type: 'triangle', vol: 0.2 });
+  audio.tone({ freq: f * 1.5, dur: dur * 0.8, type: 'sine', vol: 0.11, delay: 0.05 });
+}
 
 function chainMult(chainNo) {
   if (chainNo <= 1) return 1;
@@ -7806,6 +7884,10 @@ class ChainMode {
     const v = getView();
     setModeTheme({ ...equippedTheme(), boardId: 'board_ocean' });
     this.engine = new Engine();
+    // ⛓️ だけの規則: 揃った線は1本ずつ消える（このインスタンスのみ差し替え）。
+    // engine.place() の中の消去もここを通るので、置いた瞬間に何本揃っていても
+    // 消えるのは1本 ── 残りは落下のあとに次の波として消え、連鎖になる。
+    this.engine.resolveLines = () => resolveOneLine(this.engine.grid);
     v.setEngine(this.engine);
     v.inputLocked = false;
     v.onIntentPlace = (i, r, c) => this.intent(i, r, c);
@@ -7816,8 +7898,8 @@ class ChainMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('battle');
-    toast(t('⛓️ ブロックは必ず下へ落ちる！ 消して落として、連鎖でスコアを爆発させろ！',
-      '⛓️ Everything falls! Clear a line, let the rest drop — chain reactions multiply your score!'), 'announce', 3600);
+    toast(t('⛓️ ブロックは必ず下へ落ちる！ 揃った列は1本ずつ消えるので、まとめて揃えるほど連鎖が伸びる！',
+      '⛓️ Everything falls! Full lines clear one at a time — set up several at once and the chain keeps going!'), 'announce', 3600);
   }
 
   best() {
@@ -7861,19 +7943,22 @@ class ChainMode {
     return true;
   }
 
-  // 連鎖1波ぶん。仕様書の雛形（compactDown → resolveLines → guard）そのまま。
+  // 連鎖1波ぶん（compactDown → resolveLines（1本だけ） → guard）。
   cascadeStep() {
     if (this.ended) return;
     const e = this.engine;
     const v = getView();
     if (this.guard++ >= CHAIN_GUARD) { this.endCascade(); return; }
     const before = e.grid.slice();
-    if (e.compactDown() === 0) { this.endCascade(); return; }
-    // 落下でマスが動くと spawnAnim の key と実セルがズレる。捨てて張り直す。
-    v.spawnAnim.clear();
-    for (let k = 0; k < 64; k++) {
-      if (e.grid[k] && !before[k]) v.spawnAnim.set(k, v.time);
+    if (e.compactDown() > 0) {
+      // 落下でマスが動くと spawnAnim の key と実セルがズレる。捨てて張り直す。
+      v.spawnAnim.clear();
+      for (let k = 0; k < 64; k++) {
+        if (e.grid[k] && !before[k]) v.spawnAnim.set(k, v.time);
+      }
     }
+    // 1マスも動かなくても、まだ揃ったままの線が残っていることがある
+    // （列を丸ごと消した回など）。落下の有無ではなく「消す線がもう無い」で畳む。
     const r = e.resolveLines();
     if (r.lineCount === 0) { this.endCascade(); return; }
     this.chainNo++;
@@ -7887,7 +7972,8 @@ class ChainMode {
     this.maxChain = Math.max(this.maxChain, this.chainNo);
     // 演出は既存の applyResult に丸ごと任せる（消去パーティクル・ライン点滅・
     // 効果音まで同じ経路になる）。合成 result なので frozenCount は付けない。
-    v.applyResult({
+    // ただし置いた音だけは黙らせる ── この波でピースは1つも置いていない。
+    applyResultMuted(v, {
       placedCells: [],
       color: 0,
       fullRows: r.fullRows, fullCols: r.fullCols,
@@ -7896,17 +7982,19 @@ class ChainMode {
       // 連鎖で盤面が空になったら、それは正真正銘の全消し（昇華）。
       perfect: e.grid.every(x => x === 0),
       over: false,
-    });
+    }, ['place']);
     if (this.chainNo >= 2) {
       const cx = v.boardX + v.boardSize / 2;
       const cy = v.boardY + v.boardSize * 0.22;
       v.addFloatText(cx, cy, t(`⛓️ ${this.chainNo}連鎖！ ×${mult}`, `⛓️ ${this.chainNo} CHAIN! ×${mult}`),
         chainColor(this.chainNo), 1.6 + Math.min(1, this.chainNo * 0.12));
       v.screenFlash = Math.max(v.screenFlash || 0, Math.min(0.5, 0.12 + this.chainNo * 0.06));
-      audio.combo(Math.min(9, this.chainNo + 2));
+      chainHit(this.chainNo);   // 連鎖が伸びるほど高く・短く畳みかける
     }
     this.updateHud();
-    this.after(CHAIN_STEP_MS, () => this.cascadeStep());
+    // 連鎖が伸びるほど少しずつ詰めて畳みかける（1波1ラインなので波数が増えた ──
+    // 等速のままだと長い連鎖で操作できない時間が伸びすぎる）。
+    this.after(Math.max(220, CHAIN_STEP_MS - this.chainNo * 30), () => this.cascadeStep());
   }
 
   endCascade() {
@@ -8272,6 +8360,7 @@ class BlueprintMode {
     this.startedAt = Date.now();
     this.ended = false;
     this.crumbles = 0;
+    this.doomed = false;   // 「残りのピースではもう埋まらない」と分かった回
     this.strayCells = new Set();
     this.want = new Set(this.bp.cells);
     this.queue = this.bp.pieces.slice();
@@ -8339,7 +8428,11 @@ class BlueprintMode {
     e.over = false;
     result.over = false;
     const v = getView();
-    v.applyResult(result);
+    // 揃えてはいけないモードなので、揃ってしまった回に「消せた！」の音を
+    // 鳴らすと耳だけを頼りにしている人へ真逆の合図になる（直後に鳴る
+    // bossAttack が本当の合図）。絵は残したまま、その2音だけ黙らせる。
+    if (result.lineCount > 0) applyResultMuted(v, result, ['clearLines', 'combo']);
+    else v.applyResult(result);
     // 設計図の外へ出たマス。ここが1つでもあると完成形にはならないので、
     // 赤く出して「いま何が起きたか」をその場で見せる。
     let stray = 0;
@@ -8369,8 +8462,85 @@ class BlueprintMode {
     // もう埋めきれない／置く場所が無い ＝ そこで終わり。
     if (this.missing() > this.cellsLeft() || this.remaining() === 0 || !e.hasAnyMove()) {
       this.finish(false);
+      return true;
     }
+    // マス数の足し算ではまだ足りていても、形の都合でもう組めないことがある。
+    // 黙ったまま2〜3手進ませないよう、分かった瞬間に伝える。
+    // はみ出しの音が既に鳴った手では重ねない（同じ1手で2回エラー音は騒がしい）。
+    this.checkDoomed(stray > 0);
     return true;
+  }
+
+  // 残りのピース（手札＋キュー）で、まだ空いている設計図のマスを
+  // ちょうど埋めきれるか。true=埋められる / false=もう無理 / null=打ち切り（判断しない）。
+  // 置き場所が重ならない解なら、キューの順どおりに置いても必ず成立するので、
+  // 「どの順で来るか」は考えなくてよい（＝形の敷き詰め問題そのもの）。
+  canStillFill() {
+    const e = this.engine;
+    const need = [];
+    for (const k of this.want) if (!e.grid[k]) need.push(k);
+    if (!need.length) return true;
+    const shapes = [];
+    for (const p of e.hand) if (p) shapes.push(p.cells);
+    for (const p of this.queue) shapes.push(p.cells);
+    let stock = 0;
+    for (const cells of shapes) stock += cells.length;
+    if (stock < need.length) return false;
+    // 同じ形はまとめる（探索が指数で膨らむのを防ぐ）。
+    const kinds = new Map();
+    for (const cells of shapes) {
+      const key = cells.map(([r, c]) => `${r},${c}`).join(' ');
+      const cur = kinds.get(key);
+      if (cur) cur.n++; else kinds.set(key, { cells, n: 1 });
+    }
+    const list = [...kinds.values()];
+    const open = new Set(need);
+    let budget = 40000;   // 最悪でも一瞬で戻す。使い切ったら「分からない」を返す。
+    const solve = (left) => {
+      if (left === 0) return true;
+      if (budget-- <= 0) return null;
+      // いちばん若い番号の空きマスは必ずどれかのピースが覆う ── そこだけ試す。
+      let anchor = -1;
+      for (const k of open) if (anchor < 0 || k < anchor) anchor = k;
+      const ar = (anchor / 8) | 0, ac = anchor % 8;
+      let cut = false;
+      for (const kind of list) {
+        if (kind.n === 0) continue;
+        for (const [dr, dc] of kind.cells) {
+          const r0 = ar - dr, c0 = ac - dc;
+          const put = [];
+          let ok = true;
+          for (const [er, ec] of kind.cells) {
+            const rr = r0 + er, cc = c0 + ec;
+            if (rr < 0 || cc < 0 || rr > 7 || cc > 7) { ok = false; break; }
+            const kk = rr * 8 + cc;
+            if (!open.has(kk)) { ok = false; break; }
+            put.push(kk);
+          }
+          if (!ok) continue;
+          for (const kk of put) open.delete(kk);
+          kind.n--;
+          const res = solve(left - put.length);
+          kind.n++;
+          for (const kk of put) open.add(kk);
+          if (res === true) return true;
+          if (res === null) cut = true;
+        }
+      }
+      return cut ? null : false;
+    };
+    return solve(need.length);
+  }
+
+  checkDoomed(quiet) {
+    if (this.doomed || this.ended) return;
+    if (this.canStillFill() !== false) return;
+    this.doomed = true;
+    if (!quiet) audio.error();
+    this.updateHud();
+    toast(t('🏗️ 残りのピースでは、この設計図はもう埋めきれません ── やり直すと同じ図柄・同じ順で挑戦できます',
+      '🏗️ The remaining pieces can no longer fill this blueprint — a retry gives you the same shape and the same order'),
+    'err', 4200);
   }
 
   updateHud() {
@@ -8382,7 +8552,7 @@ class BlueprintMode {
       `🏗️ ${this.bp.icon}${name} — ${this.missing()} left${this.crumbles ? ` ・ ${this.crumbles} crumble(s)` : ''}`);
     const tm = $('#hudTimer');
     tm.textContent = `🏗️${this.remaining()}`;
-    tm.classList.toggle('urgent', this.missing() > this.cellsLeft());
+    tm.classList.toggle('urgent', this.doomed || this.missing() > this.cellsLeft());
   }
 
   stars(secs) {
@@ -8644,6 +8814,9 @@ export async function startDailyRace(row) {
 class ReplayMode {
   constructor(replay, meta) {
     this.mode = 'replay';
+    // 他人の走りを見ているだけ。送る結果は無いので、サーバー更新の
+    // 確定送信(__bbaSaveNow)で途中の手数のまま結果モーダルを出させない。
+    this.savable = false;
     this.replay = replay;
     this.meta = meta || {};
     this.speed = 1;
@@ -8866,6 +9039,10 @@ class WorkshopMode {
     this.noItems = true;   // 固定キューの契約 — アイテム／奥義は解を壊す
     this.stage = stage;
     this.authoring = !!opts.authoring;
+    // 作者の試遊はスコアを送らない。ここで finish() を呼ばれると引数なし＝
+    // won undefined で「❌ クリアできませんでした」になり、投稿に必要な
+    // 解答手順まで捨ててしまう（下書きは残る）。確定送信の対象から外す。
+    this.savable = !this.authoring;
     this.onCleared = opts.onCleared || null;
   }
 

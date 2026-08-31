@@ -11,6 +11,27 @@ import { ultIcon, ultColor } from './skills.js';
 import { showYouTubeStudio } from './ytexport.js';
 
 // ---------------------------------------------------------------------------
+// A11y: ボタンではない要素（カード）を押せる形にしている箇所を、キーボードからも
+// 押せるようにする。role と tabindex を足し、Enter / Space で同じハンドラを呼ぶ。
+// DOM構造も CSS も触らないので見た目は今のまま、Tab で到達できるようになる。
+// ※ 中にボタンを持つカード（工房カードの ▶遊ぶ / ❤️）では、そのボタン上の
+//    Enter / Space が親まで上がってくるので、自分自身が対象のときだけ反応する。
+// ---------------------------------------------------------------------------
+function bindActivate(el, handler) {
+  if (!el) return;
+  el.onclick = handler;
+  if (el.tagName === 'BUTTON' || el.tagName === 'A') return;
+  el.setAttribute('role', 'button');
+  if (!el.hasAttribute('tabindex')) el.tabIndex = 0;
+  el.onkeydown = e => {
+    if (e.target !== el) return;
+    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+    e.preventDefault();
+    handler(e);
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Auth modal
 // ---------------------------------------------------------------------------
 
@@ -1746,7 +1767,7 @@ async function renderInvDex() {
   body.querySelectorAll('[data-dexgo]').forEach(card => {
     const [kind, id] = String(card.dataset.dexgo).split('|');
     const go = dexEntryInfo(kind, id).go;
-    if (go) { card.style.cursor = 'pointer'; card.onclick = () => { audio.click(); go(); }; }
+    if (go) { card.style.cursor = 'pointer'; bindActivate(card, () => { audio.click(); go(); }); }
     else card.style.cursor = 'default';
   });
 
@@ -4566,7 +4587,7 @@ function renderGuildRank() {
   body.innerHTML = `
     <p class="muted center" style="font-size:12px;margin-bottom:8px">${tr('週間ポイント順（毎週月曜リセット）。メンバーの全試合のスコアが加算されます', 'Ranked by weekly points (resets Monday). Every member game counts')}</p>
     <div class="ms-list">${rows.map(g => guildCard(g, { rank: g.rank })).join('') || `<p class="muted center">${tr('まだギルドがありません', 'No guilds yet')}</p>`}</div>`;
-  body.querySelectorAll('[data-guild]').forEach(el => { el.onclick = () => showGuildModal(el.dataset.guild); });
+  body.querySelectorAll('[data-guild]').forEach(el => { bindActivate(el, () => showGuildModal(el.dataset.guild)); });
 }
 
 function renderGuildFind() {
@@ -4579,7 +4600,7 @@ function renderGuildFind() {
     <div class="ms-list">${rows.map(g => guildCard(g)).join('') || `<p class="muted center">${tr('いま募集中の公開ギルドはありません', 'No open guilds right now')}</p>`}</div>
     ${session.user && !guildData.mine ? `<div class="modal-buttons" style="margin-top:12px"><button class="btn btn-gold" id="gdCreate2">${tr(`🏰 自分でギルドを設立（🪙${fmt(guildData.createCost)}）`, `🏰 Found your own (🪙${fmt(guildData.createCost)})`)}</button></div>` : ''}`;
   body.querySelector('#gdJoinCode2').onclick = () => joinGuildBy({ code: body.querySelector('#gdCode2').value.trim() });
-  body.querySelectorAll('[data-guild]').forEach(el => { el.onclick = () => showGuildModal(el.dataset.guild); });
+  body.querySelectorAll('[data-guild]').forEach(el => { bindActivate(el, () => showGuildModal(el.dataset.guild)); });
   const c = body.querySelector('#gdCreate2');
   if (c) c.onclick = () => showGuildCreateModal(guildData);
 }
@@ -4997,7 +5018,7 @@ function bindWorkshopCards(root) {
     b.onclick = e => { e.stopPropagation(); likeWorkshopStage(b.dataset.wsLike, b); };
   });
   root.querySelectorAll('[data-ws-code]').forEach(el => {
-    el.onclick = () => { const st = wsFind(el.dataset.wsCode); if (st) showWorkshopStageModal(st); };
+    bindActivate(el, () => { const st = wsFind(el.dataset.wsCode); if (st) showWorkshopStageModal(st); });
   });
 }
 

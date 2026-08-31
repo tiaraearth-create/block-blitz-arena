@@ -14,6 +14,9 @@ import {
   jstDayKey,
 } from '../adminevent.js';
 import {
+  blueprintHasFullLine,
+} from '../daily.js';
+import {
   Engine, SHAPES, SIZE,
 } from '../../public/js/engine.js';
 import { ctx } from '../context.js';
@@ -70,6 +73,7 @@ const WS_PLAY_COINS = 5;               // 1プレイあたり作者に還元す�
 const WS_AUTHOR_COIN_DAY_CAP = 300;    // 作者1人が1日に受け取れる還元の上限（60プレイぶん）
 const WS_LIST_MAX = 30;                // 1ページの既定件数（limit 未指定のとき）
 const WS_LIST_HARD_MAX = 60;           // limit で広げられる上限（ページ送りの取りこぼしを防ぐ）
+const WS_DUP_MS = 10 * 60 * 1000;      // これ以内の「まったく同じ投稿」は押し直しとみなす
 
 function workshopStore() {
   const w = db.meta.workshop;
@@ -128,10 +132,37 @@ function sanitizeWorkshopTitle(raw) {
   return Array.from(t).slice(0, WS_TITLE_MAX).join('');
 }
 
+// 退会・管理者削除の後始末。作者が db.users から消えると workshopView は
+// byName（投稿時の表示名スナップショット）へフォールバックするので、何も
+// しないと「退会したのに、自分の名前つきのステージが未認証でも読める一覧に
+// 並び続ける」ことになる。両方の削除経路がこの1本を呼ぶ:
+//   ① その人が投稿したステージを消す
+//   ② 移行前の stage.likedBy に残っている生IDから、その人の分を外す
+//      （likes はカウンタで別に持っているので表示数は動かない）
+//   ③ その日のコイン還元台帳から行を落とす
+// 判定できるのは「id で照合するだけ」なので、レコード削除の前でも後でもよい。
+export function purgeUserWorkshop(userId) {
+  const id = String(userId || '');
+  const w = id ? workshopStore() : null;
+  const stages = w && w.stages && typeof w.stages === 'object' && !Array.isArray(w.stages) ? w.stages : null;
+  if (!stages) return { stages: 0, likes: 0 };
+  let removed = 0, unliked = 0;
+  for (const [code, s] of Object.entries(stages)) {
+    if (!s) continue;
+    if (s.by === id) { delete stages[code]; removed++; continue; }
+    if (Array.isArray(s.likedBy)) {
+      const i = s.likedBy.indexOf(id);
+      if (i !== -1) { s.likedBy.splice(i, 1); unliked++; }
+    }
+  }
+  if (w.payout && w.payout.by && typeof w.payout.by === 'object') delete w.payout.by[id];
+  return { stages: removed, likes: unliked };
+}
+
 // 凍結された人の作品は公開面から引っ込める。db から導出しているだけなので、
 // 凍結を解けばそのまま戻る（stages 側に印を足さないぶん、復元の合流も無傷）。
 // ※ 退会・管理者削除でユーザーごと消えた場合は db.users から引けず、ここでは
-//   判定できない。その掃除は routes/admin.js 側の担当（coordination 参照）。
+//   判定できない。その掃除は上の purgeUserWorkshop() を削除経路から呼ぶ形。
 function stageHidden(stage) {
   const author = stage ? db.users[stage.by] : null;
   return !!(author && author.banned);
@@ -156,6 +187,15 @@ function parseWorkshopBoard(raw) {
   if (filled < WS_MIN_CELLS) return null;
   if (filled >= board.length) return null;   // 全マス埋まりでは1手も置けない
   return { board, filled };
+}
+// 最初から揃っている行・列があるか。あると engine は最初の1手でそれを全部
+// 消してしまう（63マス塗って1x1を1個置けば16ライン同時＝25,601点が1手で出る）。
+// 判定は 📅デイリーの設計図とまったく同じ掟（daily.js の blueprintHasFullLine）
+// を使い回す ── ステージも設計図も「置いて初めて揃う」ものだけを認める。
+function boardHasFullLine(board) {
+  const cells = [];
+  for (let i = 0; i < board.length; i++) if (board[i] !== 0) cells.push(i);
+  return blueprintHasFullLine(cells);
 }
 // 配るピース列は SHAPES の番号だけ。存在しない形は通さない。
 function parseWorkshopPieces(raw) {
@@ -315,6 +355,12 @@ workshopRouter.post('/api/workshop/stages', requireAuth, maintenanceGuard, (req,
   if (!parsed) {
     return res.status(400).json({ error: `盤面が不正です（8×8・光るマスは${WS_MIN_CELLS}個以上）`, errorEn: `Invalid board (8×8, at least ${WS_MIN_CELLS} glowing cells)` });
   }
+  if (boardHasFullLine(parsed.board)) {
+    return res.status(400).json({
+      error: '最初から揃っている行・列がある盤面は投稿できません（置く前に消えてしまいます）',
+      errorEn: 'A board that already has a completed row or column cannot be published — it would clear before you place anything',
+    });
+  }
   const pieces = parseWorkshopPieces(b.pieces);
   if (!pieces) {
     return res.status(400).json({ error: `ピースは1〜${WS_MAX_PIECES}個で指定してください`, errorEn: `Provide 1–${WS_MAX_PIECES} pieces` });
@@ -335,6 +381,19 @@ workshopRouter.post('/api/workshop/stages', requireAuth, maintenanceGuard, (req,
   const w = ensureWorkshop();
   const stages = w.stages;
   const mine = Object.values(stages).filter(s => s && s.by === req.user.id);
+  // 応答だけが落ちた投稿の押し直しで、同じステージが2件公開されるのを防ぐ。
+  // 直近 WS_DUP_MS 以内の自分の投稿に「題名・盤面・ピース列がまったく同じ」
+  // ものがあれば、新しく作らずそのコードを返す ── /api/collection/claim や ♡ と
+  // 同じ「再送しても壊れない」形。上限の判定より前に置くのが要点で、枠が
+  // 埋まった状態で押し直しても 409 ではなく元のコードが返る。
+  const now = Date.now();
+  const same = (x, y) => Array.isArray(x) && Array.isArray(y) && x.length === y.length && x.every((v, i) => v === y[i]);
+  const dup = mine.find(s => s.title === title
+    && (now - (Number(s.at) || 0)) <= WS_DUP_MS
+    && same(s.pieces, pieces) && same(s.board, parsed.board));
+  if (dup) {
+    return res.json({ ok: true, code: dup.code, duplicate: true, stage: workshopView(dup, req.user, { board: true }) });
+  }
   if (mine.length >= WS_MAX_PER_USER) {
     return res.status(409).json({ error: `投稿できるのは1人${WS_MAX_PER_USER}ステージまでです。古いものを削除してください`, errorEn: `You can publish up to ${WS_MAX_PER_USER} stages — delete an old one first` });
   }

@@ -141,7 +141,6 @@ export function initBattle(server, deps) {
   const MAX_SOCKETS_PER_IP = 12;        // 同一IPあたり（家族や学校の共有を考慮して緩め）
   const MAX_SOCKETS_PER_USER = 6;       // 同一アカウントあたり（PC＋スマホ＋予備）
   const HELLO_GRACE_MS = 20_000;        // 名乗らない接続を切るまで
-  const ipCounts = new Map();
   const sockIp = ws => (ws && ws._ip) || '?';
   const matches = new Map();               // matchId -> match
   const rooms = new Map();                 // code -> room
@@ -2594,16 +2593,17 @@ export function initBattle(server, deps) {
       try { send(ws, { type: 'error', error: '接続数が上限に達しています。しばらくしてからお試しください' }); ws.close(); } catch { /* ignore */ }
       return;
     }
-    const n = (ipCounts.get(ip) || 0) + 1;
-    if (n > MAX_SOCKETS_PER_IP) {
+    // 同一IPの本数も「いま本当に開いている socket」で数える。以前は接続時に
+    // 足して close で引くカウンタだったので、電波が切れた端末のように close が
+    // 遅れて届く socket（心拍が掃除するまで最大60秒）が数に居座り、共有回線＋
+    // モバイルの組み合わせだと入り直せなくなることがあった。clients は最大でも
+    // MAX_SOCKETS 本なので、接続のたびに数え直しても十分軽い。
+    let sameIp = 0;
+    for (const c of clients) if (sockIp(c) === ip && c.readyState === c.OPEN) sameIp++;
+    if (sameIp >= MAX_SOCKETS_PER_IP) {
       try { send(ws, { type: 'error', error: '同時接続が多すぎます' }); ws.close(); } catch { /* ignore */ }
       return;
     }
-    ipCounts.set(ip, n);
-    ws.on('close', () => {
-      const c = (ipCounts.get(ip) || 1) - 1;
-      if (c > 0) ipCounts.set(ip, c); else ipCounts.delete(ip);
-    });
     // 名乗らないまま居座る接続を切る。gateSocket は message 受信時にしか
     // 走らないので、無言のソケットは ban もメンテナンスもすり抜けていた。
     ws._helloTimer = setTimeout(() => {
@@ -2663,9 +2663,13 @@ export function initBattle(server, deps) {
           // 2本目を数えると「オンライン○人」が実人数の倍近くまで膨らむ。
           // 同じアカウントで何十本も繋いで対戦を並列に回されると、
           // REST 側の回数制限を迂回してコインを稼げてしまう（実測で8試合同時）。
+          // 数えるのは「いま本当に開いている socket」だけ。clients を素で走査すると、
+          // 電波が切れた端末の閉じ損ねた socket が心拍に掃除されるまで（30秒×2＝
+          // 最大60秒）生きているものとして数に入り、張り直すたびに上限へ近づいて
+          // 自分のアカウントから締め出されていた。socketsOf は生存判定のついでに
+          // 死んだ socket を表から外すので、ゾンビは数えた瞬間に消える。
           if (user) {
-            let mine = 0;
-            for (const c of clients) if (c !== ws && c.user && c.user.id === user.id) mine++;
+            const mine = socketsOf(user.id).filter(w => w !== ws).length;
             if (mine >= MAX_SOCKETS_PER_USER) {
               send(ws, { type: 'error', error: '同じアカウントの接続が多すぎます' });
               ws.close();

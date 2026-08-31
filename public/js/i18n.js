@@ -360,6 +360,18 @@ export function applyStaticI18n() {
   attr('#liveFeed', 'title', 'Live feed');
   attr('#chaosBar', 'title', 'Until the next rule change');
   attr('#chatReplyCancel', 'title', 'Cancel reply');
+  // 絵文字だけのボタンは、読み上げでは名前が無いと「✕ ボタン」としか出ない。
+  // 日本語面の名前は index.html 側に置いてある。
+  attr('#btnQuit', 'title', 'Quit');
+  attr('#btnQuit', 'aria-label', 'Quit');
+  attr('#chatToggle', 'title', 'Global chat');
+  attr('#chatToggle', 'aria-label', 'Open global chat');
+  // 試合が始まると game.js がもっと詳しい名前へ差し替える（こちらは控え）。
+  attr('#gameCanvas', 'aria-label', 'Game board');
+  for (const el of document.querySelectorAll('[data-back], #btnRoomBack')) {
+    el.setAttribute('title', 'Back');
+    el.setAttribute('aria-label', 'Back');
+  }
   document.title = 'Block Blitz Arena — Block Puzzle × Online Battles';
   set('#screen-shop .sub-header h2', '🛍️ Shop');
   set('[data-shop="skin"]', 'Blocks');

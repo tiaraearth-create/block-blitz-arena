@@ -1176,6 +1176,42 @@ if (location.search.includes('purchase=success')) {
   toast(t('購入をキャンセルしました', 'Purchase canceled'), '', 2500);
 }
 
+// ---------------------------------------------------------------------------
+// 📴 通信が切れたとき
+//
+// これまでは圏外になっても画面はまったく変わらず、次に何かを押したときに
+// はじめて失敗のトーストが出ていた（＝理由が分からない）。トップバーに
+// 小さな印を出して、押す前に気づけるようにする。
+// ---------------------------------------------------------------------------
+function updateOfflineTag(announce) {
+  const tag = $('#offlineTag');
+  if (!tag) return;
+  const off = navigator.onLine === false;
+  tag.textContent = t('📴 オフライン', '📴 Offline');
+  tag.classList.toggle('hidden', !off);
+  if (!announce) return;
+  if (off) toast(t('📴 通信が切れました。つながると自動で元に戻ります', '📴 You are offline — everything resumes once the connection is back'), 'err', 4000);
+  else toast(t('📶 通信が戻りました', '📶 Back online'), 'ok', 2200);
+}
+window.addEventListener('offline', () => updateOfflineTag(true));
+window.addEventListener('online', () => updateOfflineTag(true));
+updateOfflineTag(false);
+
+// ---- Service Worker ----
+// ホーム画面から起動するインストール型（manifest は display:standalone）なので、
+// 圏外で開くと「接続できません」というブラウザの既定画面がアプリの中に出ていた。
+// sw.js は常にネットワークを先に見て、失敗したときだけ控えを出す ──
+// つまり更新の届き方は今までと変わらない。
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  // 起動直後の通信と取り合わないよう、読み込みが済んでから登録する。
+  const registerSw = () => {
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+      .catch(() => { /* 未対応・非HTTPS なら今までどおり動くだけ */ });
+  };
+  if (document.readyState === 'complete') registerSw();
+  else window.addEventListener('load', registerSw, { once: true });
+}
+
 // ---- session restore ----
 document.body.dataset.screen = 'menu';
 initChat();

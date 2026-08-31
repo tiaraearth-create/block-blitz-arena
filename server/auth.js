@@ -97,6 +97,40 @@ export function parseToken(token) {
   return { userId, createdAt };
 }
 
+// ログアウト済みトークン表の掃除。
+//
+// 以前は revokeToken の中でしか走らなかったので、誰もログアウトしない期間は
+// 1件も減らなかった。トークンは1件あたり JSON で約115バイトあり、db.json は
+// 保存のたびに全体を書き直すので、溜まったぶんはそのまま毎回の保存コストになる。
+// 落とすのは次の3つ:
+//   ・年（V2_TTL）を越えたもの
+//   ・署名が壊れている／期限切れで parseToken が受け付けないもの
+//   ・パスワード変更などで user.sessionsSince が立ち、この行が無くても
+//     resolveToken が 'revoked' を返すようになったもの
+// 持ち主のレコードが見つからない行は **残す**（ディスクが飛んで復元待ちの窓で
+// 消すと、復元後にログアウト済みのはずのトークンが生き返る ── 迷ったら閉じる側）。
+// db を渡すと saveDb はしない（呼び出し側がまとめて保存する）。
+export function sweepRevoked(dbIn) {
+  const db = dbIn || loadDb();
+  if (!db.revoked || typeof db.revoked !== 'object') return 0;
+  const cutoff = Date.now() - V2_TTL;
+  let removed = 0;
+  for (const [t, at] of Object.entries(db.revoked)) {
+    let drop = !(Number(at) > cutoff);
+    if (!drop) {
+      const v2 = parseToken(t);
+      if (!v2) drop = true;
+      else {
+        const u = db.users && db.users[v2.userId];
+        if (u && u.sessionsSince && v2.createdAt < u.sessionsSince) drop = true;
+      }
+    }
+    if (drop) { delete db.revoked[t]; removed++; }
+  }
+  if (removed && !dbIn) saveDb();
+  return removed;
+}
+
 // Single-device logout.
 export function revokeToken(token) {
   if (!token) return;
@@ -104,8 +138,7 @@ export function revokeToken(token) {
   if (token.startsWith('v2.')) {
     db.revoked = db.revoked || {};
     db.revoked[token] = Date.now();
-    const cutoff = Date.now() - V2_TTL;
-    for (const [t, at] of Object.entries(db.revoked)) if (at < cutoff) delete db.revoked[t];
+    sweepRevoked(db);
   } else {
     delete db.tokens[token];
   }

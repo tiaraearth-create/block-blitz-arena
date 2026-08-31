@@ -1,6 +1,16 @@
 // Particle system with per-effect presets (spark / fireworks / thunder / sakura).
 import { PALETTE } from './themes.js';
 
+// 演出の総数の頭打ち。掃除は update() の中にしかなく、update() は
+// requestAnimationFrame からしか呼ばれない ── オートパイロットのように
+// setTimeout で回る経路がタブの裏で撒き続けると、誰も片付けないまま
+// 際限なく伸びる（実測で100秒に12万個）。上限を超えたぶんは古いものから
+// 捨てる。1手で出る最大（64マス × 花火14粒 × 濃さ1.9 ≒ 1700）より
+// 十分に大きいので、まともな遊び方では1粒も間引かれない。
+const MAX_PARTICLES = 4000;
+const MAX_RINGS = 200;
+const MAX_BOLTS = 120;
+
 export class ParticleSystem {
   constructor() {
     this.particles = [];
@@ -12,6 +22,17 @@ export class ParticleSystem {
   // Expanding shockwave ring (line clears, big events).
   ring(x, y, maxR, color = '#ffffff') {
     this.rings.push({ x, y, r: maxR * 0.15, maxR, life: 1, color });
+    this.trim();
+  }
+
+  // 上限を超えたぶんを古いものから捨てる（撒く側から必ず通る）。
+  trim() {
+    const over = this.particles.length - MAX_PARTICLES;
+    if (over > 0) this.particles.splice(0, over);
+    const ro = this.rings.length - MAX_RINGS;
+    if (ro > 0) this.rings.splice(0, ro);
+    const bo = this.bolts.length - MAX_BOLTS;
+    if (bo > 0) this.bolts.splice(0, bo);
   }
 
   n(base) { return Math.max(1, Math.round(base * this.intensity)); }
@@ -34,6 +55,7 @@ export class ParticleSystem {
       case 'fx_admin': this.rainbow(x, y, size); break;
       default: this.spark(x, y, size, light, dark);
     }
+    this.trim();
   }
 
   // 👑 封印砕き: 紫の破片が外へ弾け、割れ目の白が一瞬だけ残る。
@@ -146,6 +168,7 @@ export class ParticleSystem {
         kind: 'sparkle', rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 6,
       });
     }
+    this.trim();   // modes.js が burstCell を通さず直接呼ぶ唯一の経路
   }
 
   spark(x, y, size, light, dark) {
@@ -234,6 +257,7 @@ export class ParticleSystem {
         kind: 'square', rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 12,
       });
     }
+    this.trim();
   }
 
   update(dt) {
@@ -265,6 +289,7 @@ export class ParticleSystem {
       r.r += (r.maxR - r.r) * dt * 9;
       if (r.life <= 0) rs.splice(i, 1);
     }
+    this.trim();
   }
 
   draw(ctx) {

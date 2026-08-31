@@ -41,8 +41,14 @@ import {
   healSocial, unfriendAll,
 } from '../friends.js';
 import {
-  archivedTransactions,
+  archivedTransactions, anonymizeUserTransactions,
 } from './shop.js';
+import {
+  purgeUserWorkshop,
+} from './workshop.js';
+import {
+  purgeUserDailyReplays,
+} from './daily.js';
 import { ctx } from '../context.js';
 
 // index.js のモジュールスコープにしか無いもの。値は起動時に一度だけ
@@ -441,20 +447,16 @@ adminRouter.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res)
   leaveGuild(db, target);   // same reason as DELETE /api/me — before the record goes
   unfriendAll(db, target);  // フレンド側も同じ（DELETE /api/me と同じ理由）
   if (battleReady && battle.party) battle.party.ejectUser(target.id);
-  // 🧩 工房の後始末。作者が退会すると db.users から引けなくなるので、
-  // その作者名義（s.by === target.id）のステージはここで消しておく。判定できる
-  // のは target がまだ居るこの瞬間だけ ── workshop.js は削除後の id を db.users
-  // から引けないので、あちら側からは取り残しを掃除できない。
+  // 🧩 UGC と履歴の後始末。レコードを消しただけだと、工房のステージ・
+  // 📅デイリーのゴースト・💎購入履歴が「投稿時の表示名スナップショット」で
+  // 名前を出し続ける（どれも db.users から引けないときの控えを持っている）。
+  // DELETE /api/me も同じ3本を呼ぶ（coordination 参照）。
   // （凍結 banned=true は別。あちらは workshop.js が公開面から隠すだけなので
   //  ここでは触らず、凍結解除でそのまま戻す。）
-  const ws = db.meta && db.meta.workshop;
-  if (ws && ws.stages && typeof ws.stages === 'object' && !Array.isArray(ws.stages)) {
-    let removed = 0;
-    for (const [code, s] of Object.entries(ws.stages)) {
-      if (s && s.by === target.id) { delete ws.stages[code]; removed++; }
-    }
-    if (removed) console.log(`[workshop] 退会に伴い ${target.username} のステージ ${removed} 件を削除しました`);
-  }
+  const ws = purgeUserWorkshop(target.id);
+  if (ws.stages) console.log(`[workshop] 退会に伴い ${target.username} のステージ ${ws.stages} 件を削除しました`);
+  purgeUserDailyReplays(target.id);
+  anonymizeUserTransactions(target.id);
   if (Object.prototype.hasOwnProperty.call(db.users, String(req.params.id))) delete db.users[String(req.params.id)];
   db.deleted[req.params.id] = Date.now();
   saveDb();

@@ -3,8 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <!-- viewport-fit=cover: iPhone のノッチ／ホームバーの下まで描く。
-     はみ出しぶんは style.css が env(safe-area-inset-*) で内側に逃がす。 -->
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+     はみ出しぶんは style.css が env(safe-area-inset-*) で内側に逃がす。
+
+     maximum-scale / user-scalable は外してある。文字の大きさが px 固定なので、
+     ブラウザやOSの「文字を大きく」は効かない ── ピンチズームまで塞ぐと
+     拡大する手段がひとつも残らない（文字は最小 8.5px まである）。
+     誤爆で拡大しないかは、body の touch-action: manipulation（ダブルタップ拡大を
+     止める）と #gameCanvas の touch-action: none（盤面のドラッグを守る）が
+     すでに面倒を見ているので、ここを外してもゲーム操作は変わらない。
+     ただし iOS は「16px 未満の入力欄に触ると勝手に拡大」するので、
+     文字を打つ欄は style.css 側で 16px を下回らせないこと。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Block Blitz Arena — ブロックパズル×オンライン対戦</title>
 <meta name="description" content="無料のブロックパズル×オンライン対戦ゲーム。1v1ランクマッチ・2v2チーム戦・レイドボス・100階ダンジョン・ウィークリーチャレンジ！ Free block-puzzle battle arena: ranked 1v1, co-op raids, a 100-floor dungeon & weekly challenges. Play free in your browser!">
 <meta name="theme-color" content="#141a33">
@@ -35,6 +44,9 @@
       <span id="userName">ゲスト</span>
       <span id="userLevel" class="lvl hidden">Lv.1</span>
     </button>
+    <!-- 圏外になったことを、次の操作が失敗するより先に知らせる（main.js が出し入れする）。
+         hidden のあいだは display:none なので、通常時のトップバーは今までと同じ並び。 -->
+    <span id="offlineTag" class="offline-tag hidden" role="status">📴 オフライン</span>
     <div class="currency">
       <span class="chip coin-chip">🪙 <b id="coinsLabel">0</b></span>
       <span class="chip gem-chip">💎 <b id="gemsLabel">0</b></span>
@@ -116,7 +128,7 @@
     <section id="screen-game" class="screen hidden">
       <div class="game-hud">
         <div class="hud-left">
-          <button id="btnQuit" class="chip icon-btn">✕</button>
+          <button id="btnQuit" class="chip icon-btn" title="やめる" aria-label="やめる">✕</button>
           <button id="btnReroll" class="chip icon-btn" title="ピースを引き直す（1ゲーム1回）">🔄<b id="rerollLeft">1</b></button>
           <button id="btnUlt" class="chip icon-btn ult-btn hidden" title="奥義：ゲージ満タンで発動！">
             <span class="ult-ring"></span><span id="ultIcon" class="ult-icon">💥</span><b id="ultPct">0</b>
@@ -153,7 +165,10 @@
         </div>
       </div>
       <div class="game-canvas-wrap">
-        <canvas id="gameCanvas"></canvas>
+        <!-- 名前が無いと読み上げは「キャンバス」としか言わない。試合が始まると
+             game.js が操作方法まで含む詳しい aria-label に差し替える（role も
+             そちらが決める）ので、ここは差し替え前の控えの名前だけ。 -->
+        <canvas id="gameCanvas" aria-label="ゲームの盤面"></canvas>
       </div>
     </section>
 
@@ -174,7 +189,7 @@
     <!-- ===================== Custom room ===================== -->
     <section id="screen-room" class="screen sub-screen hidden">
       <div class="sub-header">
-        <button class="chip icon-btn" id="btnRoomBack">←</button>
+        <button class="chip icon-btn" id="btnRoomBack" aria-label="戻る" title="戻る">←</button>
         <h2>🔧 カスタムルーム</h2>
       </div>
       <div id="roomJoin" class="room-join">
@@ -199,7 +214,7 @@
     <!-- ===================== Leaderboard ===================== -->
     <section id="screen-leaderboard" class="screen sub-screen hidden">
       <div class="sub-header">
-        <button class="chip icon-btn back-btn" data-back>←</button>
+        <button class="chip icon-btn back-btn" data-back aria-label="戻る" title="戻る">←</button>
         <h2>🏆 ランキング</h2>
       </div>
       <div class="tabs">
@@ -218,7 +233,7 @@
     <!-- ===================== Shop ===================== -->
     <section id="screen-inventory" class="screen sub-screen hidden">
       <div class="sub-header">
-        <button class="chip icon-btn back-btn" data-back>←</button>
+        <button class="chip icon-btn back-btn" data-back aria-label="戻る" title="戻る">←</button>
         <h2>🎒 インベントリ</h2>
       </div>
       <div id="invSummary" class="inv-summary"></div>
@@ -233,7 +248,7 @@
 
     <section id="screen-shop" class="screen sub-screen hidden">
       <div class="sub-header">
-        <button class="chip icon-btn back-btn" data-back>←</button>
+        <button class="chip icon-btn back-btn" data-back aria-label="戻る" title="戻る">←</button>
         <h2>🛍️ ショップ</h2>
       </div>
       <div class="tabs">
@@ -249,7 +264,7 @@
     <!-- ===================== Missions / achievements ===================== -->
     <section id="screen-missions" class="screen sub-screen hidden">
       <div class="sub-header">
-        <button class="chip icon-btn back-btn" data-back>←</button>
+        <button class="chip icon-btn back-btn" data-back aria-label="戻る" title="戻る">←</button>
         <h2>📋 ミッション</h2>
       </div>
       <div class="tabs">
@@ -263,7 +278,7 @@
     <!-- ===================== Battle pass ===================== -->
     <section id="screen-battlepass" class="screen sub-screen hidden">
       <div class="sub-header">
-        <button class="chip icon-btn back-btn" data-back>←</button>
+        <button class="chip icon-btn back-btn" data-back aria-label="戻る" title="戻る">←</button>
         <h2>🎫 バトルパス</h2>
       </div>
       <div id="bpHeader" class="bp-header"></div>
@@ -274,7 +289,7 @@
     <!-- ===================== Friends ===================== -->
     <section id="screen-friends" class="screen sub-screen hidden">
       <div class="sub-header">
-        <button class="chip icon-btn back-btn" data-back>←</button>
+        <button class="chip icon-btn back-btn" data-back aria-label="戻る" title="戻る">←</button>
         <h2>🤝 フレンド</h2>
       </div>
       <div class="tabs">
@@ -288,7 +303,7 @@
 
     <section id="screen-guild" class="screen sub-screen hidden">
       <div class="sub-header">
-        <button class="chip icon-btn back-btn" data-back>←</button>
+        <button class="chip icon-btn back-btn" data-back aria-label="戻る" title="戻る">←</button>
         <h2>🏰 ギルド</h2>
       </div>
       <div class="tabs">
@@ -302,7 +317,7 @@
     <!-- ===================== News ===================== -->
     <section id="screen-news" class="screen sub-screen hidden">
       <div class="sub-header">
-        <button class="chip icon-btn back-btn" data-back>←</button>
+        <button class="chip icon-btn back-btn" data-back aria-label="戻る" title="戻る">←</button>
         <h2>📰 ニュース</h2>
         <button class="btn btn-sm btn-primary hidden" id="btnNewsPost" style="margin-left:auto">✍️ 投稿</button>
       </div>
@@ -312,7 +327,7 @@
     <!-- ===================== Admin ===================== -->
     <section id="screen-admin" class="screen sub-screen hidden">
       <div class="sub-header">
-        <button class="chip icon-btn back-btn" data-back>←</button>
+        <button class="chip icon-btn back-btn" data-back aria-label="戻る" title="戻る">←</button>
         <h2>🛡️ 管理者パネル</h2>
       </div>
       <div id="adminStats" class="admin-stats"></div>
@@ -366,7 +381,10 @@
 <!-- 👥 パーティー。試合中も出したいので .chat-drawer の外に置く。 -->
 <div id="partyDock" class="hidden"></div>
 <div id="modal-root"></div>
-<div id="toast-root"></div>
+<!-- トーストはこのゲームで唯一の通知経路（エラー・報酬・マッチング結果まで
+     ぜんぶここに出る）。ライブリージョンにしておかないと、読み上げ利用者には
+     操作が失敗したことすら届かない。JS 側は今までどおり要素を足すだけでよい。 -->
+<div id="toast-root" role="status" aria-live="polite" aria-atomic="false"></div>
 
 <!-- Global chat drawer (menu screen only) -->
 <div id="chatDrawer" class="chat-drawer">
@@ -379,7 +397,7 @@
       <button class="btn btn-sm btn-primary" id="chatSend">送信</button>
     </div>
   </div>
-  <button id="chatToggle" class="chat-toggle">💬<span id="chatUnread" class="chat-unread hidden">0</span></button>
+  <button id="chatToggle" class="chat-toggle" aria-label="全体チャットを開く" title="全体チャット">💬<span id="chatUnread" class="chat-unread hidden">0</span></button>
 </div>
 
 <!-- Tap-to-start splash: guarantees music from the very first moment -->

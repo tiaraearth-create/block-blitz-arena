@@ -160,6 +160,26 @@ export function archivedTransactions(limit = 100) {
   return out;
 }
 
+// 退会・管理者削除の後始末。会計として残す意味があるのは「いつ・いくら・
+// どの取引IDか」までで、そこに表示名を併記し続ける理由は無い。削除経路が
+// これを呼んで、db に残っている行の username だけを伏せ字に置き換える
+// （金額・取引ID・日時・件数は動かさないので、管理画面の売上集計は無傷）。
+// ※ 書庫（DATA_DIR/transactions-YYYY.jsonl）は追記専用なのでここでは触らない。
+//    保持年数の運用は README 側の宿題（coordination 参照）。
+const TX_ANON_NAME = '(退会済み / deleted)';
+export function anonymizeUserTransactions(userId) {
+  const id = String(userId || '');
+  if (!id || !Array.isArray(db.transactions)) return 0;
+  let n = 0;
+  for (const t of db.transactions) {
+    if (!t || t.userId !== id || t.username === TX_ANON_NAME) continue;
+    t.username = TX_ANON_NAME;
+    t.deletedUser = true;
+    n++;
+  }
+  return n;
+}
+
 function grantPack(user, pack, status, extId = null) {
   const total = pack.gems + pack.bonus;
   user.gems += total;

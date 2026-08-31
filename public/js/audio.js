@@ -260,13 +260,13 @@ TRACKS.kami.bars[3].chord = [N.E4, 415.3, N.B4];
 export const TRACK_INFO = [
   { id: 'menu',   icon: '🏠', name: 'やすらぎのロビー', nameEn: 'Cozy Lobby',      where: 'メニュー',                 whereEn: 'Menu' },
   { id: 'solo',   icon: '🧩', name: 'ブロックさんぽ',   nameEn: 'Block Stroll',    where: 'ソロ・ウィークリー',       whereEn: 'Solo / Weekly' },
-  { id: 'battle', icon: '⚔️', name: 'アリーナの熱気',   nameEn: 'Arena Heat',      where: 'オンライン対戦',           whereEn: 'Online battles' },
+  { id: 'battle', icon: '⚔️', name: 'アリーナの熱気',   nameEn: 'Arena Heat',      where: 'オンライン対戦・⛓️連鎖・👻リプレイ', whereEn: 'Online battles / Chain / Replay' },
   { id: 'hard',   icon: '🔥', name: '限界突破',         nameEn: 'Limit Break',     where: '達人・タイムアタック',     whereEn: 'Expert / Time Attack' },
   { id: 'boss',   icon: '🐲', name: '巨影せまる',       nameEn: 'Looming Giant',   where: 'ボス戦',                   whereEn: 'Boss fights' },
   { id: 'oni',    icon: '👹', name: '鬼の巣窟',         nameEn: "Oni's Den",       where: '鬼・深淵',                 whereEn: 'Oni / Abyss' },
   { id: 'pixel',  icon: '👾', name: 'PIXEL RUSH 182',   nameEn: 'PIXEL RUSH 182',  where: 'バトルロイヤル',           whereEn: 'Battle Royale' },
   { id: 'kami',   icon: '🔱', name: '天上の光',         nameEn: 'Celestial Light', where: '神・天国ダンジョン',       whereEn: 'Kami / Heaven' },
-  { id: 'ruins',  icon: '🗿', name: '遺跡の囁き',       nameEn: 'Whisper of Ruins', where: 'パズル遺跡',              whereEn: 'Puzzle Ruins' },
+  { id: 'ruins',  icon: '🗿', name: '遺跡の囁き',       nameEn: 'Whisper of Ruins', where: 'パズル遺跡・🏗️設計図・🛠️工房', whereEn: 'Puzzle Ruins / Blueprint / Workshop' },
   { id: 'mine',   icon: '⛏️', name: '地底のハンマー',   nameEn: 'Hammer Below',     where: '採掘場',                  whereEn: 'The Mines' },
   { id: 'royal',  icon: '👑', name: '王座の間',         nameEn: 'Throne Room',      where: '王者のテーマ（ジュークボックス限定）', whereEn: 'Champions (jukebox exclusive)' },
   { id: 'ghost',  icon: '👻', name: '幽霊屋敷のオルゴール', nameEn: 'Haunted Music Box', where: '？？？', whereEn: '???', hidden: true },
@@ -312,7 +312,15 @@ class AudioEngine {
 
   ensure() {
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') this.ctx.resume();
+      // 🔇 自動停止で止めている最中（かつ本当にまだ隠れている）なら resume しない。
+      // ここで無条件に戻すと、裏で鳴った効果音ひとつで AudioContext が復活し、
+      // バックグラウンドから音が漏れる（⛓️連鎖の自走中など）。
+      // 復帰は resumeFromHidden() の責務 ── あちらは pausedHidden を false に
+      // してから resume するのでここを通り抜ける。
+      const stillHidden = this.pausedHidden
+        && typeof document !== 'undefined' && document.hidden
+        && !this.keepSoundWhileHidden();
+      if (this.ctx.state === 'suspended' && !stillHidden) this.ctx.resume();
       return true;
     }
     try {
@@ -662,8 +670,15 @@ class AudioEngine {
   // SFX (one-shot)
   // -------------------------------------------------------------------------
 
+  // 🔇 タブが裏に回っている間の効果音は鳴らさない。⛓️連鎖のように隠れていても
+  // 自走する処理があるので、ここで止めないと裏から音が聞こえてしまう。
+  // 録画中（keepSoundWhileHidden）は従来どおり鳴らす。
+  sfxSuppressed() {
+    return typeof document !== 'undefined' && document.hidden && !this.keepSoundWhileHidden();
+  }
+
   tone({ freq = 440, dur = 0.15, type = 'sine', vol = 0.3, attack = 0.005, sweep = 0, delay = 0 }) {
-    if (!this.sfxOn || !this.ensure()) return;
+    if (!this.sfxOn || this.sfxSuppressed() || !this.ensure()) return;
     const t0 = this.ctx.currentTime + delay;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -678,7 +693,7 @@ class AudioEngine {
   }
 
   noise({ dur = 0.2, vol = 0.25, freq = 1200, delay = 0 }) {
-    if (!this.sfxOn || !this.ensure()) return;
+    if (!this.sfxOn || this.sfxSuppressed() || !this.ensure()) return;
     const t0 = this.ctx.currentTime + delay;
     const len = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
     const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);

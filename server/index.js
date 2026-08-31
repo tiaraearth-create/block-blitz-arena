@@ -19,6 +19,7 @@ import { initBattle } from './battle.js';
 import {
   hashPassword, verifyPassword, issueToken, revokeToken, revokeAllTokens,
   authMiddleware, requireAuth, requireAdmin, userFromToken, SESSIONS_PERSIST,
+  sweepRevoked,
 } from './auth.js';
 import {
   SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED, BOOST_ITEMS,
@@ -835,10 +836,23 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 1時間あたりの上限を置く。正直に色々なステージを遊ぶぶんには当たらない。
   if (mode === 'workshop' && won && !rateLimit(`wswin:${user.id}`, 10, 60 * 60 * 1000)) won = false;
 
-  let coins = Math.min(1000, 20 + Math.floor(score / 100) + (won ? 50 : 0));
+  // 1回の送信ごとに付く「固定ぶん」（基礎 20🪙/30bpXp/20accXp と勝利ボーナス）は
+  // プレイの長さを一切見ていなかった。スコア連動ぶんと違って回数だけで増えるので、
+  // 1回が短いモードほど分あたりの実入りが良くなる ── 10秒で終わる🛠️工房の par1
+  // ステージが最も割がよく、90秒の🏗️ブループリントや数分のソロ、まして数十分の
+  // ⛓️連鎖が最も割に合わない、という「長く遊ぶほど損」な向きになっていた。
+  //
+  // そこで固定ぶんだけを「そのプレイの実体（duration）」に連動させる。duration は
+  // 上で実経過時間により頭を押さえてあるので、申告で伸ばすことはできない。
+  // 45秒以上のプレイは今までどおり満額。それより短い回は取り分が縮むが、
+  // スコア連動ぶんは一切触らないので、短いステージの実入りが消えるわけではない。
+  const BASE_FULL_SECONDS = 45;
+  const paceScale = Math.max(0.25, Math.min(1, duration / BASE_FULL_SECONDS));
+  const paced = n => Math.round(n * paceScale);
+  let coins = Math.min(1000, paced(20) + Math.floor(score / 100) + (won ? paced(50) : 0));
   if (mode === 'chaos') coins = Math.min(1500, Math.round(coins * 1.5));   // chaos-mode bonus
-  let bpXp = Math.min(800, 30 + Math.floor(score / 60) + lines * 5 + (won ? 100 : 0));
-  let accXp = Math.min(600, 20 + Math.floor(score / 100) + (won ? 80 : 0));
+  let bpXp = Math.min(800, paced(30) + Math.floor(score / 60) + lines * 5 + (won ? paced(100) : 0));
+  let accXp = Math.min(600, paced(20) + Math.floor(score / 100) + (won ? paced(80) : 0));
 
   // Limited-time event multipliers.
   const bonus = eventBonus(currentEvent());
@@ -1438,13 +1452,29 @@ setInterval(() => {
   for (const [k, at] of feedAt) {
     if (now - at > 3600_000) feedAt.delete(k);
   }
+  // 🔑 ログアウト済みトークン表も同じ理由でここに相乗りさせる（掃除が
+  // revokeToken の中にしか無かったので、誰もログアウトしない期間は1件も
+  // 減らなかった）。落ちる行が無ければ保存もしない。
+  try {
+    const swept = sweepRevoked();
+    if (swept) console.log(`[auth] 失効済みトークンを${swept}件掃除しました`);
+  } catch (err) { console.error('[auth] トークン掃除に失敗:', err && err.message); }
   // 📅 イベント自動運行。/api/status からも呼んでいるが、誰も画面を開いて
   // いない時間帯に枠(18:00 JST)へ入る日のために、こちらでも点火を見る。
   // 自動運行OFF（既定）なら比較1回で戻るだけ。
   try { syncAutoEvent(); } catch (err) { console.error('[events] 自動開催に失敗:', err && err.message); }
 }, 600_000).unref?.();
 
-function inMaintenance() { return !!db.meta.maintenance; }
+// 🛠 メンテナンスのスイッチが入った時刻。db には残さない（この機体が
+// 「いま止めているか」だけの運用状態で、backup.js も maintenance は
+// 持ち込まない）。起動時にすでに ON だった場合は、最初の判定の時刻＝
+// この機体でメンテが始まった時刻として扱う。
+let maintenanceSince = 0;
+function inMaintenance() {
+  const on = !!db.meta.maintenance;
+  if (on !== (maintenanceSince > 0)) maintenanceSince = on ? Date.now() : 0;
+  return on;
+}
 
 // Moderators (or admins): chat policing only — no economy/user management.
 function requireMod(req, res, next) {
@@ -1460,6 +1490,25 @@ function maintenanceGuard(req, res, next) {
     return res.status(503).json({ error: '🛠 メンテナンス中です。しばらくお待ちください' });
   }
   next();
+}
+
+// 結果送信だけは「猶予つき」で通す。
+//
+// メンテナンスのスイッチは押した瞬間に効くので、これまでは、そのとき遊んで
+// いた全員の **まだ送っていない1回** が 503 で落ちていた（報酬ゼロ、📅デイリーは
+// 予約だけ残って0点確定）。告知はチャット欄に1行積まれるだけでゲーム画面には
+// 出ないため、プレイヤーには何が起きたのか分からない。
+//
+// 結果送信は「これから新しく遊び始める入口」ではなく「もう終わった1回の
+// 着地点」なので、スイッチを入れてしばらくのあいだ通しても、新しい負荷も
+// 不整合も増えない（着地しきったぶんだけバックアップの中身が正しくなる）。
+// 猶予が切れたあとは今までどおり 503。
+const MAINTENANCE_RESULT_GRACE_MS = 3 * 60 * 1000;
+function maintenanceResultGuard(req, res, next) {
+  if (inMaintenance() && maintenanceSince && Date.now() - maintenanceSince < MAINTENANCE_RESULT_GRACE_MS) {
+    return next();
+  }
+  return maintenanceGuard(req, res, next);
 }
 
 const DAILY_COINS = 100;
@@ -1777,8 +1826,12 @@ function adminLog(req, action, target, detail = {}) {
   db.meta.adminLog.push({
     at: Date.now(),
     by: req.user ? req.user.username : '(未ログイン)',
+    // IPアドレスは残さない。表示にも判定にも使っていない（管理画面の
+    // 🧾操作ログは by / action / target / detail しか描かない）のに、
+    // db.meta.adminLog は /api/admin/backup のダンプに丸ごと入り、その
+    // ダンプは暗号化されて公開リポジトリにコミットされる。読まれない値の
+    // ために、鍵が破られたときの被害面だけを広げていた。
     byId: req.user ? req.user.id : null,
-    ip: req.ip,
     action,
     target: target || null,
     detail: safe,
@@ -2402,10 +2455,18 @@ app.post('/api/clienterror', (req, res) => {
   // スタックは先頭だけ（1行目＝発生箇所が分かれば足りる。全文は500字でも
   // 溢れるうえ、200件ぶん抱えると db.json が無視できない大きさになる）。
   const stack = cut(String(b.stack || '').split('\n')[0]).trim();
+  // 発生位置。クライアント（public/js/main.js）が送っているのは
+  // where = "file:line:col" の1本の文字列で、file/line/col という欄は無い。
+  // ここが b.file しか読んでいなかったので where は常に空になり、
+  //   ・管理画面の「📄 発生位置」が一度も描画されない
+  //   ・重複判定のハッシュが実質 message だけ ＝ 別ファイル別行の同名例外
+  //     （"Cannot read properties of undefined" など）が全部1行に畳まれる
+  // という、いちばん残すべきものだけが落ちる状態だった。
+  // b.where を正とし、旧い形（file/line/col）も互換で受ける。
   const line = Math.max(0, Math.min(9_999_999, Math.floor(Number(b.line) || 0)));
   const col = Math.max(0, Math.min(9_999_999, Math.floor(Number(b.col) || 0)));
   const file = cut(b.file).trim();
-  const where = file ? `${file}:${line}${col ? `:${col}` : ''}` : '';
+  const where = (cut(b.where).trim() || (file ? `${file}:${line}${col ? `:${col}` : ''}` : '')).slice(0, 300);
   const ua = cut(b.ua || req.headers['user-agent']);
   const lang = cut(b.lang).slice(0, 40);
   const screen = cut(b.screen).slice(0, 40);
@@ -2418,9 +2479,16 @@ app.post('/api/clienterror', (req, res) => {
     found.count = (found.count || 1) + 1;
     found.lastAt = Date.now();
     // 直近の環境で上書きする（同じ不具合でも端末が分かると当たりが付く）。
-    if (ua) found.ua = ua;
-    if (lang) found.lang = lang;
-    if (screen) found.screen = screen;
+    //
+    // 以前は ua/lang/screen だけを入れ替えて by（報告者名）は最初の1人のまま
+    // だったので、管理画面には「◯◯さん ・ 412x915@3 ・ Android…」と、
+    // **別人の端末指紋がその人の名前で** 並んでいた。1行の中で人と端末が
+    // 食い違わないよう、必ず同じ1件のもので揃えて入れ替える。
+    found.by = req.user ? req.user.username : 'ゲスト';
+    found.role = req.user ? req.user.role : 'guest';
+    found.ua = ua;
+    found.lang = lang;
+    found.screen = screen;
     if (!found.stack && stack) found.stack = stack;
     saveDb();
     return res.json({ ok: true, hash, count: found.count });
@@ -3098,7 +3166,7 @@ app.post('/api/rank/claim', requireAuth, maintenanceGuard, (req, res) => {
 // as the network allowed. A real game takes 20+ seconds, and even the fastest
 // mode (a ★3 puzzle stage) tops out near 80 runs an hour, so these ceilings are
 // far above legitimate play and still turn "unlimited" into "bounded".
-app.post('/api/game/result', requireAuth, maintenanceGuard, (req, res) => {
+app.post('/api/game/result', requireAuth, maintenanceResultGuard, (req, res) => {
   const tooFast = !rateLimit(`result:${req.user.id}`, 30, 60 * 1000)
     || !rateLimit(`resulth:${req.user.id}`, 250, 60 * 60 * 1000);
   if (tooFast) {
@@ -3659,10 +3727,13 @@ function seedAdmin() {
   newUser(ADMIN_NAME, password, 'admin');
   const credFile = path.join(DATA_DIR, 'admin-credentials.txt');
   fs.writeFileSync(credFile, `username: ${ADMIN_NAME}\npassword: ${password}\n`);
+  // パスワードそのものは標準出力に出さない。ホスティング事業者のログ基盤に
+  // 流れて保持され、あとから回収も回転もできないため（ファイル側は
+  // .gitignore で覆われた server/data/ 配下なので追跡はされない）。
   console.log('='.repeat(60));
   console.log('  管理者アカウントを作成しました');
-  console.log(`  ユーザー名: ${ADMIN_NAME} / パスワード: ${password}`);
-  console.log(`  (${credFile} にも保存済み)`);
+  console.log(`  ユーザー名: ${ADMIN_NAME}`);
+  console.log(`  パスワードは ${credFile} に保存しました（この画面には出しません）`);
   console.log('='.repeat(60));
 }
 
@@ -3690,13 +3761,25 @@ function autoRestoreFromSeed() {
     console.warn('[seed] seed-backup.json を読み込めませんでした:', err.message);
     return;
   }
-  // The repo is public, so the committed seed is encrypted with the admin
-  // password (scripts/pull-backup.mjs). ADMIN_PASSWORD must match to open it.
+  // The repo is public, so the committed seed is encrypted (scripts/pull-backup.mjs).
+  //
+  // 鍵はこれまで「ログイン用の管理者パスワード」そのものだった。中身は db 丸ごと
+  // ＝全ユーザーの salt / passHash が入った完全ダンプで、しかも公開リポジトリに
+  // 毎日コミットされる ── つまり ADMIN_PASSWORD（下限8文字）1つの強度が、
+  // オフラインで何度でも試せる相手に対する全プレイヤーの資格情報の防壁に
+  // なっていた。バックアップ専用の合言葉 BACKUP_PASSPHRASE（十分に長い
+  // ランダム値）を優先して読む。設定されていなければ従来どおり
+  // ADMIN_PASSWORD に落ちる（既にコミット済みのファイルが開けなくならない）。
   if (data && data.enc === 'aes-256-gcm') {
-    const pw = process.env.ADMIN_PASSWORD;
+    const pw = process.env.BACKUP_PASSPHRASE || process.env.ADMIN_PASSWORD;
     if (!pw) {
-      console.warn('[seed] seed-backup.json は暗号化されていますが ADMIN_PASSWORD 環境変数が未設定のため復元できません');
+      console.warn('[seed] seed-backup.json は暗号化されていますが BACKUP_PASSPHRASE / ADMIN_PASSWORD 環境変数が未設定のため復元できません');
       return;
+    }
+    if (!process.env.BACKUP_PASSPHRASE && pw.length < 24) {
+      console.warn('[seed] バックアップの鍵に ADMIN_PASSWORD を使っています。'
+        + `（${pw.length}文字）このファイルは全ユーザーの資格情報を含み、公開リポジトリに置かれます。`
+        + ' 専用の BACKUP_PASSPHRASE（32文字以上のランダム値）を設定してください');
     }
     try {
       const salt = Buffer.from(data.salt, 'base64');
@@ -3706,7 +3789,7 @@ function autoRestoreFromSeed() {
       decipher.setAuthTag(Buffer.from(data.tag, 'base64'));
       data = JSON.parse(Buffer.concat([decipher.update(Buffer.from(data.data, 'base64')), decipher.final()]).toString('utf8'));
     } catch {
-      console.warn('[seed] seed-backup.json の復号に失敗しました（ADMIN_PASSWORD がバックアップ取得時と一致していません）');
+      console.warn('[seed] seed-backup.json の復号に失敗しました（BACKUP_PASSPHRASE / ADMIN_PASSWORD がバックアップ取得時と一致していません）');
       return;
     }
   }
@@ -3751,6 +3834,16 @@ if (seasonAdopted) console.log(`[season] 旧シーズンIDからバトルパス�
 currentSeason();
 seedAdmin();
 pinAdminPassword();
+// 🧹 すでに記録に残っている操作者のIPアドレスを一度だけ落とす（adminLog は
+// もう残さない。理由はそちらのコメント参照）。ダンプは公開リポジトリに
+// コミットされるので、過去ぶんを抱えたままにしない。
+{
+  let wiped = 0;
+  for (const e of (Array.isArray(db.meta.adminLog) ? db.meta.adminLog : [])) {
+    if (e && e.ip !== undefined) { delete e.ip; wiped++; }
+  }
+  if (wiped) { saveDb(); console.log(`[admin] 操作ログ${wiped}件からIPアドレスを削除しました`); }
+}
 unlockEverythingForStaff();
 seedNews();
 finalizeWeeklyRankings();   // pay out any week that ended while we were down
@@ -3781,7 +3874,10 @@ setContext({
   // ユーザーの読み書き
   migrateUser, publicUser, userById, levelOf, sanitizeName, fmtNum,
   // 門番と関所
-  rateLimit, maintenanceGuard, requireMod,
+  // maintenanceResultGuard は「もう終わった1回の着地点」専用の猶予つき関所。
+  // routes/adminevent.js の /api/adminevent/result も同じ性格なので、あちらも
+  // maintenanceGuard からこれに差し替えてよい。
+  rateLimit, maintenanceGuard, maintenanceResultGuard, requireMod,
   // 期間もの（イベント・シーズン・週・日）
   currentEvent, currentSeason, SEASON_MS, derivedSeasonIndex, adoptLegacySeason,
   syncBattlePass, settleSeasonHallOfFame, SEASON_BADGE_RE,

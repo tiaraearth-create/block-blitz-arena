@@ -51,14 +51,23 @@ let studioState = null;   // { raf, analyser, dest, rec, timer, worker, wakeLock
 // 実際にこれで録画が丸ごと死んでいた（描画もフレーム送出も進行管理も
 // この Worker が駆動しているため、状態表示が空のまま何も起きなくなる）。
 function makeTickWorker(onTick, onFail) {
+  let url = null;
   try {
     const src = 'let iv=null;onmessage=e=>{if(e.data==="start"&&!iv)iv=setInterval(()=>postMessage(0),33);if(e.data==="stop"&&iv){clearInterval(iv);iv=null}}';
-    const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    // Blob URL は Worker を作った時点で読み込みが始まるので、直後に revoke しても
+    // 出来上がった Worker は動き続ける。捨てないと録画のたびに1つずつ残る。
+    url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    const w = new Worker(url);
+    URL.revokeObjectURL(url); url = null;
     w.onmessage = onTick;
     w.onerror = () => { try { w.terminate(); } catch { /* gone */ } if (onFail) onFail(); };
     w.postMessage('start');
     return w;
-  } catch { if (onFail) onFail(); return null; }
+  } catch {
+    if (url) { try { URL.revokeObjectURL(url); } catch { /* gone */ } }
+    if (onFail) onFail();
+    return null;
+  }
 }
 
 function stopStudio() {
