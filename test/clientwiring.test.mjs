@@ -149,4 +149,43 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
   check('お知らせの改訂判定が titleEn を見ている', /existing\.titleEn !== p\.titleEn/.test(cmp), '');
 }
 
+
+// --- 9. 📣 スコアのシェアが全モードの結果画面に乗っているか ---
+// 結果モーダルは18個あるが、報酬欄は全部 rewardsRows() を通る。ここに
+// 足しておけば全モードに一度に乗る（signup ボタンと同じ作法）。1つの出口でも
+// 抜けると、そのモードだけ黙ってシェアできなくなり、気づく手がかりが無い。
+{
+  const src = read('public/js/modes.js');
+  const body = (src.match(/function rewardsRows\(rewards\) \{[\s\S]*?\n\}/) || [''])[0];
+  const exits = (body.match(/shareRow\(\)/g) || []).length;
+  check('rewardsRows の3つの出口すべてにシェアが乗っている', exits === 3, `${exits}/3`);
+  check('報酬あり・ゲスト・送信失敗の全部が rewardsRows を通る',
+    (src.match(/\$\{rewardsRows\(rewards\)\}/g) || []).length >= 15,
+    `${(src.match(/\$\{rewardsRows\(rewards\)\}/g) || []).length} モーダル`);
+
+  check('シェアボタンの委譲リスナーがある', /closest\('\[data-bba-share\]'\)/.test(src), '');
+  check('シェア先URLに流入計測の ref が付いている', /\?ref=share/.test(src), '');
+  // ゲストにも出すことが肝心（まだアカウントの無い人こそ friend に見せる）。
+  const guest = (body.match(/if \(!rewards\) \{[\s\S]*?\n  \}/) || [''])[0];
+  check('ゲストの結果画面にもシェアが出る', /shareRow\(\)/.test(guest), '');
+  // 0点の回は誘わない（宣伝にならないうえ、押しても恥ずかしいだけ）。
+  check('0点のときはシェアを出さない', /score <= 0\) return null/.test(src), '');
+  // 画像つき→共有シート→コピー＋X の3段構え。どれか1つでも欠けると
+  // 「押しても何も起きない」環境が生まれる。
+  check('共有は画像つき・共有シート・コピーの3経路がある',
+    /navigator\.canShare/.test(src) && /navigator\.share/.test(src) && /clipboard/.test(src), '');
+  check('共有シートを閉じただけをエラー扱いしない', /AbortError/.test(src), '');
+}
+
+// --- 10. 外部サイトへの埋め込みは環境変数を入れたときだけ開く ---
+// itch.io 等に出すために必要だが、既定で開けると誰にでも枠の中に置かれる。
+{
+  const src = read('server/index.js');
+  check('埋め込み許可はホワイトリスト方式（* を受け付けない）',
+    /s !== '\*'/.test(src), '');
+  check('未設定なら X-Frame-Options を今までどおり出す',
+    /if \(!FRAME_ANCESTORS\.length\) res\.setHeader\('X-Frame-Options'/.test(src), '');
+  check('許可先は frame-ancestors に載る', /frame-ancestors 'self'\$\{FRAME_ANCESTORS/.test(src), '');
+}
+
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

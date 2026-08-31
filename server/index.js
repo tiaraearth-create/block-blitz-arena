@@ -293,10 +293,30 @@ app.use((err, req, res, next) => {
   }
 }
 
+// 🖼 このゲームを外部サイトのページに埋め込ませたいときだけ、その相手を明示する。
+//
+// 既定は今までどおり「自分自身のページ以外には埋め込ませない」。ゲーム配信
+// サイト（itch.io / CrazyGames 等）へ出すときだけ、そのサイトのオリジンを
+// 空白区切りで FRAME_ANCESTORS に入れる:
+//   FRAME_ANCESTORS="https://itch.io https://*.itch.io https://html-classic.itch.zone"
+//
+// 埋め込みを許すと、その相手のページの中でこのゲームが動く＝クリックジャッキング
+// の余地が生まれる。だから「全部許す(*)」は受け付けず、必ず相手を名指しさせる。
+// X-Frame-Options には複数オリジンを書く文法が無い（ALLOW-FROM は廃止済み）ので、
+// 許可先を指定したときは CSP の frame-ancestors 一本に任せて XFO は落とす
+// ── 両方出すと、古いブラウザが XFO を優先して結局埋め込めない。
+const FRAME_ANCESTORS = String(process.env.FRAME_ANCESTORS || '')
+  .split(/\s+/).map(s => s.trim())
+  .filter(s => s && s !== '*' && /^https?:\/\/[A-Za-z0-9.*\-:[\]]+$/.test(s));
+if (FRAME_ANCESTORS.length) {
+  console.log('[csp] 外部サイトからの埋め込みを許可:', FRAME_ANCESTORS.join(' '));
+}
+
 app.use(authMiddleware);
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  // 埋め込み先を指定したときだけ XFO を外す（理由は FRAME_ANCESTORS の注記）。
+  if (!FRAME_ANCESTORS.length) res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   // このゲームは外部のスクリプトも外部への通信も使っていない（フォントも
   // 画像も自前）。だから許可先を自分自身だけに絞れる。万一どこかに文字列を
@@ -325,7 +345,7 @@ app.use((req, res, next) => {
     "img-src 'self' data: blob:",
     "media-src 'self' data: blob:",
     `connect-src 'self'${wsSrc}`,
-    "frame-ancestors 'self'",
+    `frame-ancestors 'self'${FRAME_ANCESTORS.length ? ' ' + FRAME_ANCESTORS.join(' ') : ''}`,
     "base-uri 'self'",
     "form-action 'self'",
   ].join('; '));

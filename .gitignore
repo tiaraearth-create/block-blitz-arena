@@ -16,3 +16,5 @@ _repro_tmp.mjs
 .claude/
 test/_probe/
 test/_scratch/
+# 配布用に組み立てた成果物。中身は dist/itch/ のソースから再生成できる。
+dist/*.zip

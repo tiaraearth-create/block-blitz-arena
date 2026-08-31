@@ -175,6 +175,12 @@ body {
   background: linear-gradient(135deg, #ffd75e, #e09a1f);
   box-shadow: 0 5px 0 #96690f; color: #40300a;
 }
+/* 📣 結果画面のシェアボタン。報酬の行より一段control（金＝報酬）にせず、
+   「持ち帰る／広める」ための青系にして役割を色で分ける。 */
+.btn-share {
+  background: linear-gradient(135deg, #4f8cff, #2f5fd0);
+  box-shadow: 0 5px 0 #1f3f8f; color: #fff;
+}
 .btn:disabled { opacity: 0.45; pointer-events: none; }
 /* 小さいボタンも指で押す（実測32px）。<button> は中身を縦中央に置くので、
    min-height を足すだけで見た目の重心は変わらない。 */

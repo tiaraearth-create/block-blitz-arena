@@ -183,7 +183,7 @@ function rewardsRows(rewards) {
   // 送信に失敗した回。ログインしているのに「ログインしてください」と出すと、
   // 直せる問題（通信・メンテ）を直しようのない問題に見せてしまう。
   if (rewards && rewards.failed) {
-    return `<div class="rs-row"><span>${t('⚠️ 送信に失敗しました — この回の報酬は付いていません', '⚠️ Submission failed — no rewards for this run')}</span></div>`;
+    return `<div class="rs-row"><span>${t('⚠️ 送信に失敗しました — この回の報酬は付いていません', '⚠️ Submission failed — no rewards for this run')}</span></div>${shareRow()}`;
   }
   if (!rewards) {
     // ゲストの結果はサーバーへ送られない＝コイン・ジェム・パスXP・ミッション
@@ -194,7 +194,8 @@ function rewardsRows(rewards) {
       <div class="rs-row"><span>${t('🎁 この回の報酬は受け取れませんでした', '🎁 No rewards were earned for this run')}</span></div>
       <button class="btn btn-gold" data-bba-signup style="width:100%;margin-top:8px">
         ${t('🎁 アカウントを作って報酬を受け取る', '🎁 Create an account to earn rewards')}
-      </button>`;
+      </button>
+      ${shareRow()}`;
   }
   return `
     <div class="rs-row"><span>${t('🪙 コイン', '🪙 Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
@@ -206,7 +207,8 @@ function rewardsRows(rewards) {
           eventGems / badge の内訳を返す必要がある。 */''}
     ${rewards.gems ? `<div class="rs-row"><span>${t('💎 ジェム', '💎 Gems')}</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
     <div class="rs-row"><span>${t('🎫 パスXP', '🎫 Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
-    <div class="rs-row"><span>${t('⭐ アカウントXP', '⭐ Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>`;
+    <div class="rs-row"><span>${t('⭐ アカウントXP', '⭐ Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>
+    ${shareRow()}`;
 }
 
 export function quitCurrent() {
@@ -228,6 +230,174 @@ document.addEventListener('click', ev => {
   const chip = document.getElementById('userChip');
   if (chip) chip.click();
 });
+
+// ---------------------------------------------------------------------------
+// 📣 スコアのシェア
+//
+// 遊んだ人自身に広めてもらうための出口。個人開発で広告費ゼロなら、これが
+// いちばん効く導線になる（勝敗や記録をシェアできる対戦ゲームが伸びた実例は
+// 多い）。だから **ゲストにも出す** ── むしろ、まだアカウントを作っていない人
+// ほど「友達に見せる」動機で戻ってくる。
+//
+// 置き場所は rewardsRows() の中ひとつだけ。結果モーダルは18個あるが、全部が
+// この関数を通るので、ここに足せば全モードに一度に乗る（既存の
+// data-bba-signup ボタンとまったく同じ作法）。呼ばれる時点では currentMode の
+// 差し替えガードを通った直後なので、スコアは currentMode.engine から読める。
+// ---------------------------------------------------------------------------
+
+// シェア文に出すモード名。screens.js の MODE_LABEL を import すると
+// screens.js ⇄ modes.js の循環になるので、ここに短い対訳だけ持つ。
+const SHARE_MODE_NAME = {
+  solo: ['ソロプレイ', 'Solo'], ai: ['AI対戦', 'vs AI'], boss: ['ボス戦', 'Boss'],
+  rush: ['地獄ラッシュ', 'Boss Rush'], dungeon: ['ダンジョン', 'Dungeon'],
+  survival: ['サバイバル', 'Survival'], sprint: ['タイムアタック', 'Time Attack'],
+  weekly: ['ウィークリー', 'Weekly'], daily: ['デイリー', 'Daily'],
+  chaos: ['カオスモード', 'Chaos'], meltdown: ['メルトダウン', 'Meltdown'],
+  chimera: ['キメラ工房', 'Chimera'], royale: ['バトルロイヤル', 'Battle Royale'],
+  duel: ['オンライン対戦', 'Online Duel'], attack: ['アタック戦', 'Attack'],
+  team: ['チーム戦', 'Team Battle'], coop: ['協力プレイ', 'Co-op'],
+};
+const shareModeName = id => {
+  const p = SHARE_MODE_NAME[id];
+  return p ? t(p[0], p[1]) : t('プレイ', 'a run');
+};
+
+// シェアに使う「いまの成績」。currentMode から読むので引数が要らない。
+function shareSnapshot() {
+  const m = currentMode;
+  const e = m && m.engine;
+  if (!e) return null;
+  const score = Math.max(0, Math.round(e.score || 0));
+  if (score <= 0) return null;              // 0点は誘わない（宣伝にならない）
+  return {
+    score,
+    lines: e.linesCleared || 0,
+    combo: e.maxCombo || 0,
+    mode: shareModeName(m.mode),
+    floor: typeof m.floor === 'number' ? m.floor : null,
+    wave: typeof m.wave === 'number' ? m.wave : null,
+  };
+}
+
+function shareRow() {
+  if (!shareSnapshot()) return '';
+  return `<button class="btn btn-share" data-bba-share style="width:100%;margin-top:8px">
+    ${t('📣 スコアをシェアする', '📣 Share your score')}
+  </button>`;
+}
+
+const SHARE_URL = `${location.origin}/?ref=share`;
+
+function shareText(s) {
+  const extra = s.floor ? t(`（${s.floor}階）`, ` (floor ${s.floor})`)
+    : s.wave ? t(`（Wave ${s.wave}）`, ` (wave ${s.wave})`) : '';
+  return t(
+    `Block Blitz Arena の${s.mode}で ${fmt(s.score)}点${extra}！\n最大コンボ ${s.combo} / ${fmt(s.lines)}ライン消し\n\n無料・登録なしでブラウザですぐ遊べます 👇\n${SHARE_URL}\n#BlockBlitzArena #ブロックパズル`,
+    `Scored ${fmt(s.score)} in ${s.mode}${extra} on Block Blitz Arena!\nBest combo ${s.combo} / ${fmt(s.lines)} lines cleared\n\nFree in your browser, no signup 👇\n${SHARE_URL}\n#BlockBlitzArena`);
+}
+
+// シェア用の画像を1枚描く。文字だけより圧倒的に目に留まるので、
+// 画像を渡せる環境（Web Share API level 2）では画像も一緒に送る。
+function drawShareCard(s) {
+  const W = 1200, H = 630;                    // OGP と同じ比率（SNSでの見え方が安定する）
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+
+  const bg = g.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#141a2e'); bg.addColorStop(1, '#251b3a');
+  g.fillStyle = bg; g.fillRect(0, 0, W, H);
+
+  // 背景に薄くブロックを散らす（このゲームらしさ）。決定的に並べるので毎回同じ絵。
+  const cols = ['#4f8cff', '#ffd93d', '#6bd968', '#ff6b6b', '#b06bff', '#3ecfd5'];
+  for (let i = 0; i < 22; i++) {
+    const x = ((i * 137) % (W - 90)) + 20;
+    const y = ((i * 271) % (H - 90)) + 20;
+    const sz = 34 + (i % 3) * 16;
+    g.globalAlpha = 0.09;
+    g.fillStyle = cols[i % cols.length];
+    g.beginPath(); g.roundRect(x, y, sz, sz, 8); g.fill();
+  }
+  g.globalAlpha = 1;
+
+  g.textAlign = 'center';
+  g.fillStyle = '#9fb0d0';
+  g.font = 'bold 34px system-ui, sans-serif';
+  g.fillText('BLOCK BLITZ ARENA', W / 2, 96);
+
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 40px system-ui, sans-serif';
+  g.fillText(s.mode, W / 2, 176);
+
+  g.fillStyle = '#ffd93d';
+  g.font = 'bold 168px system-ui, sans-serif';
+  g.fillText(fmt(s.score), W / 2, 350);
+
+  g.fillStyle = '#c8d4ea';
+  g.font = '36px system-ui, sans-serif';
+  const sub = s.floor ? t(`${s.floor}階 到達`, `Floor ${s.floor}`)
+    : s.wave ? t(`Wave ${s.wave} 到達`, `Wave ${s.wave}`)
+    : t(`最大コンボ ${s.combo} ・ ${fmt(s.lines)} ライン`, `${s.combo} combo · ${fmt(s.lines)} lines`);
+  g.fillText(sub, W / 2, 420);
+
+  g.fillStyle = '#7f8db0';
+  g.font = '30px system-ui, sans-serif';
+  g.fillText(location.host, W / 2, 552);
+  return c;
+}
+
+const canvasToBlob = c => new Promise(res => c.toBlob(res, 'image/png'));
+
+async function doShare() {
+  const s = shareSnapshot();
+  if (!s) return;
+  const text = shareText(s);
+  const title = 'Block Blitz Arena';
+
+  // ① 画像つきで共有できるなら、それがいちばん強い（スマホの共有シート）。
+  try {
+    const blob = await canvasToBlob(drawShareCard(s));
+    if (blob) {
+      const file = new File([blob], 'block-blitz-score.png', { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], text, title });
+        return;
+      }
+    }
+  } catch (err) {
+    // 共有シートを閉じただけ（AbortError）はエラーではない。黙って終わる。
+    if (err && err.name === 'AbortError') return;
+  }
+  // ② 画像なしの共有シート（古いスマホ）。
+  try {
+    if (navigator.share) { await navigator.share({ text, title }); return; }
+  } catch (err) {
+    if (err && err.name === 'AbortError') return;
+  }
+  // ③ PC: 文面をコピーしてから X の投稿画面を開く。
+  //    どちらか片方でも成功したら「何も起きない」を避けられる。
+  let copied = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text); copied = true;
+    }
+  } catch { /* 下で案内する */ }
+  const intent = `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
+  const w = window.open(intent, '_blank', 'noopener,noreferrer');
+  if (!w) {
+    toast(copied
+      ? t('📋 シェア文をコピーしました。好きな場所に貼り付けてください', '📋 Copied — paste it anywhere')
+      : t('シェアできませんでした', 'Could not share'), copied ? 'ok' : 'err', 3200);
+  }
+}
+
+document.addEventListener('click', ev => {
+  const btn = ev.target && ev.target.closest ? ev.target.closest('[data-bba-share]') : null;
+  if (!btn) return;
+  audio.click();
+  doShare();
+});
+
 
 // ---------------------------------------------------------------------------
 // 全消し「昇華」
