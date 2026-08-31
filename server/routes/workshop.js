@@ -16,6 +16,7 @@ import {
   Engine, SHAPES, SIZE,
 } from '../../public/js/engine.js';
 import { ctx } from '../context.js';
+import { buildWorkshopSeedStages, WORKSHOP_SEED_REV } from '../workshop-seed.js';
 
 // index.js のモジュールスコープにしか無いもの。値は起動時に一度だけ
 // 流し込む（init… は server.listen より前・battle 生成より後に呼ばれる）。
@@ -24,6 +25,7 @@ import { ctx } from '../context.js';
 let db, rateLimit, sanitizeReplay;
 export function initWorkshopRoutes() {
   ({ db, rateLimit, sanitizeReplay } = ctx);
+  seedWorkshopStages();
 }
 
 // ミドルウェアだけは上の遅延束縛にできない ── ハンドラ本体と違って、
@@ -165,6 +167,41 @@ function verifyWorkshopClear(board, pieceIdx, moves) {
   return { ok: true, moves: used, score: e.score };
 }
 
+// ---------------------------------------------------------------------------
+// 🏁 開店祝いの初期ステージ（server/workshop-seed.js）
+//
+// 起動時に一度だけ、**工房がまだ空のときだけ** 住人のステージを何本か置く。
+// 空の工房は「まだ誰も投稿していません」しか出ず、遊び方も伝わらないため。
+//
+// 冪等性は二重の門で担保する:
+//   ① db.meta.workshop.seedRev … 一度でも投入したら以後は何もしない。
+//      これがあるので「初期ステージを全部消した」あとに再起動しても復活しない。
+//   ② stages が1つでもあるなら触らない … 復元やバックアップで人の投稿が
+//      入っている工房に、あとから開店祝いを足さない。
+//   さらに ③ コードが既に埋まっているステージは飛ばす（多重防御）。
+//
+// 投入前に、投稿と**まったく同じ** verifyWorkshopClear() で作者の模範解答を
+// 再生する。解けなかったものは入らない ── 「解けないステージが公開される」
+// のを防ぐ仕組みを、運営が置くステージだけ素通りさせては意味がない。
+// ---------------------------------------------------------------------------
+function seedWorkshopStages() {
+  const w = workshopStore();
+  if (w && (w.seedRev || (w.stages && typeof w.stages === 'object' && Object.keys(w.stages).length > 0))) return;
+  const seeded = buildWorkshopSeedStages(verifyWorkshopClear, (s, why) => {
+    console.warn(`[workshop] 初期ステージ「${s.title}」は再生で解けなかったので入れませんでした (${why})`);
+  });
+  const store = ensureWorkshop();
+  store.seedRev = WORKSHOP_SEED_REV;   // 落ちた場合も含めて「一度走った」印
+  let added = 0;
+  for (const s of seeded) {
+    if (store.stages[s.code]) continue;
+    store.stages[s.code] = s;
+    added++;
+  }
+  saveDb();
+  if (added) console.log(`[workshop] 🛠パズル工房に住人の初期ステージ ${added}件を並べました`);
+}
+
 // 配信する形。solution（作者の模範解答）は本人と管理者にしか出さない ──
 // 誰でも読めると、工房のステージが全部「答えを見るだけ」になってしまう。
 function workshopView(stage, viewer, opts = {}) {
@@ -183,6 +220,9 @@ function workshopView(stage, viewer, opts = {}) {
     liked: !!viewer && Array.isArray(stage.likedBy) && stage.likedBy.includes(viewer.id),
     mine,
   };
+  // 英語のステージ名。プレイヤーの投稿には無い欄なので、持っているものだけ出す
+  // （画面側 normalizeWorkshopStage は nameEn/titleEn を見て英語表示に使う）。
+  if (stage.titleEn) out.titleEn = String(stage.titleEn);
   if (opts.board) out.board = stage.board;
   if (opts.board) out.targets = stage.board.reduce((a, v, i) => (v !== 0 ? (a.push(i), a) : a), []);
   if (mine || (viewer && viewer.role === 'admin')) out.solution = stage.solution;
