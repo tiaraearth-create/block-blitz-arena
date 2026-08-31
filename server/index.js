@@ -161,11 +161,45 @@ const app = express();
 // XFF を無視させる。数値=ホップ数、'false'/'0'/'off'=無効、その他文字列は
 // Express にそのまま渡す(サブネット指定 'loopback','10.0.0.0/8' 等)。
 const _trustProxy = process.env.TRUST_PROXY;
-app.set('trust proxy',
-  _trustProxy == null || _trustProxy === '' ? 1
+const TRUST_PROXY = _trustProxy == null || _trustProxy === '' ? 1
   : /^(0|false|off|no)$/i.test(_trustProxy.trim()) ? false
   : /^\d+$/.test(_trustProxy.trim()) ? Number(_trustProxy.trim())
-  : _trustProxy.trim());
+  : _trustProxy.trim();
+app.set('trust proxy', TRUST_PROXY);
+
+// WebSocket の接続元IP。Express の req.ip と同じ規則で解く。
+//
+// なぜ要るか: HTTP 側は上の trust proxy 設定のおかげで X-Forwarded-For から
+// 本当のクライアントIPを取れていたが、WS のアップグレードは Express を通らず、
+// battle.js が req.socket.remoteAddress を直に読んでいた。前段にLBがある本番
+// (Render) では remoteAddress がプロキシの内部IPになるので、「同一IPあたり
+// 12接続まで」の上限が“全プレイヤー合算”に効いてしまう。1人がチャット用と
+// 対戦用で2本つなぐ設計なので、最悪プロキシIP1つあたり6人前後で新規プレイヤーが
+// 「同時接続が多すぎます」で門前払いになる。ゲストのチャット制限キーも同じ IP
+// なので、他人の発言まで巻き込んで止まる。
+//
+// proxy-addr は express の依存であって当プロジェクトの直接依存ではないので、
+// ホップ数の解釈だけをここで実装する（Express と同じく、socket の相手を先頭に
+// 置いた鎖の n 番目 = 信頼したホップ数ぶん遡った位置を採用する）。数値指定は
+// これで Express の req.ip と完全に一致することを確認済み。
+//
+// サブネット指定('loopback','10.0.0.0/8' 等)の文字列は、鎖の各ホップが信頼集合に
+// 入っているかを見ないと解けない ── そこだけ真似ると Express より**緩く**なり、
+// 「信頼していない相手が付けた XFF を採用する」＝詐称が成立して、下の per-IP 上限も
+// ゲストの連投制限も回避されてしまう。なので文字列指定のときは XFF を一切見ずに
+// socket の相手を返す（Express より厳しい側に倒す）。厳しすぎて困る＝プロキシ背後で
+// 壁が出る場合は、TRUST_PROXY をホップ数（数値）で指定すること。
+function clientIpOf(req) {
+  const raw = String((req && req.socket && req.socket.remoteAddress) || '?');
+  if (TRUST_PROXY === false) return raw;          // 直結公開: XFF は詐称できるので見ない
+  if (typeof TRUST_PROXY !== 'number') return raw; // サブネット指定は数値化できない
+  const hops = TRUST_PROXY;
+  if (hops <= 0) return raw;
+  const xff = String((req && req.headers && req.headers['x-forwarded-for']) || '')
+    .split(',').map(s => s.trim()).filter(Boolean).reverse();
+  const chain = [raw, ...xff];
+  return chain[Math.min(hops, chain.length - 1)] || raw;
+}
 app.use(compression());   // gzip — big win for overseas players on slow links
 // Restore uploads a whole database dump, so it gets its own generous parser;
 // every other route stays on the tight limit.
@@ -3597,6 +3631,9 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, (req, res) => {
     inQueue: battle.queueSize(),
     activeMatches: battle.matches.size,
     openRooms: battle.rooms.size,
+    // 🔌 接続上限と、そこで断った回数。rejectedPerIp が増えているのに人数が
+    // 少ないときは、IPの見え方（前段プロキシ・trust proxy 設定）を疑うこと。
+    conn: battle.connStats ? battle.connStats() : null,
     popScale: getLiveScale(),
     ambient: getCustom(),
     crowd: {
@@ -3672,6 +3709,8 @@ const battle = initBattle(server, {
     return !!s && RESERVED_NAMES.some(r => r.toLowerCase() === s);
   },
   isMaintenance: inMaintenance,
+  // WSの接続元IP。HTTP側の req.ip と同じ規則で解く（上の clientIpOf のコメント参照）。
+  clientIp: clientIpOf,
   guildTagOf: (name, user) => tagOfName(db, name, user),
   // AI-vote guild solidarity: ghost-guild tag only (never scans db.users).
   residentGuildTag: (name) => { const g = ghostGuildOfResident(name); return g ? g.tag : null; },

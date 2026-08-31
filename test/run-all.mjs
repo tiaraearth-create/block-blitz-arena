@@ -8,13 +8,14 @@
 // ここでは全部を最後まで走らせて、落ちたものをまとめて出す。
 //
 // ■ 並列にしてよいのか（重要）
-// サーバーを立てるテストが16本ある。並列にするなら、次の2つが衝突しないことが
+// サーバーを立てるテストが17本ある。並列にするなら、次の2つが衝突しないことが
 // 前提になる。両方とも確認済み:
-//   ・ポート … 全16本が test/_port.mjs の freePort() を使い、OS に 0 番を
+//   ・ポート … 全17本が test/_port.mjs の freePort() を使い、OS に 0 番を
 //     渡して空きを割り当ててもらっている。固定ポートは残っていない。
-//   ・保存先 … 全16本が DATA_DIR に os.tmpdir() 配下の**自分専用**の名前を
+//   ・保存先 … 全17本が DATA_DIR に os.tmpdir() 配下の**自分専用**の名前を
 //     渡している（bba-battle-test / bba-social-test …）。重複は無い。
-//     dbsafety だけは mkdtempSync で毎回別の場所を作る。
+//     dbsafety は mkdtempSync で毎回別の場所を作り、wsip は割り当てられた
+//     ポート由来の名前を使う（起動前と終了後に自分で消す）。
 // なので同時に走らせてもデータを踏み合わない。
 //
 // ただし freePort() は「空きを見つけて閉じてから使う」ので、閉じてから
@@ -45,8 +46,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 
 // 速い順。直列で回すときに、安いテストから落ちてくれたほうが早く気づける。
-// 上の14本はサーバーを立てない純ロジック（合計でも数秒）。
+// 上の17本はサーバーを立てない純ロジック（合計でも数秒）。
 const TESTS = [
+  // いちばん最初に置く。public/js は素のままブラウザへ配られる（ビルド工程が
+  // 無い）ので、閉じ括弧1つの欠けで全プレイヤーが起動できなくなる。それを
+  // 数百msで止められるのはこれだけなので、他のどれより先に落ちてほしい。
+  'syntax.test.mjs',
   'engine.test.mjs',
   'modes-structure.test.mjs',
   'mode-registry.test.mjs',
@@ -64,6 +69,9 @@ const TESTS = [
   'ranking-ai.test.mjs',
   'dbsafety.test.mjs',
   // ここから下はサーバーを起動する。
+  // 接続上限まわり。サーバーを2つ立てる（プロキシ有り構成／無し構成）ぶん
+  // 少し重いので、サーバー組の先頭に置いて早めに結果を出す。
+  'wsip.test.mjs',
   'restore-auth.test.mjs',
   'session.test.mjs',
   'rank-rewards.test.mjs',

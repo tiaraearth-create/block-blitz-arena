@@ -107,8 +107,14 @@ export function cutDamageFor(index, humans, { keystone = false, run = null } = {
 }
 
 // 断罪を1回落としたときにゼロが回復する量。
-export function missHealFor(index, humans, run) {
-  return Math.round(danHpFor(index, humans, run) * MISS_HEAL / lanesFor(humans));
+// 断罪を1回落としたときの回復量。humans は「HPの重み」、lanes は「同時に走って
+// いる断罪の本数」で、本来は別のもの。1ラウンド全部落としたときの回復量を一定に
+// するために本数で割るので、本数は実際に走っている数（＝生きている人数から決まる
+// fireVerdicts と同じ値）を渡すこと。省略時は従来どおり humans から導く。
+export function missHealFor(index, humans, run, lanes) {
+  const n = Number(lanes);
+  const div = Number.isFinite(n) && n >= 1 ? Math.floor(n) : lanesFor(humans);
+  return Math.round(danHpFor(index, humans, run) * MISS_HEAL / div);
 }
 
 export function cutsNeededFor(index) {

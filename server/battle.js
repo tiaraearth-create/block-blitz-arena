@@ -142,6 +142,24 @@ export function initBattle(server, deps) {
   const MAX_SOCKETS_PER_USER = 6;       // 同一アカウントあたり（PC＋スマホ＋予備）
   const HELLO_GRACE_MS = 20_000;        // 名乗らない接続を切るまで
   const sockIp = ws => (ws && ws._ip) || '?';
+  // 接続元IP。index.js が Express の req.ip と同じ規則（trust proxy）で解いた
+  // 関数を渡してくる。渡ってこない組み方（テストの部分起動など）では従来どおり
+  // socket の相手をそのまま使う。
+  //
+  // ここを remoteAddress 直読みにしていたのが「6人の壁」の正体だった。前段に
+  // LB がある本番では全員がプロキシの内部IPに見えるので、下の per-IP 上限が
+  // “全プレイヤー合算”に効く。1人がチャット用＋対戦用の2本をつなぐ設計なので、
+  // プロキシIP1つあたり6人前後で新規プレイヤーが門前払いになっていた。
+  const ipOf = req => (deps.clientIp
+    ? String(deps.clientIp(req) || '?')
+    : String((req && req.socket && req.socket.remoteAddress) || '?'));
+  // 上限で断った回数。壁に当たり始めたことを運営が事前に気づけるように数える
+  // （断ること自体は正しい動作なので、ログではなく管理画面の数字として出す）。
+  // 上限は3つ（全体・IPごと・アカウントごと）あるので、カウンタも3つ並べて
+  // total はその合計にする ── total が「全体上限ぶんだけ」だと、IP上限で毎分
+  // 断られていても total=0 と表示され、いちばん見たい数字を読み違える。
+  const connRejects = { total: 0, max: 0, perIp: 0, perUser: 0, lastAt: null };
+  const noteReject = kind => { connRejects[kind]++; connRejects.total++; connRejects.lastAt = Date.now(); };
   const matches = new Map();               // matchId -> match
   const rooms = new Map();                 // code -> room
   const tourneys = new Map();              // id -> tournament
@@ -149,6 +167,9 @@ export function initBattle(server, deps) {
   const queues = { duel: [], attack: [], team: [], raid: [], tourney: [], royale: [], coop: [] };   // entries: { ws, since, botAt }
   // 全体チャットを「発言順」で配るための直列化チェーン（翻訳完了順のズレを防ぐ）。
   let chatChain = Promise.resolve();
+  // チェーンの中で落ちた回数。catch で復帰するようになったぶん「静かに落ち
+  // 続けている」状態に気づけるよう、数だけ管理画面へ出す。
+  let chatChainErrors = 0;
 
   function send(sock, msg) {
     if (sock.isBot) return;
@@ -2601,9 +2622,16 @@ export function initBattle(server, deps) {
   // -------------------------------------------------------------------------
 
   wss.on('connection', (ws, req) => {
-    const ip = String((req && req.socket && req.socket.remoteAddress) || '?');
+    // ws は ECONNRESET・不正フレーム・ping 失敗といった普通の事象で 'error' を
+    // 出す。リスナが1本も無い EventEmitter が 'error' を出すとプロセスごと落ちる
+    // ので、**何よりも先に**付ける。以前は下の上限チェックより後ろに付けていた
+    // ため、「断った接続」だけがこの保護の外にいた（close() は閉じ終わるまで受信を
+    // 続けるので、そこでエラーが出ると全試合を道連れに落ちうる）。
+    ws.on('error', err => console.error('[ws] socket error:', err && err.code ? err.code : '', err && err.message));
+    const ip = ipOf(req);
     ws._ip = ip;
     if (clients.size >= MAX_SOCKETS) {
+      noteReject('max');
       try { send(ws, { type: 'error', error: '接続数が上限に達しています。しばらくしてからお試しください' }); ws.close(); } catch { /* ignore */ }
       return;
     }
@@ -2615,6 +2643,7 @@ export function initBattle(server, deps) {
     let sameIp = 0;
     for (const c of clients) if (sockIp(c) === ip && c.readyState === c.OPEN) sameIp++;
     if (sameIp >= MAX_SOCKETS_PER_IP) {
+      noteReject('perIp');
       try { send(ws, { type: 'error', error: '同時接続が多すぎます' }); ws.close(); } catch { /* ignore */ }
       return;
     }
@@ -2629,11 +2658,6 @@ export function initBattle(server, deps) {
     clients.add(ws);
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
-    // ws emits 'error' for ordinary conditions (ECONNRESET on a phone that
-    // walked out of range, a malformed frame, a failed ping). An EventEmitter
-    // that emits 'error' with no listener takes the whole process down with
-    // it — one flaky connection would have ended every live match.
-    ws.on('error', err => console.error('[ws] socket error:', err && err.code ? err.code : '', err && err.message));
 
     ws.on('message', (raw) => {
       let msg;
@@ -2685,6 +2709,7 @@ export function initBattle(server, deps) {
           if (user) {
             const mine = socketsOf(user.id).filter(w => w !== ws).length;
             if (mine >= MAX_SOCKETS_PER_USER) {
+              noteReject('perUser');
               send(ws, { type: 'error', error: '同じアカウントの接続が多すぎます' });
               ws.close();
               return;
@@ -3173,6 +3198,15 @@ export function initBattle(server, deps) {
           // 翻訳の完了順ではなく発言順で配る。翻訳を待ってから配ると、外部翻訳
           // エンジン設定時に発言の順番が入れ替わる。翻訳は待つが、配信は到着順に
           // 直列化する（translateChat は 2.5秒でタイムアウトするので詰まらない）。
+          // ⚠️ このチェーンは必ず catch で閉じること。
+          // ここは「発言順を守るため」に全員ぶんの発言を1本の Promise チェーンへ
+          // 直列につないでいる。翻訳以外（履歴・配信・住人の返信生成）は素なので、
+          // どれか1つが投げるとチェーンが rejected のまま固定され、以後 .then() の
+          // 中身が二度と走らない ＝ 全プレイヤーの発言が、レート制限と統計だけ
+          // 通って誰にも届かないまま消える。住人のセリフは postChat 直呼びで
+          // ここを通らないのでチャット欄は動き続け、気づくのが決定的に遅れる
+          // （復旧は再デプロイのみ）。catch を付ければチェーンは fulfilled に
+          // 戻り、1件の失敗が後続の発言を巻き込まなくなる。
           chatChain = chatChain.then(async () => {
             let tr = null;
             try { tr = await translateChat(text); } catch { /* ignore */ }
@@ -3183,7 +3217,7 @@ export function initBattle(server, deps) {
             if (repliedResident) forceResidentReply(ws, replyTarget.from, text);
             else maybeAmbientReply(text);
             maybeResidentReacts(entry);
-          });
+          }).catch(err => { chatChainErrors++; console.error('[chat] chain:', err); });
           break;
         }
         case 'react': {
@@ -3398,6 +3432,18 @@ export function initBattle(server, deps) {
     endAllForShutdown,
     queueSize: queueSizeAll,   // all seven queues — duel+team alone under-reported
     displayOnline, displayMatches,
+    // 🔌 接続の上限まわり。断った回数が増え始めたら、上限そのものを見直す合図。
+    connStats: () => ({
+      max: MAX_SOCKETS, perIp: MAX_SOCKETS_PER_IP, perUser: MAX_SOCKETS_PER_USER,
+      open: clients.size,
+      // いま開いている socket が何種類のIPに見えているか。前段プロキシの設定が
+      // ずれていると、人数が多いのにここが 1 に張り付く（＝また壁が出る合図）。
+      distinctIps: new Set([...clients].map(sockIp)).size,
+      rejectedTotal: connRejects.total,
+      rejectedMax: connRejects.max, rejectedPerIp: connRejects.perIp, rejectedPerUser: connRejects.perUser,
+      lastRejectAt: connRejects.lastAt,
+      chatChainErrors,
+    }),
     broadcastAll,
     zero: {
       name: ZERO_NAME,

@@ -29,6 +29,30 @@ services:
     buildCommand: npm ci --omit=dev
     startCommand: npm start
     healthCheckPath: /api/status
+    # 🌙 毎晩の自動バックアップ（.github/workflows/backup.yml）は
+    # server/seed-backup.json だけを更新してコミット＆push する。それが自動
+    # デプロイを誘発していた ── このサービスは永続ディスク付きなので Render は
+    # ゼロダウンタイムデプロイができず（旧を止めてから新を起動する）、毎晩
+    # 全 WebSocket が切れて短時間ダウンしていた。進行中の対戦は引き分けで畳まれる。
+    #
+    # seed はディスクを失った日の保険であって、載せ替えを急ぐ理由が無い。
+    # 次の通常デプロイで一緒に運ばれれば十分なので、この1ファイルだけの変更では
+    # デプロイしない。
+    # ※ ignoredPaths は「これ以外に変更があればデプロイする」という意味なので、
+    #   コードを直した回はこれまでどおり普通にデプロイされる。
+    #
+    # ⚠️ 引き換えに、本番インスタンスが積んでいる seed は「最後にコードを
+    #    デプロイした日のもの」で固定される（以前は毎晩デプロイされていたので
+    #    常に24時間以内だった）。GitHub 側には毎晩の最新 seed が入り続けるので、
+    #    ディスクを失った日の復旧手順はこう:
+    #      Render ダッシュボード → Manual Deploy → Deploy latest commit
+    #    手動デプロイは build filter を無視するので、最新の seed ごと載る。
+    # ⚠️ free プランへ戻すとき（上の注意書き）は、この buildFilter ブロックも
+    #    一緒に外すこと。free にはディスクが無く「毎回の起動が seed からの復元」
+    #    なので、夜間バックアップがデプロイされないと復元元が古いまま止まる。
+    buildFilter:
+      ignoredPaths:
+        - server/seed-backup.json
     envVars:
       # 本番の処理系を CI（.github/workflows/*.yml）と Dockerfile に合わせて固定する。
       # 未指定だと Render 側の既定が使われ、その既定が上がった日に無言で変わる。

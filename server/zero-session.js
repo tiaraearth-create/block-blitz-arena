@@ -264,7 +264,7 @@ export function tick(s, run, deps) {
     return;
   }
   const dan = danAt(danIndex);
-  const softCap = softCapFor(danIndex, s.humans, run);
+  const softCap = softCapFor(danIndex, danBasis(s, run), run);
 
   // --- 住人ボットが実際に打つ（これが段の7割を削る火力）---
   for (const e of liveBots(s)) {
@@ -327,7 +327,7 @@ export function tick(s, run, deps) {
   runDeal(s, run, danIndex, deps, elapsed, t);
 
   // --- 段が落ちたか ---
-  const seal = sealHpFor(danIndex, s.humans, run);
+  const seal = sealHpFor(danIndex, danBasis(s, run), run);
   if ((run.dealt || 0) >= softCap - 0.5 && (run.sealDealt || 0) >= seal) {
     breakDan(s, run, danIndex, deps);
   }
@@ -359,7 +359,11 @@ function resolveExpiredVerdicts(s, run, danIndex, deps) {
     if (deps.onStat) deps.onStat(v.target, 'zeroMissed');
     // 落とすと段が少し回復し、住人が1人処刑される。
     const dan = danAt(danIndex);
-    run.dealt = Math.max(0, (run.dealt || 0) - missHealFor(danIndex, s.humans, run));
+    // 回復量はHPの重み（申込人数）で決まるが、missHealFor は同じ引数を
+    // 「同時に走る断罪の本数」の分母にも使う。本数は実際に生きている人数で
+    // 決まる（fireVerdicts と同じ）ので、そちらは lanes で明示的に上書きする。
+    run.dealt = Math.max(0, (run.dealt || 0)
+      - missHealFor(danIndex, danBasis(s, run), run, lanesFor(aliveHumans(s).length)));
     const victim = executeResident(s, run, deps, random);
     chronicle(run, 'missed', { by: v.target, victim: victim ? victim.name : null });
     if (say) say('missed', danIndex, { you: v.target, name: victim ? victim.name : undefined, seed: v.at });
@@ -506,7 +510,7 @@ function applyHumanScore(s, run, e, rawScore, t) {
   const budget = Math.floor(HUMAN_DPM_CAP * span / 60_000);
   const add = Math.min(gained, budget);
   if (add <= 0) return 0;
-  const softCap = softCapFor(danIndex, s.humans, run);
+  const softCap = softCapFor(danIndex, danBasis(s, run), run);
   const before = run.dealt || 0;
   // 点は封印の手前で必ず止まる（住人の火力とまったく同じ扱い）。
   run.dealt = Math.min(softCap, before + add);
@@ -534,7 +538,7 @@ export function submitCut(s, run, name, verdictId, clearedCells, deps) {
   // 👑 王座の欠片。急所ごと斬れば上乗せ。
   if (deps.shard) deps.shard(name, (deps.SHARD ? deps.SHARD.cut : 3) + (r.keystone ? (deps.SHARD ? deps.SHARD.keystone : 5) : 0));
   const danIndex = run.dan | 0;
-  const dmg = cutDamageFor(danIndex, s.humans, { keystone: r.keystone, run });
+  const dmg = cutDamageFor(danIndex, danBasis(s, run), { keystone: r.keystone, run });
   run.sealDealt = (run.sealDealt || 0) + dmg;
   run.cuts = (run.cuts || 0) + 1;
   chronicle(run, 'cut', { by: name, keystone: !!r.keystone, dan: danIndex + 1 });
@@ -564,7 +568,7 @@ export function topOut(s, run, name, deps, userId = null) {
   e.alive = false;
   e.downUntil = t + REVIVE_SEC * 1000;
   const danIndex = run.dan | 0;
-  run.dealt = Math.max(0, (run.dealt || 0) - Math.round(danHpFor(danIndex, s.humans, run) * TOPOUT_HEAL));
+  run.dealt = Math.max(0, (run.dealt || 0) - Math.round(danHpFor(danIndex, danBasis(s, run), run) * TOPOUT_HEAL));
   if (say) say('revive', danIndex, { you: name, seed: now() });
   return true;
 }
@@ -583,6 +587,38 @@ function executeResident(s, run, deps, random) {
   s.executed++;
   run.fallen.push({ name: victim.name, id: victim.residentId || null, at: Date.now() });
   return victim;
+}
+
+// その段のHP基準になる人数。
+//
+// ここを s.humans（＝いま部屋にいる人数）から直に取っていたのが、
+// 「誰も打っていないのに段が割れる」バグの正体だった。閾値（softCap / seal）は
+// 人数に比例して重くなるのに、削った量（run.dealt / run.sealDealt）は
+// db.meta.adminEventRun 側に日単位の絶対値で残る。最後の人間が抜けると部屋は
+// 破棄されるので、6人で貯めたあと1人が入り直すと閾値だけが半分近くまで縮み、
+// 入った瞬間の tick でいきなり陥落 ── その人が「とどめ」として欠片もバッジも
+// 伝言権も持っていってしまう。全員退室→再入場で意図的にも再現できた。
+//
+// 直し方は「部屋の寿命に左右されない値を分母にする」こと。run.entrants はその回の
+// 申込人数で、adminevent.js の ensureRun が持ち、遅い申込でだけ増える（部屋を
+// 畳んでも減らない）。段の進捗と同じ run に載っているので、これでようやく
+// 「削った量」と「目標」が同じものさしに乗る。
+//
+// あえて「段の開始時に人数を焼き付ける」やり方は採らない。焼き付けは
+//   (a) その日の最初の段が「最初に読んだ人」＝1人基準に確定してしまう
+//       （実際の呼び出し順は zeroSeatIn → stateView なので必ず1人になる）
+//   (b) s.humans は部屋のピーク人数で退席では下がらないため、賑わった枠の
+//       人数が次の枠へ居座って「1人では絶対に割れない段」を作る
+//   (c) 焼き付けの無い既存の run では、移行の瞬間に同じ事故がもう一度起きる
+// という別の穴を開ける。申込人数は最初から安定しているので焼き付ける必要がない。
+//
+// 副作用を持たない（run を書き換えない）ことも大事 ── stateView は「画面に送る
+// 形を作るだけ」の関数で、そこが共有状態の最初の書き手になってはいけない。
+function danBasis(s, run) {
+  const signed = Math.max(0, (run && run.entrants) | 0);
+  if (signed >= 1) return signed;
+  // 申込数を持たない run（テストからの直接呼び出しなど）だけ、部屋の人数に頼る。
+  return Math.max(1, (s && s.humans) | 0);
 }
 
 // 段が割れた。王座が1つ返ってくる。
@@ -750,9 +786,12 @@ export function submitDealVote(run, userId, pick) {
 
 export function stateView(s, run) {
   const danIndex = Math.min(DAN.length - 1, run.dan | 0);
-  const hp = danHpFor(danIndex, s.humans, run);
-  const seal = sealHpFor(danIndex, s.humans, run);
-  const soft = softCapFor(danIndex, s.humans, run);
+  // 表示も判定とまったく同じ基準を使う（片方だけ人数で動くと、ゲージが
+  // 満タンなのに割れない／空なのに割れる、が起きる）。
+  const basis = danBasis(s, run);
+  const hp = danHpFor(danIndex, basis, run);
+  const seal = sealHpFor(danIndex, basis, run);
+  const soft = softCapFor(danIndex, basis, run);
   return {
     type: 'zero_state',
     dan: danIndex + 1,

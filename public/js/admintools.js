@@ -17,6 +17,11 @@ import { AI_LEVELS } from './ai.js';
 
 const isAdmin = () => !!session.user && session.user.role === 'admin' && staffExtras();
 
+// 管理者はモードを問わず何でもできる（運営の方針）。アイテム・奥義バーが
+// 出ないモードでも、パレット・ゴッド・オートパイロットはここから使える。
+// 全部まとめて切りたいときは設定の「🛡️ 管理者専用ボタンを表示」を OFF に
+// する ── isAdmin() が staffExtras() を見ているので、それだけで素の状態に戻る。
+
 // Persistent "god" switches — live on the engine so every mode honours them.
 export const god = { invincible: false, noGarbage: false, combo: false, mult: 1, fever: false, freezeEnemy: false, stopTimer: false, ultInfinite: true };
 

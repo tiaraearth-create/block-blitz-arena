@@ -287,4 +287,61 @@ const freshRun = () => ({ dan: 0, dealt: 0, sealDealt: 0, cuts: 0, fallen: [], b
   check('でたらめな割合は無視される', sealHpFor(0, 1, { dealSeal: 9 }) === seal, '');
 }
 
+
+// ---- 🔌 段の重さは「部屋」ではなく「その回の申込人数」で決まる -------------
+//
+// 回帰対象: 段の閾値（softCap / seal）を s.humans（いま部屋にいる人数）から
+// 取っていたため、進捗（run.dealt / run.sealDealt は日単位で持ち越す絶対値）は
+// そのままなのに閾値だけが縮み、大人数で貯めたあと1人が入り直すと**誰も1手も
+// 打たないまま段が割れて**、その人が「とどめ」の欠片とバッジを持っていった。
+// 全員退室→再入場で意図的にも再現できた。
+{
+  CLOCK = 9_000_000; SEED = 4242;
+  // 6人が申し込んだ回。閾値は申込人数で決まるので、部屋の人数には左右されない。
+  const run = { ...freshRun(), entrants: 6 };
+  const softCap6 = softCapFor(0, 6);
+  const seal6 = sealHpFor(0, 6);
+
+  // 6人ぶんの目標の「ほぼ手前」まで進めた状態を作る（陥落条件は未達）。
+  run.dealt = softCap6;
+  run.sealDealt = Math.floor(seal6 * 0.6);
+
+  // 全員が抜けて部屋が消え、次に1人だけが入り直す＝作り直された新しい部屋。
+  const d = deps();
+  const s1 = createSession(d, [fakeSock('入り直した人')]);
+  check('作り直した部屋は1人から始まる', s1.humans === 1, `${s1.humans}人`);
+
+  const view = stateView(s1, run);
+  check('★ 部屋を作り直しても段の重さが縮まない',
+    view.hp === danHpFor(0, 6) && view.seal === seal6,
+    `hp ${view.hp} / 6人基準 ${danHpFor(0, 6)}`);
+
+  // カウントダウンぶんも含めて回し、無プレイのまま段が割れないことを見る。
+  const danBefore = run.dan;
+  for (let i = 0; i < 4 * 20; i++) { CLOCK += 250; tick(s1, run, d); }
+  check('★ 誰も斬っていないのに段が割れることはない',
+    run.dan === danBefore, `段${run.dan}（開始時 ${danBefore}）`);
+  check('とどめの記録が勝手に増えない', run.broken.length === 0, `${run.broken.length}件`);
+
+  // 申込が増えれば目標は重くなるが、削った量は保たれる（巻き戻さない）。
+  const dealtBefore = run.dealt;
+  run.entrants = 10;
+  const view10 = stateView(s1, run);
+  check('申込が増えたら目標も重くなる', view10.hp === danHpFor(0, 10), `hp ${view10.hp}`);
+  check('削った量は巻き戻らない', run.dealt === dealtBefore, `${run.dealt}`);
+
+  // 部屋の人数が段の重さに影響しないこと（申込人数だけが効く）を直接確かめる。
+  const d2 = deps();
+  const s3 = createSession(d2, [fakeSock('A'), fakeSock('B'), fakeSock('C')]);
+  const viewRoom3 = stateView(s3, { ...freshRun(), entrants: 6 });
+  const viewRoom1 = stateView(s1, { ...freshRun(), entrants: 6 });
+  check('★ 同じ申込人数なら部屋の人数が違っても目標は同じ',
+    viewRoom3.hp === viewRoom1.hp, `${viewRoom3.hp} vs ${viewRoom1.hp}`);
+
+  // stateView は「画面に送る形を作るだけ」で、共有される run を書き換えない。
+  const snapshot = JSON.stringify(run);
+  stateView(s1, run);
+  check('stateView は run を書き換えない', JSON.stringify(run) === snapshot, '');
+}
+
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

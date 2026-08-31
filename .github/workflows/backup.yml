@@ -97,5 +97,10 @@ jobs:
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add server/seed-backup.json
-          git commit -m "chore(backup): 本番データの自動バックアップ（${USERS}人 / $(date -u '+%Y-%m-%d %H:%M UTC')）"
+          # [skip render] … このコミットでは本番を再デプロイしない。
+          # render.yaml の buildFilter でも止めているが、あちらは Blueprint 由来の
+          # サービスにしか効かない（ダッシュボードで手で作ったサービスには届かない）。
+          # 毎晩の再デプロイは、永続ディスク付き＝ゼロダウンタイム不可のため
+          # そのまま「毎晩、全員切断＋短時間ダウン」になる。二重に止めておく。
+          git commit -m "chore(backup): 本番データの自動バックアップ（${USERS}人 / $(date -u '+%Y-%m-%d %H:%M UTC')） [skip render]"
           git push

@@ -134,7 +134,7 @@ node test/session.test.mjs   # 1本だけ回す
 | `TRANSLATE_URL` / `TRANSLATE_KEY` | なし | LibreTranslate互換APIのURL（と必要ならキー）。設定するとチャット翻訳が本格エンジンになる |
 | `DATA_DIR` | `server/data` | データ保存先ディレクトリ（永続ディスクを別パスにマウントした場合やテスト用）。**Dockerイメージでは既定が `/data`**（Dockerfileが `ENV DATA_DIR=/data` を焼いている）ので、ボリュームは `/data` に当てること |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | なし | 設定すると課金が「製作中」→本物のStripe決済に切り替わる |
-| `TRUST_PROXY` | `1` | Express の `trust proxy` 設定。LB/リバースプロキシ無しで直結公開するなら `0`（`false`/`off` も可）にして XFF を無視させる。数値＝信頼するホップ数、サブネット指定（`loopback` や `10.0.0.0/8` 等）も可。レート制限のIP判定を正しく保つためのもの |
+| `TRUST_PROXY` | `1` | Express の `trust proxy` 設定。**HTTP のレート制限だけでなく、WebSocket の同時接続上限とゲストのチャット連投制限も、この設定で解いた接続元IPで数える**（`server/index.js` の `clientIpOf`）。数値＝信頼するホップ数。**LB/リバースプロキシ無しで直結公開するなら必ず `0`**（`false`/`off` も可）── 既定の `1` のままだと、クライアントが自分で付けた `X-Forwarded-For` がそのまま接続元IPとして採用され、IPごとの上限を振り分けて回避されうる。サブネット指定（`loopback` や `10.0.0.0/8` 等）も書けるが、その場合 WS 側は安全側に倒して XFF を見ない（HTTP と挙動が変わるので、プロキシ背後ではホップ数の数値指定を推奨）。前段が2段（CDN＋LB 等）なら `2` を指定しないと全員が同じ中間IPに畳まれ、新規プレイヤーが接続上限で弾かれる。管理画面 `/api/admin/stats` の `conn.distinctIps` が人数のわりに極端に小さいときは、この設定を疑うこと |
 | `SEED_RESTORE` | `1` | 起動時の `seed-backup.json` からの自動マージ復元。永続ディスク運用が安定したら `0` で止められる |
 | `ASSET_HASH` | `1` | 配信JS/CSSの内容ハッシュによる長期キャッシュ。変換で不具合が出たときは `0` で丸ごと無効化できる逃げ道 |
 | `RENDER_EXTERNAL_URL` / `KEEPALIVE_URL` | なし | 設定すると10分ごとに自分の `/api/status` を ping してスリープを防止（無料枠のスピンダウン対策）。`RENDER_EXTERNAL_URL` は Render が自動で入れる |
