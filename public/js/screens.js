@@ -2212,6 +2212,59 @@ async function renderInvDex() {
   if (all) all.onclick = () => claim('*', all);
 }
 
+// ボードのミニ盤面。ショップの棚と持ち物の両方から呼ばれる。
+//
+// 装飾の色は public/js/game.js の drawBackground() に合わせてある ──
+// あちらと違う色にすると「棚で見た色と、遊んだときの色が違う」になる。
+// あちらは時間で動かすが、ここは静止画なので位置だけ決め打ちで散らす。
+function drawBoardPreview(ctx, b, size) {
+  const g = ctx.createLinearGradient(0, 0, size * 0.35, size);
+  g.addColorStop(0, b.bg[0]);
+  g.addColorStop(1, b.bg[1]);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+
+  // 4×4 のマス目。実際の盤面は8×8だが、84pxの枠に8本引くと線が潰れる。
+  const pad = size * 0.11, inner = size - pad * 2, n = 4, cell = inner / n;
+  ctx.fillStyle = b.cell;
+  ctx.strokeStyle = b.cellLine;
+  ctx.lineWidth = Math.max(1, size / 84);
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const x = pad + c * cell, y = pad + r * cell;
+      ctx.fillRect(x, y, cell, cell);
+      ctx.strokeRect(x + 0.5, y + 0.5, cell - 1, cell - 1);
+    }
+  }
+
+  // 装飾。game.js の drawBackground と同じ色づかい。
+  const decoColor = b.fireflies ? '#b8ff9e'
+    : b.nebula ? '#d9b8ff'
+    : b.embers ? '#ff8a5c'
+    : b.petals ? '#ffc0dc'
+    : b.holy ? '#ffe9a8'
+    : b.snow ? '#eaf4ff'
+    : b.digital ? '#5ee86e'
+    : b.aurora ? '#7cf5c8'
+    : b.stars || b.bubbles ? '#cfe0ff'
+    : null;
+  if (decoColor) {
+    // 位置は id から決まる擬似乱数。毎回同じ絵にしたい（棚を開くたびに
+    // 粒が動くと、同じ商品が別物に見える）。
+    let seed = 0;
+    for (const ch of (b.accent + b.bg[0])) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    ctx.fillStyle = decoColor;
+    for (let i = 0; i < 14; i++) {
+      ctx.globalAlpha = 0.30 + rnd() * 0.45;
+      ctx.beginPath();
+      ctx.arc(rnd() * size, rnd() * size, size * (0.008 + rnd() * 0.016), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
 function renderPreview(el, item) {
   if (item.cat === 'skin') {
     const canvas = document.createElement('canvas');
@@ -2223,11 +2276,29 @@ function renderPreview(el, item) {
     let i = 0;
     for (let r = 0; r < 2; r++) for (let c = 0; c < 2; c++) skin(ctx, c * 84, r * 84, 84, colors[i++], 1);
   } else if (item.cat === 'board') {
+    // ボードは「盤面そのものの見た目」が商品なので、**実物を小さく描く**。
+    //
+    // v2.36 で共通アイコン icon('cat_board') を載せたのは失敗だった:
+    // あのアイコンは自分の色（シアン）を持っているので、21種のボードが
+    // どれも同じ絵になり、グラデーションの違いも潰していた。
+    // その前の '▦' 一文字も、差し色が乗るだけで種類は見分けられなかった。
+    //
+    // スキンが getSkin(id) で実物のブロックを描いているのと同じ考え方で、
+    // ここも themes.js の値（bg / cell / cellLine / accent と装飾フラグ）から
+    // ミニ盤面を描く。棚に並べたときに「遊んだらこう見える」が分かる。
     const b = BOARDS[item.id];
-    el.style.background = b ? `linear-gradient(160deg, ${b.bg[0]}, ${b.bg[1]})` : '#222';
+    el.style.background = '';
     el.style.border = `1px solid ${b ? b.accent : '#555'}`;
-    el.innerHTML = icon('cat_board', { size: 44 });
     el.style.color = b ? b.accent : '#fff';
+    el.textContent = '';
+    if (!b) { el.innerHTML = icon('cat_board', { size: 44 }); }
+    else {
+      const canvas = document.createElement('canvas');
+      // 見えている寸法はCSS（棚84px / 持ち物60px）。中身は2倍で描いて滲みを防ぐ。
+      canvas.width = 168; canvas.height = 168;
+      el.appendChild(canvas);
+      drawBoardPreview(canvas.getContext('2d'), b, 168);
+    }
   } else {
     // 奥義とエフェクトは id 引きの独自アイコン。
     //
