@@ -246,7 +246,10 @@ export function mountBackBar(container, opts = {}) {
 
 // 試合中は盤面を隠したくないので少なめ。メニューでは少し余裕を持たせる。
 function toastCap() {
-  return document.body.dataset.screen === 'game' ? 3 : 4;
+  // 試合中は2件まで。盤面の下端とコマの上端のあいだ（実測で109px程度）に
+  // 収めるための上限で、3件だと必ず盤面へはみ出す。
+  // 3件目が来たら古いものから消えるので、情報が失われるわけではない。
+  return document.body.dataset.screen === 'game' ? 2 : 4;
 }
 
 /**
@@ -261,7 +264,47 @@ export function syncGameToastAnchor() {
   // 画面が隠れているときは 0 が返る。0 を入れると通知が画面の外へ飛ぶので、
   // 測れなかったときは既定値（CSS の 88px）に任せて何もしない。
   if (r.height <= 0) return;
-  document.documentElement.style.setProperty('--game-toast-top', `${Math.round(r.top + 6)}px`);
+
+  // 通知を **盤面にも手札にも被らない場所** に置く。
+  //
+  // ここは二度作り直している:
+  //   1. 最初は bottom:96px（下寄せ）── そこは手札の帯のど真ん中で、
+  //      背の低い端末ではコマが完全に隠れて「何を掴むのか見えない」状態だった。
+  //   2. 次に盤面の上端へ移した ── 手札は空いたが、今度は盤面の最上段に重なった。
+  // どちらも「片方を避けたら、もう片方に当たる」形。
+  //
+  // 本当の空きは **盤面の下端とコマの上端のあいだ**にある。手札の帯は残り物の
+  // 高さを全部もらうので背の高い端末では余っていて、コマは帯の中央に描かれる
+  // （game.js の drawTray）。そこが空く。
+  // 座標は game.js が --bba-board-bottom / --bba-hand-piece-top で出している。
+  //
+  // 入らない端末（背が低い・横持ち）だけ、従来どおり盤面の上端へ落とす。
+  // 盤面の最上段に少し重なるが、手札を隠すよりはましという順序。
+  const cs = getComputedStyle(document.documentElement);
+  const num = name => {
+    const v = parseFloat(cs.getPropertyValue(name));
+    return Number.isFinite(v) ? v : null;
+  };
+  const boardBottom = num('--bba-board-bottom');
+  const pieceTop = num('--bba-hand-piece-top');
+  // 判定は「1件ぶんが入るか」で行う。**いま積み上がっている高さで測ってはいけない**
+  // ── 2件目・3件目が出た瞬間に判定が裏返り、通知の位置が画面の反対側へ飛ぶ。
+  // 底を固定して上へ積む作りなので、入りきらないぶんは盤面側へ静かに溢れる。
+  const need = 44;
+
+  const s = document.documentElement.style;
+  s.setProperty('--game-toast-top', `${Math.round(r.top + 6)}px`);   // 既定＝盤面の上端
+
+  // 空きに入るなら、**コマの直上を底にして上へ積む**。
+  // 上端を固定して下へ積むと、通知が増えるほどコマへ寄っていき、
+  // 2枚目・3枚目がまた手札に被る（最初の不具合の再来）。
+  // 底を固定して上へ伸ばせば、あふれたぶんは盤面側へ逃げる。
+  const inGap = boardBottom != null && pieceTop != null && pieceTop - boardBottom >= need;
+  if (inGap) {
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    s.setProperty('--game-toast-bottom', `${Math.max(0, Math.round(vh - pieceTop + 6))}px`);
+  }
+  document.body.dataset.toastGap = inGap ? '1' : '0';
 }
 
 export function toast(message, kind = '', ms = 2600) {
@@ -877,6 +920,15 @@ export function updateTopbar() {
   if (u) { lvl.classList.remove('hidden'); lvl.textContent = `Lv.${u.level}`; }
   else lvl.classList.add('hidden');
   $('#btnAdmin').classList.toggle('hidden', !u || (u.role !== 'admin' && u.role !== 'mod'));
+  // 📣 「ログインしている人が変わった」の合図。updateTopbar は session.user が
+  //    差し替わる経路すべて（ログイン・ログアウト・復元・改名）から必ず呼ばれる
+  //    ので、権限で見え方が変わる物はここに乗せれば取りこぼしが無い。
+  //    最初の利用者は main.js の幽霊屋敷の扉 ── 以前はログインのたびに
+  //    updateGhostButton() を書き足す作りで、ログインモーダルからの経路だけ
+  //    抜けており、管理者でログインしても再読み込みするまで扉が出なかった
+  //    （ログアウトしても消えない、という逆向きの穴も同じ原因）。
+  try { window.dispatchEvent(new CustomEvent('bba:session-changed')); }
+  catch { /* CustomEvent の無い環境では何もしない */ }
 }
 
 // スコアがタイマーに重ならないようにする。

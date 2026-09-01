@@ -7,6 +7,14 @@ node_modules/
 # （ディレクトリを除外すると中のファイルは `!` で復活できないので、ここへ何か
 #   コミットしたくなったら除外の書き方から変えること。snapshots/ もこれで覆われる）
 server/data/
+# DATA_DIR を別の場所へ向けて dev サーバーを立てると、上の `server/data/` の
+# 守りの外に出る（実際に `.data-qa3351/` が db.json と平文の
+# admin-credentials.txt を抱えたまま未追跡で残っていた）。手元で並行して
+# サーバーを立てるときは **`.data-<ポート>/` の形**にすること ── ここで
+# まとめて落とす。念のため認証情報のファイル名も名指しで落とす。
+.data*/
+**/admin-credentials.txt
+**/session-secret.txt
 .DS_Store
 *.log
 block-blitz-backup-*.json

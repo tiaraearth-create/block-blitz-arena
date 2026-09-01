@@ -193,7 +193,16 @@ missionsRouter.post('/api/achievements/claim', requireAuth, maintenanceGuard, (r
   // The rarest achievements are worth a line on the feed.
   const top = ACHIEVEMENTS.filter(a => out.ids.includes(a.id)).sort((a, b) => b.gems - a.gems)[0];
   if (top && top.gems >= 15) {
-    postRealFeed(req.user, [{ icon: top.icon, ja: `${req.user.username} が実績「${top.name}」を解除！`, en: `${req.user.username} unlocked "${top.nameEn}"!` }]);
+    // ⚠️ ここは **絵文字** を渡すこと。top.icon は v2.36 から icons.js の
+    //    アイコン名（'throne' 等）になったが、ライブフィードは絵文字を
+    //    そのまま文字として描く器（public/js/chat.js）なので、名前を渡すと
+    //    「throne るみまき が実績…を解除！」と生の名前が流れる。
+    //    さらに実害として、この行は postRealFeed ＝ 実プレイヤー専用で、
+    //    住人の行(crowd.js)は必ず絵文字を持つ ── 生の名前が出る行は
+    //    「必ず人間」の目印になり、住人の正体を隠す約束と正面からぶつかる。
+    //    フィード全体を独自アイコンへ移すなら crowd.js の FEED と
+    //    index.js の feedNotes を同時に移すこと（片方だけでは同じ穴が残る）。
+    postRealFeed(req.user, [{ icon: '🏆', ja: `${req.user.username} が実績「${top.name}」を解除！`, en: `${req.user.username} unlocked "${top.nameEn}"!` }]);
   }
   res.json({ reward: out, achievements: achievementsView(req.user), user: publicUser(req.user) });
 });

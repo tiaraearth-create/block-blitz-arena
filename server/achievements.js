@@ -59,7 +59,7 @@ export const ACHIEVEMENTS = [
   a('ach_streak5',  'mode_chain', 'battle', 5,    1500, 12, '連勝街道',     'Streak Rider',     'ランクマ5連勝',       'Win 5 ranked in a row',   u => S(u).winStreakBest || S(u).winStreak || 0),
   a('ach_rate1200', 'rating', 'battle', 1200, 900,  7,  'レジェンド',   'Legend',           'レート1200到達',      'Reach 1200 rating',       u => S(u).rating || 0),
   a('ach_rate1500', 'gems', 'battle', 1500, 2500, 20, 'ダイヤの誇り', 'Diamond Pride',    'レート1500到達',      'Reach 1500 rating',       u => S(u).rating || 0),
-  a('ach_rate1700', 'throne', 'battle', 1700, 6000, 50, '頂のマスター', 'Peak Master',      'レート1700到達',      'Reach 1700 rating',       u => S(u).rating || 0),
+  a('ach_rate1700', 'rating', 'battle', 1700, 6000, 50, '頂のマスター', 'Peak Master',      'レート1700到達',      'Reach 1700 rating',       u => S(u).rating || 0),
   a('ach_tourney',  'leaderboard', 'battle', 1,    3000, 25, '大会王者',     'Tournament King',  'トーナメント優勝',     'Win a tournament',        u => has(u, 'tourney') ? 1 : 0),
   a('ach_royale',   'mode_royale', 'battle', 1,    3000, 25, '百人の頂点',   'Apex of 100',      'バトルロイヤル1位',    'Take #1 in Battle Royale', u => has(u, 'royale') ? 1 : 0),
   // v2.11 — battle royale grew a whole progression, so it gets goals that are
@@ -69,19 +69,19 @@ export const ACHIEVEMENTS = [
   a('ach_rl_ko3',   'cut', 'battle', 3,    2000, 16, '一狩り三殺',   'Triple Threat',    '1試合で3KO', 'Knock out 3 rivals in a single Battle Royale', u => S(u).royaleBestKills || 0),
   a('ach_rl_50',    'mode_royale', 'battle', 50,   3000, 24, '百戦のロワイヤル', 'Royale Veteran', 'バトルロイヤルに50回参加', 'Enter Battle Royale 50 times', u => S(u).royalePlays || 0),
   // v2.11 — 👑 管理者イベント
-  a('ach_ae_join',  'throne', 'battle', 1,    800,  6,  '招かれし者',   'Invited',          '管理者イベントに参加', 'Take part in an Admin Event', u => S(u).aePlays || 0),
-  a('ach_ae_10',    'throne', 'battle', 10,   2500, 20, '常連の来賓',   'Honoured Guest',   '管理者イベントで10回プレイ', 'Play 10 Admin Event runs', u => S(u).aePlays || 0),
+  a('ach_ae_join',  'mode_adminevent', 'battle', 1,    800,  6,  '招かれし者',   'Invited',          '管理者イベントに参加', 'Take part in an Admin Event', u => S(u).aePlays || 0),
+  a('ach_ae_10',    'mode_adminevent', 'battle', 10,   2500, 20, '常連の来賓',   'Honoured Guest',   '管理者イベントで10回プレイ', 'Play 10 Admin Event runs', u => S(u).aePlays || 0),
   a('ach_ae_clear', 'hall', 'battle', 1,    4000, 32, '管理者イベント制覇', 'Event Conqueror', '管理者イベントの目標を達成', 'Complete an Admin Event objective', u => has(u, 'adminevent') ? 1 : 0),
 
   // ---- 探索 ----
   a('ach_boss1',    'mode_boss', 'explore', 1,   400,  3,  'ボス初討伐',   'First Kill',       'ボスを1体討伐',       'Defeat 1 boss',           u => S(u).bossMax || 0),
   a('ach_boss4',    'boss_maou', 'explore', 6,   2000, 16, '魔王を討ちし者', 'Demon Lord Slayer', '全6ボスを討伐',      'Defeat all 6 bosses',     u => S(u).bossMax || 0),
-  a('ach_rush',     'mode_online', 'explore', 1,   2500, 20, 'ボスラッシュ制覇', 'Rush Conqueror', 'ボスラッシュクリア', 'Clear Boss Rush',         u => has(u, 'rush') ? 1 : 0),
+  a('ach_rush',     'mode_boss', 'explore', 1,   2500, 20, 'ボスラッシュ制覇', 'Rush Conqueror', 'ボスラッシュクリア', 'Clear Boss Rush',         u => has(u, 'rush') ? 1 : 0),
   a('ach_dun10',    'mode_dungeon', 'explore', 10,  500,  4,  '塔の来訪者',   'Tower Visitor',    'ダンジョンF10到達',    'Reach dungeon F10',       u => S(u).dungeonMax || 0),
   a('ach_dun50',    'mode_dungeon', 'explore', 50,  2000, 16, '塔の探検家',   'Tower Explorer',   'ダンジョンF50到達',    'Reach dungeon F50',       u => S(u).dungeonMax || 0),
   a('ach_dun100',   'badge_dungeon', 'explore', 100, 8000, 70, '百塔の覇者',   'Lord of 100 Floors', 'ダンジョンF100制覇', 'Conquer dungeon F100',    u => S(u).dungeonMax || 0),
-  a('ach_wave10',   'skull', 'explore', 10,  800,  6,  '生存者',       'Survivor',         'サバイバルW10到達',    'Reach Survival wave 10',  u => S(u).survivalWave || 0),
-  a('ach_wave20',   'skull', 'explore', 20,  2800, 22, '生存本能',     'Survival Instinct', 'サバイバルW20到達',   'Reach Survival wave 20',  u => S(u).survivalWave || 0),
+  a('ach_wave10',   'mode_survival', 'explore', 10,  800,  6,  '生存者',       'Survivor',         'サバイバルW10到達',    'Reach Survival wave 10',  u => S(u).survivalWave || 0),
+  a('ach_wave20',   'mode_survival', 'explore', 20,  2800, 22, '生存本能',     'Survival Instinct', 'サバイバルW20到達',   'Reach Survival wave 20',  u => S(u).survivalWave || 0),
   a('ach_oni',      'badge_oni', 'explore', 1,   1500, 12, '鬼退治',       'Oni Slayer',       '難易度「鬼」に勝利',   'Beat "Oni" difficulty',   u => has(u, 'oni') ? 1 : 0),
   a('ach_kami',     'badge_kami', 'explore', 1,   4000, 35, '神殺し',       'God Slayer',       '難易度「神」に勝利',   'Beat "Kami" difficulty',  u => has(u, 'kami') ? 1 : 0),
   a('ach_souzou',   'badge_souzou', 'explore', 1,   10000, 90, '創造を超えし者', 'Beyond Creation', '難易度「創造神」に勝利', 'Beat "Creator God"',     u => has(u, 'souzou') ? 1 : 0),
@@ -105,8 +105,8 @@ export const ACHIEVEMENTS = [
   a('ach_abyss10',  'mode_abyss', 'explore', 10,    1500, 12, '深淵の入口',   'Edge of the Abyss', '深淵 A10到達',          'Reach Abyss A10',         u => S(u).abyssMax || 0),
   a('ach_abyss50',  'mode_abyss', 'explore', 50,    5000, 45, '深淵を覗きし者', 'Abyss Walker',    '深淵 A50到達',          'Reach Abyss A50',         u => S(u).abyssMax || 0),
   a('ach_abyss100', 'badge_under', 'explore', 100,   20000, 200, '深淵の支配者', 'Lord of the Abyss', '深淵 A100制覇',       'Conquer Abyss A100',      u => S(u).abyssMax || 0),
-  a('ach_guild',    'mode_dungeon', 'collect', 1,     500,  4,  'ギルド加入',   'Guild Member',     'ギルドに加入する',      'Join a guild',            u => u.guildId ? 1 : 0),
-  a('ach_guild2k',  'mode_dungeon', 'collect', 2000,  2000, 16, 'ギルドのエース', 'Guild Ace',      'ギルドに週2,000pt貢献', 'Contribute 2,000 pts in a week', u => S(u).guildBestWeek || 0),
+  a('ach_guild',    'guild', 'collect', 1,     500,  4,  'ギルド加入',   'Guild Member',     'ギルドに加入する',      'Join a guild',            u => u.guildId ? 1 : 0),
+  a('ach_guild2k',  'guild', 'collect', 2000,  2000, 16, 'ギルドのエース', 'Guild Ace',      'ギルドに週2,000pt貢献', 'Contribute 2,000 pts in a week', u => S(u).guildBestWeek || 0),
 
   // ---- 伝説（アルティメット & ミッション） ----
   a('ach_ult1',     'ultimate', 'legend', 1,    300,  2,  '奥義開眼',     'Awakening',        'アルティメット初発動',  'Use your first ultimate', u => S(u).ultsUsed || 0),
@@ -143,7 +143,7 @@ export const ACHIEVEMENTS = [
   a('ach_rush5',    'fire', 'explore', 5,      1500, 12, '地獄の五合目',  'Halfway to Hell',  '無限地獄ラッシュ深度5',  'Reach depth 5 in Hell Rush', u => S(u).rushDepth || 0),
   a('ach_rush12',   'mode_bossrush', 'explore', 12,     6000, 50, '地獄を駆ける者','Hellrunner',       '無限地獄ラッシュ深度12', 'Reach depth 12 in Hell Rush', u => S(u).rushDepth || 0),
   a('ach_allS',     'achievement', 'explore', 6,      8000, 70, '完全討伐',     'Perfect Hunter',   '全6ボスでSランク',      'Earn S rank on all 6 bosses', u => Object.values(S(u).bossRanks || {}).filter(r => r === 'S').length),
-  a('ach_wave30',   'skull', 'explore', 30,     6000, 50, '不死身',       'Deathless',        'サバイバルW30到達',     'Reach Survival wave 30',    u => S(u).survivalWave || 0),
+  a('ach_wave30',   'mode_survival', 'explore', 30,     6000, 50, '不死身',       'Deathless',        'サバイバルW30到達',     'Reach Survival wave 30',    u => S(u).survivalWave || 0),
   a('ach_sprint180','clock', 'explore', 30000,  2600, 20, '持久走の覇者',  'Marathon Champ',   'TA 180秒で30,000点',    'Score 30,000 in a 180s run', u => (S(u).sprint && S(u).sprint.s180) || 0),
   a('ach_puzzle10', 'mode_puzzle', 'explore', 10,     800,  6,  '遺跡の入口',    'Ruins Gate',       'パズル遺跡 ステージ10',  'Clear Puzzle Ruins stage 10', u => S(u).puzzleStage || 0),
   a('ach_puzzle30', 'mode_puzzle', 'explore', 30,     2500, 20, '遺跡の解読者',  'Ruins Decoder',    'パズル遺跡 ステージ30',  'Clear Puzzle Ruins stage 30', u => S(u).puzzleStage || 0),
@@ -220,7 +220,13 @@ export function achievementsView(user) {
       name: ac.name, nameEn: ac.nameEn, desc: ac.desc, descEn: ac.descEn,
       goal: ac.goal, progress: Math.min(value, ac.goal),
       coins: ac.coins, gems: ac.gems,
-      done: value >= ac.goal, claimed: claimed.has(ac.id),
+      // 受け取り済みなら必ず「解除済み」。claimAchievement は value>=goal の
+      // ものしか受け取らせないので、ふつうに遊んでいる限り claimed ⊆ done で
+      // あり、この OR は何も変えない。効くのは管理者アカウントの起動時シード
+      // （u.achievements に全124件を入れるが、進捗は全部までは満たさない）で、
+      // 以前はヘッダが「解除 84 / 124 ・ 受取済 124」と受取が解除を上回って
+      // いた。片方だけ作り話にしない ── 数字を2つ並べる以上、辻褄は合わせる。
+      done: value >= ac.goal || claimed.has(ac.id), claimed: claimed.has(ac.id),
     };
   });
   return {

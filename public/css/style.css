@@ -183,8 +183,12 @@ body {
    （--ic-a / --ic-b）に焼くので、CSS から上書きするにはこの2変数を
    指定するしかない。既定の金系アイコン（throne / leaderboard /
    mode_tourney / guild / mode_workshop）は地色と同化して消えていた。
-   文字色 #40300a と同じ濃さに寄せて、字と同じ明度で読めるようにする。 */
-.btn-gold .bba-ic { --ic-a: #40300a; --ic-b: #96690f; }
+   文字色 #40300a と同じ濃さに寄せて、字と同じ明度で読めるようにする。
+   ⚠ !important が要る。icon() は色を **style 属性**に焼く
+     （icons.js: style="--ic-a:…;--ic-b:…"）ので、素のクラス指定では必ず
+     負ける ── この行は書いてあるのに効いておらず、オンライン対戦の
+     「トーナメント（8人制）」は金の地に金のトロフィーで絵が消えていた。 */
+.btn-gold .bba-ic { --ic-a: #40300a !important; --ic-b: #96690f !important; }
 /* お知らせの固定印。以前は 📌 の絵文字だったものを
    <span class="news-pin">固定</span> に置き換えてある。CSS が無いと
    見出しの中に同じ大きさの字で混ざるので、小さなチップにする。 */
@@ -757,7 +761,15 @@ body {
    折り返しは狭い画面のメディアクエリにしか無く、デスクトップ幅では効いて
    いなかった。どの幅でも折り返し、1本あたりの下限を決めておく。 */
 .modal-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.modal-buttons .btn { flex: 1 1 96px; min-width: 96px; }
+/* ラベルは**語の途中で折らない**。日本語のラベルは1文字ずつどこでも折れて
+   しまうので、内幅をほんの数pxでも超えると「対戦開」「始！」のように2行に
+   割れていた（実測: 「対戦開始！」= 幅110px・高さ72px、結果画面の
+   「メニュー」= 幅109px。英語の Start! / Menu では起きない日本語だけの症状）。
+   折れなくなったぶんは、左右の余白を詰めて収める ── 全角4文字(64px)＋
+   余白24px = 88px なので、3本並びの1本ぶん(約98px)に収まる。
+   入りきらないときは .modal-buttons の flex-wrap が**ボタンごと**次の行へ
+   落とすので、字が割れるかわりに並びが変わるだけで済む。 */
+.modal-buttons .btn { flex: 1 1 96px; min-width: 96px; white-space: nowrap; padding-left: 12px; padding-right: 12px; }
 /* 狭い画面で、結果画面の3本並び（メニュー／再戦／もう一戦）が毎回2行に
    折れて高さ 74px の縦長ボタンになっていた。実測: 375px 幅では容器 313px
    ÷3 = 1本 98px なのに、ラベル「もう一戦」は 16px×4文字 ＋ 左右 22px の
@@ -784,6 +796,15 @@ body {
 body[data-screen="game"] #toast-root {
   top: var(--game-toast-top, 88px); bottom: auto;
 }
+/* 盤面の下端とコマの上端のあいだに空きがある端末では、そこへ置く
+   （盤面にも手札にも被らない唯一の場所）。dom.js の syncGameToastAnchor が
+   入るかどうかを測って data-toast-gap を立てる。
+   ⚠️ 底を固定して**上へ**積むこと。上端を固定して下へ積むと、通知が増えるほど
+      コマへ寄っていき2枚目から手札に被る（最初に直した不具合の再来）。 */
+body[data-screen="game"][data-toast-gap="1"] #toast-root {
+  top: auto; bottom: var(--game-toast-bottom, 96px);
+  flex-direction: column-reverse;
+}
 #toast-root { position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
 .toast {
   background: rgba(16,20,43,0.92); border: 1px solid var(--line);
@@ -793,10 +814,10 @@ body[data-screen="game"] #toast-root {
 }
 /* 試合中は一回り小さく・薄く。盤面の上に重なるので、読めるが邪魔にならない濃さ。 */
 body[data-screen="game"] .toast {
-  padding: 7px 16px; font-size: 13px; max-width: min(92vw, 420px);
+  padding: 6px 14px; font-size: 12.5px; max-width: min(92vw, 400px); line-height: 1.35;
   background: rgba(16,20,43,0.82);
 }
-body[data-screen="game"] #toast-root { gap: 5px; }
+body[data-screen="game"] #toast-root { gap: 4px; }
 /* 同じ文言が続いたときの「×2」。行を増やさずに回数だけ増やす。 */
 .toast-x {
   display: inline-block; margin-left: 8px; padding: 0 7px;
@@ -2119,7 +2140,18 @@ body[data-screen="game"] #topbar { display: none; }
   border-radius: 12px;
   animation: fadeIn .25s ease;
 }
-.rl-spec-bar { flex: 0 0 auto; text-align: center; min-width: 0; }
+/* 観戦に入った直後は「いま誰を見ているのか」がいちばん知りたい情報なのに、
+   その2行（観戦中: ◯◯ / 点数・順位・残り）にちょうど announce トーストが
+   重なって、数秒のあいだ両方読めなくなっていた。
+   トースト側を動かすと他の画面へ波及する。かといって上マージンで避けるのは
+   当てにならない ── 通知の高さ（--game-toast-top）は dom.js の
+   syncGameToastAnchor が端末ごとに測って決めるので、固定値では追えない。
+   そこで**並び順**で外す: 盤面 → 見出し → 相手えらび。
+   見出しが「誰を見ているか」で、その真下が「誰に切り替えるか」の一覧なので、
+   意味のうえでも近いものが隣り合う。通知の帯は盤面の上に来るだけになる。 */
+.rl-spec-stage { order: 1; }
+.rl-spec-bar { flex: 0 0 auto; text-align: center; min-width: 0; order: 2; }
+.rl-spec-picker { order: 3; }
 .rl-spec-head {
   font-size: 14px; font-weight: 800; color: var(--cyan); line-height: 1.35;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

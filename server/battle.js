@@ -6,12 +6,16 @@ import { Engine } from '../public/js/engine.js';
 // AI_LEVELS も読む。王者専用の手番間隔を写経せず souzou の定義から取るため
 // （ai.js を調整したときにサーバー側だけ古い値のまま残る、を作らない）。
 import { chooseMove, AI_LEVELS } from '../public/js/ai.js';
-import { RAID_BOSSES } from './catalog.js';
+// TITLES は実プレイヤーの称号を match_found に載せるために要る（index.js の
+// titleOf と同じ引き方 ── 表を写経せず、同じ定義から引く）。
+import { RAID_BOSSES, TITLES } from './catalog.js';
 // 段位（帯・24段）の唯一の正解。手書きの表をここに持たない ── サーバーと画面で
 // しきい値がズレると「画面ではゴールドなのにサーバーはシルバー扱い」が起きる。
 import { rankOf, bandOf, RANK_BANDS } from '../public/js/ranks.js';
 import {
   effectiveScale, pickPersona, pickResidentBot, pickChampionBot,
+  // 🎭 席の称号・ギルド・戦績。住人と使い捨てを同じ関数から作るための入口。
+  seatProfile,
   residentLine, residentById, residentByName,
   ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor, chatFloorMs, getRoster,
   toggles, isQuietNow, popFactor, worldCtx,
@@ -1008,6 +1012,44 @@ export function initBattle(server, deps) {
   }
 
   // -------------------------------------------------------------------------
+  // 🎭 対戦カードの任意欄（称号・ギルドタグ・直近の戦績）
+  // -------------------------------------------------------------------------
+  // 画面（public/js/modes.js の VS_CARD_EXTRAS）は「並ぶ全員がその欄を持つとき
+  // だけ行ごと出す」。つまり **片側にだけ欄がある状態を作らない**ことが、この
+  // 3つを出してよい条件そのもの。だから席の種類（実プレイヤー／住人／使い捨て）
+  // で分岐せず、下の3つを **全席に必ず同じ規則で**載せる。
+  // 値が null になるのは「アカウントを持っていない席（ゲスト）」と
+  // 「その欄を持っていない人」だけで、どちらも人間にも普通に起きる。
+  //
+  // ボット側の値は Bot のコンストラクタが ambient.seatProfile で作る（住人でも
+  // 使い捨てでも同じ関数を通る）。ここは実プレイヤーぶんの出典を index.js と
+  // そろえるだけ。
+  function sockUser(s) {
+    return !s.isBot && s.user && db.users[s.user.id] ? db.users[s.user.id] : null;
+  }
+  function sockTitle(s) {
+    if (s.isBot) return s.title || null;
+    const u = sockUser(s);
+    if (!u) return null;
+    // index.js の titleOf と同じ。id を落とすと画面が英語名を引けない。
+    const t = TITLES.find(x => x.id === u.equippedTitle);
+    return t ? { id: t.id, name: t.name, color: t.color } : null;
+  }
+  function sockGuild(s) {
+    if (s.isBot) return s.guild || null;
+    const u = sockUser(s);
+    const g = u && u.guildId ? db.guilds[u.guildId] : null;
+    // 出すのはタグ（4文字）だけ。ギルドの実体を渡すと ghost:true が混ざる。
+    return g && typeof g.tag === 'string' ? g.tag : null;
+  }
+  function sockRecord(s) {
+    if (s.isBot) return s.record || null;
+    const u = sockUser(s);
+    if (!u || !u.stats) return null;
+    return { w: u.stats.pvpWins || 0, l: u.stats.pvpLosses || 0 };
+  }
+
+  // -------------------------------------------------------------------------
   // Bots — disguised as normal players: human-like persona names, a fake
   // rating/level that matches their strength, and randomized strength.
   // -------------------------------------------------------------------------
@@ -1061,11 +1103,16 @@ export function initBattle(server, deps) {
       // beat in ranked is the same one chatting in the lobby and sitting on
       // the leaderboard. Fall back to a throwaway persona otherwise.
       const res = champ || (Math.random() < 0.7 ? pickResidentBot(this.level, used) : null);
+      // アカウント持ちの席かどうか。両方の枝で決まるので手前に置いておく
+      // （this に持たせない ── `registered` は sanitize.js が落とすキー名で、
+      //  ソケットの持ち物としては正体を指す名前になってしまう）。
+      let hasAccount = true;
       if (res) {
         this.resident = res.resident;
         this.name = res.name;
         this.rating = res.rating;
         this.fakeLevel = res.level;
+        hasAccount = !!res.registered;
         // 王者だけ、引いた席の強さを捨てて専用AIに差し替える。
         // champion は「この socket が王者か」を endMatch が見る印でもある
         // （フィールド名に bot/ai/resident を使わないこと ── 送信フレームには
@@ -1087,7 +1134,22 @@ export function initBattle(server, deps) {
         this.rating = persona.registered ? rLo + crypto.randomInt(rHi - rLo) : null;
         const [lLo, lHi] = BOT_LVL[this.level];
         this.fakeLevel = persona.registered ? lLo + crypto.randomInt(lHi - lLo) : 1;
+        hasAccount = !!persona.registered;
       }
+      // 🎭 称号・ギルドタグ・直近の戦績。**住人の席も使い捨ての席もここ1本**で
+      // 作る ── 分けた瞬間に「欄の揃い方」で正体が割れる（第5波でこの3つを
+      // 対戦カードから外したのがまさにその理由）。ゲスト表示の席（レート無し）は
+      // 3つとも null になり、本物のゲストと見分けが付かなくなる。
+      const prof = seatProfile({
+        resident: this.resident,
+        name: this.name,
+        level: this.level,
+        registered: hasAccount,
+        guildTagOf: deps.residentGuildTag || null,
+      });
+      this.title = prof.title;
+      this.guild = prof.guild;
+      this.record = prof.record;
       this.timer = null;
       this.emoteTimer = null;
     }
@@ -1221,9 +1283,14 @@ export function initBattle(server, deps) {
         // isBot は運営にだけ載せる。関門（send）も落とすが、そもそも
         // 組み立てないのが正しい ── 対戦相手が住人かどうかは、盤面の外から
         // 分かってはいけない一番の情報。
+        // 🎭 title / guild / record は**全席に必ず載せる**（値が null でも
+        // キーは消さない）。欄の有無が席ごとに違うと、その差だけで
+        // 「実プレイヤー／住人／使い捨て」を選り分けられてしまう。
+        // 出典は sockTitle / sockGuild / sockRecord に1本化してある。
         players: match.players.map(q => ({
           slot: q.slot, team: q.team, name: sockName(q.sock),
           level: sockLevel(q.sock), rating: sockRating(q.sock),
+          title: sockTitle(q.sock), guild: sockGuild(q.sock), record: sockRecord(q.sock),
           isYou: q === p,
           ...(sockAdmin(p.sock) ? { isBot: !!q.sock.isBot } : {}),
         })),
@@ -1701,12 +1768,20 @@ export function initBattle(server, deps) {
     //   導入で丸ごと外れてしまう。
     //   例外は 'shutdown' だけ。あれは誰のせいでもないので必ず引き分けにする
     //   （下の winTeam = -1 と揃える。切れていた人だけ敗北、にはしない）。
+    // 🩹 ここで forfeited を立てた人が居たかを控える。下の裁定で使う ──
+    //   猶予の終わりは min(now+猶予, ハード終了) なので、終了間際の切断では
+    //   猶予切れ(reason='forfeit')ではなく **ハード終了(reason='timeout')の
+    //   タイマーが先に鳴る**。reason だけを見ていると、切れた人が点でリード
+    //   したまま勝ち、最後まで遊んだ側が敗北として記録されていた（実測: 残り
+    //   17秒で切断 → 残った側が outcome=lose / rating-16）。
+    let graceForfeit = false;
     for (const p of match.players) {
       if (!p.dc) continue;
       clearHold(p);
       if (reason === 'shutdown') continue;
       p.forfeited = true;
       p.finished = true;
+      graceForfeit = true;
     }
     for (const p of match.players) if (p.sock.isBot) p.sock.stop();
     // 👀 観戦室（カスタムルームの観戦席）を畳んで、ふつうの部屋に戻す。
@@ -1724,7 +1799,19 @@ export function initBattle(server, deps) {
       winTeam = lc[0] > lc[1] ? a.team : lc[1] > lc[0] ? b.team
         : a.score > b.score ? a.team : b.score > a.score ? b.team : -1;
     }
-    if (reason === 'forfeit') {
+    // 棄権・切断の裁定。reason だけでなく「猶予切れで forfeited を立てた人が
+    // 居たか(graceForfeit)」も見る ── 終了間際の切断はハード終了のタイマーが
+    // 先に鳴って reason='timeout' で来るため、reason だけだと逃げ得になる。
+    //
+    // ⚠ graceForfeit のほうは **1対1のときだけ**に効かせる。この上書きは
+    //   「残っている人間の側の勝ち」という 1対1 の理屈で書かれていて、
+    //   3人以上（2v2・大会の同時進行）では『players の並びで最初に見つかった
+    //   人間の team』という意味のない側へ倒れてしまう ── 2v2 で味方が1人
+    //   切れただけで、点で負けている自分の側が勝ちになりうる。
+    //   reason==='forfeit' のほうは forfeitPlayer が 2人の試合でしか
+    //   立てないので、そちらは今までどおりでよい。
+    const soloForfeit = graceForfeit && match.players.length === 2;
+    if (reason === 'forfeit' || soloForfeit) {
       const alive = match.players.find(p => !p.forfeited && !p.sock.isBot);
       if (alive) winTeam = alive.team;
     }
@@ -2263,6 +2350,14 @@ export function initBattle(server, deps) {
   // ホストが明示的に観戦席へ回した人（benched）は繰り上げない ── 自動で
   // 戻すと「ホストが決めた席割り」を機械が上書きしてしまう。
   function reseat(room) {
+    // 🩹 試合中は席を組み直さない。部屋に残っているのは**全員が観戦者**で、
+    //    対戦席の人は startRoom で room.players から抜けている。
+    //    ここで組み直すと観戦者の先頭が「対戦席」に繰り上がり、
+    //    yourSeat が play になって画面の説明と食い違う（以前はそのうえ
+    //    case 'watch' の門にも弾かれて、観戦相手を切り替えられなかった）。
+    //    reseat は誰かが抜けたときにも呼ばれるので、判定はここ1か所に置く。
+    //    席の組み直しは試合が終わったとき endRoomSpectate がやる。
+    if (room.matchId) { for (const p of room.players) room.watch.add(p); return; }
     const need = roomSeats(room);
     let n = 0;
     for (const p of room.players) {
@@ -2358,6 +2453,10 @@ export function initBattle(server, deps) {
       room.benched.delete(p);
       p.roomCode = null;
     }
+    // 🔁 出ていった人を控えておく。試合が終わったら endRoomSpectate が部屋へ
+    //   戻す ── 戻さないと1試合ごとに2人が部屋から落ち、遊び方画面が謳う
+    //   「交代で遊ぶ」に合言葉の入り直しが要る。
+    room.away = play.slice();
     const watchers = room.players.slice();
     if (!watchers.length) { clearInterval(room.specTick); rooms.delete(room.code); }
     const match = createMatch({
@@ -2372,7 +2471,9 @@ export function initBattle(server, deps) {
     room.matchId = match.id;
     match.roomCode = room.code;
     for (const p of watchers) p.watchTarget = null;   // 既定は「おまかせ＝首位」
-    reseat(room);        // 残った人で席を組み直す（試合後にそのまま次を組める）
+    // 残った人は全員が観戦者。room.matchId を立てたあとなので、reseat は
+    // 上の門で「全員 watch」にして返る（席の組み直しは試合が終わってから）。
+    reseat(room);
     broadcastRoom(room);
     clearInterval(room.specTick);
     room.specTick = setInterval(() => {
@@ -2388,11 +2489,25 @@ export function initBattle(server, deps) {
     clearInterval(room.specTick);
     room.specTick = null;
     room.matchId = null;
-    if (!rooms.has(room.code)) return;
+    if (!rooms.has(room.code)) { room.away = null; return; }
     for (const p of room.players) p.watchTarget = null;
+    // 🔁 試合に出ていた人を部屋へ戻す（出ていった順のまま末尾に付ける）。
+    //   観戦していた人が room.players の前に居るので、次の試合は自然に
+    //   その人たちが対戦席に座る ＝「交代で遊ぶ」が回る。
+    const away = Array.isArray(room.away) ? room.away : [];
+    room.away = null;
+    for (const p of away) {
+      if (!p || p.readyState !== p.OPEN) continue;   // 切れた人は戻さない
+      if (p.roomCode) continue;                      // 別の部屋へ移った人も戻さない
+      if (room.players.includes(p)) continue;
+      if (room.players.length >= ROOM_MAX) break;
+      p.roomCode = room.code;
+      room.players.push(p);
+    }
     // 対戦席は空になったので、観戦席の人が繰り上がって次の試合を組める。
+    // ⚠ benched（ホストが「観戦席へ」と決めた人）は消さない ── 消すと
+    //   ホストの席割りが毎試合リセットされ、ホスト自身が毎回対戦席に戻る。
     room.watch.clear();
-    room.benched.clear();
     reseat(room);
     broadcastRoom(room);
   }
@@ -3113,8 +3228,20 @@ export function initBattle(server, deps) {
     if (!takeGraceQuota(user)) return false;
     // 同じ人が別の試合で猶予中、は起こらないはず（1人1試合）だが、
     // 残っていたら古いほうを畳んでから開く（表に2つ入ると復帰先が決まらない）。
+    // ⚠ タイマーを消すだけにしてはいけない ── 古い試合の席は p.dc が立った
+    //   ままで、猶予切れを鳴らす人が誰も居なくなる。実測では「切断 → すぐ別の
+    //   試合に入って切断」で1試合目がハード終了まで宙吊りになり、相手が44秒
+    //   余分に待たされた。古い札を捨てる前に、その席を必ず確定させる。
     const old = dcHolds.get(p.userId);
-    if (old) clearTimeout(old.timer);
+    if (old) {
+      clearTimeout(old.timer);
+      dcHolds.delete(old.userId);
+      const om = matches.get(old.matchId);
+      const op = om && !om.ended ? om.players[old.slot] : null;
+      // p.dc を先に外す（forfeitPlayer → clearHold が消した札を見に行かない）。
+      if (op && op.dc === old) op.dc = null;
+      if (op) forfeitPlayer(om, op);
+    }
 
     const hold = { userId: p.userId, matchId: match.id, slot: p.slot, until, timer: null };
     hold.timer = setTimeout(() => {
@@ -3779,6 +3906,26 @@ export function initBattle(server, deps) {
           finishPlayer(match, me.slot, msg.score, msg.lines, msg.combo);
           break;
         }
+        // 🚪 自分の意思で降りた（クライアントの ✕ →「終了する」）。
+        //    これが無かったころは離脱がソケットの close だけで伝わっていて、
+        //    サーバーからは回線事故と区別が付かなかった。実害は2つ:
+        //      (1) 相手が最大25秒（RECONNECT_GRACE_MS）、動かない盤面を相手に
+        //          戦い続ける。離脱した本人の画面は即「敗北扱い」でメニューへ
+        //          戻っているのに、である（猶予を入れる前は即決着だった＝退行）。
+        //      (2) 1日3回の猶予枠(RECONNECT_GRACE_PER_DAY)を自分の離脱で使い切る。
+        //          takeGraceQuota の趣旨は「切断を戦術に使う人に猶予を出さない」で
+        //          あって、「自分で画面を閉じた回数」を数えることではない。
+        //    ここで受けた席は猶予を通さず、その場で棄権として裁く（従来どおりの
+        //    敗北・相手の不戦勝）。このフレームを送らない古いクライアントは
+        //    今までどおり close ハンドラの猶予に落ちるので、後方互換も保てる。
+        case 'forfeit': {
+          if (!match || match.ended || !me || me.finished) return;
+          // 協力プレイは切断しても負けにならない（サーバーが代打する）ので、
+          // close ハンドラと同じくここでも棄権にしない。
+          if (match.mode === 'coop') return;
+          forfeitPlayer(match, me);
+          break;
+        }
         // 🚩 陣取りデュエル: 共有盤面へ1手。作法は coop_place と同じ。
         case 'land_place': {
           if (!match || match.ended || !me || match.mode !== 'land') return;
@@ -3819,6 +3966,9 @@ export function initBattle(server, deps) {
           rooms.set(code, {
             code, players: [ws], settings: cleanSettings(msg.settings),
             watch: new Set(), benched: new Set(), matchId: null, specTick: null,
+            // away … いま試合に出ていて部屋を離れている socket。
+            //   endRoomSpectate が試合後に部屋へ戻す（交代で遊ぶための控え）。
+            away: null,
           });
           ws.roomCode = code;
           ws.watchTarget = null;
@@ -3844,7 +3994,12 @@ export function initBattle(server, deps) {
           ws.roomCode = code;
           ws.watchTarget = null;
           // 試合中の部屋に入ってきた人は、そのまま観戦席へ。
-          if (room.matchId) { room.watch.add(ws); room.benched.add(ws); }
+          // ⚠ benched（＝ホストが手で観戦席へ回した印）には**入れない**。
+          //   試合中に繰り上がらないことは reseat 側の matchId の門が保証して
+          //   いるし、benched は試合をまたいで残る（ホストの席割りを引き継ぐ）
+          //   ので、ここで付けると途中参加した人だけ次の試合でも観戦席のまま
+          //   になり、ホストが手で戻すまで永久に遊べない。
+          if (room.matchId) room.watch.add(ws);
           else reseat(room);
           broadcastRoom(room);
           break;
@@ -3905,8 +4060,10 @@ export function initBattle(server, deps) {
             return;
           }
           const room = roomOf(ws);
-          // 部屋では「観戦席にいて、その部屋が試合中」のときだけ効く。
-          if (room && room.matchId && room.watch.has(ws)) {
+          // 部屋が試合中なら、部屋に残っている人は**全員が観戦者**
+          // （対戦席の人は startRoom で room.players から抜けている）。
+          // 席(room.watch)で判定すると、席の組み直し次第で観戦者が弾かれる。
+          if (room && room.matchId) {
             ws.watchTarget = target;
             // 押した手応えをすぐ返す（次の1秒待ちにしない）。
             broadcastRoom(room);

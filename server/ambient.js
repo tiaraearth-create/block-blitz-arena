@@ -13,6 +13,9 @@ import {
   buildRoster, customResident, residentStats, residentDailyScore, onlineResidents, residentsForLevel,
   archetype, ARCHETYPES, jstHour, jstWeekday, jstDay, unit, mulberry32, strHash, JA_NAMES, EN_NAMES,
   isChampion, residentRecord,
+  // 🎭 使い捨ての対戦相手を「その帯に出てくる住人」と同じ条件で作るために要る
+  // （residentsForLevel が住人を絞るのと同じ帯・同じ軽量レート式）。
+  residentRating, BOT_RATING_BANDS,
 } from './residents.js';
 import { dailyGhostFactor } from './daily.js';
 import { composeLine, chooseReplies as crowdReplies, buildCtx } from './crowd.js';
@@ -356,6 +359,124 @@ export function pickResidentBot(level, used, now = Date.now()) {
   return { resident: r, name: r.name, registered: r.registered, rating: r.registered ? st.rating : null, level: r.registered ? st.level : 1 };
 }
 
+// ---------------------------------------------------------------------------
+// 🎭 席に並ぶ「人間なら当然持っているもの」（称号・ギルドタグ・直近の戦績）
+// ---------------------------------------------------------------------------
+// 対戦カードに称号やギルドを出すと、値そのものより **欄の有無** が正体を明かす。
+// 住人（residents）は residentStats から3つとも作れるが、ボット席の約3割は
+// 名簿に居ない使い捨ての persona（pickResidentBot が null を返す分岐）なので、
+// 素直に書くとそこだけ null になる ──「その欄が出ない＝使い捨てのボット」と
+// 読めてしまい、いま無害な機能がそのまま秘匿の穴になる。第5波で称号・ギルド・
+// 戦績を対戦カードから外したのはこれが理由で、ここはその封印を解く側の実装。
+//
+// 作り方は「値を似せる」ではなく **住人と同じ関数に通す**:
+//   ① 名前から決定論的に“合成住人”を1人こしらえる（customResident）
+//   ② その席の強さの帯（BOT_RATING_BANDS）にレートが収まるまで引き直す
+//      ← residentsForLevel が変装候補を絞る条件と**まったく同じ**なので、
+//        「その帯に出てくる住人」と同じ条件付き分布になる。称号は
+//        residentStats の中でレートやバッジから決まるので、帯を合わせないと
+//        「レート1800なのに“かけだしブロッカー”」という、住人には絶対に
+//        起きない組み合わせが persona にだけ現れる。
+//   ③ あとは residentStats に通すだけ ── 称号の出る割合も勝敗の分布も、
+//      似せているのではなく**同じ式が出した値**になる。
+//
+// ギルドだけは別扱い。ghostGuilds は名簿から組み、定員20人から溢れた住人は
+// 無所属になるので、加入率は名簿の大きさで 70.3%（64人）〜65.8%（600人）と
+// 動く。「unit(id,'guild') が 0.3 未満なら無所属」と写経すると倍率次第で
+// 数ポイントずれる（1000人ぶん並べれば有意に見える差）。そこで
+// **名前から選んだ住人1人の加入状況をそのまま借りる** ── 借り元が住人の実分布
+// そのものなので、定員あふれ込みで必ず一致する。
+//
+// ⚠ 合成住人は名簿には**入れない**。id は `x……` 形で sanitize.js が住人の印と
+// 見なす形なので、外へ出すのは title / guild / record の3つだけに留めること。
+
+// 帯に収まるまでの引き直しの上限。実測（住人600人ぶんの名前 × 4帯）で平均
+// 2.6〜8.9回、40回までで 98〜100% が帯に収まる。収まらなかった名前は
+// 「いちばん帯に近かった1人」を使う ── 席を空欄にするより近い値のほうがよい。
+const PERSONA_TRIES = 40;
+// 引き直しの刻み。素数にしておくと index が近い名前どうしで系列が重ならない。
+const PERSONA_STEP = 7919;
+
+// 名前と席の強さから決まる“合成住人”。同じ (名前, 強さ) なら毎回同じ。
+// 強さも種に混ぜるのは、席のレートが帯から決まる以上、称号だけ名前で固定すると
+// レートと食い違う組み合わせが出てしまうため（上の②の理由）。
+function personaResident(name, level, now) {
+  const [lo, hi] = BOT_RATING_BANDS[level] || BOT_RATING_BANDS.normal;
+  const base = strHash(`persona:${name}:${level}`) % 1000000;
+  let best = null;
+  let bestGap = Infinity;
+  for (let k = 0; k < PERSONA_TRIES; k++) {
+    // index を動かすと id（unit の種）と名前由来の乱数列の両方が動く。
+    const r = customResident({ name }, base + k * PERSONA_STEP);
+    const rating = residentRating(r, now);
+    if (rating >= lo && rating <= hi) return r;
+    const gap = rating < lo ? lo - rating : rating - hi;
+    if (gap < bestGap) { bestGap = gap; best = r; }
+  }
+  return best;
+}
+
+// いま名簿に出ている同名の住人。residentByName は予約表（MAX_ROSTER=600）にも
+// 落ちるが、ここで欲しいのは **ゴーストギルドの名簿に本当に載っている人**なので
+// 出ている名簿だけを見る（予約表の住人にギルドは無く、借りると必ず null になる）。
+function liveResidentNamed(name) {
+  return getRoster().find(r => r.name === name) || null;
+}
+
+// ギルドを借りる住人を1人選ぶ。名簿はにぎわい倍率で伸び縮みするので、同じ名前
+// でも世界の大きさが変われば借り元は変わる ── 住人自身の数字（レート・自己
+// ベスト）も倍率で動くので、ここだけ据え置いても意味がない。
+function personaGuildDonor(name) {
+  const roster = getRoster();
+  if (!roster.length) return null;
+  return roster[strHash(`persona-guild:${name}`) % roster.length];
+}
+
+/**
+ * 席1つぶんの称号・ギルドタグ・直近の戦績。
+ *
+ * 住人でも使い捨てでも **この1つの関数**を通すこと。経路が分かれた瞬間に
+ * 差が生まれ、その差がそのまま正体になる。
+ *
+ * @param {object|null} resident  名簿の住人（persona なら null）
+ * @param {string} name           画面に出る名前
+ * @param {string} level          席の強さ（BOT_RATING_BANDS のキー）
+ * @param {boolean} registered    アカウント持ちか
+ * @param {number} now
+ * @param {function|null} guildTagOf  住人名 → ギルドタグ（battle.js が渡す）
+ * @returns {{title: object|null, guild: string|null, record: {w:number,l:number}|null}}
+ *   欄は必ず3つとも返る（値が null でも**キーは消さない**）。
+ */
+export function seatProfile({ resident = null, name = '', level = 'normal', registered = true, now = Date.now(), guildTagOf = null } = {}) {
+  const none = { title: null, guild: null, record: null };
+  // ゲスト（アカウント無し）は本物のゲストと同じく3つとも持たない。ここを
+  // 埋めると「ゲスト名なのに称号がある＝人間ではない」という逆向きの穴になる。
+  // 未登録の住人（registered:false）も同じ扱い ── 席の見え方はゲストなので。
+  if (!registered) return none;
+  const r = resident || personaResident(name, level, now);
+  if (!r) return none;
+  const st = residentStats(r, now);
+  // 住人は本当にそのギルドに居る。persona は名簿に席が無いので借りるのだが、
+  // 借り元は **まず同名の住人**を試す。
+  //
+  // 理由: ゴーストギルドの詳細（/api/guilds/:id）は所属者の名前を並べる。
+  // 無関係な住人からタグを借りると「タグは 🛡COMBO なのに COMBO の名簿に
+  // その名前が居ない」という、実プレイヤーにも住人にも起きない食い違いが残る
+  // ── 手間はかかるが、1人ずつ確実に判定できてしまう形の穴。
+  // pickPersona は住人と**同じ名前の池**から引くので、多くの名前は名簿に本人が
+  // 居る。その場合は本人のギルドをそのまま名乗れば名簿とも一致する。
+  // 2桁サフィックス付き（`Milo42` など）の名前だけが借り物のままだが、
+  // 分布はどちらの経路でも住人そのものなので、加入率は変わらない。
+  const donor = resident || liveResidentNamed(name) || personaGuildDonor(name);
+  const tag = guildTagOf && donor ? guildTagOf(donor.name) : null;
+  return {
+    title: st.title || null,
+    guild: typeof tag === 'string' && tag ? tag : null,
+    // 実プレイヤー側（index.js の stats.pvpWins / pvpLosses）と同じ形。
+    record: { w: st.pvpWins, l: st.pvpLosses },
+  };
+}
+
 // A lobby voice: an active resident weighted by chattiness.
 export function lobbyPersona(now = Date.now()) {
   const active = activeResidents(now).filter(r => r.chatty > 0.2);
@@ -622,7 +743,9 @@ export function rosterView(now = Date.now()) {
       id: r.id, name: r.name, arch: r.arch, archLabel: a.label, lang: r.lang,
       skill: r.skill, chatty: r.chatty, favMode: r.favMode, hours: r.hours,
       registered: r.registered, custom: r.custom,
-      rating: st.rating, level: st.level, tier: st.tier.name, online: online.has(r.id),
+      // 段まで入った表示名（例「グランドマスター I」）。実プレイヤー側の表示は
+      // すべて24段の粒度なので、運営が見る住人一覧だけ帯止まりにしない。
+      rating: st.rating, level: st.level, tier: st.tier.label || st.tier.name, online: online.has(r.id),
       // 差分が無い住人（＝まだ誰とも当たっていない）は null。行が無いことと
       // 「0勝0敗の行がある」ことを運営が見分けられるようにしておく。
       record: rec ? { w: rec.w || 0, l: rec.l || 0, rd: rec.rd || 0, lastAt: rec.at || 0 } : null,

@@ -178,10 +178,27 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
   const src = read('public/js/modes.js');
   const body = (src.match(/function rewardsRows\(rewards\) \{[\s\S]*?\n\}/) || [''])[0];
   const exits = (body.match(/shareRow\(\)/g) || []).length;
-  check('rewardsRows の3つの出口すべてにシェアが乗っている', exits === 3, `${exits}/3`);
+  // ⚠ 「出口がちょうど3つ」で固定しない。検査したいのは**どの出口にも
+  //    シェアがあること**なので、出口（return 文）の数と shareRow() の数を
+  //    突き合わせる。個数で固定すると、出口を1つ足した人が
+  //    （シェアを正しく乗せていても）赤くなり、テストのほうを疑わせる。
+  const returns = (body.match(/\breturn\b/g) || []).length;
+  check('rewardsRows のすべての出口にシェアが乗っている',
+    exits > 0 && exits === returns, `シェア ${exits} / 出口 ${returns}`);
   check('報酬あり・ゲスト・送信失敗の全部が rewardsRows を通る',
     (src.match(/\$\{rewardsRows\(rewards\)\}/g) || []).length >= 15,
     `${(src.match(/\$\{rewardsRows\(rewards\)\}/g) || []).length} モーダル`);
+
+  // 🧾 結果送信に冪等キー(runId)が添えてあるか。サーバーは runId が来た回だけ
+  //    「同じ回」を1回にまとめられる（server/index.js の RESULT_FIELDS に
+  //    'runId' があることは test/api-contract.test.mjs が見張っている）。
+  //    ここが抜けると、net.js の再送がそのまま二重加算に戻る。
+  const submit = (src.match(/async function submitResult\([\s\S]*?\n\}/) || [''])[0];
+  check('結果送信が冪等キー runId を添えている', /runId:\s*currentRunId\(\)/.test(submit),
+    submit ? '' : 'submitResult が見つからない');
+  // 1回のプレイで1つ・同じ試合なら同じ値であること（作り直すと鍵にならない）。
+  check('runId は1回のプレイに1つだけ発行する',
+    /if \(!m\.runId\) m\.runId = newRunId\(\)/.test(src), '');
 
   check('シェアボタンの委譲リスナーがある', /closest\('\[data-bba-share\]'\)/.test(src), '');
   check('シェア先URLに流入計測の ref が付いている', /\?ref=share/.test(src), '');

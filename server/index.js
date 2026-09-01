@@ -3676,16 +3676,127 @@ app.post('/api/rank/claim', requireAuth, maintenanceGuard, (req, res) => {
 // Game results & leaderboard
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 🧾 結果送信の冪等キー（runId）
+// ---------------------------------------------------------------------------
+//
+// ■ 直していること（実バグ）
+// 同じ結果を2回受けると **2回ぶん加算していた**。効いていたのは2つ:
+//   ・通信が不安定なときの再送（応答だけ落ちた回）で、こっそり報酬が二重になる
+//   ・「オフライン中の記録をあとから送る」仕組みを **入れられない** 原因になる
+//     （入れると、二重加算が事故のときだけでなく毎回になる）
+// クライアントが1試合ごとに作る `runId` を覚えておき、既出なら報酬を計算し
+// 直さずに **前回とまったく同じ内容を 200 で返す**（エラーにはしない＝冪等）。
+//
+// ⚠ 判定は「同じ runId かどうか」**だけ** で行う。中身が違っても同じ runId なら
+//   前回の結果を返す ── ここを「中身も一致したときだけ」にすると、runId を
+//   固定したまま中身を変えて連投する経路が残ってしまう。
+// ⚠ runId が無いリクエストは従来どおり処理する（古いクライアントを切らない）。
+//
+// ■ 置き場と上限
+// 置き場は db.meta。プロセスを跨いで効かせたいのでメモリには置かない
+// （再デプロイの直後に再送が来ると、メモリだけでは二重加算に戻る）。
+// db.json は保存のたび **丸ごと** 書き出すので、必ず寿命と件数の上限を付ける:
+//   ・寿命 24時間 … 再送は普通なら数秒〜数分。オフラインの控えを後から送る
+//     経路（public/js/net.js）でも 12時間 より古い控えは送らない ── つまり
+//     「送られうる窓」は必ずこの寿命の内側に収まる。
+//   ・件数 2000件 … 1件は「時刻＋報酬の要約＋リプレイ保存の可否」で、JSON に
+//     すると概ね 300B 前後。2000件で 0.6MB ほど（db.json はいま 0.08MB）。
+//     ここで効く天井は復元の上限(RESTORE_LIMIT_MB=12MB)ではなく **保存時間** の
+//     ほう ── db.js の実測は 0.27MB/2.3ms・fsync まで同期なので、上限に張り付くと
+//     1回の保存で +25ms ほどイベントループが止まる。5000件（1.5MB）だと
+//     +60ms になり、それは「たまに固まるサーバー」として体感に出る。
+//     結果送信は1人 250件/時なので、2000件でも全速力の連投 8時間ぶんを覚えて
+//     いられる ── まっとうな再送の窓（数秒〜数分）より桁違いに広い。
+//     テスト（test/idempotent.test.mjs）は環境変数で下げて上限の挙動を見る。
+//   ・退会したときの掃除は要らない … 覚えているのは報酬の要約だけで、
+//     どのみち24時間で消える（工房やリプレイのような「その人の作ったもの」ではない）。
+const RESULT_RUN_TTL_MS = 24 * 60 * 60 * 1000;
+const RESULT_RUN_MAX = Number(process.env.RESULT_RUN_MAX) > 0
+  ? Math.floor(Number(process.env.RESULT_RUN_MAX)) : 2000;
+// runId の長さの上限。UUID(36文字)が余裕で入る。切らないと、1リクエストごとに
+// 巨大なキーが1個ずつ db.json に積まれる（＝保存時間＝イベントループの停止時間）。
+const RUN_ID_MAX = 48;
+// 期限切れの掃除をどれくらいの間隔で回すか。件数が上限を超えたときは間隔に
+// かかわらず必ず回す（下の sweepResultRuns）。
+const RESULT_RUN_SWEEP_MS = 60 * 1000;
+let lastResultRunSweep = 0;
+
+function resultRunStore() {
+  const cur = db.meta.resultRuns;
+  // 配列や壊れた値が入っていたら作り直す（復元ファイル経由で何が来るか分からない）。
+  if (!cur || typeof cur !== 'object' || Array.isArray(cur)) db.meta.resultRuns = {};
+  return db.meta.resultRuns;
+}
+
+// クライアント申告の runId を、db.json のキーとして安全な形に落とす。
+// 空文字を返したら「runId 無し」＝従来どおりの処理。
+function runKeyOf(user, raw) {
+  if (typeof raw !== 'string') return '';
+  const id = raw.trim().slice(0, RUN_ID_MAX);
+  if (!id) return '';
+  // キーは必ず `<userId>:<runId>`。人ごとに分けておけば、他人と runId が
+  // ぶつかっても「別人の結果が返る」ことが起きえない。先頭が userId なので
+  // `__proto__` のような危ないキーそのものにもならない。
+  return `${user.id}:${id}`;
+}
+
+function recallResultRun(key) {
+  const runs = resultRunStore();
+  if (!Object.prototype.hasOwnProperty.call(runs, key)) return null;
+  const rec = runs[key];
+  if (!rec || typeof rec !== 'object') { delete runs[key]; return null; }
+  // NaN / 欠落は「期限切れ」側に倒す（> の比較は NaN で false になる）。
+  if (!(Number(rec.at) > Date.now() - RESULT_RUN_TTL_MS)) { delete runs[key]; return null; }
+  return rec;
+}
+
+function rememberResultRun(key, res) {
+  const runs = resultRunStore();
+  runs[key] = { at: Date.now(), res };
+  sweepResultRuns(runs);
+}
+
+// 期限切れを捨て、それでも上限を超えていたら **古いほうから** 落とす。
+function sweepResultRuns(runs) {
+  const now = Date.now();
+  const keys = Object.keys(runs);
+  if (keys.length <= RESULT_RUN_MAX && now - lastResultRunSweep < RESULT_RUN_SWEEP_MS) return;
+  lastResultRunSweep = now;
+  const alive = [];
+  for (const k of keys) {
+    const at = Number(runs[k] && runs[k].at);
+    if (!(at > now - RESULT_RUN_TTL_MS)) { delete runs[k]; continue; }
+    alive.push([k, at]);
+  }
+  if (alive.length <= RESULT_RUN_MAX) return;
+  alive.sort((a, b) => a[1] - b[1]);
+  for (const [k] of alive.slice(0, alive.length - RESULT_RUN_MAX)) delete runs[k];
+}
+
 // Per-game rewards are capped (score rate, coin ceiling), but the ENDPOINT had
 // no limit at all — a loop against it minted coins, gems, XP and badges as fast
 // as the network allowed. A real game takes 20+ seconds, and even the fastest
 // mode (a ★3 puzzle stage) tops out near 80 runs an hour, so these ceilings are
 // far above legitimate play and still turn "unlimited" into "bounded".
 app.post('/api/game/result', requireAuth, maintenanceResultGuard, (req, res) => {
+  // レート上限は冪等の判定より **先** に置いたままにする。再送も1件は1件として
+  // 数えたい（既知の runId なら素通し、にすると回数の頭押さえが実質外れる）。
   const tooFast = !rateLimit(`result:${req.user.id}`, 30, 60 * 1000)
     || !rateLimit(`resulth:${req.user.id}`, 250, 60 * 60 * 1000);
   if (tooFast) {
     return res.status(429).json({ error: '結果の送信が多すぎます。しばらく待ってください' });
+  }
+  // 🧾 冪等キー。写し取りの一覧(RESULT_FIELDS)を通してから取り出す ── 名乗って
+  // よい欄の一覧は1つに保ちたいので、runId もそこに載せてある（applyGameResult
+  // は runId を使わないので、あちらには何も渡らない）。
+  const runKey = runKeyOf(req.user, pickResultFields(req.body).runId);
+  const reply = r => res.json({ rewards: r.rewards, user: publicUser(req.user), replaySaved: r.replaySaved });
+  if (runKey) {
+    const prev = recallResultRun(runKey);
+    // 既出なら再計算しない。user だけは「いまの姿」を返す（前回の写しを返すと、
+    // その間の買い物や対戦の結果が画面上で巻き戻って見える）。
+    if (prev) return reply(prev.res);
   }
   // req.body をそのまま渡してはいけない。applyGameResult は
   // `trusted`（サーバー判定モードの申告を通す）と `preClamped`
@@ -3702,7 +3813,11 @@ app.post('/api/game/result', requireAuth, maintenanceResultGuard, (req, res) => 
   let replaySaved = false;
   try { replaySaved = captureDailyReplay(req.user, req.body, rewards); }
   catch (err) { console.warn('[replay] 保存に失敗:', err && err.message); }
-  res.json({ rewards, user: publicUser(req.user), replaySaved });
+  // 覚えるのは「実際に処理し終えた応答」そのもの。applyGameResult は中で
+  // saveDb() を呼ぶが、それはこの記録より前なので、ここでもう一度呼ぶ
+  // （saveDb は 250ms のデバウンス付きなので二重呼び出しの費用は無い）。
+  if (runKey) { rememberResultRun(runKey, { rewards, replaySaved }); saveDb(); }
+  reply({ rewards, replaySaved });
 });
 
 // クライアントが申告してよい欄。ここに無いものは黙って捨てる。
@@ -3723,6 +3838,11 @@ const RESULT_FIELDS = [
   // ための識別子なので、名乗らせてよい（day は形式を、attemptId は保存済みの
   // pending との一致を applyGameResult 側で必ず検証する）。
   'day', 'attemptId',
+  // 🧾 1試合ごとの識別子（冪等キー）。報酬を増やせる申告ではなく「同じ回か
+  // どうか」の目印なので名乗らせてよい。⚠ これだけは applyGameResult には
+  // 渡らない（あちらは使わない）── 読むのは /api/game/result のハンドラで、
+  // 長さと形はそこ（runKeyOf）で押さえている。
+  'runId',
   // 👑 beatChampion は **わざと載せない**（trusted / preClamped と同じ内部専用の鍵）。
   // 立てられるのは対戦を裁いた server/battle.js だけ。ここに足すと
   // { beatChampion: true } の連投で称号と実績（＝💎の原資）が湧く。

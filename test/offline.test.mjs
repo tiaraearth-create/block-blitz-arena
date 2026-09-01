@@ -16,9 +16,13 @@
 //   1. 起動一式（index.html / CSS / import グラフの js 全部）が控えに入ること
 //   2. install が失敗しても、次の機会に必ず補修されること
 //   3. /api/ は絶対に控えないし返さないこと（古い残高を本物として出さない）
-//   4. 結果の自動再送を入れていないこと
-//      ── いまのサーバーの POST /api/game/result には冪等キーが無く、同じ回を
-//      2回受けると2回ぶん加算する。冪等キーが入るまで再送を足してはいけない。
+//   4. 結果の控え送りが「冪等キーのある結果だけ」に限られていること
+//      ── かつては再送そのものが禁止だった（POST /api/game/result が同じ回を
+//      2回受けると2回ぶん加算したため）。サーバーに冪等キー(runId)が入った
+//      ので解禁したが、**runId を持たない結果を控えたら元の二重加算に戻る**。
+//      控えを持つのは public/js/net.js。sw.js は今までどおり結果送信を知らない
+//      （Background Sync は入れない ── 画面もセッションも無いところから
+//      報酬の付く POST を投げる仕組みは、増やす価値より危なさのほうが大きい）。
 //   5. オンライン専用の入口に「押す前に分かる」印が付いていること
 import { spawn } from 'child_process';
 import fs from 'fs';
@@ -31,6 +35,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const SW_SRC = fs.readFileSync(path.join(ROOT, 'public', 'sw.js'), 'utf8');
 const MAIN_SRC = fs.readFileSync(path.join(ROOT, 'public', 'js', 'main.js'), 'utf8');
+// 📴 オフライン中の結果の控えは net.js が持つ（4番の検査で読む）。
+const NET_SRC = fs.readFileSync(path.join(ROOT, 'public', 'js', 'net.js'), 'utf8');
 const INDEX_SRC = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
 
 const results = [];
@@ -169,8 +175,9 @@ for (const [where, ok] of Object.entries(repairAt)) {
 check('main.js が SW に補修の合図を送っている',
   /postMessage\(\s*\{\s*type:\s*'bba-warm'/.test(MAIN_SRC), '');
 
-// 4) 自動再送を入れていないこと。
-//    ⚠️ サーバーに冪等キーが入るまでは禁止（同じ回が2回加算される）。
+// 4) 控え送りの置き場と条件。
+//    ⚠️ 控えてよいのは冪等キー(runId)を持つ結果だけ。ここが緩むと、
+//    再送のたびにコインとXPが二重に入る昔の状態に戻る。
 check("sw.js に 'sync' / 'periodicsync' の購読が無い",
   !/addEventListener\(\s*['"](periodic)?sync['"]/.test(SW_SRC), '');
 // コメントは落として見る ── 「なぜ入れないか」の説明は残したいが、
@@ -179,11 +186,37 @@ const swCode = SW_SRC.split('\n')
   .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 check('sw.js のコードが結果送信のパスを一切知らない',
   !swCode.includes('/api/game/result') && !/\bBackgroundSync\b/.test(swCode), '');
+// 控えの持ち主は net.js 1箇所だけ。画面側(main.js)にもう1本ぶら下がると、
+// 「どちらが送ったか」が分からないまま二重に送る経路ができる。
 check('main.js にオフライン結果の再送キューが無い',
   !/(resend|retryQueue|pendingResults|flushQueue)/i.test(MAIN_SRC), '');
-// 代わりに「端末にしか残らない」と正直に伝えているか。
+// ⚠️ 生命線: 控えるのは runId を持つ結果だけ。
+{
+  const q = NET_SRC.match(/function queueOfflineResult\([\s\S]{0,900}?\n\}/);
+  check('net.js に控えの入口(queueOfflineResult)がある', !!q, q ? '' : '関数名が変わった — このテストを実装に合わせて直すこと');
+  const body = q ? q[0] : '';
+  check('控えるのは runId を持つ結果だけ',
+    /typeof body\.runId !== 'string'/.test(body) && /return;/.test(body),
+    body ? '' : '');
+  check('控えるのは結果送信のパスだけ', /path !== RESULT_PATH/.test(body), '');
+  // 送り出す側があること（控えるだけで一生送らない、を防ぐ）。
+  check('つながったら送る仕組みがある',
+    /export async function flushResultQueue/.test(NET_SRC)
+    && /addEventListener\('online'/.test(NET_SRC), '');
+}
+// オフライン中の記録の扱いを、画面でも正直に伝えているか。
+// v2.38 で net.js に「つながったら送る」控えが入り、サーバーに冪等キー(runId)が
+// 入ったので、伝える中身が変わった:
+//   旧「この端末にだけ残ります（ランキングにも報酬にも入りません）」
+//   新「端末に預かって、つながったら自動で送ります」
+// ⚠️ 逆戻り（＝控えを消したのに文言だけ残る）を捕まえたいので、**古い文言が
+//    消えていること**も一緒に見る。控えが本当にあるかは1つ上の検査が見ている。
 check('オフライン中の記録の扱いを画面で伝えている',
-  /この端末にだけ残り/.test(MAIN_SRC) && /stay on this device only/.test(MAIN_SRC), '');
+  /つながったら自動で送ります/.test(MAIN_SRC) && /sent automatically once you are back online/.test(MAIN_SRC), '');
+check('「端末にだけ残る」という古い案内が残っていない',
+  !/この端末にだけ残り/.test(MAIN_SRC) && !/stay on this device only/.test(MAIN_SRC), '');
+// 送り終わったことを画面に伝える口があるか（net.js は表示を持たない）。
+check('控えを送り終えたら画面が知らせる', /bba:results-sent/.test(MAIN_SRC), '');
 
 // 5) /api/ は素通し（控えない・返さない）。
 check('sw.js が /api/ を素通ししている',

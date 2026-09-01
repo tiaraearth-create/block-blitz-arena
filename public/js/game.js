@@ -376,7 +376,30 @@ export class GameView {
       s.setProperty('--bba-hand-top', px(handTop));
       s.setProperty('--bba-hand-left', px(handLeft));
       s.setProperty('--bba-board-bottom', px(boardBottom));
+      s.setProperty('--bba-hand-piece-top', px(r.top + this.handPieceTop()));
     } catch { /* 差し替えられた document スタブなど */ }
+  }
+
+  // コマが実際に描かれ始める高さ（キャンバス内座標）。
+  //
+  // --bba-hand-top は「帯の上端」だが、drawTray はコマを**帯の中央**に描くので、
+  // 盤面の下端と帯の上端のあいだではなく、**盤面の下端とコマの上端**のあいだが
+  // 本当の空きになる。背の高い端末ではここが100px以上あって、通知を置くのに
+  // ちょうどよい（盤面にも手札にも被らない唯一の場所）。
+  //
+  // いちばん背の高いコマ（縦5連 と 3×3）で計算する ── 実際に配られるコマで
+  // 測ると、手札が変わるたびに通知の位置が飛ぶ。いちばん厳しい形に合わせておけば
+  // どの手札でも被らない。式は drawTray と同じものを使うこと。
+  handPieceTop() {
+    if (!this.showTray) return this.H;
+    if (this.sideTray) return 0;               // 横持ちは帯が右。縦方向の空きは別で見る
+    const slotW = this.W / 3, slotH = this.trayH;
+    const phOf = (rows, cols) => {
+      const maxCell = Math.min((slotW - 20) / cols, (slotH - 14) / rows, this.cell * 0.6);
+      return rows * maxCell;
+    };
+    const ph = Math.max(phOf(5, 1), phOf(3, 3));   // 縦5連 / 3×3 のうち背の高いほう
+    return this.trayY + Math.max(0, (this.trayH - ph) / 2);
   }
 
   // 背景装飾の数。設定「エフェクト量」に素直に従う。

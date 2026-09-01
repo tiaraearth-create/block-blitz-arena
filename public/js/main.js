@@ -1,5 +1,5 @@
 // App bootstrap: wire menu, session restore, global buttons.
-import { session, api, refreshMe, setToken } from './net.js';
+import { session, api, refreshMe, setToken, queuedResultCount } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, popModal, toast, updateTopbar, fmt, staffExtras , goBack, initHistory } from './dom.js';
 import { audio } from './audio.js';
 import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked, tutorialDone } from './modes.js';
@@ -296,6 +296,10 @@ function unlockSouzou() {
 function updateGhostButton() {
   $('#btnGhost').classList.toggle('hidden', !ghostUnlocked());
 }
+// ghostUnlocked() は localStorage か session.user.role==='admin' で決まるので、
+// 「いま誰でログインしているか」が変わったら必ず塗り直す。updateTopbar() が
+// 出す合図に乗せてあるので、ログインの導線が増えてもここは直さなくてよい。
+window.addEventListener('bba:session-changed', updateGhostButton);
 
 function unlockGhost() {
   if (localStorage.getItem('bba_ghost') === '1') return;
@@ -1644,15 +1648,19 @@ if (location.search.includes('purchase=success')) {
 // これまでは圏外でもボタンが普段どおり光っていて、押してはじめて
 // 「サーバーに接続できません」と言われていた。
 //
-// ■ オフライン中の記録をどうするか（決めたこと）
-//   **自動再送も「つながったら送る」ボタンも入れない。端末にだけ残す。**
-//   理由: POST /api/game/result には冪等キーが無く、同じ回を2回受けると
-//   2回ぶん加算する（modes.js の submitResult も同じ理由で再送しない）。
-//   溜めて後から送る仕組みは、その二重加算を「事故のとき」から「毎回」へ
-//   格上げしてしまううえ、localStorage を書き換えるだけで報酬を捏造できる
-//   経路にもなる。だからここでは、遊べること・記録が端末に残ること・
-//   ランキングには載らないことを**先に正直に伝える**。
-//   （サーバー側に冪等キーが入ったら、この判断は見直してよい。）
+// ■ オフライン中の記録をどうするか（第6波で判断が変わった）
+//   以前は「自動再送も『つながったら送る』ボタンも入れない。端末にだけ残す」
+//   だった。理由は POST /api/game/result に冪等キーが無く、同じ回を2回受けると
+//   2回ぶん加算したから。**その前提はもう無い** ── サーバーは runId で
+//   同じ回を1回しか数えず、modes.js の submitResult は毎回 runId を載せる。
+//   いまは net.js が圏外の結果を控えて、つながったら古い順に送り直す
+//   （控えるのは runId を持つ結果だけ・最大20件・寿命12時間）。
+//   だから画面で伝えることも変わる: 「端末に残るだけ」ではなく
+//   **「つながったら自動で送ります」**。送り終えると net.js が
+//   window に 'bba:results-sent'（detail.count）を投げるので、
+//   下でそれを拾って知らせと残高の更新を出している。
+//   ※ 控えを持つのは net.js の1箇所だけ。sw.js に Background Sync を
+//     足さない判断は据え置き（理由は public/sw.js の頭に書いてある）。
 // ---------------------------------------------------------------------------
 
 // サーバーに実際に届いたかどうか。null = まだ分からない。
@@ -1761,9 +1769,12 @@ function updateOfflineNotice(off) {
   body.style.cssText = 'margin-top:4px;opacity:.9';
   // ⚠️ ここは「記録がどうなるか」を先に言う場所。あとから
   //    「送信できませんでした」と言われるより、先に知っているほうがよい。
+  // 📮 未送信の件数が分かるなら添える（net.js の控え）。数が出ると
+  //    「本当に預かってもらえている」ことが確かめられる。
+  const waiting = queuedResultCount();
   body.textContent = t(
-    'うすくなっているボタンは通信が戻ると使えます。いま遊んだぶんの記録はこの端末にだけ残り、ランキング・コイン・ミッションには反映されません。',
-    'The dimmed buttons come back with your connection. Runs you play now stay on this device only — no ranking, coins or missions.');
+    `うすくなっているボタンは通信が戻ると使えます。いま遊んだぶんの記録は端末に預かって、つながったら自動で送ります${waiting ? `（未送信 ${waiting} 件）` : ''}。`,
+    `The dimmed buttons come back with your connection. Runs you play now are saved on your device and sent automatically once you are back online${waiting ? ` (${waiting} waiting)` : ''}.`);
   el.append(head, body);
   el.classList.remove('hidden');
 }
@@ -1794,12 +1805,25 @@ function updateOfflineTag(announce) {
     const head = navigator.onLine === false
       ? t('通信が切れました。', 'You are offline. ')
       : t('サーバーに接続できません。', "Can't reach the server. ");
-    toast(head + t('ソロプレイなどはこのまま遊べます（記録は端末にだけ残ります）',
-      'Solo modes still work — but results stay on this device only'), 'err', 5000);
+    toast(head + t('ソロプレイなどはこのまま遊べます（記録は預かって、つながったら送ります）',
+      'Solo modes still work — results are saved and sent when you are back'), 'err', 5000);
   } else {
     toast(t('通信が戻りました', 'Back online'), 'ok', 2200);
   }
 }
+
+// 📮 圏外で遊んだぶんを net.js が送り終えたときの知らせ。
+//    net.js は表示を持たない（1箇所で控えを持つだけ）ので、
+//    トーストと残高の更新はここで受けて出す。
+window.addEventListener('bba:results-sent', ev => {
+  const n = Math.max(0, Number(ev && ev.detail && ev.detail.count) || 0);
+  if (!n) return;
+  toast(t(`オフラインで遊んだ${n}件ぶんの報酬が入りました`,
+    `Rewards for ${n} offline run${n === 1 ? '' : 's'} have arrived`), 'ok', 4000);
+  // 送ったぶんコインとジェムが増えているので、トップバーを引き直す。
+  refreshMe().then(() => updateTopbar()).catch(() => { /* 次の更新で合う */ });
+  updateOfflineNotice(netDown());
+});
 
 // 押す前に分かるようにしたうえで、それでも押されたときの受け皿。
 // capture で捕まえるので、ボタン自身の onclick までは届かない

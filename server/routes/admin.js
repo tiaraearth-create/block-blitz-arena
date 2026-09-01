@@ -986,6 +986,15 @@ adminRouter.get('/api/admin/backup', requireAuth, requireAdmin, (req, res) => {
   } catch (err) {
     console.error('[backup] 取引の書庫を読めませんでした:', err.message);
   }
+  // 🧾 結果送信の冪等キーの控え（db.meta.resultRuns）は**無条件に落とす**。
+  //   復元側は必ず捨てる（backup.js の META_NOT_RESTORED）ので、積んでも
+  //   ダンプが最大0.6MB 太るだけの純粋な無駄。しかも中身は
+  //   `${userId}:${runId}` の一覧＝「誰がいつ何回遊んだか」なので、
+  //   持ち出す理由が無いなら持ち出さないほうがよい。
+  //   ⚠ 下の天井調整（over() で削っていく列）より**前**に置くこと。
+  //     容量に余裕があるときだけ残す、では意味が無い。
+  if (dump.meta && dump.meta.resultRuns != null) delete dump.meta.resultRuns;
+
   const limit = restoreLimitBytes();
   let body = JSON.stringify(dump);
   const fullBytes = Buffer.byteLength(body);

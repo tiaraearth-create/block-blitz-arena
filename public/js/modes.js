@@ -8,7 +8,9 @@ import { GameView, MiniBoard } from './game.js';
 import { PALETTE } from './themes.js';
 import { chooseMove, AI_LEVELS, planImmortalMove } from './ai.js';
 import { audio } from './audio.js';
-import { session, api, refreshMe, BattleClient } from './net.js';
+// queuedResultCount は「圏外で落ちた結果が控えに入ったか」を確かめるために引く。
+// 結果画面が「報酬は付いていません」と「あとで自動で送ります」を取り違えないため。
+import { session, api, refreshMe, BattleClient, queuedResultCount } from './net.js';
 import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf, rankBadge, rankLabel, staffExtras , applyScoreFit } from './dom.js';
 import { t, trServer, catName } from './i18n.js';
 // ショップに並ぶ英語名の出典。HUD・トーストが名前を自前で手書きしていたため、
@@ -17,7 +19,9 @@ import { t, trServer, catName } from './i18n.js';
 import { CATALOG_EN } from './catalog-en.js';
 // 独自SVGアイコン。端末ごとに絵が変わる絵文字を「アイコンとして使っている所」
 // だけを置き換えるために使う（文章の飾りの絵文字はそのまま）。
-import { icon, itemIconName, bossIconName, medalIconName } from './icons.js';
+// hasIcon はダンジョンの敵の系統表（FOE_FAMILIES）を読み込み時に突き合わせる
+// ために引く ── 表に書いた系統の絵が icons.js に無いことを黙って見逃さない。
+import { icon, hasIcon, itemIconName, bossIconName, medalIconName } from './icons.js';
 // 攻撃の量の式。サーバー（server/battle.js の attackCells）と同じものを
 // rules.js が持っている ── 試合中に「何個送ったか」を先に見せるために引く。
 // 数字をここへ書き写さない（写した瞬間、サーバーとズレても誰も気づけなくなる）。
@@ -147,7 +151,7 @@ function escapeHtml(s) {
 const ic = (name, size = 16) => icon(name, { size });
 
 // ---------------------------------------------------------------------------
-// 絵文字の枠に独自SVGアイコンを入れる／戻す
+// 絵文字の枠に独自SVGアイコンを入れる
 //
 // 絵文字を置いていた枠（#bossEmoji / #ultIcon / アイテムバーの .ib-icon）は
 // どれも「文字」として大きさが決まっていた。SVG は文字ではないので、
@@ -161,23 +165,16 @@ const ic = (name, size = 16) => icon(name, { size });
 //    中身を SVG に替えても掛かる先は枠のままなので、演出はそのまま効く。
 //    枠は flex コンテナ（.boss-panel / .chip）の子なので block 化されており、
 //    inline 要素だと transform が効かない問題も起きない。
-function paintIcon(el, name, size) {
+//
+// tint（{ a, b }）を渡すとアイコンの2色を上書きする。ダンジョンの敵が
+// 「系統アイコン ＋ 帯の色」で描き分かるための口で、渡さなければ
+// icons.js の定義色そのまま＝今までの呼び出しは見た目が変わらない。
+function paintIcon(el, name, size, tint = null) {
   if (!el) return null;
   el.style.display = 'inline-flex';
   el.style.alignItems = 'center';
   el.style.justifyContent = 'center';
-  el.innerHTML = icon(name, { size });
-  return el;
-}
-
-// アイコンがまだ無いもの（ダンジョンの雑魚は40帯×5種＝200体以上ある）は
-// 絵文字のまま。paintIcon で付けた inline style を必ず外してから戻す。
-function paintEmoji(el, text) {
-  if (!el) return null;
-  el.style.display = '';
-  el.style.alignItems = '';
-  el.style.justifyContent = '';
-  el.textContent = text;
+  el.innerHTML = icon(name, tint ? { size, a: tint.a, b: tint.b } : { size });
   return el;
 }
 
@@ -188,15 +185,55 @@ function paintEmoji(el, text) {
 // size は通常のボスパネルが 44px の絵文字だったので 40、レイドや管理者
 // イベントの1行パネル（.boss-panel.slim, 24px）では 24 を渡す。
 const BOSS_FACE_SLIM = 24;
-function setBossFace(el, iconName, size = 40) {
+function setBossFace(el, iconName, size = 40, tint = null) {
   if (!el) return null;
   el.className = 'boss-emoji';
-  return paintIcon(el, iconName, size);
+  return paintIcon(el, iconName, size, tint);
 }
-function setBossFaceEmoji(el, emoji) {
-  if (!el) return null;
-  el.className = 'boss-emoji';
-  return paintEmoji(el, emoji);
+
+// ---------------------------------------------------------------------------
+// 冪等キー（runId）
+//
+// /api/game/result はいま「同じ結果を2回受けると2回ぶん加算する」。そのせいで
+// **送信の再試行がどこにも入れられない** ── 応答だけ落ちたときに再送すると
+// コイン・XP・ミッション進捗を二重取りできてしまうので、submitResult() は
+// 失敗しても黙って諦めるしかなかった（offline 中の記録の後送りも同じ理由で
+// 入れられていない）。サーバーが「同じ runId は1回だけ数える」ようになれば
+// 再送を足せるので、先にキーを載せる。
+//
+// ⚠️ runId は「1回のプレイ」に紐づく。**同じ試合を再送するときは同じ値**で
+//    なければ意味がない ── 毎回作り直すと、サーバーから見て別の試合になる。
+//    そこでモードのインスタンス（＝1回のプレイで1つ作られ、リトライでは
+//    startXxx() が必ず新しく作り直す）に持たせる。currentMode を見るのは、
+//    submitResult() を呼ぶのが必ず「いま走っているモードの finish()」で、
+//    直後の `if (currentMode !== this) return;` がそれを前提にしているため。
+// ---------------------------------------------------------------------------
+let runIdSeq = 0;
+function newRunId() {
+  const c = globalThis.crypto;
+  // randomUUID は「安全なコンテキスト」でしか生えない（http:// の LAN 配信など
+  // では undefined）。getRandomValues はもう少し広く使えるので二段構え。
+  if (c && typeof c.randomUUID === 'function') {
+    try { return c.randomUUID(); } catch { /* 実装によっては投げる。下へ落とす */ }
+  }
+  if (c && typeof c.getRandomValues === 'function') {
+    const b = c.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;   // version 4
+    b[8] = (b[8] & 0x3f) | 0x80;   // variant 10
+    const h = [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  // 最後の砦。UUID の形にはしない ── 本物の乱数で作ったものと区別が付かないと、
+  // 「この端末では衝突しうる」ことがログから読めなくなる。
+  return `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}-${(++runIdSeq).toString(36)}`;
+}
+
+/** いま走っているプレイの runId（無ければその場で1つだけ発行して持たせる）。 */
+function currentRunId() {
+  const m = currentMode;
+  if (!m || typeof m !== 'object') return newRunId();
+  if (!m.runId) m.runId = newRunId();
+  return m.runId;
 }
 
 async function submitResult(payload) {
@@ -204,10 +241,13 @@ async function submitResult(payload) {
   // Per-run telemetry the mission system feeds on — filled in centrally so
   // every mode reports it without repeating itself.
   const e = currentMode && currentMode.engine;
-  const body = e
-    // perfectClears は全消し「昇華」の回数（celebratePerfect() が数えている）。
-    ? { ults: e.ultUses || 0, items: e.itemUses || 0, pieces: e.piecesPlaced || 0, perfectClears: e.perfectClears || 0, ...payload }
-    : payload;
+  // perfectClears は全消し「昇華」の回数（celebratePerfect() が数えている）。
+  const tele = e
+    ? { ults: e.ultUses || 0, items: e.itemUses || 0, pieces: e.piecesPlaced || 0, perfectClears: e.perfectClears || 0 }
+    : null;
+  // runId は先頭に置く＝呼び出し側が明示的に渡したときはそちらが勝つ
+  // （将来「同じ回をもう一度送る」経路を足すときのため）。
+  const body = { runId: currentRunId(), ...tele, ...payload };
   // この回が「サーバーに残る初めての1戦」かどうか。あとで受け取り先を案内する。
   const firstEver = !!(session.user.stats && (session.user.stats.gamesPlayed || 0) === 0);
   try {
@@ -237,8 +277,25 @@ async function submitResult(payload) {
     // 「報酬を受け取るにはログイン」と出て、その回のコイン／XP／ミッション
     // 進捗が消えたことが console 以外どこにも出ていなかった。
     // ここで区別して返し、結果画面には本当のことを出す。
-    // ※ 自動再送はしない。/api/game/result は同じ回を2回受けると2回ぶん
-    //   加算するので、応答だけ落ちたときに二重取りになる。
+    //
+    // 📴 「圏外で落ちた回」と「サーバーが断った回」はさらに別物。
+    // net.js は runId を持つ結果に限って控えを取り、つながったら送り直す。
+    // 控えに入った回まで「報酬は付いていません」と言い切ると、**あとから
+    // 本当に入る報酬** を「消えた」と伝えることになる（逆に、控えに入って
+    // いない回を「あとで送ります」と言うのはもっと悪い）。
+    // 見分け方は net.js の約束そのまま:
+    //   ・status 0 …… 通信が届かなかった回（netError）。控えの対象。
+    //   ・それ以外 … サーバーが返事をした回（429/503/400…）。控えない。
+    // 実際に控えられたかは queuedResultCount() で確かめてから言う。
+    const offline = err && err.status === 0;
+    const queued = offline && queuedResultCount() > 0;
+    if (queued) {
+      toast(t('通信が切れています。この回の結果は、つながったら自動で送ります',
+        // 'announce'（紫の枠）にするのは、これが「失敗の報せ」ではなく
+        // 「見落とされたら困る案内」だから。css に .toast.warn は無い。
+        'You are offline — this run will be submitted automatically once you reconnect'), 'announce', 4500);
+      return { queued: true };
+    }
     toast(t('結果を送信できませんでした。この回の報酬は付いていません',
       'Could not submit your result — no rewards were granted for this run'), 'err', 4500);
     return { failed: true };
@@ -257,8 +314,14 @@ function announceMissions(n) {
 function rewardsRows(rewards) {
   // 送信に失敗した回。ログインしているのに「ログインしてください」と出すと、
   // 直せる問題（通信・メンテ）を直しようのない問題に見せてしまう。
-  if (rewards && rewards.failed) {
-    return `<div class="rs-row"><span>${ic('warn')} ${t('送信に失敗しました — この回の報酬は付いていません', 'Submission failed — no rewards for this run')}</span></div>${shareRow()}`;
+  // 📴 圏外で控えに入った回はここに混ぜる（出口を増やさない）。報酬の金額は
+  // サーバーが決めるのでまだ出せないが、「消えた」と「あとで入る」は
+  // プレイヤーにとって全く違う話なので、文言だけは必ず分ける。
+  if (rewards && (rewards.failed || rewards.queued)) {
+    const row = rewards.queued
+      ? `${ic('offline')} ${t('未送信 — つながったら自動で送ります（報酬はそのとき入ります）', 'Not sent yet — it will be submitted automatically when you reconnect')}`
+      : `${ic('warn')} ${t('送信に失敗しました — この回の報酬は付いていません', 'Submission failed — no rewards for this run')}`;
+    return `<div class="rs-row"><span>${row}</span></div>${shareRow()}`;
   }
   if (!rewards) {
     // ゲストの結果はサーバーへ送られない＝コイン・ジェム・パスXP・ミッション
@@ -3760,13 +3823,22 @@ class DailyMode {
     // なので、記録もされないし今日はもう挑戦し直せない ── ここを「練習」と
     // 言ってしまうと、いちばん説明が要る場面で嘘をつくことになる。
     const sendFailed = !!(rewards && rewards.failed);
+    // 📴 圏外で控えに入った回は「失敗」ではない ── net.js がつながったときに
+    // 同じ runId で送り直すので、記録もそのとき付く。ここを sendFailed と
+    // ひとまとめにすると「記録に残りません」と嘘をつくし、素通しにすると
+    // 下の既定文（＝「今日の記録はもう確定している練習回」）になって、
+    // これから記録される回を練習だと言ってしまう。
+    const sendQueued = !!(rewards && rewards.queued);
     const d = rewards && rewards.daily;
     const recorded = d ? d.recorded : (session.user ? false : !this.practice);
     const streak = d ? d.streak : 0;
     const usedAll = e.piecesPlaced >= this.info.pieces;
     // 記録されなかった理由はサーバーが返す。まとめて「練習」と言ってしまうと、
     // 日付を跨いだ回や予約の取れていない回に嘘の説明をすることになる。
-    const notRecordedNote = sendFailed
+    const notRecordedNote = sendQueued
+      ? t('通信が切れています。この回はつながったときに送られ、そのとき記録されます',
+          'You are offline — this run will be submitted and recorded once you reconnect')
+      : sendFailed
       ? t('結果を送信できませんでした。この回は記録もランキングにも残りません',
           'Your result could not be submitted — this run is not recorded or ranked')
       : {
@@ -3784,7 +3856,9 @@ class DailyMode {
         ${recorded && d ? `<div class="rs-row"><span>${ic('fire')} ${t('連続クリア', 'Clear streak')}</span><b>${d.cleared ? t(`${streak}日目`, `Day ${streak}`) : t('リセット…', 'Reset…')}</b></div>` : ''}
         ${d && d.bonusCoins ? `<div class="rs-row"><span>${ic('mode_daily')} ${t('デイリーボーナス', 'Daily bonus')}</span><b>+${fmt(d.bonusCoins)} ${ic('coins', 14)}${d.bonusGems ? ` +${fmt(d.bonusGems)} ${ic('gems', 14)}` : ''}</b></div>` : ''}
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
-        ${sendFailed
+        ${sendQueued
+          ? `<div class="rs-row"><span>${ic('offline')} ${t('未送信 — つながったら自動で送ります（報酬はそのとき入ります）', 'Not sent yet — it will be submitted automatically when you reconnect')}</span></div>`
+          : sendFailed
           ? `<div class="rs-row"><span>${ic('warn')} ${t('送信に失敗しました — この回の報酬は付いていません', 'Submission failed — no rewards for this run')}</span></div>`
           : rewards ? `
         <div class="rs-row"><span>${ic('coins')} ${t('コイン', 'Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
@@ -3981,60 +4055,183 @@ export async function startDaily(info, opts = {}) {
 // After each floor you pick 1 of 3 perks that stack for the whole run.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 敵の「系統」対応表
+//
+// 敵は 4世界 × 10帯 × 5体（雑魚4 ＋ 区画ボス1）＝ 200体いる。ここは画面に
+// 残っていた最後の大きな絵文字だった（#bossEmoji は戦闘中いちばん大きい絵で、
+// 端末ごとに顔が変わっていた）。200枚描くのは無理、かといって1枚の共通絵に
+// まとめると「200体ぜんぶ同じ顔」＝ icons.js が潰した重複の作り直しになる。
+//
+// そこで敵を**系統**に分け、系統ごとに1枚（icons.js の foe_*）を描き、
+// 1体ずつの見分けは「系統アイコン ＋ 帯の色」で付ける。
+// 色は foeTint() が「世界 × 階の深さ」から作るので、同じスライムでも
+// F1 と B100 では別の色になる（＝強さが色で分かる）。
+//
+// 系統は下の band 表の**1つ目の欄**に1体ずつ書いてある（以前そこに絵文字が
+// 入っていた）。「どの敵がどの系統か」はその表を横に読めば分かる。
+// 系統名として書けるのは FOE_FAMILIES の鍵だけ。
+//
+// 表を作るときの決めごと:
+//   ・同じ帯の雑魚4体は**必ず別の系統**にする。同じ帯の敵は色がほとんど同じ
+//     なので、系統まで同じだと2体が完全に同じ絵になってしまう。
+//   ・区画ボスは雑魚と系統が被ってよい（キングスライム＝スライム系のように、
+//     被ることに意味がある）。ボスは色が帯の先へ進むので見分けが付く。
+// ---------------------------------------------------------------------------
+const FOE_FAMILIES = {
+  slime:    { icon: 'foe_slime',    ja: 'スライム系',   en: 'Ooze' },
+  beast:    { icon: 'foe_beast',    ja: '獣系',         en: 'Beast' },
+  bird:     { icon: 'foe_bird',     ja: '有翼系',       en: 'Winged' },
+  bug:      { icon: 'foe_bug',      ja: '蟲系',         en: 'Vermin' },
+  crab:     { icon: 'foe_crab',     ja: '甲殻系',       en: 'Crustacean' },
+  aqua:     { icon: 'foe_aqua',     ja: '水棲系',       en: 'Aquatic' },
+  tentacle: { icon: 'foe_tentacle', ja: '軟体系',       en: 'Tentacled' },
+  serpent:  { icon: 'foe_serpent',  ja: '蛇系',         en: 'Serpent' },
+  dragon:   { icon: 'foe_dragon',   ja: '竜系',         en: 'Dragon' },
+  undead:   { icon: 'foe_undead',   ja: '不死系',       en: 'Undead' },
+  ghost:    { icon: 'foe_ghost',    ja: '霊体系',       en: 'Spirit' },
+  // 鬼・悪魔系だけは既にある foe_oni を使い回す（同じ顔を2枚描かないため）。
+  oni:      { icon: 'foe_oni',      ja: '鬼・悪魔系',   en: 'Demon' },
+  angel:    { icon: 'foe_angel',    ja: '天使系',       en: 'Angel' },
+  golem:    { icon: 'foe_golem',    ja: '岩石・像系',   en: 'Golem' },
+  flame:    { icon: 'foe_flame',    ja: '炎系',         en: 'Flame' },
+  frost:    { icon: 'foe_frost',    ja: '氷雪系',       en: 'Frost' },
+  storm:    { icon: 'foe_storm',    ja: '雷嵐系',       en: 'Storm' },
+  plant:    { icon: 'foe_plant',    ja: '植物・菌系',   en: 'Flora' },
+  arcane:   { icon: 'foe_arcane',   ja: '魔術系',       en: 'Arcane' },
+  star:     { icon: 'foe_star',     ja: '星辰系',       en: 'Astral' },
+  void:     { icon: 'foe_void',     ja: '虚無系',       en: 'Void' },
+  blade:    { icon: 'foe_blade',    ja: '武具系',       en: 'Armament' },
+  royal:    { icon: 'foe_royal',    ja: '王侯・術者系', en: 'Sovereign' },
+  eye:      { icon: 'foe_eye',      ja: '邪眼系',       en: 'Evil Eye' },
+  mask:     { icon: 'foe_mask',     ja: '仮面系',       en: 'Masked' },
+};
+
+function foeIconName(family) {
+  const f = FOE_FAMILIES[family];
+  // 知らない系統は placeholder（見慣れない箱）に落とす。ここで「敵の共通
+  // アイコン」に落とすと、表を書き間違えても画面上は普通に見えてしまい、
+  // 気づけないまま「同じ顔の敵」が増えていく。
+  return f && hasIcon(f.icon) ? f.icon : 'placeholder';
+}
+
+// 世界ごとの色の道筋。h0 から span ぶん色相を進めながら、彩度と明度も動かす。
+// 「深いほど強い」を色だけで言い切るための表なので、
+//   ・塔　　… 苔の緑から血の赤へ
+//   ・地下　… 苔の黄緑から錆・血・毒の紫へ（明度をいちばん落とす）
+//   ・天国　… 空の青から黄金へ（明るいまま色相だけ一周する）
+//   ・深淵　… 菫から血の色へ（彩度を上げ、明度を沈める）
+// span は 360 を跨いでよい（最後に 0..359 へ畳む）。
+const FOE_TINTS = {
+  tower:  { h0: 128, span:  232, s0: 54, s1: 70, l0: 62, l1: 54 },
+  under:  { h0:  92, span: -142, s0: 46, s1: 64, l0: 56, l1: 44 },
+  heaven: { h0: 200, span:  208, s0: 62, s1: 90, l0: 74, l1: 64 },
+  abyss:  { h0: 276, span:  104, s0: 48, s1: 76, l0: 54, l1: 40 },
+};
+
+const pctClamp = n => Math.max(6, Math.min(94, Math.round(n)));
+
+/**
+ * 敵の2色（{ a, b }）を階層の深さから作る。
+ *
+ * @param realm    DUNGEON_REALMS の1つ
+ * @param bandIdx  何番目の帯か（0始まり）
+ * @param slot     帯の中で何番目の雑魚か（0始まり。ボスは無視される）
+ * @param isBoss   区画ボスか
+ *
+ * 帯だけでなく帯の中の順番でも少しずつ色が進む。こうしておくと
+ * 「同じ帯・同じ系統」が並んでも別の色になるし、色の並びは階数の順のまま
+ * （F1 → F100 で一方向に進む）なので「深い色＝強い」が崩れない。
+ */
+function foeTint(realm, bandIdx, slot, isBoss) {
+  const T = FOE_TINTS[realm.id] || FOE_TINTS.tower;
+  const bands = Math.max(1, realm.bands.length);
+  // 帯の中の位置は 0.1 / 0.3 / 0.5 / 0.7、ボスはいちばん奥の 0.9。
+  const step = bandIdx + (isBoss ? 0.9 : Math.min(0.8, slot * 0.2 + 0.1));
+  const k = Math.min(1, step / bands);
+  const h = ((Math.round(T.h0 + T.span * k) % 360) + 360) % 360;
+  const s = T.s0 + (T.s1 - T.s0) * k + (isBoss ? 10 : 0);
+  const l = T.l0 + (T.l1 - T.l0) * k + (isBoss ? -4 : 0);
+  return {
+    a: `hsl(${h}, ${pctClamp(s)}%, ${pctClamp(l)}%)`,
+    // 差し色は同じ色相の深い影。形の中の目・牙・輪郭がこれで出る。
+    b: `hsl(${h}, ${pctClamp(s + 14)}%, ${pctClamp(l * 0.36)}%)`,
+  };
+}
+
 const DUNGEON_BANDS = [
-  { name: '苔の洞窟',   nameEn: 'Mossy Cave',       board: 'board_forest',  track: 'battle', foes: [['🦇', 'コウモリ', 'Bat'], ['🐀', '大ネズミ', 'Giant Rat'], ['🟢', 'スライム', 'Slime'], ['🕷️', '毒グモ', 'Venom Spider']], boss: ['👑', 'キングスライム', 'King Slime'] },
-  { name: '海底神殿',   nameEn: 'Sunken Temple',    board: 'board_ocean',   track: 'battle', foes: [['🐙', 'タコ兵', 'Octopus Trooper'], ['🦀', '鉄カニ', 'Iron Crab'], ['🐡', 'トゲフグ', 'Spike Puffer'], ['🦈', 'サメ傭兵', 'Shark Mercenary']], boss: ['🧜‍♀️', '海の女王', 'Queen of the Sea'] },
-  { name: '桜の迷宮',   nameEn: 'Sakura Labyrinth', board: 'board_sakura',  track: 'solo',   foes: [['🦊', '妖狐', 'Fox Spirit'], ['🐍', '花蛇', 'Blossom Snake'], ['🦋', '幻蝶', 'Phantom Butterfly'], ['🐦', '怪鳥', 'Dread Bird']], boss: ['👺', '大天狗', 'Great Tengu'] },
-  { name: '黄昏の砂漠', nameEn: 'Twilight Desert',  board: 'board_sunset',  track: 'hard',   foes: [['🦂', '大サソリ', 'Giant Scorpion'], ['🐫', '護衛ラクダ', 'Guard Camel'], ['🦅', 'ハゲタカ', 'Vulture'], ['🐍', '砂大蛇', 'Sand Serpent']], boss: ['🦁', 'スフィンクス', 'Sphinx'] },
-  { name: '灼熱火山',   nameEn: 'Scorching Volcano', board: 'board_volcano', track: 'hard',  foes: [['🔥', '火の精', 'Fire Sprite'], ['🦎', '溶岩トカゲ', 'Lava Lizard'], ['🐗', 'マグマ猪', 'Magma Boar'], ['🗿', '岩人形', 'Stone Golem']], boss: ['🐲', '火竜グレンド', 'Grend the Fire Dragon'] },
-  { name: '氷結洞窟',   nameEn: 'Frozen Cavern',    board: 'board_default', track: 'boss',   foes: [['⛄', '雪人形', 'Snow Golem'], ['🐧', '氷ペンギン兵', 'Ice Penguin Trooper'], ['🦭', '氷セイウチ', 'Ice Walrus'], ['❄️', '氷の精', 'Frost Sprite']], boss: ['🐻‍❄️', 'フロストベア', 'Frost Bear'] },
-  { name: '雷雲の頂',   nameEn: 'Thunderhead Peak', board: 'board_galaxy',  track: 'boss',   foes: [['⚡', '雷精', 'Storm Sprite'], ['🦅', '雷鷲', 'Thunder Eagle'], ['☁️', '雲魔', 'Cloud Fiend'], ['🌪️', '竜巻魔', 'Tornado Fiend']], boss: ['🦚', 'サンダーバード', 'Thunderbird'] },
-  { name: '亡霊の城',   nameEn: 'Haunted Castle',   board: 'board_oni',     track: 'oni',    foes: [['👻', '亡霊', 'Wraith'], ['💀', 'スケルトン', 'Skeleton'], ['🧟', 'ゾンビ騎士', 'Zombie Knight'], ['🦇', '吸血コウモリ', 'Vampire Bat']], boss: ['🧛', 'ヴァンパイア卿', 'Lord Vampire'] },
-  { name: '鬼の巣窟',   nameEn: 'Oni Den',          board: 'board_oni',     track: 'oni',    foes: [['👹', '赤鬼', 'Red Oni'], ['👺', '青鬼', 'Blue Oni'], ['🔥', '鬼火', 'Ghost Flame'], ['💀', '骨武者', 'Bone Samurai']], boss: ['👹', '鬼神ラセツ', 'Rasetsu the Oni God'] },
-  { name: '天界の門',   nameEn: 'Heavenly Gate',    board: 'board_kami',    track: 'kami',   foes: [['🕊️', '堕天使', 'Fallen Angel'], ['⚔️', '神殿騎士', 'Temple Knight'], ['🌟', '星霊', 'Star Spirit'], ['🔮', '法陣魔', 'Rune Fiend']], boss: ['😈', '魔神ゼルガドス', 'Zelgados the Demon God'] },
+  { name: '苔の洞窟',   nameEn: 'Mossy Cave',       board: 'board_forest',  track: 'battle', foes: [['bird', 'コウモリ', 'Bat'], ['beast', '大ネズミ', 'Giant Rat'], ['slime', 'スライム', 'Slime'], ['bug', '毒グモ', 'Venom Spider']], boss: ['slime', 'キングスライム', 'King Slime'] },
+  { name: '海底神殿',   nameEn: 'Sunken Temple',    board: 'board_ocean',   track: 'battle', foes: [['tentacle', 'タコ兵', 'Octopus Trooper'], ['crab', '鉄カニ', 'Iron Crab'], ['aqua', 'トゲフグ', 'Spike Puffer'], ['beast', 'サメ傭兵', 'Shark Mercenary']], boss: ['royal', '海の女王', 'Queen of the Sea'] },
+  { name: '桜の迷宮',   nameEn: 'Sakura Labyrinth', board: 'board_sakura',  track: 'solo',   foes: [['beast', '妖狐', 'Fox Spirit'], ['serpent', '花蛇', 'Blossom Snake'], ['bug', '幻蝶', 'Phantom Butterfly'], ['bird', '怪鳥', 'Dread Bird']], boss: ['oni', '大天狗', 'Great Tengu'] },
+  { name: '黄昏の砂漠', nameEn: 'Twilight Desert',  board: 'board_sunset',  track: 'hard',   foes: [['crab', '大サソリ', 'Giant Scorpion'], ['beast', '護衛ラクダ', 'Guard Camel'], ['bird', 'ハゲタカ', 'Vulture'], ['serpent', '砂大蛇', 'Sand Serpent']], boss: ['royal', 'スフィンクス', 'Sphinx'] },
+  { name: '灼熱火山',   nameEn: 'Scorching Volcano', board: 'board_volcano', track: 'hard',  foes: [['flame', '火の精', 'Fire Sprite'], ['serpent', '溶岩トカゲ', 'Lava Lizard'], ['beast', 'マグマ猪', 'Magma Boar'], ['golem', '岩人形', 'Stone Golem']], boss: ['dragon', '火竜グレンド', 'Grend the Fire Dragon'] },
+  { name: '氷結洞窟',   nameEn: 'Frozen Cavern',    board: 'board_default', track: 'boss',   foes: [['golem', '雪人形', 'Snow Golem'], ['bird', '氷ペンギン兵', 'Ice Penguin Trooper'], ['aqua', '氷セイウチ', 'Ice Walrus'], ['frost', '氷の精', 'Frost Sprite']], boss: ['beast', 'フロストベア', 'Frost Bear'] },
+  { name: '雷雲の頂',   nameEn: 'Thunderhead Peak', board: 'board_galaxy',  track: 'boss',   foes: [['storm', '雷精', 'Storm Sprite'], ['bird', '雷鷲', 'Thunder Eagle'], ['ghost', '雲魔', 'Cloud Fiend'], ['void', '竜巻魔', 'Tornado Fiend']], boss: ['bird', 'サンダーバード', 'Thunderbird'] },
+  { name: '亡霊の城',   nameEn: 'Haunted Castle',   board: 'board_oni',     track: 'oni',    foes: [['ghost', '亡霊', 'Wraith'], ['undead', 'スケルトン', 'Skeleton'], ['blade', 'ゾンビ騎士', 'Zombie Knight'], ['bird', '吸血コウモリ', 'Vampire Bat']], boss: ['royal', 'ヴァンパイア卿', 'Lord Vampire'] },
+  { name: '鬼の巣窟',   nameEn: 'Oni Den',          board: 'board_oni',     track: 'oni',    foes: [['oni', '赤鬼', 'Red Oni'], ['mask', '青鬼', 'Blue Oni'], ['flame', '鬼火', 'Ghost Flame'], ['undead', '骨武者', 'Bone Samurai']], boss: ['oni', '鬼神ラセツ', 'Rasetsu the Oni God'] },
+  { name: '天界の門',   nameEn: 'Heavenly Gate',    board: 'board_kami',    track: 'kami',   foes: [['angel', '堕天使', 'Fallen Angel'], ['blade', '神殿騎士', 'Temple Knight'], ['star', '星霊', 'Star Spirit'], ['arcane', '法陣魔', 'Rune Fiend']], boss: ['oni', '魔神ゼルガドス', 'Zelgados the Demon God'] },
 ];
 
 // Underground realm (B1–B100): tougher, faster, rubble on every floor.
 const UNDER_BANDS = [
-  { name: '苔むす地下道', nameEn: 'Mossy Underpass',  board: 'board_forest',  track: 'battle', foes: [['🐛', '大ミミズ', 'Giant Worm'], ['🦟', '洞窟蚊', 'Cave Gnat'], ['🍄', '毒キノコ', 'Toxic Shroom'], ['🐌', '岩ナメクジ', 'Rock Slug']], boss: ['🐍', '地底大蛇', 'Tunnel Serpent'] },
-  { name: '忘れられた坑道', nameEn: 'Forgotten Mineshaft', board: 'board_default', track: 'battle', foes: [['⛏️', '亡霊坑夫', 'Ghost Miner'], ['🦇', '洞窟コウモリ', 'Cave Bat'], ['🕸️', '坑道グモ', 'Shaft Spider'], ['🧌', 'トロル', 'Troll']], boss: ['🗿', 'ゴーレム親方', 'Golem Foreman'] },
-  { name: '地底湖',       nameEn: 'Sunless Lake',     board: 'board_ocean',   track: 'battle', foes: [['🐟', '盲目魚', 'Blind Fish'], ['🦞', '白ザリガニ', 'Pale Crayfish'], ['🐸', '洞窟ガエル', 'Cave Toad'], ['🪼', '地底クラゲ', 'Deep Jelly']], boss: ['🐊', '地底湖の主', 'Lord of the Sunless Lake'] },
-  { name: '水晶の洞',     nameEn: 'Crystal Hollow',   board: 'board_galaxy',  track: 'hard',   foes: [['💎', 'クリスタル獣', 'Crystal Beast'], ['✨', '光の精', 'Light Wisp'], ['🦂', '水晶サソリ', 'Crystal Scorpion'], ['🗿', '晶石人形', 'Geode Golem']], boss: ['👸', '水晶の女王', 'Crystal Queen'] },
-  { name: '骨の回廊',     nameEn: 'Bone Gallery',     board: 'board_oni',     track: 'boss',   foes: [['💀', '骸骨兵', 'Bone Soldier'], ['🦴', '骨犬', 'Bone Hound'], ['👻', '地縛霊', 'Earthbound Ghost'], ['🧟', '屍鬼', 'Ghoul']], boss: ['☠️', '骸骨王', 'Skeleton King'] },
-  { name: '溶岩脈',       nameEn: 'Lava Vein',        board: 'board_volcano', track: 'hard',   foes: [['🔥', 'マグマ虫', 'Magma Grub'], ['🦎', '火蜥蜴', 'Flame Newt'], ['👹', '炎鬼', 'Flame Oni'], ['🌋', '噴煙魔', 'Smoke Fiend']], boss: ['🐉', '地竜バルガ', 'Balga the Earth Dragon'] },
-  { name: '毒の沼窟',     nameEn: 'Venom Grotto',     board: 'board_forest',  track: 'oni',    foes: [['🐍', '毒蛇', 'Viper'], ['🦠', '猛毒スライム', 'Toxic Ooze'], ['🕷️', '母グモ', 'Brood Spider'], ['🦂', '死のサソリ', 'Death Scorpion']], boss: ['🐲', '毒竜ドクロア', 'Dokuroa the Venom Drake'] },
-  { name: '静寂の墓所',   nameEn: 'Silent Crypt',     board: 'board_oni',     track: 'oni',    foes: [['⚰️', '棺の霊', 'Coffin Wraith'], ['🧛', '血吸い', 'Blood Fiend'], ['👤', '影人', 'Shade'], ['🕯️', '呪い火', 'Curse Flame']], boss: ['👑', '墓所の王', 'Crypt King'] },
-  { name: '奈落への橋',   nameEn: 'Bridge to the Abyss', board: 'board_galaxy', track: 'kami', foes: [['🌑', '闇の使徒', 'Dark Apostle'], ['🦅', '深淵鷲', 'Abyss Eagle'], ['⛓️', '鎖の獄卒', 'Chain Warden'], ['🔮', '虚無魔', 'Void Fiend']], boss: ['😱', '奈落の番人', 'Warden of the Abyss'] },
-  { name: '深淵の玉座',   nameEn: 'Throne of the Abyss', board: 'board_oni',  track: 'kami',   foes: [['👿', '深淵の魔兵', 'Abyssal Soldier'], ['🌑', '無貌のもの', 'The Faceless'], ['🐙', '深淵の触手', 'Abyssal Tendril'], ['💀', '奈落騎士', 'Abyss Knight']], boss: ['👁️', '深淵神アビソス', 'Abysos the Abyss God'] },
+  { name: '苔むす地下道', nameEn: 'Mossy Underpass',  board: 'board_forest',  track: 'battle', foes: [['serpent', '大ミミズ', 'Giant Worm'], ['bug', '洞窟蚊', 'Cave Gnat'], ['plant', '毒キノコ', 'Toxic Shroom'], ['slime', '岩ナメクジ', 'Rock Slug']], boss: ['serpent', '地底大蛇', 'Tunnel Serpent'] },
+  { name: '忘れられた坑道', nameEn: 'Forgotten Mineshaft', board: 'board_default', track: 'battle', foes: [['ghost', '亡霊坑夫', 'Ghost Miner'], ['bird', '洞窟コウモリ', 'Cave Bat'], ['bug', '坑道グモ', 'Shaft Spider'], ['beast', 'トロル', 'Troll']], boss: ['golem', 'ゴーレム親方', 'Golem Foreman'] },
+  { name: '地底湖',       nameEn: 'Sunless Lake',     board: 'board_ocean',   track: 'battle', foes: [['aqua', '盲目魚', 'Blind Fish'], ['crab', '白ザリガニ', 'Pale Crayfish'], ['slime', '洞窟ガエル', 'Cave Toad'], ['tentacle', '地底クラゲ', 'Deep Jelly']], boss: ['dragon', '地底湖の主', 'Lord of the Sunless Lake'] },
+  { name: '水晶の洞',     nameEn: 'Crystal Hollow',   board: 'board_galaxy',  track: 'hard',   foes: [['beast', 'クリスタル獣', 'Crystal Beast'], ['star', '光の精', 'Light Wisp'], ['crab', '水晶サソリ', 'Crystal Scorpion'], ['golem', '晶石人形', 'Geode Golem']], boss: ['royal', '水晶の女王', 'Crystal Queen'] },
+  { name: '骨の回廊',     nameEn: 'Bone Gallery',     board: 'board_oni',     track: 'boss',   foes: [['undead', '骸骨兵', 'Bone Soldier'], ['beast', '骨犬', 'Bone Hound'], ['ghost', '地縛霊', 'Earthbound Ghost'], ['oni', '屍鬼', 'Ghoul']], boss: ['royal', '骸骨王', 'Skeleton King'] },
+  { name: '溶岩脈',       nameEn: 'Lava Vein',        board: 'board_volcano', track: 'hard',   foes: [['bug', 'マグマ虫', 'Magma Grub'], ['serpent', '火蜥蜴', 'Flame Newt'], ['oni', '炎鬼', 'Flame Oni'], ['flame', '噴煙魔', 'Smoke Fiend']], boss: ['dragon', '地竜バルガ', 'Balga the Earth Dragon'] },
+  { name: '毒の沼窟',     nameEn: 'Venom Grotto',     board: 'board_forest',  track: 'oni',    foes: [['serpent', '毒蛇', 'Viper'], ['slime', '猛毒スライム', 'Toxic Ooze'], ['bug', '母グモ', 'Brood Spider'], ['crab', '死のサソリ', 'Death Scorpion']], boss: ['dragon', '毒竜ドクロア', 'Dokuroa the Venom Drake'] },
+  { name: '静寂の墓所',   nameEn: 'Silent Crypt',     board: 'board_oni',     track: 'oni',    foes: [['ghost', '棺の霊', 'Coffin Wraith'], ['undead', '血吸い', 'Blood Fiend'], ['void', '影人', 'Shade'], ['flame', '呪い火', 'Curse Flame']], boss: ['royal', '墓所の王', 'Crypt King'] },
+  { name: '奈落への橋',   nameEn: 'Bridge to the Abyss', board: 'board_galaxy', track: 'kami', foes: [['ghost', '闇の使徒', 'Dark Apostle'], ['bird', '深淵鷲', 'Abyss Eagle'], ['blade', '鎖の獄卒', 'Chain Warden'], ['void', '虚無魔', 'Void Fiend']], boss: ['eye', '奈落の番人', 'Warden of the Abyss'] },
+  { name: '深淵の玉座',   nameEn: 'Throne of the Abyss', board: 'board_oni',  track: 'kami',   foes: [['oni', '深淵の魔兵', 'Abyssal Soldier'], ['void', '無貌のもの', 'The Faceless'], ['tentacle', '深淵の触手', 'Abyssal Tendril'], ['undead', '奈落騎士', 'Abyss Knight']], boss: ['eye', '深淵神アビソス', 'Abysos the Abyss God'] },
 ];
 
 // Heaven realm (H1–H100): slower but heavier attacks; bosses grant blessings.
 const HEAVEN_BANDS = [
-  { name: '雲の階段',     nameEn: 'Stairway of Clouds', board: 'board_default', track: 'solo', foes: [['☁️', '雲ひつじ', 'Cloud Sheep'], ['🕊️', '白鳩兵', 'Dove Trooper'], ['🌬️', '風の精', 'Wind Sprite'], ['🎐', '鈴天使', 'Chime Cherub']], boss: ['🦢', '白鳥の守護者', 'Swan Guardian'] },
-  { name: '虹の花園',     nameEn: 'Rainbow Garden',   board: 'board_sakura',  track: 'solo',   foes: [['🦋', '虹蝶', 'Rainbow Butterfly'], ['🐝', '蜜天蜂', 'Honeybee Cherub'], ['🌷', '花の精', 'Flower Sprite'], ['🐞', '星てんとう', 'Star Ladybug']], boss: ['🧚', '花園の女王', 'Queen of the Garden'] },
-  { name: '星屑の橋',     nameEn: 'Stardust Bridge',  board: 'board_galaxy',  track: 'battle', foes: [['⭐', '星の子', 'Starling'], ['🌠', '流星獣', 'Meteor Beast'], ['🪐', '環の精', 'Ring Spirit'], ['✨', '光塵魔', 'Gleam Fiend']], boss: ['🌟', '星織りの賢者', 'Sage of Woven Stars'] },
-  { name: '月光の泉',     nameEn: 'Moonlit Spring',   board: 'board_ocean',   track: 'solo',   foes: [['🌙', '月ウサギ', 'Moon Rabbit'], ['🫧', '泡天使', 'Bubble Cherub'], ['🐬', '天空イルカ', 'Sky Dolphin'], ['🦚', '月孔雀', 'Moon Peacock']], boss: ['🌕', '月の巫女', 'Priestess of the Moon'] },
-  { name: '審判の間',     nameEn: 'Hall of Judgment', board: 'board_kami',    track: 'boss',   foes: [['⚖️', '天秤の番人', 'Scale Keeper'], ['📜', '律法の霊', 'Law Spirit'], ['🗡️', '裁きの剣', 'Judging Blade'], ['👁️', '監視者', 'The Watcher']], boss: ['🦁', '審判者レオン', 'Leon the Adjudicator'] },
-  { name: '竪琴の雲海',   nameEn: 'Sea of Harp Clouds', board: 'board_sunset', track: 'kami',  foes: [['🎵', '音符精', 'Note Sprite'], ['🎺', 'ラッパ天使', 'Trumpet Cherub'], ['🪽', '有翼獅子', 'Winged Lion'], ['🕊️', '聖鳩', 'Holy Dove']], boss: ['🎼', '大聖歌長', 'Grand Cantor'] },
-  { name: '黄金の大聖堂', nameEn: 'Golden Cathedral', board: 'board_kami',    track: 'kami',   foes: [['⚔️', '聖堂騎士', 'Cathedral Knight'], ['🛡️', '光の衛兵', 'Light Sentinel'], ['🕯️', '聖火の精', 'Sacred Flame'], ['📿', '祈りの霊', 'Prayer Spirit']], boss: ['👼', '大天使ミカエラ', 'Archangel Michaela'] },
-  { name: '天雷の峰',     nameEn: 'Peak of Holy Thunder', board: 'board_galaxy', track: 'oni', foes: [['⚡', '天雷精', 'Skybolt Sprite'], ['🦅', '神鷲', 'Divine Eagle'], ['🌩️', '雷雲魔', 'Storm Halo'], ['🔱', '雷槍兵', 'Thunder Lancer']], boss: ['🐦‍🔥', '不死鳥フェニクス', 'Phoenix'] },
-  { name: '神々の回廊',   nameEn: 'Corridor of the Gods', board: 'board_kami', track: 'kami',  foes: [['🗿', '神像兵', 'Idol Soldier'], ['🦄', '聖獣ユニコーン', 'Unicorn'], ['🐉', '天竜', 'Sky Dragon'], ['🪽', '熾天使', 'Seraph']], boss: ['🌈', '虹神殿の主', 'Master of the Rainbow Shrine'] },
-  { name: '創造の玉座',   nameEn: 'Throne of Creation', board: 'board_kami',  track: 'kami',   foes: [['🪽', '大熾天使', 'High Seraph'], ['☀️', '太陽の化身', 'Avatar of the Sun'], ['🌌', '星幽体', 'Astral Being'], ['👑', '王冠の霊', 'Crown Spirit']], boss: ['✨', '至高神ルミナス', 'Luminus the Supreme'] },
+  { name: '雲の階段',     nameEn: 'Stairway of Clouds', board: 'board_default', track: 'solo', foes: [['beast', '雲ひつじ', 'Cloud Sheep'], ['bird', '白鳩兵', 'Dove Trooper'], ['storm', '風の精', 'Wind Sprite'], ['angel', '鈴天使', 'Chime Cherub']], boss: ['bird', '白鳥の守護者', 'Swan Guardian'] },
+  { name: '虹の花園',     nameEn: 'Rainbow Garden',   board: 'board_sakura',  track: 'solo',   foes: [['bug', '虹蝶', 'Rainbow Butterfly'], ['angel', '蜜天蜂', 'Honeybee Cherub'], ['plant', '花の精', 'Flower Sprite'], ['star', '星てんとう', 'Star Ladybug']], boss: ['royal', '花園の女王', 'Queen of the Garden'] },
+  { name: '星屑の橋',     nameEn: 'Stardust Bridge',  board: 'board_galaxy',  track: 'battle', foes: [['star', '星の子', 'Starling'], ['beast', '流星獣', 'Meteor Beast'], ['arcane', '環の精', 'Ring Spirit'], ['ghost', '光塵魔', 'Gleam Fiend']], boss: ['royal', '星織りの賢者', 'Sage of Woven Stars'] },
+  { name: '月光の泉',     nameEn: 'Moonlit Spring',   board: 'board_ocean',   track: 'solo',   foes: [['beast', '月ウサギ', 'Moon Rabbit'], ['angel', '泡天使', 'Bubble Cherub'], ['aqua', '天空イルカ', 'Sky Dolphin'], ['bird', '月孔雀', 'Moon Peacock']], boss: ['royal', '月の巫女', 'Priestess of the Moon'] },
+  { name: '審判の間',     nameEn: 'Hall of Judgment', board: 'board_kami',    track: 'boss',   foes: [['golem', '天秤の番人', 'Scale Keeper'], ['arcane', '律法の霊', 'Law Spirit'], ['blade', '裁きの剣', 'Judging Blade'], ['eye', '監視者', 'The Watcher']], boss: ['beast', '審判者レオン', 'Leon the Adjudicator'] },
+  { name: '竪琴の雲海',   nameEn: 'Sea of Harp Clouds', board: 'board_sunset', track: 'kami',  foes: [['arcane', '音符精', 'Note Sprite'], ['angel', 'ラッパ天使', 'Trumpet Cherub'], ['beast', '有翼獅子', 'Winged Lion'], ['bird', '聖鳩', 'Holy Dove']], boss: ['royal', '大聖歌長', 'Grand Cantor'] },
+  { name: '黄金の大聖堂', nameEn: 'Golden Cathedral', board: 'board_kami',    track: 'kami',   foes: [['blade', '聖堂騎士', 'Cathedral Knight'], ['golem', '光の衛兵', 'Light Sentinel'], ['flame', '聖火の精', 'Sacred Flame'], ['arcane', '祈りの霊', 'Prayer Spirit']], boss: ['angel', '大天使ミカエラ', 'Archangel Michaela'] },
+  { name: '天雷の峰',     nameEn: 'Peak of Holy Thunder', board: 'board_galaxy', track: 'oni', foes: [['storm', '天雷精', 'Skybolt Sprite'], ['bird', '神鷲', 'Divine Eagle'], ['arcane', '雷雲魔', 'Storm Halo'], ['blade', '雷槍兵', 'Thunder Lancer']], boss: ['bird', '不死鳥フェニクス', 'Phoenix'] },
+  { name: '神々の回廊',   nameEn: 'Corridor of the Gods', board: 'board_kami', track: 'kami',  foes: [['golem', '神像兵', 'Idol Soldier'], ['beast', '聖獣ユニコーン', 'Unicorn'], ['dragon', '天竜', 'Sky Dragon'], ['angel', '熾天使', 'Seraph']], boss: ['royal', '虹神殿の主', 'Master of the Rainbow Shrine'] },
+  { name: '創造の玉座',   nameEn: 'Throne of Creation', board: 'board_kami',  track: 'kami',   foes: [['angel', '大熾天使', 'High Seraph'], ['star', '太陽の化身', 'Avatar of the Sun'], ['ghost', '星幽体', 'Astral Being'], ['royal', '王冠の霊', 'Crown Spirit']], boss: ['star', '至高神ルミナス', 'Luminus the Supreme'] },
 ];
 
 // 🌑 The Abyss — the hardest realm. Unlocked by conquering the tower.
 const ABYSS_BANDS = [
-  { name: '忘却の入口',   nameEn: 'Gate of Oblivion',   board: 'board_oni',     track: 'oni',  foes: [['🕯️', '消えかけの灯', 'Dying Light'], ['🦇', '影蝙蝠', 'Shade Bat'], ['🪦', '墓守', 'Gravekeeper'], ['🐍', '黒蛇', 'Black Serpent']], boss: ['🧟', '忘却の番人', 'Warden of Oblivion'] },
-  { name: '嘆きの回廊',   nameEn: 'Corridor of Lament', board: 'board_oni',     track: 'oni',  foes: [['👻', '嘆きの霊', 'Lamenting Spirit'], ['🕷️', '毒蜘蛛', 'Venom Spider'], ['🗝️', '錆びた鍵守', 'Rusted Keyholder'], ['🌫️', '瘴気', 'Miasma']], boss: ['💀', '嘆きの王', 'King of Lament'] },
-  { name: '血の沼',       nameEn: 'Blood Marsh',        board: 'board_volcano', track: 'oni',  foes: [['🩸', '血の滴', 'Blood Drop'], ['🐊', '沼の顎', 'Marsh Jaw'], ['🧛', '吸血鬼', 'Vampire'], ['🦟', '吸血蚊の群れ', 'Mosquito Swarm']], boss: ['🐲', '血竜ヴァルグ', 'Valg the Blood Dragon'] },
-  { name: '虚無の階段',   nameEn: 'Stairs of the Void', board: 'board_cyber',   track: 'kami', foes: [['⬛', '虚無の欠片', 'Void Shard'], ['🌀', '歪み', 'Distortion'], ['👁️', '無の眼', 'Eye of Nothing'], ['🕳️', '落とし穴', 'Pitfall']], boss: ['🌀', '虚無の支配者', 'Master of the Void'] },
-  { name: '狂気の鏡殿',   nameEn: 'Hall of Mad Mirrors', board: 'board_cyber',  track: 'oni',  foes: [['🪞', '鏡像', 'Mirror Image'], ['🤡', '狂道化', 'Mad Jester'], ['🎭', '二面鬼', 'Two-Faced Oni'], ['🔮', '惑わしの珠', 'Orb of Delusion']], boss: ['🃏', '狂王ジョーカー', 'The Mad Joker'] },
-  { name: '氷獄',         nameEn: 'Frozen Hell',        board: 'board_snow',    track: 'oni',  foes: [['🧊', '氷の亡者', 'Frozen Wraith'], ['🐺', '氷狼', 'Ice Wolf'], ['❄️', '吹雪の精', 'Blizzard Sprite'], ['🗿', '凍てつく像', 'Frozen Idol']], boss: ['🧙', '氷獄の魔女', 'Witch of Frozen Hell'] },
-  { name: '灼熱の底',     nameEn: 'Scorched Depths',    board: 'board_volcano', track: 'oni',  foes: [['🔥', '溶岩魔', 'Lava Fiend'], ['🌋', '噴火獣', 'Eruption Beast'], ['🐉', '火蜥蜴', 'Fire Lizard'], ['💥', '爆炎の精', 'Blast Sprite']], boss: ['👹', '灼熱鬼イフリート', 'Ifrit the Scorching'] },
-  { name: '星喰いの巣',   nameEn: 'Nest of the Star-Eater', board: 'board_galaxy', track: 'kami', foes: [['🕸️', '星の糸', 'Star Silk'], ['🦑', '宇宙蛸', 'Cosmic Squid'], ['☄️', '落星', 'Fallen Star'], ['🌑', '暗黒球', 'Dark Sphere']], boss: ['🐙', '星喰いヨグ', 'Yog the Star-Eater'] },
-  { name: '神殺しの祭壇', nameEn: 'Altar of Godslaying', board: 'board_kami',   track: 'kami', foes: [['⚔️', '堕天騎士', 'Fallen Knight'], ['🗡️', '弑逆の刃', 'Regicide Blade'], ['📿', '異端僧', 'Heretic Monk'], ['🪽', '黒翼', 'Black Wing']], boss: ['😈', '堕神ルシファル', 'Lucifal the Fallen'] },
-  { name: '深淵の玉座',   nameEn: 'Throne of the Abyss', board: 'board_oni',    track: 'kami', foes: [['👁️‍🗨️', '深淵の視線', 'Gaze of the Abyss'], ['🌌', '終焉の兆し', 'Omen of the End'], ['🕳️', '奈落', 'Naraka'], ['🖤', '無慈悲', 'Mercilessness']], boss: ['🩻', '深淵王アビスゼロ', 'Abyss Zero, King of the Deep'] },
+  { name: '忘却の入口',   nameEn: 'Gate of Oblivion',   board: 'board_oni',     track: 'oni',  foes: [['flame', '消えかけの灯', 'Dying Light'], ['bird', '影蝙蝠', 'Shade Bat'], ['ghost', '墓守', 'Gravekeeper'], ['serpent', '黒蛇', 'Black Serpent']], boss: ['undead', '忘却の番人', 'Warden of Oblivion'] },
+  { name: '嘆きの回廊',   nameEn: 'Corridor of Lament', board: 'board_oni',     track: 'oni',  foes: [['ghost', '嘆きの霊', 'Lamenting Spirit'], ['bug', '毒蜘蛛', 'Venom Spider'], ['blade', '錆びた鍵守', 'Rusted Keyholder'], ['void', '瘴気', 'Miasma']], boss: ['royal', '嘆きの王', 'King of Lament'] },
+  { name: '血の沼',       nameEn: 'Blood Marsh',        board: 'board_volcano', track: 'oni',  foes: [['slime', '血の滴', 'Blood Drop'], ['aqua', '沼の顎', 'Marsh Jaw'], ['undead', '吸血鬼', 'Vampire'], ['bug', '吸血蚊の群れ', 'Mosquito Swarm']], boss: ['dragon', '血竜ヴァルグ', 'Valg the Blood Dragon'] },
+  { name: '虚無の階段',   nameEn: 'Stairs of the Void', board: 'board_cyber',   track: 'kami', foes: [['golem', '虚無の欠片', 'Void Shard'], ['arcane', '歪み', 'Distortion'], ['eye', '無の眼', 'Eye of Nothing'], ['void', '落とし穴', 'Pitfall']], boss: ['royal', '虚無の支配者', 'Master of the Void'] },
+  { name: '狂気の鏡殿',   nameEn: 'Hall of Mad Mirrors', board: 'board_cyber',  track: 'oni',  foes: [['ghost', '鏡像', 'Mirror Image'], ['mask', '狂道化', 'Mad Jester'], ['oni', '二面鬼', 'Two-Faced Oni'], ['arcane', '惑わしの珠', 'Orb of Delusion']], boss: ['royal', '狂王ジョーカー', 'The Mad Joker'] },
+  { name: '氷獄',         nameEn: 'Frozen Hell',        board: 'board_snow',    track: 'oni',  foes: [['undead', '氷の亡者', 'Frozen Wraith'], ['beast', '氷狼', 'Ice Wolf'], ['frost', '吹雪の精', 'Blizzard Sprite'], ['golem', '凍てつく像', 'Frozen Idol']], boss: ['royal', '氷獄の魔女', 'Witch of Frozen Hell'] },
+  { name: '灼熱の底',     nameEn: 'Scorched Depths',    board: 'board_volcano', track: 'oni',  foes: [['slime', '溶岩魔', 'Lava Fiend'], ['beast', '噴火獣', 'Eruption Beast'], ['dragon', '火蜥蜴', 'Fire Lizard'], ['flame', '爆炎の精', 'Blast Sprite']], boss: ['oni', '灼熱鬼イフリート', 'Ifrit the Scorching'] },
+  { name: '星喰いの巣',   nameEn: 'Nest of the Star-Eater', board: 'board_galaxy', track: 'kami', foes: [['bug', '星の糸', 'Star Silk'], ['tentacle', '宇宙蛸', 'Cosmic Squid'], ['star', '落星', 'Fallen Star'], ['void', '暗黒球', 'Dark Sphere']], boss: ['tentacle', '星喰いヨグ', 'Yog the Star-Eater'] },
+  { name: '神殺しの祭壇', nameEn: 'Altar of Godslaying', board: 'board_kami',   track: 'kami', foes: [['angel', '堕天騎士', 'Fallen Knight'], ['blade', '弑逆の刃', 'Regicide Blade'], ['arcane', '異端僧', 'Heretic Monk'], ['bird', '黒翼', 'Black Wing']], boss: ['oni', '堕神ルシファル', 'Lucifal the Fallen'] },
+  { name: '深淵の玉座',   nameEn: 'Throne of the Abyss', board: 'board_oni',    track: 'kami', foes: [['eye', '深淵の視線', 'Gaze of the Abyss'], ['star', '終焉の兆し', 'Omen of the End'], ['void', '奈落', 'Naraka'], ['ghost', '無慈悲', 'Mercilessness']], boss: ['royal', '深淵王アビスゼロ', 'Abyss Zero, King of the Deep'] },
 ];
+
+// 表を書き間違えても画面は「見慣れない箱」が出るだけで、遊べてしまう。
+// 読み込み時に一度だけ突き合わせて、間違いを console に出しておく。
+// （このファイルは DOM 前提なのでテストから import できない ── 気づける口が
+//   ここ以外に無い。正しいときは何も言わないので、普段は静かなまま）
+{
+  const bad = new Set();
+  for (const bands of [DUNGEON_BANDS, UNDER_BANDS, HEAVEN_BANDS, ABYSS_BANDS]) {
+    for (const band of bands) {
+      for (const [family] of [...band.foes, band.boss]) {
+        if (!FOE_FAMILIES[family] || !hasIcon(FOE_FAMILIES[family].icon)) bad.add(family);
+      }
+      // 同じ帯の雑魚が同じ系統だと、色もほぼ同じなので2体が同じ絵になる。
+      const fams = band.foes.map(f => f[0]);
+      if (new Set(fams).size !== fams.length) bad.add(`${band.name}:雑魚の系統が重複`);
+    }
+  }
+  if (bad.size) console.warn('[dungeon] 系統の対応表がおかしい:', [...bad].join(', '));
+}
 
 // One curse per Abyss floor (deterministic, so a floor feels like "that floor").
 const ABYSS_CURSES = [
@@ -4099,20 +4296,23 @@ const DUNGEON_REALMS = {
 
 function dungeonFloor(f, realm = DUNGEON_REALMS.tower) {
   const bands = realm.bands;
-  const band = bands[Math.min(bands.length - 1, Math.floor((f - 1) / 10))];
+  const bandIdx = Math.min(bands.length - 1, Math.floor((f - 1) / 10));
+  const band = bands[bandIdx];
   const isBoss = f % (realm.bossEvery || 10) === 0;
   const isFinal = f === realm.floors;
-  const [emoji, name, nameEn] = isBoss ? band.boss : band.foes[(f - 1) % band.foes.length];
+  const slot = (f - 1) % band.foes.length;
+  const [family, name, nameEn] = isBoss ? band.boss : band.foes[slot];
   let hp = Math.round((260 + f * 95 + f * f * 1.15) * realm.hpMult);
   if (isBoss) hp = Math.round(hp * (isFinal ? (realm.finalMult || 3) : 2.1));
   const atkSec = Math.max(4.5, (15 - f * 0.09) * realm.atkSecMult) * (isBoss ? 1.25 : 1);
   const atkCells = Math.min(8, 1 + Math.floor(f / 12) + (isBoss ? 2 : 0) + realm.extraAtkCells);
-  // 独自アイコンがある敵だけ iconName を持つ。今あるのは深淵の最下層
-  // （深淵王アビスゼロ＝icons.js の boss_abysszero）だけで、残り200体以上の
-  // 雑魚・区画ボスにはまだ絵が無い。無いものを1つの共通アイコンに落とすと
-  // 「全部同じ顔」になり、icons.js が潰したはずの重複が戻るので絵文字のまま。
-  const iconName = (realm.id === 'abyss' && isFinal) ? bossIconName('abysszero') : null;
-  return { floor: f, band, isBoss, isFinal, emoji, iconName, name, nameEn, hp, atkSec, atkCells };
+  // 敵の顔は「系統アイコン ＋ 階の深さで決まる色」。
+  // 深淵の最下層（深淵王アビスゼロ）だけは物語の主役なので専用の絵があり、
+  // その絵は色まで含めて描いてあるので tint を当てない（null）。
+  const special = realm.id === 'abyss' && isFinal;
+  const iconName = special ? bossIconName('abysszero') : foeIconName(family);
+  const tint = special ? null : foeTint(realm, bandIdx, slot, isBoss);
+  return { floor: f, band, bandIdx, isBoss, isFinal, family, iconName, tint, name, nameEn, hp, atkSec, atkCells };
 }
 
 const DUNGEON_PERKS = [
@@ -4217,8 +4417,8 @@ class DungeonMode {
     const v = getView();
     setModeTheme({ ...equippedTheme(), boardId: this.info.band.board });
     audio.playTrack(this.info.band.track);
-    if (this.info.iconName) setBossFace($('#bossEmoji'), this.info.iconName);
-    else setBossFaceEmoji($('#bossEmoji'), this.info.emoji);
+    // 系統の絵に、その階の色をかぶせる（深淵王だけは tint が null＝専用の色）。
+    setBossFace($('#bossEmoji'), this.info.iconName, 40, this.info.tint);
     $('#bossName').textContent = t(`${this.realm.prefix}${f} ${this.info.band.name}：${this.info.name}`, `${this.realm.prefix}${f} ${this.info.band.nameEn}: ${this.info.nameEn}`);
     this.phase = 1;
     this.applyCurse(f);
@@ -4295,7 +4495,9 @@ class DungeonMode {
       view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
     }
     view.shake = 10;
-    toast(t(`${this.info.emoji} ${this.info.name}の攻撃！`, `${this.info.emoji} ${this.info.nameEn} attacks!`), 'err', 1100);
+    // トーストは textContent なので SVG を差し込めない（dom.js の toast()）。
+    // 絵文字を頭に付けていた名残りは落として、名前だけを出す。
+    toast(t(`${this.info.name}の攻撃！`, `${this.info.nameEn} attacks!`), 'err', 1100);
     if (this.engine.over) this.onTopOut();
   }
 
@@ -4373,8 +4575,8 @@ class DungeonMode {
         const cells = this.engine.addGarbage(p === 3 ? 6 : 4);
         for (const [r, c] of cells) v.spawnAnim.set(r * 8 + c, v.time);
         toast(p === 3
-          ? t(`${this.info.emoji} ${this.info.name}が真の姿に…！！攻撃がさらに加速！`, `${this.info.emoji} ${this.info.nameEn} reveals its true form!! Even faster attacks!`)
-          : t(`${this.info.emoji} ${this.info.name}が第二形態に！攻撃が加速する！`, `${this.info.emoji} ${this.info.nameEn} enters phase 2! Attacks speed up!`), 'announce', 2800);
+          ? t(`${this.info.name}が真の姿に…！！攻撃がさらに加速！`, `${this.info.nameEn} reveals its true form!! Even faster attacks!`)
+          : t(`${this.info.name}が第二形態に！攻撃が加速する！`, `${this.info.nameEn} enters phase 2! Attacks speed up!`), 'announce', 2800);
       }
       v.shake = 18; v.screenFlash = 0.5; audio.bossAttack();
       $('#bossEmoji').classList.add('boss-atk');
@@ -4841,7 +5043,10 @@ class ChaosMode extends VersusBase {
         <div class="rs-row"><span>${t('発動したルール', 'Rules triggered')}</span><b>${t(`${fmt(this.modCount)}回`, `${fmt(this.modCount)}`)}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
-        ${rewards ? `<div class="rs-row"><span>${t('イベントボーナス', 'Event bonus')}</span><b>${t('コイン1.5倍！', '1.5x coins!')}</b></div>` : ''}
+        ${/* submitResult は失敗した回に { failed } / 圏外の回に { queued } を返す。
+              どちらも truthy なので、素の `rewards ?` だと「報酬は付いていません」の
+              すぐ隣に「コイン1.5倍！」が並んでいた。実際に報酬が入った回だけ出す。 */''}
+        ${rewards && !rewards.failed && !rewards.queued ? `<div class="rs-row"><span>${t('イベントボーナス', 'Event bonus')}</span><b>${t('コイン1.5倍！', '1.5x coins!')}</b></div>` : ''}
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
@@ -5036,8 +5241,14 @@ class OnlineMode extends VersusBase {
         ? t('バトルロイヤル参加者を募集しています…', 'Gathering battle-royale contenders…')
         : this.kind === 'coop'
         ? t('いっしょに遊ぶ相棒を探しています…', 'Looking for a co-op partner…')
-        : this.kind === 'attack'
-        ? t('アタック戦の相手を探しています…', 'Looking for an attack-duel opponent…')
+        // 🏷 表の名前は rules.js の ONLINE_MODES が唯一の正解。ここで
+        //    文言を書くと名前が2つになる ── 実際「1v1 ランクマッチ」を
+        //    押したのに待ち合わせ画面だけ旧名「アタック戦」のままだった。
+        //    onlineModeName() は知らない kind に空文字を返すので、
+        //    そのときは下の汎用文に落ちる。
+        : onlineModeName(this.kind)
+        ? t(`「${onlineModeName(this.kind)}」の相手を探しています…`,
+            `Looking for a ${onlineModeName(this.kind)} opponent…`)
         : t('対戦相手を探しています…', 'Looking for an opponent…');
       // 接続人数は #mmOnlineLine が持っている。ここで作り直すと id が重複する。
       $('#mmSub').textContent = t('対戦相手を検索中…', 'Searching…');
@@ -5178,6 +5389,29 @@ class OnlineMode extends VersusBase {
     });
   }
 
+  // 👀 「観戦している」ときに片づける物を1か所にまとめたもの。
+  //    ルームの観戦席（onRoomSpectate）とロイヤルの脱落後観戦（royaleDead）は
+  //    どちらも「自分の試合はもう無い」状態なのに、片づけがルーム側にしか
+  //    書かれていなかった ── ロイヤルの観戦中はリロール（残数つき）が出たまま
+  //    残り、押しても何も起きない死にボタンになっていた。
+  //    ⚠ 2か所に同じ列挙を書かないこと（片方だけ直る事故が起きる）。
+  enterSpectatorHud() {
+    $('#oppPanel').classList.add('hidden');
+    $('#bossPanel').classList.add('hidden');
+    $('#coopBar').classList.add('hidden');
+    $('#btnEmote').classList.add('hidden');
+    $('#hudTimer').classList.add('hidden');
+    // 自分の試合が無いのだから、自分の試合の道具は出さない。
+    // 引き直しも奥義も、押しても何も起きないボタンになる。
+    $('#btnReroll').classList.add('hidden');
+    $('#btnUlt').classList.add('hidden');
+    showItemBar(false);
+    // 自分は打たない。GameView は観戦ビューに完全に覆われるが、
+    // 入力だけは閉じておく（覆いの隙間から触れる端末を作らない）。
+    getView().inputLocked = true;
+    $('#hudScore').textContent = '-';
+  }
+
   // カスタムルームの観戦席。試合が始まったあとも room_update が届き、
   // そこに watch / watchable が載る（この波の取り決め）。ロビーの更新では
   // ないので、部屋の画面ではなく観戦ビューへ回す。
@@ -5187,21 +5421,7 @@ class OnlineMode extends VersusBase {
       this.spectatingRoom = true;
       this.inMatch = true;
       showScreen('game');
-      $('#oppPanel').classList.add('hidden');
-      $('#bossPanel').classList.add('hidden');
-      $('#coopBar').classList.add('hidden');
-      $('#btnEmote').classList.add('hidden');
-      $('#hudTimer').classList.add('hidden');
-      // 自分の試合が無いのだから、自分の試合の道具は出さない。
-      // 引き直しも奥義も、押しても何も起きないボタンになる。
-      $('#btnReroll').classList.add('hidden');
-      $('#btnUlt').classList.add('hidden');
-      showItemBar(false);
-      // 自分は打たない。GameView は観戦ビューに完全に覆われるが、
-      // 入力だけは閉じておく（覆いの隙間から触れる端末を作らない）。
-      const v = getView();
-      v.inputLocked = true;
-      $('#hudScore').textContent = '-';
+      this.enterSpectatorHud();
       $('#hudSub').innerHTML = ic('spectate', 13) + ' ' + t('観戦席', 'SPECTATING');
       toast(t('観戦席から試合を見ています', 'Watching from the spectator seats'), 'announce', 2600);
     }
@@ -5870,6 +6090,11 @@ class OnlineMode extends VersusBase {
     const w = m.querySelector('#rWatch');
     if (w) w.onclick = () => {
       closeModal();
+      // ルームの観戦席とまったく同じ後始末をする（リロール・奥義・エモート・
+      // アイテムバーを隠し、入力を閉じる）。ここに書かないと、脱落後の観戦中に
+      // リロールが残数つきで出たまま、押しても何も起きないボタンになる。
+      this.enterSpectatorHud();
+      $('#hudSub').innerHTML = ic('spectate', 13) + ' ' + t('観戦中', 'SPECTATING');
       toast(t('観戦モード — 決着がついたら結果が出ます', 'Spectating — the result appears when it is over'), 'announce', 3000);
     };
   }
@@ -6926,6 +7151,13 @@ class OnlineMode extends VersusBase {
   // 確認文はここ1箇所から読む（読み手は main.js の ✕ 確認モーダル）。
   quitWarning() {
     if (!this.inMatch || this.ended) return null;   // マッチング待ちは失うものが無い
+    // 👀 カスタムルームの観戦席。onRoomSpectate が inMatch を立てるので、
+    //    ここで先に外さないと「試合中のプレイヤー」として扱われ、観戦を
+    //    やめるだけの人に「離脱は敗北になります」と嘘の警告が出る
+    //    （レートも戦績も実際には1も動かない）。ロイヤルの観戦
+    //    （royaleDead）は下で正しく出し分けているのに、ここだけ抜けていた。
+    //    ⚠ quit() のトーストと必ず同じ順序で分岐すること。
+    if (this.spectatingRoom) return null;   // 観戦をやめるだけ＝失うものが無い
     if (this.isCoop) {
       return t('協力プレイの離脱は<b>敗北になりません</b>（相棒はそのまま続けられます）',
         'Leaving a co-op run is <b>not a loss</b> — your partner can keep going');
@@ -6943,8 +7175,18 @@ class OnlineMode extends VersusBase {
   quit() {
     if (this.inMatch && !this.ended) {
       this.ended = true;
+      // 🚪 「自分で降りた」ことをサーバーへ伝えてから閉じる。伝えないと
+      //    回線事故と同じ扱い（再接続の猶予25秒）になり、相手が待たされる。
+      //    観戦をやめるだけの回は試合に出ていないので送らない。
+      if (!this.spectatingRoom && this.client) {
+        try { this.client.forfeit(); } catch { /* 閉じかけなら何もしない */ }
+      }
       this.destroy();
-      toast(this.isCoop
+      toast(this.spectatingRoom
+        // 👀 ルームの観戦席（上の quitWarning と同じ順序で分岐すること）。
+        //    観戦をやめるだけなので、敗北でも不戦勝でもない。
+        ? t('観戦を終了しました', 'Stopped spectating')
+        : this.isCoop
         ? t('協力プレイから離脱しました（敗北にはなりません）', 'You left the co-op run (no loss recorded)')
         : this.isRoyale
         // ロイヤルには「相手」がいないので、敗北でも不戦勝でもない。
@@ -6955,7 +7197,10 @@ class OnlineMode extends VersusBase {
                 'Stopped spectating (your placement is already final)')
             : t('バトルロイヤルから離脱しました（そのときの生存者の中で最下位扱い）',
                 'You left the royale (recorded as last among the survivors at that moment)'))
-        : t('対戦から離脱しました（敗北扱い・相手の不戦勝）', 'You left the match (counts as a loss)'), 'err', 2600);
+        : t('対戦から離脱しました（敗北扱い・相手の不戦勝）', 'You left the match (counts as a loss)'),
+        // 観戦をやめただけの回は警告色(err)にしない ── 何も失っていない。
+        // '' は素のトースト（CSS にあるのは err と ok だけ）。
+        (this.spectatingRoom || (this.isRoyale && this.royaleDead)) ? '' : 'err', 2600);
       endToMenu();
     } else {
       this.client.cancelQueue();

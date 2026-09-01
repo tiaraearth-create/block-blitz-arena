@@ -16,7 +16,7 @@ import { dailyGhostFactor } from './daily.js';
 // 段位（帯）の唯一の正解。ここに帯の表を手書きすると、画面とサーバーで
 // 「ゴールドなのにプラチナ扱い」がいつか必ず起きる。server/catalog.js が
 // public/js/catalog-en.js を読んでいるのと同じ作法で、素のJSを直に読む。
-import { bandOf } from '../public/js/ranks.js';
+import { bandOf, rankOf } from '../public/js/ranks.js';
 
 // ---------------------------------------------------------------------------
 // Deterministic helpers
@@ -370,7 +370,17 @@ export function customResident(spec, index) {
 // レート1900以上の住人が全員「マスター」に丸められていたのもこれが原因）。
 export function tierOf(rating) {
   const b = bandOf(rating);
-  return { name: b.name, nameEn: b.nameEn };
+  const r = rankOf(rating);
+  return {
+    // name / nameEn は**帯だけ**（ブロンズ〜レジェンド）。住人チャットの
+    // {tier} スロットはこちらを使う ── 「◯◯に昇格した」は帯の単位のほうが
+    // 自然で、段（I/II/III）まで言うと人間の話し方から浮く。
+    name: b.name, nameEn: b.nameEn,
+    // label / labelEn は段まで入った表示名（例「グランドマスター I」）。
+    // 実プレイヤー側の表示（結果画面・段位一覧・対戦相手）はすべて段まで
+    // 出しているので、管理画面の住人一覧だけ6帯時代の粒度で止まっていた。
+    label: r.label, labelEn: r.labelEn,
+  };
 }
 
 // ---------------------------------------------------------------------------

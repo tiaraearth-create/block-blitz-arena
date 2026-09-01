@@ -180,11 +180,24 @@ function enToJa(text) {
 }
 
 // Local table translation — synchronous and instant.
+// 日本語の文字（ひらがな・カタカナ・漢字）が残っているか。
+// 半角カナと長音符・々も見る（「ｶﾀｶﾅ」「人々」を訳せた扱いにしないため）。
+const HAS_JA = /[぀-ゟ゠-ヿ一-鿿ｦ-ﾝ々〆ヵヶ]/;
+
 export function translateLocal(text, to) {
   const from = detectLang(text);
   if (from === to) return null;
   const out = to === 'en' ? jaToEn(text) : enToJa(text);
   if (!out || out === String(text).trim()) return null;
+  // 🈳 対訳表は「部分文字列の置換」なので、表に無い語が混ざると日本語が
+  //    そのまま残った半端な文が出る。実例:
+  //      「すきな色」→ "love itな色"（'すき' だけ当たった）
+  //      「テスト発言です」→ "テスト発言"（'です' が消えただけ）
+  //    どちらも英語面に**翻訳として**配られていた。日本語が残っているうちは
+  //    翻訳できていないので、何も返さない ── 呼び出し側は null を
+  //    「訳が無い」として扱い、原文のまま出す（index.js / battle.js とも
+  //    `if (tr && …)` で受けているので、English 面には原文が出る）。
+  if (to === 'en' && HAS_JA.test(out)) return null;
   return { lang: to, text: out, engine: 'table' };
 }
 

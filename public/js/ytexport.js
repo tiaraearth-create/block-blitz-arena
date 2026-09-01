@@ -89,6 +89,31 @@ function stopStudio() {
   audio.stopPreview();
 }
 
+// 🧱 2×2のブロックの印。canvas の図形だけで描く（外部画像を貼らないので
+//    canvas が汚染されず、toBlob / captureStream が必ず通る）。
+//    size は「印全体の一辺」。中心 (cx, cy) に描く。
+function drawBlockMark(ctx2d, cx, cy, size, accent) {
+  const gap = size * 0.08;
+  const cell = (size - gap) / 2;
+  const r = cell * 0.18;                       // 角の丸み
+  const x0 = cx - size / 2, y0 = cy - size / 2;
+  // 左上と右下を明るく、残り2つを控えめに ── のっぺりした四角の塊に
+  // 見えないよう、市松に濃淡を付ける。
+  const cells = [
+    [0, 0, 'rgba(255,255,255,0.92)'], [1, 0, accent],
+    [0, 1, accent], [1, 1, 'rgba(255,255,255,0.92)'],
+  ];
+  for (const [cxi, cyi, fill] of cells) {
+    const x = x0 + cxi * (cell + gap), y = y0 + cyi * (cell + gap);
+    ctx2d.fillStyle = fill;
+    ctx2d.beginPath();
+    // roundRect は新しめのブラウザにしか無い。無ければ普通の四角で描く
+    // （書き出しが落ちるより角が四角いほうがよい）。
+    if (typeof ctx2d.roundRect === 'function') { ctx2d.roundRect(x, y, cell, cell, r); ctx2d.fill(); }
+    else ctx2d.fillRect(x, y, cell, cell);
+  }
+}
+
 function drawFrame(ctx2d, info, an, freqBuf, elapsed, total, recording) {
   const [c1, c2, accent] = moodOf(info.id);
   const tall = H > W;                    // 縦型（ショート）か
@@ -145,9 +170,15 @@ function drawFrame(ctx2d, info, an, freqBuf, elapsed, total, recording) {
     ctx2d.fillStyle = accent;
     ctx2d.fillText('ORIGINAL SOUNDTRACK', W / 2, topY + 40 * k);
   }
-  ctx2d.fillStyle = 'rgba(255,255,255,0.92)';
-  ctx2d.font = `${Math.round((tall ? 150 : 110) * k)}px system-ui, sans-serif`;
-  ctx2d.fillText(info.icon, W / 2, tall ? H * 0.34 : 250);
+  // 🧱 ブロックの印。以前はここに info.icon（絵文字）を fillText していたが、
+  //    v2.36 で TRACK_INFO の欄が icon → iconName（icons.js の名前）に変わり、
+  //    info.icon が undefined になって **文字列 "undefined" が巨大に焼き込まれて
+  //    いた**（例外が出ないので動画・サムネにそのまま残る）。
+  //    icons.js の SVG を canvas に貼るのは避ける ── SVG画像を描いた canvas は
+  //    ブラウザによっては汚染扱いになり、toBlob / captureStream が
+  //    SecurityError で落ちて書き出しそのものが死ぬ。ここは canvas だけで
+  //    描ける「2×2のブロック」にする（ゲームの見た目とも合う）。
+  drawBlockMark(ctx2d, W / 2, tall ? H * 0.34 : 250, (tall ? 150 : 110) * k, accent);
   // 曲名は遊んでいる言語のほうを大きく出す。英語で遊んでいても
   // 日本語しか出ていなかった（下の行と同じ文字が2回並ぶこともあった）。
   const primary = t(info.name, info.nameEn);
@@ -225,7 +256,10 @@ export function showYouTubeStudio() {
     <p id="ytFmtNote" class="muted center" style="font-size:11px;margin:-2px 0 6px">1280×720 ・ YouTube</p>
     <div class="settings-row">
       <label>${t('曲', 'Track')}</label>
-      <select id="ytTrack" style="max-width:210px">${tracks.map(x => `<option value="${x.id}">${x.icon} ${t(x.name, x.nameEn)}</option>`).join('')}</select>
+      <!-- ⚠ <option> は文字しか描けないので、アイコン(SVG)は入れられない。
+           以前は ${'x.icon'}（絵文字）を前置していたが、v2.36 で TRACK_INFO の欄が
+           iconName に変わって全行が "undefined 曲名" になっていた。曲名だけ出す。 -->
+      <select id="ytTrack" style="max-width:210px">${tracks.map(x => `<option value="${x.id}">${t(x.name, x.nameEn)}</option>`).join('')}</select>
     </div>
     <div class="settings-row">
       <label>${t('長さ', 'Length')}</label>

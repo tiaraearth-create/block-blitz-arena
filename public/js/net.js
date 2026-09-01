@@ -58,7 +58,142 @@ function netError(msg) {
   return e;
 }
 
-export async function api(path, { method = 'GET', body, timeout } = {}) {
+// ---------------------------------------------------------------------------
+// 📴 オフライン中の結果を、つながったら送る
+// ---------------------------------------------------------------------------
+//
+// 第5波では **わざと入れなかった**。当時の POST /api/game/result は同じ回を
+// 2回受けると2回ぶん加算したので、溜めて後から送る仕組みは「二重加算を
+// “事故のとき” から “毎回” へ格上げする」だけだった。
+// サーバーに冪等キー（runId）が入ったので解禁する。条件は3つ:
+//   1. 控えるのは runId を持つ結果だけ。**runId が無い結果は絶対に控えない**
+//      （再送がそのまま二重加算に戻るため。ここがこの仕組みの生命線）。
+//   2. 控えるのは「通信そのものが落ちた回」だけ。サーバーが返事を返した回
+//      （429・503・400 など）はもう処理が済んでいるので控える理由が無い。
+//   3. 控えの寿命は12時間。サーバー側の冪等キーの寿命（24時間 ＝ index.js の
+//      RESULT_RUN_TTL_MS）の **内側** に必ず収める。外に出ると、サーバーが
+//      runId を忘れたあとに届いて二重加算になりうる。
+//
+// ■「localStorage を書き換えれば報酬を捏造できるのでは」について
+// この控えは **新しい権限を1つも増やしていない**。中身は最終的に
+// POST /api/game/result に載るだけで、それは細工したクライアントなら元から
+// 直接叩ける。実際に効いている守りは全部サーバー側にあり、どれも緩んでいない:
+//   ・trusted … 対戦/レイド等のサーバー判定モードは自己申告では通らない
+//   ・レート上限 … 30件/分・250件/時（冪等の判定より **前** に置いたまま）
+//   ・duration の壁時計クランプ … 「前回の提出からの実経過＋90秒」。控えを
+//     まとめて送っても、2件目以降は実経過がほぼ無いので90秒ぶんに切られる
+//   ・1日あたりの上限（🪙/XP/💎）
+// 増えるのは「正直に遊んだ人が、圏外で遊んだ回の報酬を受け取れる」ことだけ。
+const RESULT_PATH = '/api/game/result';
+const RESULT_QUEUE_KEY = 'bba_result_queue';
+// 控える件数の上限。圏外で遊べるのは1人用モードだけなので、20件もあれば
+// 現実の「圏外のひとまとまり」は収まる（これを超えると古いほうから落ちる）。
+const RESULT_QUEUE_MAX = 20;
+const RESULT_QUEUE_TTL_MS = 12 * 60 * 60 * 1000;
+// 控えを送るときの間隔。まとめて叩いてレート上限(30件/分)を自分で踏まない。
+const RESULT_QUEUE_GAP_MS = 2500;
+
+function readResultQueue() {
+  try {
+    const raw = localStorage.getItem(RESULT_QUEUE_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(list)) return [];
+    const now = Date.now();
+    // 読むたびに「冪等キーを持つ・期限内」だけに絞る。手で書き換えられた
+    // 控えも、ここで形の合わないものは落ちる。
+    return list.filter(e => e && typeof e === 'object' && e.body && typeof e.body === 'object'
+      && typeof e.body.runId === 'string' && e.body.runId
+      && Number(e.at) > now - RESULT_QUEUE_TTL_MS).slice(-RESULT_QUEUE_MAX);
+  } catch { return []; }
+}
+
+function writeResultQueue(list) {
+  try {
+    if (!list.length) localStorage.removeItem(RESULT_QUEUE_KEY);
+    else localStorage.setItem(RESULT_QUEUE_KEY, JSON.stringify(list.slice(-RESULT_QUEUE_MAX)));
+  } catch { /* 容量いっぱい／プライベートモード。控えられなくても遊べる */ }
+}
+
+/** 送れずに控えてある結果の件数（画面から「未送信◯件」を出せるように）。 */
+export function queuedResultCount() {
+  return readResultQueue().filter(e => !session.user || e.uid === session.user.id).length;
+}
+
+function queueOfflineResult(path, method, body) {
+  if (path !== RESULT_PATH || method !== 'POST') return;
+  // ⚠ 冪等キーが無いものは控えない（＝再送しない）。ここを緩めると、
+  //   再送のたびにコインとXPが二重に入る昔の状態に戻る。
+  if (!body || typeof body.runId !== 'string' || !body.runId) return;
+  // 誰の結果かが分からないと、別の人がログインしている端末で送ってしまう。
+  if (!session.token || !session.user) return;
+  const list = readResultQueue().filter(e => e.body.runId !== body.runId);
+  list.push({ uid: session.user.id, at: Date.now(), body });
+  writeResultQueue(list);
+}
+
+let flushingResults = false;
+let lastResultFlushAt = 0;
+
+/**
+ * 控えてある結果を古い順に送る。送れた件数を返す。
+ * 送信中・未ログイン・控えなしのときは何もしない。
+ */
+export async function flushResultQueue() {
+  if (flushingResults || !session.token || !session.user) return 0;
+  if (!readResultQueue().some(e => e.uid === session.user.id)) return 0;
+  flushingResults = true;
+  lastResultFlushAt = Date.now();
+  let sent = 0;
+  try {
+    for (;;) {
+      const list = readResultQueue();
+      const entry = list.find(e => e.uid === session.user.id);
+      if (!entry) break;
+      // 送る前に控えから外し、送れなかったら戻す。付けたまま送ると、
+      // 送信中にもう一度 flush が走ったときに同じ控えを二度送ることになる
+      // （サーバーは冪等なので実害は無いが、レート上限を無駄に食う）。
+      writeResultQueue(list.filter(e => e !== entry));
+      try {
+        await api(RESULT_PATH, { method: 'POST', body: entry.body, queueOffline: false });
+        sent++;
+      } catch (err) {
+        // まだ圏外(0) / 送りすぎ(429) / メンテ中(503) は、こちらの都合ではなく
+        // 時間が解決する ── 控えに戻して次の機会に回す。
+        if (err.status === 0 || err.status === 429 || err.status === 503) {
+          const back = readResultQueue();
+          back.unshift(entry);
+          writeResultQueue(back);
+          break;
+        }
+        // 401/403/400 … 送り直しても通らない。捨てる（残すと永遠に叩き続ける）。
+      }
+      // 次がある時だけ間を空ける（最後の1件のあとに待つ意味は無い）。
+      if (!readResultQueue().some(e => e.uid === session.user.id)) break;
+      await new Promise(r => setTimeout(r, RESULT_QUEUE_GAP_MS));
+    }
+  } finally { flushingResults = false; }
+  // 画面（main.js）が「◯件ぶんの報酬が入りました」を出せるように知らせる。
+  // net.js は表示を持たないので、ここでは合図だけ。
+  if (sent && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    try { window.dispatchEvent(new CustomEvent('bba:results-sent', { detail: { count: sent } })); }
+    catch { /* CustomEvent が無い環境では黙って諦める */ }
+  }
+  return sent;
+}
+
+// 通信が生きていると分かった直後（＝どれか1本でも api() が成功した直後）と、
+// ブラウザが「オンラインに戻った」と言ったときに送る。専用の見張りを回さない
+// のは、圏外から戻ったことを知る最も確実な合図が「実際に1本通ったこと」だから。
+function scheduleResultFlush(delay = 1200) {
+  if (flushingResults) return;
+  if (Date.now() - lastResultFlushAt < 15000) return;   // 連打しない
+  setTimeout(() => { flushResultQueue().catch(() => { /* 次の機会に */ }); }, delay);
+}
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('online', () => scheduleResultFlush(800));
+}
+
+export async function api(path, { method = 'GET', body, timeout, queueOffline = true } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (session.token) headers.Authorization = `Bearer ${session.token}`;
   const ms = timeoutFor(path, timeout);
@@ -77,6 +212,8 @@ export async function api(path, { method = 'GET', body, timeout } = {}) {
   } catch {
     const to = aborted();
     clear();
+    // 📴 通信そのものが落ちた回だけ控える（返事が返った回は控えない）。
+    if (queueOffline) queueOfflineResult(path, method, body);
     throw netError(to ? '接続タイムアウト' : 'サーバーに接続できません');
   }
   // 本文を読み終わるまでタイマーは止めない。ヘッダだけ返ってきて本文が
@@ -86,7 +223,14 @@ export async function api(path, { method = 'GET', body, timeout } = {}) {
   try { data = await res.json(); } catch { bodyFailed = true; /* empty body */ }
   // 空ボディ（204 など）は今までどおり data={} で通す。中断されたときだけ
   // エラーにする ── ここを黙って通すと「報酬ゼロの成功」に化ける。
-  if (bodyFailed && aborted()) { clear(); throw netError('接続タイムアウト'); }
+  if (bodyFailed && aborted()) {
+    clear();
+    // ヘッダだけ返って本文が来なかった回。サーバーには届いている**かもしれない**
+    // ので、以前は再送そのものが危なかった。いまは同じ runId なら二重加算に
+    // ならないので、ここも控えてよい（届いていれば前回の結果がそのまま返る）。
+    if (queueOffline) queueOfflineResult(path, method, body);
+    throw netError('接続タイムアウト');
+  }
   clear();
   if (!res.ok) {
     if (data.season) session.season = data.season;   // /api/me sends it even when logged out
@@ -110,6 +254,8 @@ export async function api(path, { method = 'GET', body, timeout } = {}) {
   // リロードするまで戻らなかった。
   if (isMyUser(data.user)) session.user = data.user;
   if (data.season) session.season = data.season;
+  // 📴 1本でも通ったなら通信は生きている。控えてある結果があれば送る。
+  if (queueOffline) scheduleResultFlush();
   return data;
 }
 
@@ -289,6 +435,12 @@ export class BattleClient {
   setRoom(settings) { this.send({ type: 'room_set', settings }); }
   leaveRoom() { this.send({ type: 'room_leave' }); }
   startRoom() { this.send({ type: 'room_start' }); }
+  // 🚪 自分の意思で試合を降りる。ソケットを閉じるだけだと、サーバーからは
+  //    回線事故と区別が付かず「再接続の猶予」に入ってしまい、(1) 相手が
+  //    最大25秒も動かない盤面を相手に戦い続け、(2) 自分の1日3回の猶予枠まで
+  //    減る（本当に電波が切れた日に猶予が出なくなる）。
+  //    これを送ってから閉じれば、サーバーはその場で棄権として裁ける。
+  forfeit() { this.send({ type: 'forfeit' }); }
 
   close() {
     // 自分で閉じたときは繋ぎ直さない。ここを立てずに閉じると、

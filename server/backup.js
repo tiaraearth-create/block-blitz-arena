@@ -52,6 +52,18 @@ export const BACKUP_VERSION = 2;
 // これ以上を1回で流し込ませない、が意図。
 export const MAX_RESTORE_USERS = 8_000;
 
+// 📏 復元の「合流(union)」で配列を切る上限。書き込み口と同じ値でなければ
+// 意味が無いが、その定数は index.js / routes/shop.js にあり、どちらも
+// backup.js を import する側なので、こちらから読むと循環参照になる。
+// そこで値はここに置き、**ズレたら落ちるように** test/persist-registry の
+// 検査が両方のソースを読んで突き合わせている（写経の危険をテストで塞ぐ）。
+//   NEWS_CAP             … index.js の `if (db.news.length > 200) db.news.shift()`
+//   TX_CAP               … routes/shop.js の TX_KEEP
+//   BUGREPORT_CAP_MIRROR … index.js の BUGREPORT_CAP
+export const NEWS_CAP = 200;
+export const TX_CAP = 200;
+export const BUGREPORT_CAP_MIRROR = 300;
+
 export function validateBackup(data) {
   if (!data || typeof data !== 'object') return { ok: false, error: 'バックアップの形式が不正です' };
   if (!data.users || typeof data.users !== 'object' || Array.isArray(data.users)) {
@@ -627,6 +639,25 @@ function mergeEarned(winner, loser) {
     }
   }
 
+  // 🏗️ ブループリント（その日じゅう全員同じ固定盤面）の勝利ぶんの上積みを
+  // 「その日の初回だけ」に絞っている印 (index.js applyGameResult の
+  // bpDay = { day, cleared })。止めているのは +50🪙 / bpXp+100 / accXp+80 /
+  // ギルド週間pt+25 / totalWins / ミッションの 'win'。落とすと復元した日に
+  // もう一度受け取れる。性格は puzWinDay・shopGiftDay とまったく同じ:
+  //   ・勝った側に無ければ負けた側のものを引き継ぐ
+  //   ・同じ日なら cleared を OR（迷ったら閉じる）
+  //   ・日が違うときは新しい日のほう
+  const lbp = loser.stats && loser.stats.bpDay;
+  if (isPlainObj(lbp) && okDay(lbp.day)) {
+    const wst13 = winner.stats || (winner.stats = {});
+    const wbp = wst13.bpDay;
+    if (!isPlainObj(wbp) || !okDay(wbp.day) || String(lbp.day) > String(wbp.day)) {
+      wst13.bpDay = { day: String(lbp.day), cleared: !!lbp.cleared };
+    } else if (String(wbp.day) === String(lbp.day)) {
+      wbp.cleared = !!wbp.cleared || !!lbp.cleared;
+    }
+  }
+
   // 🎲 ミッションの引き直し使用回数 (missions.js rerollCounts)。
   // user.missions.rerolls = { '<日付キー>':{daily,weekly}, '<週キー W35>':{daily,weekly} }
   // の2階建てで、無料＋有料の引き直し回数を数える唯一の rate-limit 記録。落とすと
@@ -1050,6 +1081,12 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
       seen.add(n.id);
       seenBody.add(key);
     }
+    // 上限まで切る。書き込み口(index.js)は1件足すごとに shift しているが、
+    // 合流だけは切っていなかった ── live とファイルで中身が違うぶんだけ
+    // 配列が上限を越え、db.json は保存のたびに丸ごと書き出すので、
+    // 「再デプロイのたびに保存が重くなる」方向にしか動かない。
+    // 新しいほうを残す（お知らせは末尾が新しい）。
+    if (db.news.length > NEWS_CAP) db.news = db.news.slice(-NEWS_CAP);
   }
 
   // db.meta: a fresh post-deploy instance holds only trivial meta — adopt the
@@ -1094,7 +1131,15 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     // 殿堂入りはしない ── index.js 側に
     // `hallOfFame.some(e => e.season === prev.id)` の重複チェックがあり、
     // 記録済みのシーズンなら印を進めるだけで戻る（報酬もそこで止まる）。
-    const META_NOT_RESTORED = new Set(['seedHash', 'lastRankRewardWeek', 'backupAt', 'backupVersion', 'backupTrimmed', 'maintenance']);
+    //   resultRuns            … 🧾 結果送信の冪等キー（runId → 前回の応答）の控え。
+    //                           24時間で消える再送よけの帳面で、世界の状態ではない。
+    //                           持ち込むほうが**危ない**: 復元はデータが飛んだ後に
+    //                           走るので、ユーザーのレコードはバックアップ時点まで
+    //                           巻き戻る。そこへ「その runId は処理済み」という印だけ
+    //                           持ち込むと、巻き戻った回を再送しても前回の応答が
+    //                           返るだけで、報酬が**永久に入らない**。
+    //                           帳面は普通に遊べば数秒で作り直される。
+    const META_NOT_RESTORED = new Set(['seedHash', 'lastRankRewardWeek', 'backupAt', 'backupVersion', 'backupTrimmed', 'maintenance', 'resultRuns']);
     // 🧩 workshop と 🎞 dailyReplays は「片方だけを採る」では守れない。
     // 既定の規則は『live 側がまだ値を持っていないキーだけ採用する』なので、
     // 復元までの窓で誰か1人がステージを投稿しただけで、バックアップ側の
@@ -1165,6 +1210,10 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     for (const t of data.transactions) {
       if (t && t.id && !seen.has(t.id)) { db.transactions.push(t); seen.add(t.id); }
     }
+    // 上限まで切る（理由は上の news と同じ）。取引は routes/shop.js が
+    // TX_KEEP 件を残して書庫へローテーションする ── ここでは古いぶんを
+    // 落とすだけにする（書庫への追い出しは復元の仕事ではない）。
+    if (db.transactions.length > TX_CAP) db.transactions = db.transactions.slice(-TX_CAP);
   }
 
   // Bug reports: union by id so player reports survive a wipe too.
@@ -1174,6 +1223,8 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     for (const b of data.bugreports) {
       if (b && b.id && !seen.has(b.id)) { db.bugreports.push(b); seen.add(b.id); }
     }
+    // 上限まで切る（理由は上の news と同じ）。
+    if (db.bugreports.length > BUGREPORT_CAP_MIRROR) db.bugreports = db.bugreports.slice(-BUGREPORT_CAP_MIRROR);
   }
 
   report.after = Object.keys(db.users).length;

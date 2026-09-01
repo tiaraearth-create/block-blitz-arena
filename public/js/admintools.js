@@ -704,8 +704,15 @@ export async function showPlayerDetail(id) {
       ${card(esc(countText(live.sessions, '回')), '接続セッション数')}
       ${card(fmt(d.onlineTotal || 0), '在席区間の記録数')}
     </div>
+    ${/* 在席区間は closeOnlineSpan()（battle.js）が「最後の socket が閉じたとき」に
+          押すので、いま繋いでいる人の区間はまだ配列に無い。0件を「一度も接続して
+          いません」と決めつけると、同じ画面の上に出ている「接続中」と真逆のことを
+          言ってしまう（実際にそうなっていた）。在席中かどうかで出し分ける。 */''}
     ${section('在席の履歴（いつからいつまで居たか）', 'clock', spans,
-      d.onlineTotal ? '' : 'まだ在席の記録がありません（記録を始める前のアカウント、または一度も接続していません）')}
+      d.onlineTotal ? ''
+        : live.online
+          ? 'いま接続中です（この区間は切断したときに記録されます）'
+          : 'まだ在席の記録がありません（記録を始める前のアカウント、または一度も接続していません）')}
     ${section('直近のプレイ履歴', 'rematch', hist, 'まだプレイ履歴がありません')}
     ${section('モード別の内訳', 'leaderboard', modes, '—')}
     ${section('この人からの通報・バグ報告', 'bug', reports, '報告はありません')}
