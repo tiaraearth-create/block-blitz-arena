@@ -205,8 +205,8 @@ adminEventRouter.post('/api/adminevent/result', requireAuth, maintenanceGuard, (
     const mode = aeModeById(run.modeId);
     battle.broadcastAll({
       type: 'announce',
-      message: `👑 「${req.user.username}」のとどめ！ ${mode ? mode.name : '管理者'}を全員で討ち取りました！`,
-      messageEn: `👑 "${req.user.username}" lands the final blow — everyone brought the Admin down together!`,
+      message: `「${req.user.username}」のとどめ！ ${mode ? mode.name : '管理者'}を全員で討ち取りました！`,
+      messageEn: `"${req.user.username}" lands the final blow — everyone brought the Admin down together!`,
       from: '運営',
     });
     battle.crowd.feed({ icon: '👑', real: true, who: '運営',
@@ -217,8 +217,8 @@ adminEventRouter.post('/api/adminevent/result', requireAuth, maintenanceGuard, (
     const tier = run.tiers[idx];
     battle.broadcastAll({
       type: 'announce',
-      message: `🏛️ 共同作業 目標${idx + 1}達成！ 参加者全員に 🪙${tier.coins} 💎${tier.gems}`,
-      messageEn: `🏛️ The Great Work cleared tier ${idx + 1}! Everyone who took part gets 🪙${tier.coins} 💎${tier.gems}`,
+      message: `共同作業 目標${idx + 1}達成！ 参加者全員に コイン${tier.coins} ジェム${tier.gems}`,
+      messageEn: `The Great Work cleared tier ${idx + 1}! Everyone who took part gets ${tier.coins} coins and ${tier.gems} gems`,
       from: '運営',
     });
   }
@@ -331,8 +331,8 @@ adminEventRouter.post('/api/admin/adminevent', requireAuth, requireAdmin, (req, 
     const times = r.schedule.slots.join(' / ');
     battle.broadcastAll({
       type: 'announce',
-      message: `👑 管理者イベント「${mode.name}」開催決定！ ${occ.dayKey} の ${times}（JST）— メニューから好きな時間帯を予約してね`,
-      messageEn: `👑 Admin Event "${mode.nameEn}" is scheduled for ${occ.dayKey} at ${times} JST — reserve the slot that suits you from the menu`,
+      message: `管理者イベント「${mode.name}」開催決定！ ${occ.dayKey} の ${times}（JST）— メニューから好きな時間帯を予約してね`,
+      messageEn: `Admin Event "${mode.nameEn}" is scheduled for ${occ.dayKey} at ${times} JST — reserve the slot that suits you from the menu`,
       from: '運営',
     });
     battle.crowd.feed({ icon: '👑', real: true, who: '運営',

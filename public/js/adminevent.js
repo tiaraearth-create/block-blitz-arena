@@ -13,7 +13,13 @@ import { api, session } from './net.js';
 import { $, showModal, closeModal, toast, fmt, updateTopbar } from './dom.js';
 import { t, catName, catDesc } from './i18n.js';
 import { audio } from './audio.js';
-import { icon, medalIconName } from './icons.js';
+import { icon, medalIconName, itemIconName } from './icons.js';
+
+// 管理者イベントの4つの回。サーバー（server/adminevent.js）の AE_MODES は
+// 絵文字の icon を持っているが、画面には出さず id から独自アイコンを引く。
+// 👁️ゼロ は badge_zero（見開いた目）。 🏛️共同作業 は hall（列柱の建物）。
+const AE_MODE_ICONS = { invasion: 'mode_adminevent', roulette: 'gacha', communal: 'hall', zero: 'badge_zero' };
+const aeModeIcon = (size = 18) => icon(AE_MODE_ICONS[ae && ae.mode ? ae.mode.id : ''] || 'mode_adminevent', { size });
 import { startAdminEventMode } from './modes.js';
 
 let ae = null;              // latest playerView from the server
@@ -88,18 +94,18 @@ export function updateAeBanner() {
 
   if (ae.live) {
     cls = 'live';
-    text = t(`🔴 ${ae.mode.icon} ${modeName()} 開催中！ 残り${fmtRemain(ae.live.endsAt - now)} — タップして参加`,
-      `🔴 ${ae.mode.icon} ${modeName()} is LIVE! ${fmtRemain(ae.live.endsAt - now)} left — tap to join`);
+    text = t(`${modeName()} 開催中！ 残り${fmtRemain(ae.live.endsAt - now)} — タップして参加`,
+      `${modeName()} is LIVE! ${fmtRemain(ae.live.endsAt - now)} left — tap to join`);
   } else if (slot && slot.over) {
-    text = t(`👑 ${slot.time}の枠は終了 — 次回は来週${dateLabel()}`,
-      `👑 Your ${slot.time} slot is over — back next week`);
+    text = t(`${slot.time}の枠は終了 — 次回は来週${dateLabel()}`,
+      `Your ${slot.time} slot is over — back next week`);
   } else if (slot) {
     cls = 'booked';
-    text = t(`👑 管理者イベント ${dateLabel()} ${slot.time} 予約済み — あと${fmtRemain(slot.startsAt - now)}`,
-      `👑 Admin Event ${dateLabel()} ${slot.time} booked — starts in ${fmtRemain(slot.startsAt - now)}`);
+    text = t(`管理者イベント ${dateLabel()} ${slot.time} 予約済み — あと${fmtRemain(slot.startsAt - now)}`,
+      `Admin Event ${dateLabel()} ${slot.time} booked — starts in ${fmtRemain(slot.startsAt - now)}`);
   } else {
-    text = t(`👑 ${ae.mode.icon}「${modeName()}」${dateLabel()}開催 — 時間枠を予約しよう！`,
-      `👑 ${ae.mode.icon} "${modeName()}" on ${dateLabel()} — reserve your time slot!`);
+    text = t(`管理者イベント「${modeName()}」${dateLabel()}開催 — 時間枠を予約しよう！`,
+      `Admin Event "${modeName()}" on ${dateLabel()} — reserve your time slot!`);
   }
 
   el.textContent = text;
@@ -134,19 +140,19 @@ function maybeRemind() {
   if (left <= 60_000 && remindedFor !== `${key}:1`) {
     remindedFor = `${key}:1`;
     audio.click();
-    toast(t(`👑 まもなく ${slot.time}！ 管理者イベント「${modeName()}」がはじまります`,
-      `👑 ${slot.time} is almost here — "${modeName()}" starts in a moment`), 'announce', 5000);
+    toast(t(`まもなく ${slot.time}！ 管理者イベント「${modeName()}」がはじまります`,
+      `${slot.time} is almost here — "${modeName()}" starts in a moment`), 'announce', 5000);
   } else if (left <= 600_000 && left > 60_000 && !String(remindedFor || '').startsWith(key)) {
     remindedFor = `${key}:10`;
-    toast(t(`👑 あと10分で あなたの枠（${slot.time}）です`,
-      `👑 Your ${slot.time} slot opens in 10 minutes`), 'announce', 4500);
+    toast(t(`あと10分で あなたの枠（${slot.time}）です`,
+      `Your ${slot.time} slot opens in 10 minutes`), 'announce', 4500);
   }
 }
 
 function announceOpen() {
   audio.victory();
-  toast(t(`🔴 あなたの枠がはじまりました！ ${ae.mode.icon}「${modeName()}」に参加できます`,
-    `🔴 Your slot is open! Join ${ae.mode.icon} "${modeName()}" now`), 'announce', 6000);
+  toast(t(`あなたの枠がはじまりました！「${modeName()}」に参加できます`,
+    `Your slot is open! Join "${modeName()}" now`), 'announce', 6000);
 }
 
 // ---------------------------------------------------------------------------
@@ -164,10 +170,10 @@ function slotRow(s) {
     <button class="ae-slot${mine ? ' mine' : ''}${s.live ? ' live' : ''}" data-slot="${s.id}" ${s.over ? 'disabled' : ''}>
       <span class="ae-slot-time">${s.time}</span>
       <span class="ae-slot-meta">
-        <b>${s.live ? `🔴 ${state}` : state}</b>
+        <b>${state}</b>
         <span class="muted">${people}</span>
       </span>
-      <span class="ae-slot-pick">${mine ? '✅' : s.over ? '—' : t('予約', 'Book')}</span>
+      <span class="ae-slot-pick">${mine ? icon('check', { size: 16 }) : s.over ? '—' : t('予約', 'Book')}</span>
     </button>`;
 }
 
@@ -205,11 +211,11 @@ function worldHtml() {
         <div class="ae-world-sub">${fmt(w.total)} / ${fmt(goal)} ・ ${t(`目標 ${w.tiersReached}/${w.tiers.length} 達成`, `${w.tiersReached}/${w.tiers.length} tiers cleared`)}</div>
         ${joined && ready.length ? `
         <button class="btn btn-primary ae-claim" id="aeClaim">
-          🎁 ${t(`報酬を受け取る（${ready.length}段階ぶん・${fmt(purse.coins)}🪙 ${purse.gems}💎）`,
-                 `Collect rewards (${ready.length} tier${ready.length > 1 ? 's' : ''} — ${fmt(purse.coins)}🪙 ${purse.gems}💎)`)}
+          ${t(`報酬を受け取る（${ready.length}段階ぶん・コイン${fmt(purse.coins)} ジェム${purse.gems}）`,
+                 `Collect rewards (${ready.length} tier${ready.length > 1 ? 's' : ''} — ${fmt(purse.coins)} coins, ${purse.gems} gems)`)}
         </button>` : ''}
         ${joined && !ready.length && w.tiersReached ? `
-        <div class="ae-world-sub ae-claimed">✅ ${t('この段階の報酬は受け取り済み', 'Rewards for these tiers collected')}</div>` : ''}
+        <div class="ae-world-sub ae-claimed">${icon('check', { size: 14 })} ${t('この段階の報酬は受け取り済み', 'Rewards for these tiers collected')}</div>` : ''}
       </div>`;
   }
   if (w.board && w.board.length) {
@@ -226,26 +232,26 @@ export async function openAeSheet() {
   if (!ae) return;
   const live = aeIsLive();
   const m = showModal(`
-    <h2>${ae.mode.icon} ${t('管理者イベント', 'Admin Event')}</h2>
+    <h2>${icon('mode_adminevent', { size: 20 })} ${t('管理者イベント', 'Admin Event')}</h2>
     <div class="ae-head">
-      <div class="ae-mode-name">${modeName()}</div>
+      <div class="ae-mode-name">${aeModeIcon(22)} ${modeName()}</div>
       <div class="ae-mode-tag">${localized(ae.mode, 'tagline')}</div>
       <p class="ae-mode-desc">${localized(ae.mode, 'desc')}</p>
-      ${ae.note ? `<p class="ae-note">📣 ${esc(ae.note)}</p>` : ''}
+      ${ae.note ? `<p class="ae-note">${esc(ae.note)}</p>` : ''}
       <p class="muted center" style="font-size:12px">
-        ${t(`${dateLabel()} 開催 ・ 1枠 ${ae.durationMin}分 ・ 🎁 報酬 ${ae.rewardMult}倍`,
-          `${dateLabel()} ・ ${ae.durationMin} min per slot ・ 🎁 ${ae.rewardMult}× rewards`)}
+        ${t(`${dateLabel()} 開催 ・ 1枠 ${ae.durationMin}分 ・ 報酬 ${ae.rewardMult}倍`,
+          `${dateLabel()} ・ ${ae.durationMin} min per slot ・ ${ae.rewardMult}× rewards`)}
       </p>
     </div>
     ${worldHtml()}
-    ${live ? `<button class="btn btn-gold btn-big" id="aeJoin">${t('🔴 いま参加する！', '🔴 Join now!')}</button>` : ''}
+    ${live ? `<button class="btn btn-gold btn-big" id="aeJoin">${t('いま参加する！', 'Join now!')}</button>` : ''}
     <div class="ae-slot-label">${t('あなたが遊ぶ時間帯をえらんでください', 'Pick the time that suits you')}</div>
     <div class="ae-slots">${ae.slots.map(slotRow).join('')}</div>
     <p class="muted center" style="font-size:11.5px">${t('※ どの枠を選んでも、上の進捗はみんなで共有されます', '※ Whichever slot you pick, the progress above is shared by everyone')}</p>
     <div class="modal-buttons">
       ${ae.mine && ae.closesAt > Date.now() ? `<button class="btn btn-ghost" id="aeCancel">${t('予約をとりけす', 'Cancel booking')}</button>` : ''}
-      <button class="btn btn-throne" id="aeTreasury">${t('👑 王座の宝物庫', '👑 Throne Vault')}</button>
-      ${ae.mode.id === 'zero' ? `<button class="btn btn-ghost" id="aeChronicle">${t('📜 断罪録', '📜 Chronicle')}</button>` : ''}
+      <button class="btn btn-throne" id="aeTreasury">${icon('shards', { size: 16 })} ${t('王座の宝物庫', 'Throne Vault')}</button>
+      ${ae.mode.id === 'zero' ? `<button class="btn btn-ghost" id="aeChronicle">${t('断罪録', 'Chronicle')}</button>` : ''}
       <button class="btn btn-ghost" id="aeClose">${t('とじる', 'Close')}</button>
     </div>`);
 
@@ -269,7 +275,7 @@ export async function openAeSheet() {
         const res = await api('/api/adminevent/reserve', { method: 'POST', body: { slotId: Number(btn.dataset.slot) } });
         setAdminEvent(res.event);
         const s = mySlot();
-        toast(t(`✅ ${s ? s.time : ''} の枠を予約しました！`, `✅ Booked your ${s ? s.time : ''} slot!`), 'ok', 3500);
+        toast(t(`${s ? s.time : ''} の枠を予約しました！`, `Booked your ${s ? s.time : ''} slot!`), 'ok', 3500);
         closeModal();
         openAeSheet();
       } catch (err) {
@@ -306,12 +312,12 @@ export async function openAeSheet() {
       if (res.user) { session.user = res.user; updateTopbar(); }
       const g = res.reward || {};
       const bits = [];
-      if (g.coins) bits.push(`${fmt(g.coins)}🪙`);
-      if (g.gems) bits.push(`${g.gems}💎`);
+      if (g.coins) bits.push(t(`コイン${fmt(g.coins)}`, `${fmt(g.coins)} coins`));
+      if (g.gems) bits.push(t(`ジェム${g.gems}`, `${g.gems} gems`));
       if (g.badge) bits.push(t('バッジ', 'a badge'));
       audio.victory?.();
-      toast(t(`🎁 ${bits.join(' ') || '報酬'} を受け取りました！`,
-              `🎁 Collected ${bits.join(' ') || 'your rewards'}!`), 'ok', 3500);
+      toast(t(`${bits.join(' ') || '報酬'} を受け取りました！`,
+              `Collected ${bits.join(' ') || 'your rewards'}!`), 'ok', 3500);
       closeModal();
       openAeSheet();
     } catch (err) {
@@ -360,9 +366,9 @@ function renderVault(data) {
     const state = i.owned ? 'owned' : (!i.unlocked ? 'locked' : ((data.shards || 0) >= i.shards ? 'buy' : 'poor'));
     const label = i.owned ? t('所持ずみ', 'Owned')
       : !i.unlocked ? t(`第${i.dan}段が割れるまで`, `Until stage ${i.dan} falls`)
-      : `👑 ${fmt(i.shards)}`;
+      : `${icon('shards', { size: 14 })} ${fmt(i.shards)}`;
     return `<div class="tv-item ${state}">
-      <div class="tv-icon">${i.icon || CAT_ICON[i.cat] || '❖'}</div>
+      <div class="tv-icon">${icon(itemIconName(i), { size: 28 })}</div>
       <div class="tv-body">
         <div class="tv-name">${catName(i)}<span class="tv-dan">${t(`第${i.dan}段`, `St.${i.dan}`)}</span></div>
         <div class="tv-desc">${catDesc(i)}</div>
@@ -372,13 +378,13 @@ function renderVault(data) {
   };
   const R = data.rates || {};
   const m = showModal(`
-    <h2>👑 ${t('王座の宝物庫', 'Throne Vault')}</h2>
+    <h2>${icon('shards', { size: 24 })} ${t('王座の宝物庫', 'Throne Vault')}</h2>
     <p class="muted center" style="font-size:12px">${t(
       'ここの品はコインでもジェムでもガチャでも手に入りません。管理者イベントの中でしか増えない「王座の欠片」だけで交換します。',
       'Nothing here can be bought with coins, gems, or the gacha. Only Throne Shards — and shards only come from Admin Events.')}</p>
-    <div class="tv-wallet">👑 <b>${fmt(data.shards || 0)}</b> ${t('王座の欠片', 'Throne Shards')}</div>
+    <div class="tv-wallet">${icon('shards', { size: 18 })} <b>${fmt(data.shards || 0)}</b> ${t('王座の欠片', 'Throne Shards')}</div>
     <div class="tv-progress">
-      <div class="tv-crowns">${[1,2,3,4,5,6,7].map(n => `<span class="${n <= max ? 'on' : ''}">👑</span>`).join('')}</div>
+      <div class="tv-crowns">${[1,2,3,4,5,6,7].map(n => `<span class="${n <= max ? 'on' : ''}">${icon('throne', { size: 16 })}</span>`).join('')}</div>
       <div class="tv-progress-txt">${max >= 7
         ? t('七つの王座、すべて奪還ずみ。棚は全部ひらいています。', 'All seven thrones reclaimed. Every shelf is open.')
         : t(`世界は第${max}段まで割りました ── 第${max + 1}段が割れると、次の棚がひらきます`,
@@ -388,11 +394,11 @@ function renderVault(data) {
     <details class="tv-rates">
       <summary>${t('欠片の集めかた', 'How to earn shards')}</summary>
       <ul>
-        <li>${t(`断罪を斬る … 👑${R.cut || 3}（急所ごとなら +${R.keystone || 5}）`, `Cut a condemnation … 👑${R.cut || 3} (+${R.keystone || 5} with the keystone)`)}</li>
-        <li>${t(`段が割れた瞬間に居合わせる … 👑${R.danPresent || 40}（とどめなら +${R.danFinish || 80}）`, `Be there when a stage falls … 👑${R.danPresent || 40} (+${R.danFinish || 80} for the finishing blow)`)}</li>
-        <li>${t(`共同作業の目標を達成 … 👑${(R.tier || [25])[0]}〜${(R.tier || [0,0,0,250])[3]}`, `Clear a Great Work tier … 👑${(R.tier || [25])[0]}–${(R.tier || [0,0,0,250])[3]}`)}</li>
-        <li>${t(`侵攻ボスを討ち取る … 👑${R.bossKill || 120}`, `Bring down the invasion boss … 👑${R.bossKill || 120}`)}</li>
-        <li>${t(`その日はじめて席につく … 👑${R.join || 10}（1日1回）`, `First time you take a seat that day … 👑${R.join || 10} (once daily)`)}</li>
+        <li>${t(`断罪を斬る … 欠片${R.cut || 3}（急所ごとなら +${R.keystone || 5}）`, `Cut a condemnation … ${R.cut || 3} shards (+${R.keystone || 5} with the keystone)`)}</li>
+        <li>${t(`段が割れた瞬間に居合わせる … 欠片${R.danPresent || 40}（とどめなら +${R.danFinish || 80}）`, `Be there when a stage falls … ${R.danPresent || 40} shards (+${R.danFinish || 80} for the finishing blow)`)}</li>
+        <li>${t(`共同作業の目標を達成 … 欠片${(R.tier || [25])[0]}〜${(R.tier || [0,0,0,250])[3]}`, `Clear a Great Work tier … ${(R.tier || [25])[0]}–${(R.tier || [0,0,0,250])[3]} shards`)}</li>
+        <li>${t(`侵攻ボスを討ち取る … 欠片${R.bossKill || 120}`, `Bring down the invasion boss … ${R.bossKill || 120} shards`)}</li>
+        <li>${t(`その日はじめて席につく … 欠片${R.join || 10}（1日1回）`, `First time you take a seat that day … ${R.join || 10} shards (once daily)`)}</li>
       </ul>
     </details>
     <div class="modal-buttons"><button class="btn btn-ghost" id="tvClose">${t('とじる', 'Close')}</button></div>`);
@@ -405,7 +411,7 @@ function renderVault(data) {
       try {
         const res = await api('/api/throne/buy', { method: 'POST', body: { itemId: btn.dataset.buy } });
         if (res.user) { session.user = res.user; updateTopbar(); }
-        toast(t(`👑 「${res.got.name}」を手に入れました！`, `👑 You obtained 「${catName(res.got)}」!`), 'ok', 3500);
+        toast(t(`「${res.got.name}」を手に入れました！`, `You obtained 「${catName(res.got)}」!`), 'ok', 3500);
         closeModal();
         openThroneVault();
       } catch (err) {
@@ -416,7 +422,9 @@ function renderVault(data) {
   });
 }
 
-const CAT_ICON = { skin: '🧱', board: '🌌', fx: '✨', ult: '⚡' };
+// （カテゴリごとの絵文字の表はここにあったが、宝物庫の絵は icons.js の
+//  itemIconName(item) が引くようになったので消した。表が2つあると、
+//  ショップと宝物庫で同じ品が別の絵になる。）
 
 // ---------------------------------------------------------------------------
 // 📜 断罪録
@@ -429,7 +437,7 @@ export async function openChronicle() {
   catch (err) { toast(err.message, 'err'); return; }
   const run = data.run;
   if (!run) {
-    showModal(`<h2>📜 ${t('断罪録', 'The Chronicle')}</h2>
+    showModal(`<h2>${t('断罪録', 'The Chronicle')}</h2>
       <p class="muted center">${t('まだ何も書かれていません。断罪がはじまると、ここに記録が残ります。',
         'Nothing is written yet. Once CONDEMNED begins, the record appears here.')}</p>
       <div class="modal-buttons"><button class="btn btn-ghost" id="chClose">${t('とじる', 'Close')}</button></div>`);
@@ -439,19 +447,19 @@ export async function openChronicle() {
   const line = (e) => {
     const who = e.by ? esc(e.by) : '';
     switch (e.kind) {
-      case 'cut':    return `<li class="ch-cut">⚔️ ${t(`<b>${who}</b> が第${e.dan}段の封印を斬った`, `<b>${who}</b> cut the seal of stage ${e.dan}`)}${e.keystone ? ` <i>${t('急所', 'keystone')}</i>` : ''}</li>`;
-      case 'missed': return `<li class="ch-miss">💀 ${t(`<b>${who}</b> が落とした`, `<b>${who}</b> missed`)}${e.victim ? t(` ── ${esc(e.victim)} が処刑された`, ` — ${esc(e.victim)} was executed`) : ''}</li>`;
-      case 'dan':    return `<li class="ch-dan">👑 ${t(`第${e.dan}段 陥落`, `Stage ${e.dan} has fallen`)}${e.by ? t(`（とどめ: ${esc(e.by)}）`, ` (finished by ${esc(e.by)})`) : ''}</li>`;
-      case 'deal':   return `<li class="ch-deal">🤝 ${t('取引が成立した', 'A bargain was struck')}${e.pick ? `: ${esc(e.pick)}` : ''}</li>`;
+      case 'cut':    return `<li class="ch-cut">${t(`<b>${who}</b> が第${e.dan}段の封印を斬った`, `<b>${who}</b> cut the seal of stage ${e.dan}`)}${e.keystone ? ` <i>${t('急所', 'keystone')}</i>` : ''}</li>`;
+      case 'missed': return `<li class="ch-miss">${t(`<b>${who}</b> が落とした`, `<b>${who}</b> missed`)}${e.victim ? t(` ── ${esc(e.victim)} が処刑された`, ` — ${esc(e.victim)} was executed`) : ''}</li>`;
+      case 'dan':    return `<li class="ch-dan">${t(`第${e.dan}段 陥落`, `Stage ${e.dan} has fallen`)}${e.by ? t(`（とどめ: ${esc(e.by)}）`, ` (finished by ${esc(e.by)})`) : ''}</li>`;
+      case 'deal':   return `<li class="ch-deal">${t('取引が成立した', 'A bargain was struck')}${e.pick ? `: ${esc(e.pick)}` : ''}</li>`;
       default:       return `<li>${esc(e.kind || '')} ${who}</li>`;
     }
   };
   const m = showModal([
-    `<h2>📜 ${t('断罪録', 'The Chronicle')}</h2>`,
+    `<h2>${t('断罪録', 'The Chronicle')}</h2>`,
     `<p class="muted center" style="font-size:12px">${t(`${run.dayKey} ・ いまは第${run.dan}段`, `${run.dayKey} — currently stage ${run.dan}`)}</p>`,
     run.broken && run.broken.length
       ? `<div class="ch-sec"><h3>${t('割れた段', 'Stages broken')}</h3><ul class="ch-list">${
-          run.broken.map(b => `<li class="ch-dan">👑 ${t(`第${b.dan}段`, `Stage ${b.dan}`)}${b.by ? t(`（とどめ: ${esc(b.by)}）`, ` (finished by ${esc(b.by)})`) : ''}</li>`).join('')
+          run.broken.map(b => `<li class="ch-dan">${t(`第${b.dan}段`, `Stage ${b.dan}`)}${b.by ? t(`（とどめ: ${esc(b.by)}）`, ` (finished by ${esc(b.by)})`) : ''}</li>`).join('')
         }</ul></div>` : '',
     run.fallen && run.fallen.length
       ? `<div class="ch-sec"><h3>${t('今日、消えた住人', 'Lost today')}</h3>

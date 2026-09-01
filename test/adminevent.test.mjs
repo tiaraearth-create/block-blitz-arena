@@ -15,6 +15,9 @@ import { freePort } from './_port.mjs';
 import {
   normalizeSchedule, currentOccurrence, reserve, liveSlotFor,
   ensureRun, contribute, bossHpFor, jstDayKey, weekModeId, AE_MODES,
+  // 枠の下限はサーバーの定数を読む。ここを 5 と書き写していたせいで、
+  // JST 23:50〜23:59 は「サーバーが弾く長さ(5〜9分)」を送って必ず落ちていた。
+  AE_MIN_DURATION,
 } from '../server/adminevent.js';
 
 // ポート固定をやめた理由は test/_port.mjs を参照（他人のサーバーを
@@ -155,9 +158,9 @@ try {
   let laterMin = liveMin + 120;
   if (laterMin + DUR > 24 * 60) laterMin = liveMin + DUR;
   const twoSlots = laterMin + DUR <= 24 * 60;   // 深夜すぎると2枠は作れない
-  if (DUR < 5) {
+  if (DUR < AE_MIN_DURATION) {
     // 日付が変わる直前。ここだけは実時刻を動かさない限り再現できない。
-    console.log('  （JST 23:55以降のためスキップ。数分後に再実行してください）');
+    console.log(`  （JST 23:${60 - AE_MIN_DURATION}以降のためスキップ。数分後に再実行してください）`);
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');
     await stop();
     process.exit(0);
@@ -277,20 +280,30 @@ for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${
   check('OFFにすると誰にも見えなくなる', !r.d.adminEvent, JSON.stringify(r.d.adminEvent));
 
   check('専用モードがすべて日英そろっている',
-    AE_MODES.length >= 3 && AE_MODES.every(m => m.id && m.icon && m.name && m.nameEn && m.desc && m.descEn && m.tagline && m.taglineEn),
+    AE_MODES.length >= 3 && AE_MODES.every(m => m.id && m.iconName && m.name && m.nameEn && m.desc && m.descEn && m.tagline && m.taglineEn),
     AE_MODES.map(m => m.id).join(','));
     // ---- 🔒 試運転（運営だけに見せる）----------------------------------------
 // 新しいモードを本番でいきなり全員に出さないための軸。
 // 「見えないのに予約だけ通る」のような中途半端な状態を作らないこと ——
 // 実際に一度、予約だけ塞ぎ忘れていた。
 {
-  const jstNow = new Date(Date.now() - 60000 + 9 * 3600000);
-  const hh = `${pad(jstNow.getUTCHours())}:${pad(jstNow.getUTCMinutes())}`;
-  const dur = Math.min(25, 24 * 60 - (jstNow.getUTCHours() * 60 + jstNow.getUTCMinutes()));
-  if (dur >= 5) {
+  // ⚠ 枠の時刻は「今の分」を取り直さず、この上で使ったのと同じ liveAt を使う。
+  //
+  // 取り直していたころ、このテストは並列実行のときだけ最後の1件
+  //「OFFにすると一般も予約できる」で落ちていた。原因は時計ではなく分の境界:
+  //   ・早番さんは上で liveAt の枠を予約し、結果まで送っている（playedAt が付く）
+  //   ・server/adminevent.js の reserve() は「一度遊んだ日は別の枠へ移れない」
+  //     （prev.playedAt があり、かつ slotTime が違うと断る）
+  //   ・ここで分を取り直すと、テスト開始から1分をまたいだ回だけ枠の時刻が
+  //     ずれ、同じ日の別枠への乗り換え扱いになって予約が弾かれる
+  // 並列実行だと1分をまたぎやすいので「たまに落ちる」ように見えていた。
+  // 同じ時刻の枠を使えば sameSlot が成立し、経過時間に依存しなくなる。
+  const hh = liveAt;
+  const dur = DUR;
+  if (dur >= AE_MIN_DURATION) {
     let r = await api('/api/admin/adminevent', {
       method: 'POST', token: atk,
-      body: { enabled: true, staffOnly: true, weekday: jstNow.getUTCDay(), slots: [hh], durationMin: dur, rotation: 'zero' },
+      body: { enabled: true, staffOnly: true, weekday: oneMinAgo.getUTCDay(), slots: [hh], durationMin: dur, rotation: 'zero' },
     });
     check('試運転ONで設定できる', r.status === 200, r.d.error || '');
 

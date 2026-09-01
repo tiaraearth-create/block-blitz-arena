@@ -262,8 +262,8 @@ socialRouter.post('/api/friends/challenge', requireAuth, maintenanceGuard, (req,
   if (battleReady && battle.presence) {
     battle.presence.sendToUser(target.id, {
       type: 'announce',
-      message: `🔔 ${req.user.username} から挑戦状が届きました — 今日のデイリーは ${fmtNum(r.score)}点。同じ盤面・同じピース順です`,
-      messageEn: `🔔 ${req.user.username} challenged you — ${r.score.toLocaleString('en-US')} pts on today's Daily. Same board, same pieces.`,
+      message: `${req.user.username} から挑戦状が届きました — 今日のデイリーは ${fmtNum(r.score)}点。同じ盤面・同じピース順です`,
+      messageEn: `${req.user.username} challenged you — ${r.score.toLocaleString('en-US')} pts on today's Daily. Same board, same pieces.`,
       from: '運営',
     }, { primaryOnly: true });
   }

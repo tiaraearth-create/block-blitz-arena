@@ -27,6 +27,8 @@ import {
 } from '../achievements.js';
 import {
   setLiveScale, getLiveScale, setCustom, getCustom, rosterView, retiredResidents, crowdMood, isQuietNow, DEFAULT_TOGGLES, ARCHETYPES, MAX_LIVE_SCALE, clashingResidentIds, activeResidents,
+  // マッチングの状況で「住人の待機数」を実プレイヤーと**別のキー**で返すのに使う。
+  ambientQueue,
 } from '../ambient.js';
 import {
   leaveGuild,
@@ -149,8 +151,8 @@ adminRouter.get('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) =>
   res.json({
     user: adminUserView(u),
     catalog: {
-      shop: SHOP_ITEMS.map(i => ({ id: i.id, cat: i.cat, name: i.name, icon: i.icon || null, adminOnly: !!i.adminOnly, gachaOnly: !!i.gachaOnly })),
-      boosters: BOOST_ITEMS.map(i => ({ id: i.id, name: i.name, icon: i.icon, adminOnly: !!i.adminOnly })),
+      shop: SHOP_ITEMS.map(i => ({ id: i.id, cat: i.cat, name: i.name, adminOnly: !!i.adminOnly, gachaOnly: !!i.gachaOnly })),
+      boosters: BOOST_ITEMS.map(i => ({ id: i.id, name: i.name, adminOnly: !!i.adminOnly })),
       slots: EQUIP_SLOTS,
       titles: TITLES.map(t => ({ id: t.id, name: t.name, color: t.color })),
       badges: ADMIN_KNOWN_BADGES,
@@ -187,7 +189,7 @@ const EDITABLE_STATS = [
   { key: 'royaleKills', label: 'ロイヤル通算KO', max: 1_000_000 },
   // 👑 王者撃破の回数。称号 crownfeller/summittaker と実績 ach_champ1/10 が
   // これを毎回読み直して判定するので、事故で消えたときに手で戻せる口が要る。
-  { key: 'championWins', label: '👑王者撃破', max: 1_000_000 },
+  { key: 'championWins', label: '王者撃破', max: 1_000_000 },
 ];
 
 // ADMIN_KNOWN_BADGES（サーバーが配りうるバッジの全一覧）は index.js に置いたまま
@@ -814,8 +816,8 @@ adminRouter.post('/api/admin/restore', (req, res) => {
   console.log(`[restore] ${mode} by ${actor.username}${actor.fromBackup ? ' (backup password)' : ''}: +${report.added} 更新${report.updated} 維持${report.kept} → 合計${report.after}人`);
   battle.broadcastAll({
     type: 'announce',
-    message: '💾 データを復元しました。ページを再読み込みすると反映されます',
-    messageEn: '💾 Data restored — reload the page to see it',
+    message: 'データを復元しました。ページを再読み込みすると反映されます',
+    messageEn: 'Data restored — reload the page to see it',
     from: actor.username,
   });
   // 第3層（ファイル内の管理者パスワードで通す復旧経路）では、絶対にトークンを
@@ -900,8 +902,8 @@ adminRouter.post('/api/admin/maintenance', requireAuth, requireAdmin, (req, res)
   adminLog(req, 'maintenance', db.meta.maintenance ? 'on' : 'off', { on: db.meta.maintenance });
   battle.broadcastAll({
     type: 'announce',
-    message: db.meta.maintenance ? '🛠 まもなくメンテナンスを開始します' : '✅ メンテナンスが終了しました',
-    messageEn: db.meta.maintenance ? '🛠 Maintenance is starting shortly' : '✅ Maintenance is over',
+    message: db.meta.maintenance ? 'まもなくメンテナンスを開始します' : 'メンテナンスが終了しました',
+    messageEn: db.meta.maintenance ? 'Maintenance is starting shortly' : 'Maintenance is over',
     from: req.user.username,
   });
   res.json({ maintenance: db.meta.maintenance });
@@ -920,6 +922,120 @@ adminRouter.post('/api/admin/prepare-update', requireAuth, requireAdmin, (_req, 
   const ended = battle.endAllForShutdown();
   console.log(`[shutdown] 管理者操作で${ended}件の対戦を終了しました`);
   res.json({ ok: true, ended });
+});
+
+// ---------------------------------------------------------------------------
+// マッチングの状況（管理者専用）
+//
+// ■ なぜここに移したか
+// マッチング画面から「あと N 秒で対戦相手が見つかります」「このモードで
+// 待っている人: N人」を消した。プレイヤー側では、外れた予告が「壊れている」
+// に見えるうえ、人数がそのまま「誰が本物か」の手がかりにもなる。
+// ただし**運営には必要な数字**（並んでいるのに成立していないのか、そもそも
+// 誰も並んでいないのか、席が埋まるまでどれだけ余裕があるのか）なので、
+// 消すのではなくこちらへ移す。
+//
+// ■ 絶対に管理者以外へ出さないこと
+// ・この1本にも requireAuth + requireAdmin を必ず付ける（他の /api/admin/* と同じ並び）。
+// ・/api/admin/* は server/sanitize.js の関門を **経路ごとバイパス** する
+//   （secrecyMiddleware の bypass）。つまりここで返した値は一切削られない。
+// ・だから住人（にぎわい）の数は実プレイヤーと同じ器に入れない。混ざったまま
+//   別の画面へ流用されると、そこから正体が漏れる。キーを最初から分けてある。
+// ---------------------------------------------------------------------------
+
+// キューの id → 画面に出す名前。battle.js の queues と同じ7本。
+const MM_MODES = [
+  ['duel', '1on1'], ['attack', 'アタック'], ['team', 'チーム戦'],
+  ['raid', 'レイド'], ['tourney', 'トーナメント'], ['royale', 'バトルロイヤル'],
+  ['coop', '協力プレイ'],
+];
+
+// battle.js（別担当）が queueBreakdown() を持っていればそれを使う。
+// 形のゆらぎ（配列 / { mode: [entry] } / { mode: 人数 }）はここで吸収する。
+// 持っていない間は null を返し、呼び出し側が「取れる範囲」で組み立てる。
+function mmBreakdown() {
+  const fn = battle && typeof battle.queueBreakdown === 'function' ? battle.queueBreakdown : null;
+  if (!fn) return null;
+  let raw = null;
+  try { raw = fn(); } catch { return null; }
+  if (!raw) return null;
+  const out = new Map();
+  const take = (id, value) => {
+    if (!id) return;
+    if (typeof value === 'number') { out.set(String(id), { waiting: Math.max(0, value | 0), entries: [] }); return; }
+    const list = Array.isArray(value) ? value : Array.isArray(value && value.entries) ? value.entries : [];
+    const entries = list.filter(Boolean).map(e => ({
+      name: String(e.name || e.username || '—').slice(0, 24),
+      // 秒。どちらもサーバーが持っている値をそのまま（ms で来たら秒に直す）。
+      waited: Math.max(0, Math.round(Number(e.waited ?? e.waitedSec ?? (Number(e.since) ? (Date.now() - e.since) / 1000 : 0)) || 0)),
+      matchInSec: Math.max(0, Math.round(Number(e.matchInSec ?? (Number(e.botAt) ? (e.botAt - Date.now()) / 1000 : 0)) || 0)),
+      rating: Number.isFinite(Number(e.rating)) ? Number(e.rating) : null,
+      guest: !!(e.guest ?? (e.userId === null || e.userId === undefined ? undefined : false)),
+    }));
+    const n = Number.isFinite(Number(value && value.waiting)) ? Number(value.waiting) : entries.length;
+    out.set(String(id), { waiting: Math.max(0, n), entries });
+  };
+  if (Array.isArray(raw)) for (const row of raw) take(row && (row.mode || row.id), row);
+  else if (typeof raw === 'object') for (const [k, v] of Object.entries(raw)) take(k, v);
+  return out.size ? out : null;
+}
+
+adminRouter.get('/api/admin/matchmaking', requireAuth, requireAdmin, (_req, res) => {
+  const detail = mmBreakdown();
+
+  // 進行中の試合はモード別に数えられる（match.mode を持っている）。
+  const matchesByMode = {};
+  let activeMatches = 0;
+  try {
+    for (const m of battle.matches.values()) {
+      if (!m || m.ended) continue;
+      activeMatches++;
+      const k = String(m.mode || 'other');
+      matchesByMode[k] = (matchesByMode[k] || 0) + 1;
+    }
+  } catch { activeMatches = battle.matches ? battle.matches.size : 0; }
+
+  const modes = MM_MODES.map(([id, label]) => {
+    const d = detail ? detail.get(id) : null;
+    return {
+      id, label,
+      waiting: d ? d.waiting : null,          // null = まだ内訳が取れない
+      entries: d ? d.entries : [],
+      matches: matchesByMode[id] || 0,
+    };
+  });
+  // 上の7本に無いモード（ルーム発・管理者イベント等）の試合も落とさない。
+  for (const [k, n] of Object.entries(matchesByMode)) {
+    if (!MM_MODES.some(([id]) => id === k)) modes.push({ id: k, label: k, waiting: null, entries: [], matches: n });
+  }
+
+  // 内訳が取れないときの控え: いま「待機中」の実プレイヤーだけは livePlayers()
+  // から分かる（ただしモードも待ち秒も分からない。接続からの分だけ）。
+  const waitingPlayers = detail ? [] : (() => {
+    try {
+      return (battle.livePlayers ? battle.livePlayers() : [])
+        .filter(p => p.where === 'queue')
+        .map(p => ({ name: p.name, minutes: p.minutes, guest: !!p.guest, rating: p.rating ?? null }));
+    } catch { return []; }
+  })();
+
+  res.json({
+    at: Date.now(),
+    // 内訳（モード別・待ち秒・成立までの秒）が取れているか。false のときは
+    // 画面に「まだ取れない」と出す ── 0 と「不明」を同じ顔で出さないため。
+    detailed: !!detail,
+    totals: {
+      // 実プレイヤーの待機総数（全7キュー）。
+      queueing: typeof battle.queueSize === 'function' ? battle.queueSize() : null,
+      activeMatches,
+      openRooms: battle.rooms ? battle.rooms.size : 0,
+      online: battle.clients ? battle.clients.size : 0,
+    },
+    // ⚠ 住人の数はキーを分ける。実プレイヤーの数と足した値は返さない。
+    crowd: { queueing: ambientQueue(), activeResidents: battle.crowd ? battle.crowd.activeCount() : 0 },
+    modes,
+    waitingPlayers,
+  });
 });
 
 adminRouter.post('/api/admin/broadcast', requireAuth, requireAdmin, async (req, res) => {
@@ -985,11 +1101,15 @@ adminRouter.post('/api/admin/grant-all', requireAuth, requireAdmin, (req, res) =
     affected++;
   }
   saveDb();
-  const parts = [coins ? `${coins}🪙` : '', gems ? `${gems}💎` : ''].filter(Boolean).join(' ');
+  // 通貨は日英それぞれ言葉で書く。以前は 🪙/💎 の絵文字を1本の文字列にして
+  // 日英どちらにも差し込んでいたが、この文面はクライアントで textContent に
+  // 入るので絵は出せず、端末によって別の絵にもなる。
+  const partsJa = [coins ? `${coins}コイン` : '', gems ? `${gems}ジェム` : ''].filter(Boolean).join(' ');
+  const partsEn = [coins ? `${coins} coins` : '', gems ? `${gems} gems` : ''].filter(Boolean).join(' ');
   battle.broadcastAll({
     type: 'announce',
-    message: `🎁 運営から全員に ${parts} をプレゼント！（再ログインまたは画面更新で反映）`,
-    messageEn: `🎁 A gift for everyone from the team: ${parts}! (relog or refresh to receive)`,
+    message: `運営から全員に ${partsJa} をプレゼント！（再ログインまたは画面更新で反映）`,
+    messageEn: `A gift for everyone from the team: ${partsEn}! (relog or refresh to receive)`,
     from: req.user.username,
   });
   res.json({ ok: true, affected, coins, gems });

@@ -67,9 +67,14 @@ export function fmtHHMM(mins) {
 // that is the whole point of the reservation.
 // ---------------------------------------------------------------------------
 
+// icon（絵文字）をやめて iconName（public/js/icons.js の名前）にした。
+// 👑 は段位マスター・王座・管理者奧義・二/三/五冠バッジと重なっていて、
+// 「管理者イベント」だとは見分けが付かなかった。
+// ※ 選択肢（<option>）には SVG を置けないので、管理画面のプルダウンは
+//   名前だけを出す（public/js/screens.js）。
 export const AE_MODES = [
   {
-    id: 'invasion', icon: '👑',
+    id: 'invasion', iconName: 'mode_adminevent',
     name: '管理者襲来', nameEn: 'Admin Invasion',
     tagline: '全員 vs 管理者',
     taglineEn: 'Everyone vs the Admin',
@@ -77,7 +82,7 @@ export const AE_MODES = [
     descEn: 'A total war against the admin’s avatar, who meddles with your board in real time. Every participant of the day chips at one enormous HP bar — break it together!',
   },
   {
-    id: 'roulette', icon: '🎰',
+    id: 'roulette', iconName: 'gacha',
     name: '運営ルーレット', nameEn: 'Operator Roulette',
     tagline: '30秒ごとにルールが変わる',
     taglineEn: 'The rules rewrite every 30s',
@@ -85,7 +90,7 @@ export const AE_MODES = [
     descEn: 'Every 30 seconds the house spins the wheel and rewrites the rules of your board. A chaos game show — nobody knows what comes next.',
   },
   {
-    id: 'communal', icon: '🏛️',
+    id: 'communal', iconName: 'hall',
     name: '共同作業', nameEn: 'The Great Work',
     tagline: '全員のスコアが1本のゲージに',
     taglineEn: 'Every score feeds one gauge',
@@ -93,7 +98,7 @@ export const AE_MODES = [
     descEn: 'Every participant’s score of the day flows into a single gauge. Each tier you clear pays out to everyone who took part.',
   },
   {
-    id: 'zero', icon: '👁️',
+    id: 'zero', iconName: 'badge_zero',
     // 🧪 試験中。自動ローテーションには入らない（rotation:'zero' と
     // 明示したときだけ動く）。実際に自分で一度回して、数字と手触りを
     // 確かめてからこの行を消す。消し忘れても全員に出てしまうことはない。

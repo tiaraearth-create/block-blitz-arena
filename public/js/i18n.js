@@ -69,7 +69,7 @@ const SERVER_MSG_EN = {
   'この回に参加していません': 'You did not take part in this one',
   'まだ目標に届いていません（ゲージを進めよう）': 'The goal has not been reached yet — keep filling the gauge',
   '開催中のイベントがありません': 'No event is running',
-  '👑 管理者イベント専用ショップの品です（王座の欠片でのみ交換）': '👑 Admin Event exclusive — only Throne Shards can buy this',
+  '管理者イベント専用ショップの品です（王座の欠片でのみ交換）': 'Admin Event exclusive — only Throne Shards can buy this',
   'そんな品はありません': 'No such item',
   'すでに持っています': 'You already have it',
   'フレンド機能を使うにはアカウント登録が必要です': 'You need an account to use friends',
@@ -134,7 +134,12 @@ const SERVER_MSG_EN = {
   '現在と同じ名前です': 'That is already your name',
   'パスワードが違います': 'Wrong password',
   '試行回数が多すぎます。しばらく待ってください': 'Too many attempts — please wait a bit',
-  '🛠 メンテナンス中です。しばらくお待ちください': '🛠 Under maintenance — please wait',
+  // ⚠️ 絵文字あり／なしの2本ある。無いほうは server/index.js（絵文字を落とした）、
+  //    あるほうは server/battle.js（別担当なのでまだ絵文字つき）。どちらも生きている。
+  // battle.js と index.js の両方が同じ文面を返す。以前は battle 側だけ
+  // '🛠 ' 付きで、キーが2本に分かれていた。サーバー側の絵文字を
+  // 落としたので1本に戻す。
+  'メンテナンス中です。しばらくお待ちください': 'Under maintenance — please wait',
   'コインが足りません': 'Not enough coins',
   'ジェムが足りません': 'Not enough gems',
   'すでに所持しています': 'You already own this',
@@ -156,8 +161,10 @@ const SERVER_MSG_EN = {
   'ルームが見つかりません': 'Room not found',
   'ルームが満員です': 'The room is full',
   'ホストのみ開始できます': 'Only the host can start',
-  '🔇 管理者によりチャットが制限されています': '🔇 Chat restricted by an admin',
-  '💳 課金機能は製作中です。もうしばらくお待ちください！': '💳 Payments are coming soon!',
+  // 🔇 の付いた鍵は server/battle.js / server/party.js（どちらも別担当）が出している
+  // 生の文字列なので、鍵は変えられない。英語面だけ先に絵文字を落としてある。
+  '管理者によりチャットが制限されています': 'Chat restricted by an admin',
+  '課金機能は製作中です。もうしばらくお待ちください！': 'Payments are coming soon!',
   '決済サービスに接続できません': 'Could not reach the payment service',
   '決済セッションの作成に失敗しました': 'Failed to start the checkout session',
   '購入リクエストが多すぎます': 'Too many purchase requests',
@@ -174,7 +181,7 @@ const SERVER_MSG_EN = {
   '報告が多すぎます。少し待ってください': 'Too many reports — please wait a bit',
   'もう少し詳しく書いてください': 'Please add a little more detail',
   '受け取れるランキング報酬はありません': 'No ranking rewards to claim',
-  '🎰 ガチャ限定の装備です（SSRで入手）': '🎰 Gacha-exclusive gear (SSR pull only)',
+  'ガチャ限定の装備です（SSRで入手）': 'Gacha-exclusive gear (SSR pull only)',
   'ギルド名は2〜16文字（英数字・日本語）で入力してください': 'Guild name must be 2–16 characters (letters, numbers, Japanese)',
   'タグは1〜4文字（英数字・カタカナ・漢字）で入力してください': 'Tag must be 1–4 characters (A–Z, 0–9, katakana, kanji)',
   'すでにギルドに所属しています': 'You are already in a guild',
@@ -200,7 +207,8 @@ const SERVER_MSG_EN = {
   '対戦相手が見つかりません': 'Opponent not found',
   '再戦の相手はもういません': 'Your opponent has left — no rematch',
   // v2.16: trServer は通るのに表に無かったプレイヤー向け固定文言を追加。
-  '🛠 サーバー更新のためマッチングを中止しました。少し待ってからもう一度お試しください': '🛠 Matchmaking was cancelled for a server update — please wait a moment and try again',
+  // 🛠 は server/battle.js が付けている（別担当）。あちらが落としたらここも落とす。
+  'サーバー更新のためマッチングを中止しました。少し待ってからもう一度お試しください': 'Matchmaking was cancelled for a server update — please wait a moment and try again',
   'その時間枠は存在しません': 'That time slot does not exist',
   'その枠はもう終わっています': 'That slot has already ended',
   '開催中の枠からは変更できません': 'You cannot switch away from a slot that is live',
@@ -244,6 +252,7 @@ const SERVER_MSG_EN = {
   // 英文は server/index.js が同じ応答に載せている errorEn とそろえてある
   // （どちらの経路で拾っても同じ文が出る）。数が入る文言は下の
   // SERVER_MSG_PATTERNS 側。
+  '管理者により投稿が制限されています': 'Publishing is restricted by an admin',
   '投稿が多すぎます。時間をおいてください': 'Too many submissions — please try again later',
   'クリアの記録が読めません。もう一度自分でクリアしてから投稿してください': 'That clear record is unreadable — clear the stage yourself once more, then submit',
   'そのステージはサーバー側で再生してもクリアできませんでした（解けるステージだけ投稿できます）': 'Replaying your clear on the server did not solve the stage — only solvable stages can be published',
@@ -261,7 +270,7 @@ const SERVER_MSG_PATTERNS = [
   [/^この設定では最大(\d+)人です（チーム戦に変更してください）$/, (m) => `Max ${m[1]} players for this setup — switch to team mode`],
   [/^コインが足りません（([\d,]+)必要）$/, (m) => `Not enough coins (need ${m[1]})`],
   [/^ギルドは満員です（最大(\d+)人）$/, (m) => `The guild is full (max ${m[1]} members)`],
-  [/^ギルド設立には🪙(\d+)必要です$/, (m) => `Founding a guild costs 🪙${m[1]}`],
+  [/^ギルド設立にはコイン(\d+)が必要です$/, (m) => `Founding a guild costs ${m[1]} coins`],
   [/^このモードは(\d+)人までです（いま(\d+)人）$/, (m) => `This mode is for up to ${m[1]} players (you have ${m[2]} now)`],
   // 🧩 パズル工房の投稿検査。数はサーバーの定数（WS_TITLE_MAX / WS_MIN_CELLS /
   // WS_MAX_PIECES / WS_MAX_PER_USER）から埋まるので、上限を調整しても英訳が
@@ -299,21 +308,21 @@ export function applyStaticI18n() {
   };
 
   // menu buttons
-  set('#btnSolo', '▶ Solo Play');
-  set('#btnVsAi', '🤖 VS AI');
-  set('#btnBoss', '🐲 Boss Battle');
-  set('#btnDungeon', '🏰 Dungeon');
-  set('#btnSprint', '⏱️ Time Attack');
-  set('#btnWeekly', '🎯 Weekly');
-  set('#btnDaily', '📅 Daily');
-  set('#btnSurvival', '💀 Survival');
-  set('#btnMeltdown', '☢️ Meltdown');
-  set('#btnChimera', '🧬 Chimera Lab');
-  set('#btnPuzzle', '🧩 Puzzle Ruins');
-  set('#btnDig', '⛏️ The Mines');
-  set('#btnGhost', '👻 Haunted House');
-  set('#btnChaos', '🌪️ Chaos Mode');
-  set('#btnOnline', '🌐 Online Battle');
+  set('#btnSolo', 'Solo Play');
+  set('#btnVsAi', 'VS AI');
+  set('#btnBoss', 'Boss Battle');
+  set('#btnDungeon', 'Dungeon');
+  set('#btnSprint', 'Time Attack');
+  set('#btnWeekly', 'Weekly');
+  set('#btnDaily', 'Daily');
+  set('#btnSurvival', 'Survival');
+  set('#btnMeltdown', 'Meltdown');
+  set('#btnChimera', 'Chimera Lab');
+  set('#btnPuzzle', 'Puzzle Ruins');
+  set('#btnDig', 'The Mines');
+  set('#btnGhost', 'Haunted House');
+  set('#btnChaos', 'Chaos Mode');
+  set('#btnOnline', 'Online Battle');
 
   // in-game HUD tooltips
   const tips = {
@@ -346,19 +355,19 @@ export function applyStaticI18n() {
   const badge = document.getElementById('onlineBadge');
   if (badge) {
     const n = document.getElementById('onlineCount')?.textContent || '0';
-    badge.innerHTML = `🟢 Online: <b id="onlineCount">${n}</b><span id="moodTag" class="mood-tag"></span>`;
+    badge.innerHTML = `Online: <b id="onlineCount">${n}</b><span id="moodTag" class="mood-tag"></span>`;
   }
 
   // sub-screen headers + tabs
-  set('#screen-leaderboard .sub-header h2', '🏆 Ranking');
+  set('#screen-leaderboard .sub-header h2', 'Ranking');
   set('[data-lb="score"]', 'High Score');
   set('[data-lb="rating"]', 'Rating');
-  set('[data-lb="sprint"]', '⏱️Time Attack');
+  set('[data-lb="sprint"]', 'Time Attack');
   set('[data-lb="dungeon"]', 'Dungeon');
   set('[data-lb="weekly"]', 'Weekly');
-  set('[data-lb="daily"]', '📅Daily');
-  set('[data-lb="puzzle"]', '🧩Puzzle Ruins');
-  set('[data-lb="dig"]', '⛏️The Mines');
+  set('[data-lb="daily"]', 'Daily');
+  set('[data-lb="puzzle"]', 'Puzzle Ruins');
+  set('[data-lb="dig"]', 'The Mines');
   // tooltips + document title
   const attr = (sel, name, val) => { const el = document.querySelector(sel); if (el) el.setAttribute(name, val); };
   attr('#btnSettings', 'title', 'Settings');
@@ -381,38 +390,38 @@ export function applyStaticI18n() {
     el.setAttribute('aria-label', 'Back');
   }
   document.title = 'Block Blitz Arena — Block Puzzle × Online Battles';
-  set('#screen-shop .sub-header h2', '🛍️ Shop');
+  set('#screen-shop .sub-header h2', 'Shop');
   set('[data-shop="skin"]', 'Blocks');
   set('[data-shop="board"]', 'Boards');
   set('[data-shop="fx"]', 'Effects');
-  set('[data-shop="ult"]', '⚡Ultimates');
+  set('[data-shop="ult"]', 'Ultimates');
   set('[data-shop="item"]', 'Items');
-  set('#screen-missions .sub-header h2', '📋 Missions');
-  set('#screen-guild .sub-header h2', '🏰 Guild');
+  set('#screen-missions .sub-header h2', 'Missions');
+  set('#screen-guild .sub-header h2', 'Guild');
   set('[data-gd="mine"]', 'My Guild');
   set('[data-gd="rank"]', 'Ranking');
   set('[data-gd="find"]', 'Find');
   // 🎒 インベントリはここに1行も無く、英語で遊ぶと画面ごと日本語のままだった。
-  set('#screen-inventory .sub-header h2', '🎒 Inventory');
+  set('#screen-inventory .sub-header h2', 'Inventory');
   set('[data-inv="gear"]', 'Gear');
   set('[data-inv="item"]', 'Items');
   set('[data-inv="title"]', 'Titles');
   set('[data-inv="badge"]', 'Badges');
   // 🤝 フレンド（v2.12 で追加）
-  set('#screen-friends .sub-header h2', '🤝 Friends');
+  set('#screen-friends .sub-header h2', 'Friends');
   set('[data-fr="list"]', 'Friends');
   // 「申請」タブは中に通知ドット(#frReqDot)を内包しているが、set() が
   // ドットを退避・差し戻すので textContent 代入でも消えない。
   set('[data-fr="requests"]', 'Requests');
   set('[data-fr="find"]', 'Find');
   set('[data-fr="settings"]', 'Settings');
-  set('#screen-news .sub-header h2', '📰 News');
-  set('#btnNewsPost', '✍️ Post');
+  set('#screen-news .sub-header h2', 'News');
+  set('#btnNewsPost', 'Post');
   set('[data-ms="daily"]', 'Daily');
   set('[data-ms="weekly"]', 'Weekly');
-  set('[data-ms="ach"]', '🏅 Achievements');
-  set('#screen-battlepass .sub-header h2', '🎫 Battle Pass');
-  set('#screen-room .sub-header h2', '🔧 Custom Room');
+  set('[data-ms="ach"]', 'Achievements');
+  set('#screen-battlepass .sub-header h2', 'Battle Pass');
+  set('#screen-room .sub-header h2', 'Custom Room');
 
   // matchmaking
   set('#mmStatus', 'Looking for an opponent…');
@@ -428,7 +437,7 @@ export function applyStaticI18n() {
   set('#btnCancelQueue', 'Cancel');
 
   // custom room
-  set('#btnCreateRoom', '➕ Create Room');
+  set('#btnCreateRoom', 'Create Room');
   set('#btnJoinRoom', 'Join');
   const codeInput = document.getElementById('roomCodeInput');
   if (codeInput) codeInput.placeholder = 'CODE';
@@ -437,15 +446,15 @@ export function applyStaticI18n() {
   const roomCode = document.querySelector('.room-code');
   if (roomCode) roomCode.innerHTML = `Room code <b id="roomCodeLabel">----</b>`;
   set('#btnLeaveRoom', 'Leave');
-  set('#btnStartRoom', '🚀 Start!');
+  set('#btnStartRoom', 'Start!');
 
   // chat drawer
   const chatHead = document.querySelector('.chat-head');
-  if (chatHead) chatHead.innerHTML = `💬 Global Chat <span id="chatOnline" class="muted"></span>`;
+  if (chatHead) chatHead.innerHTML = `Global Chat <span id="chatOnline" class="muted"></span>`;
   const chatInput = document.getElementById('chatInput');
   if (chatInput) chatInput.placeholder = 'Message everyone…';
   set('#chatSend', 'Send');
 
   // splash + admin panel bits players never see stay Japanese
-  set('.ts-tap', '▶ Tap to Start');
+  set('.ts-tap', 'Tap to Start');
 }

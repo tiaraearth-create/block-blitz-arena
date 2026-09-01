@@ -16,6 +16,9 @@ import {
   ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor, chatFloorMs, getRoster,
   toggles, isQuietNow, popFactor, worldCtx,
 } from './ambient.js';
+// 🗒 住人の戦績の差分（実際に起きたことの記録）。置き場は db.meta で、
+// residents.js は db を知らないので読み口をここから渡す。
+import { setResidentRecordSource, recordResidentMatch } from './residents.js';
 import { composeDialogue, composeFeed, composeReaction } from './crowd.js';
 import { zeroSay, moodFor } from './zero.js';
 import { createSession as createZeroSession, tick as tickZero, submitCut as zeroCut,
@@ -64,6 +67,26 @@ export function initBattle(server, deps) {
   // endMatch で beatChampion が立った直後に呼ぶだけでよい。何度呼んでも二重には
   // 鳴らない。テストの部分起動など deps が来ない環境では何もしない。
   const announceChampionFall = deps.announceChampionFall || (() => false);
+  // 🗒 住人の戦績の差分表（db.meta.residentRecords）の読み口を residents.js に渡す。
+  //
+  // ・毎回 db.meta を引き直す。参照を1回だけ渡すと、/api/admin/restore が
+  //   db.meta を丸ごと差し替えたあとも古いオブジェクトを掴んだままになり、
+  //   復元した記録が見えないうえ、新しい記録は保存されない入れ物へ落ちる。
+  // ・入れ物を作るのは書くとき（create）だけ。読むだけの経路
+  //   （ランキング1行ごとに呼ばれる）で db.meta に空の欄を生やさない。
+  // ・中身の検査（オブジェクトか・行の形）は residents.js 側でやる。
+  setResidentRecordSource(create => {
+    if (!db.meta) {
+      if (!create) return null;
+      db.meta = {};
+    }
+    if (!db.meta.residentRecords) {
+      if (!create) return null;
+      db.meta.residentRecords = {};
+    }
+    return db.meta.residentRecords;
+  });
+
   // アカウント（未ログインはIP）単位の流量制限。sockRate は ws のプロパティに
   // カウンタを置くので、接続を増やすと持ち分もそのまま増える。
   // index.js から渡らない環境（テストの部分起動など）では素通しにする。
@@ -404,8 +427,8 @@ export function initBattle(server, deps) {
         saveDb();
         broadcastAll({
           type: 'announce',
-          message: `👁️ 断罪 ── 第${rec.dan}段が陥落！ 王座がひとつ返ってきました${rec.by ? `（とどめ: ${rec.by}）` : ''}`,
-          messageEn: `👁️ CONDEMNED ── Stage ${rec.dan} has fallen. One throne returns${rec.by ? ` (finished by ${rec.by})` : ''}`,
+          message: `断罪 ── 第${rec.dan}段が陥落！ 王座がひとつ返ってきました${rec.by ? `（とどめ: ${rec.by}）` : ''}`,
+          messageEn: `CONDEMNED ── Stage ${rec.dan} has fallen. One throne returns${rec.by ? ` (finished by ${rec.by})` : ''}`,
           from: '管理者ゼロ',
         });
       },
@@ -1554,13 +1577,11 @@ export function initBattle(server, deps) {
   // 「画面ではグランドマスターなのに、サーバーはマスターとして扱う」が起きる
   // 状態だった（実際 ranks.js は8帯なのに、この表は6帯のまま止まっていた）。
   //
-  // クライアント(modes.js)のトースト用に絵文字だけは必要なので、帯の id →
-  // 絵文字の対応表をここに置く。これは **しきい値ではない** ので、
-  // ranks.js に帯が増えたときは既定の 🎖️ に落ちるだけで、段位の判定はズレない。
-  const BAND_EMOJI = {
-    bronze: '🥉', silver: '🥈', gold: '🥇', platinum: '💠',
-    diamond: '💎', master: '👑', grandmaster: '🌟', legend: '🔥',
-  };
+  // 帯の絵は ranks.js の band.icon（＝public/js/icons.js のアイコン名。
+  // 'rank_gold' など）をそのまま送る。以前はここに絵文字の対応表を
+  // 持っていたが、👑（マスター）は王座・管理者奧義・冠バッジと四重で、
+  // 💠（プラチナ）は採掘場のクリスタルと同じだった。帯を足したときに
+  // この表だけ更新を忘れる問題も同時に消える（ranks.js が唯一の正解）。
   // 全体告知の下限。この帯より上に **上がったとき** だけ世界に流す。
   const ANNOUNCE_FROM = 'gold';
   const announceMin = (RANK_BANDS.find(b => b.id === ANNOUNCE_FROM) || RANK_BANDS[0]).min;
@@ -1572,10 +1593,10 @@ export function initBattle(server, deps) {
     const band = bandOf(r);
     return {
       // クライアント(modes.js)が読む形。min は昇格/降格の向きの判定に使う。
-      min: rk.min, icon: BAND_EMOJI[band.id] || '🎖️',
+      min: rk.min, icon: band.icon,
       name: rk.label, nameEn: rk.labelEn,
       // 全体告知に使う帯そのもの
-      band: { id: band.id, min: band.min, name: band.name, nameEn: band.nameEn, icon: BAND_EMOJI[band.id] || '🎖️' },
+      band: { id: band.id, min: band.min, name: band.name, nameEn: band.nameEn, icon: band.icon },
     };
   };
 
@@ -1750,8 +1771,10 @@ export function initBattle(server, deps) {
               const b = afterTier.band;
               broadcastAll({
                 type: 'announce',
-                message: `${b.icon} 「${me.username}」が${b.name}帯に昇格！`,
-                messageEn: `${b.icon} "${me.username}" was promoted to ${b.nameEn}!`,
+                // 全体告知の文面はクライアントで textContent に入る。
+                // b.icon は **アイコン名**（'rank_gold'）なので文面に差してはいけない。
+                message: `「${me.username}」が${b.name}帯に昇格！`,
+                messageEn: `"${me.username}" was promoted to ${b.nameEn}!`,
                 from: '大会運営',
               });
               // tier はオブジェクトで渡す — renderSlot が言語別に name/nameEn を選ぶ
@@ -1835,6 +1858,43 @@ export function initBattle(server, deps) {
         user: me ? publicUser(me) : null,
       });
     }
+    // -----------------------------------------------------------------------
+    // 🗒 住人の戦績を「実際に起きたこと」として残す
+    // -----------------------------------------------------------------------
+    // これまで住人の成績は種＋日付から丸ごと計算していたので、人間が勝っても
+    // 相手の戦績は1ミリも動かなかった ── いちばん強い「AIだとバレる手がかり」。
+    // ここで付けた差分は residentStats / residentRating が基準値に足すので、
+    // ランキングでもプロフィールでも、変装して出てくるときのレートでも、
+    // 同じ1敗が見える。
+    //
+    // 記録するのは **レート戦の1対1で、片方が人間・片方が住人の変装** のときだけ。
+    //   ・sock.rating が null（未登録の住人）は Elo も走らないので対象外
+    //   ・棄権・切断で終わった試合も記録する。人間側には敗北と Elo が付くので、
+    //     相手の勝ちだけ無かったことにすると帳尻が合わない（逃げ得になる）
+    //   ・レート増減は人間の delta の符号違いではなく Elo をそのまま引き直す。
+    //     人間側は下限クランプ（rating が 0 未満にならない）を通っているため。
+    if (duel2) {
+      const resSide = match.players.find(p => p.sock.isBot && p.sock.resident && p.sock.rating != null);
+      const humanSide = resSide ? match.players.find(p => p !== resSide && !p.sock.isBot) : null;
+      const humanRating = humanSide && humanUsers[humanSide.slot] ? preRatings[humanSide.slot] : null;
+      if (resSide && humanSide && humanRating != null) {
+        // 住人から見た結果。人間が棄権したらその人の負け＝住人の勝ち。
+        const hOutcome = humanSide.forfeited ? 0
+          : winTeam === -1 ? 0.5 : humanSide.team === winTeam ? 1 : 0;
+        const resOutcome = 1 - hOutcome;
+        try {
+          recordResidentMatch(resSide.sock.resident, {
+            outcome: resOutcome,
+            ratingDelta: eloUpdate(resSide.sock.rating, humanRating, resOutcome),
+            score: resSide.score,
+          });
+        } catch (err) {
+          // 台帳の失敗で試合の締めを止めない（報酬も結果送信も既に済んでいる）。
+          console.error('[resident] 戦績の記録に失敗', err && err.message);
+        }
+      }
+    }
+
     // A resident who played as a bot may talk about the human afterwards.
     if (match.mode === 'duel' || match.mode === 'attack' || match.mode === 'coop') {
       const human = match.players.find(p => !p.sock.isBot && !p.forfeited);
@@ -1897,7 +1957,7 @@ export function initBattle(server, deps) {
     }
     if (deps.isMaintenance && deps.isMaintenance() && (!u || u.role !== 'admin')) {
       endForMaintenance(ws);
-      send(ws, { type: 'error', error: '🛠 メンテナンス中です。しばらくお待ちください' });
+      send(ws, { type: 'error', error: 'メンテナンス中です。しばらくお待ちください' });
       ws.close();
       return false;
     }
@@ -2427,8 +2487,8 @@ export function initBattle(server, deps) {
       }
       broadcastAll({
         type: 'announce',
-        message: `🏆 オンライントーナメントで「${sockName(champ)}」が優勝！`,
-        messageEn: `🏆 "${sockName(champ)}" wins the online tournament!`,
+        message: `オンライントーナメントで「${sockName(champ)}」が優勝！`,
+        messageEn: `"${sockName(champ)}" wins the online tournament!`,
         from: '大会運営',
       });
       return;
@@ -2859,8 +2919,8 @@ export function initBattle(server, deps) {
       if (winner && winner.human) {
         broadcastAll({
           type: 'announce',
-          message: `💯 バトルロイヤルで「${winner.name}」が100人の頂点に！（${winner.kills || 0}KO）`,
-          messageEn: `💯 "${winner.name}" is the last one standing out of 100 in Battle Royale! (${winner.kills || 0} KOs)`,
+          message: `バトルロイヤルで「${winner.name}」が100人の頂点に！（${winner.kills || 0}KO）`,
+          messageEn: `"${winner.name}" is the last one standing out of 100 in Battle Royale! (${winner.kills || 0} KOs)`,
           from: '大会運営',
         });
       }
@@ -3005,7 +3065,7 @@ export function initBattle(server, deps) {
           const user = deps.userFromToken(msg.token);
           if (user && user.banned) { send(ws, { type: 'error', error: 'アカウントが凍結されています' }); ws.close(); return; }
           if (deps.isMaintenance && deps.isMaintenance() && (!user || user.role !== 'admin')) {
-            send(ws, { type: 'error', error: '🛠 メンテナンス中です。しばらくお待ちください' });
+            send(ws, { type: 'error', error: 'メンテナンス中です。しばらくお待ちください' });
             ws.close();
             return;
           }
@@ -3233,7 +3293,7 @@ export function initBattle(server, deps) {
           // 止められている人がここから書けてしまうと規制の意味が無くなる。
           const wu = ws.user ? db.users[ws.user.id] : null;
           if (wu && wu.muted) {
-            send(ws, { type: 'error', error: '🔇 管理者によりチャットが制限されています' });
+            send(ws, { type: 'error', error: '管理者によりチャットが制限されています' });
             return;
           }
           const r = zeroWill(run, sockName(ws), String(msg.text || ''));
@@ -3243,8 +3303,8 @@ export function initBattle(server, deps) {
             // 伝言はその場の全員にも見せる（次の枠の人は開幕で読む）
             broadcastAll({
               type: 'announce',
-              message: `📝 ${sockName(ws)} が次の枠へ伝言を残した`,
-              messageEn: `📝 ${sockName(ws)} left a message for the next slot`,
+              message: `${sockName(ws)} が次の枠へ伝言を残した`,
+              messageEn: `${sockName(ws)} left a message for the next slot`,
               from: '管理者ゼロ',
             });
           } else {
@@ -3543,7 +3603,7 @@ export function initBattle(server, deps) {
           if (!text) return;
           const u = ws.user ? db.users[ws.user.id] : null;
           if (u && u.muted) {
-            send(ws, { type: 'error', error: '🔇 管理者によりチャットが制限されています' });
+            send(ws, { type: 'error', error: '管理者によりチャットが制限されています' });
             return;
           }
           // 連投制限をアカウント（未ログインはIP）単位でも数える。sockRate は
@@ -3801,7 +3861,7 @@ export function initBattle(server, deps) {
     for (const q of Object.values(queues)) {
       for (const e of q) {
         send(e.ws, { type: 'queue_cancelled' });
-        send(e.ws, { type: 'error', error: '🛠 サーバー更新のためマッチングを中止しました。少し待ってからもう一度お試しください' });
+        send(e.ws, { type: 'error', error: 'サーバー更新のためマッチングを中止しました。少し待ってからもう一度お試しください' });
       }
       q.length = 0;
     }
@@ -3815,6 +3875,45 @@ export function initBattle(server, deps) {
     matches, rooms,
     endAllForShutdown,
     queueSize: queueSizeAll,   // all seven queues — duel+team alone under-reported
+
+    // 🔒 マッチング待ちの内訳（**運営専用**）。
+    //
+    // なぜ要るのか
+    //   v2.36 でマッチング画面から「あと N 秒で対戦相手が見つかります」と
+    //   「このモードで待っている人: N人」を消した。本物のマッチングは相手の
+    //   到着時刻を予告できないし、0人待ちとカウントダウンが同時に出た瞬間に
+    //   「相手は用意されたもの」だと分かってしまうため（＝住人の秘匿と衝突）。
+    //   ただし運営はこの数字が見えないと、キューが詰まっているのか誰も並んで
+    //   いないのかを切り分けられない。だから **画面からは消し、運営には残す**。
+    //
+    // ⚠ 出してよいのは /api/admin/matchmaking（requireAuth + requireAdmin）だけ。
+    //   /api/status のような公開の口に混ぜてはいけない ── matchInSec は
+    //   「席が埋まる時刻」そのもので、住人の正体に直結する。
+    //   ⚠ /api/admin/* は server/sanitize.js の関門を経路ごとバイパスするので、
+    //     ここに足した欄は削られずにそのまま出る。増やすときはその前提で。
+    //
+    // 形は server/routes/admin.js の mmBreakdown() が受け取る契約に合わせてある:
+    //   { [mode]: [{ name, waited(秒), matchInSec(秒), rating, guest }] }
+    queueBreakdown: () => {
+      const now = Date.now();
+      const out = {};
+      for (const [mode, q] of Object.entries(queues)) {
+        out[mode] = q
+          // 席埋めの Bot はキューに並ばない（botAt で直接入る）が、
+          // 将来並ぶようになっても運営の画面が水増しされないよう弾いておく。
+          .filter(e => e && e.ws && !e.ws.isBot)
+          .map(e => ({
+            name: sockName(e.ws) || '—',
+            waited: Math.max(0, Math.round((now - e.since) / 1000)),
+            matchInSec: Math.max(0, Math.round((e.botAt - now) / 1000)),
+            rating: ratingOf(e.ws),
+            // 未ログイン（ゲスト）は user を持たない。運営が
+            // 「登録者が待っているのか」を見分けるための印。
+            guest: !e.ws.user,
+          }));
+      }
+      return out;
+    },
     displayOnline, displayMatches,
     // 👥 いま本当につないでいる人。
     //

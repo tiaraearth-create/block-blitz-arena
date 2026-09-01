@@ -13,21 +13,26 @@ import { t } from './i18n.js';
 export const DEFAULT_ULT = 'ult_blast';
 
 // Presentation only — the shop catalog (names/prices) lives on the server.
+// 絵はここに持たない。以前は icon: '🛡️' のような絵文字を並べていたが、
+// 🛡️ は奧義「不落の城塞」と管理者ブースター「絶対防御」の両方、☄️ は
+// 「メテオストライク」と「天変地異」の両方に付いていて、棚で見分けが付かなかった。
+// 奧義の絵は public/js/icons.js の ult_* （id 引き）が唯一の正解で、
+// 引くのは itemIconName(id) / icon(id)。ここに残すのは色だけで、
+// 色はゲージの光や粒の色（canvas）に使うので SVG では代替できない。
 export const ULT_META = {
-  ult_blast:     { icon: '💥', color: '#ffa93d' },
-  ult_purify:    { icon: '🌊', color: '#43d9e8' },
-  ult_overdrive: { icon: '🔥', color: '#ff5d5d' },
-  ult_meteor:    { icon: '☄️', color: '#ff6bd4' },
-  ult_rainbow:   { icon: '🌈', color: '#5ee86e' },
-  ult_fortress:  { icon: '🛡️', color: '#9fd8ff' },
-  ult_timestop:  { icon: '⏳', color: '#b06bff' },
-  ult_judgement: { icon: '⚡', color: '#fff3b0' },
-  ult_condemn:   { icon: '👁️', color: '#e03546' },
-  ult_gravity:   { icon: '🧲', color: '#8fb6ff' },
-  ult_admin:     { icon: '👑', color: '#ffd75e' },
+  ult_blast:     { color: '#ffa93d' },
+  ult_purify:    { color: '#43d9e8' },
+  ult_overdrive: { color: '#ff5d5d' },
+  ult_meteor:    { color: '#ff6bd4' },
+  ult_rainbow:   { color: '#5ee86e' },
+  ult_fortress:  { color: '#9fd8ff' },
+  ult_timestop:  { color: '#b06bff' },
+  ult_judgement: { color: '#fff3b0' },
+  ult_condemn:   { color: '#e03546' },
+  ult_gravity:   { color: '#8fb6ff' },
+  ult_admin:     { color: '#ffd75e' },
 };
 
-export function ultIcon(id) { return (ULT_META[id] || ULT_META[DEFAULT_ULT]).icon; }
 export function ultColor(id) { return (ULT_META[id] || ULT_META[DEFAULT_ULT]).color; }
 
 // ---------------------------------------------------------------------------
@@ -187,7 +192,7 @@ const EFFECTS = {
     view.screenFlash = 0.5;
     audio.bossAttack();
     emit(ctx, { ...res, rows: pickRows, cols: pickCols });
-    return { msg: t('💥 破壊の衝撃波！盤面を薙ぎ払った！', '💥 Destruction Shockwave — the board is swept clean!') };
+    return { msg: t('破壊の衝撃波！盤面を薙ぎ払った！', 'Destruction Shockwave — the board is swept clean!') };
   },
 
   // 🌊 Wipe every garbage cell plus the bottom two rows.
@@ -212,7 +217,7 @@ const EFFECTS = {
     view.screenFlash = 0.4;
     audio.coin();
     emit(ctx, { ...res, gained: res.gained + bonus, rows });
-    return { msg: t(`🌊 浄化の波動！お邪魔${garbage.length}個を消し飛ばした！`, `🌊 Purifying Wave — ${garbage.length} garbage cells erased!`) };
+    return { msg: t(`浄化の波動！お邪魔${garbage.length}個を消し飛ばした！`, `Purifying Wave — ${garbage.length} garbage cells erased!`) };
   },
 
   // 🔥 Triple score for 15 seconds.
@@ -248,7 +253,7 @@ const EFFECTS = {
     const [cx, cy] = boardCenter(view);
     view.addFloatText(cx, cy, 'OVERDRIVE!', '#ff5d5d', 2);
     view.particles.confetti(cx, cy, view.cell, 60);
-    return { msg: t('🔥 オーバードライブ！15秒間スコア3倍！！', '🔥 OVERDRIVE! Triple score for 15 seconds!!') };
+    return { msg: t('オーバードライブ！15秒間スコア3倍！！', 'OVERDRIVE! Triple score for 15 seconds!!') };
   },
 
   // ☄️ Shatter 14 random filled cells.
@@ -271,7 +276,7 @@ const EFFECTS = {
     view.screenFlash = 0.5;
     audio.bossAttack();
     emit(ctx, { clearedCells: hit, gained, anchor: [hit[0][0], hit[0][1]] });
-    return { msg: t(`☄️ メテオストライク！${hit.length}マスを粉砕！`, `☄️ Meteor Strike — ${hit.length} cells obliterated!`) };
+    return { msg: t(`メテオストライク！${hit.length}マスを粉砕！`, `Meteor Strike — ${hit.length} cells obliterated!`) };
   },
 
   // 🌈 Rebuild the hand out of the three best-fitting pieces available.
@@ -304,7 +309,7 @@ const EFFECTS = {
     audio.coin();
     const [cx, cy] = boardCenter(view);
     view.addFloatText(cx, cy, 'RAINBOW HAND!', '#5ee86e', 1.8);
-    return { msg: t('🌈 レインボーハンド！最適なピースが降ってきた！', '🌈 Rainbow Hand — perfect pieces, delivered!') };
+    return { msg: t('レインボーハンド！最適なピースが降ってきた！', 'Rainbow Hand — perfect pieces, delivered!') };
   },
 
   // 🛡️ 30 seconds of combo shield + garbage immunity.
@@ -316,7 +321,7 @@ const EFFECTS = {
     audio.combo(5);
     const [cx, cy] = boardCenter(view);
     view.addFloatText(cx, cy, 'FORTRESS!', '#9fd8ff', 1.8);
-    return { msg: t('🛡️ 不落の城塞！30秒間コンボ継続＆妨害無効！', '🛡️ Impregnable Fortress — 30s of combo shield and garbage immunity!') };
+    return { msg: t('不落の城塞！30秒間コンボ継続＆妨害無効！', 'Impregnable Fortress — 30s of combo shield and garbage immunity!') };
   },
 
   // ⏳ Buys time, in whatever currency the current mode uses.
@@ -327,16 +332,16 @@ const EFFECTS = {
       mode.endAt += 12000;
       mode.timeLeft = Math.max(0, (mode.endAt - Date.now()) / 1000);
       mode.updateTimerHud && mode.updateTimerHud();
-      msg = t('⏳ 時間停止！制限時間+12秒！', '⏳ Time Stop — +12 seconds!');
+      msg = t('時間停止！制限時間+12秒！', 'Time Stop — +12 seconds!');
     } else if (mode && mode.nextAtk) {
       mode.nextAtk += 20000;
-      msg = t('⏳ 時間停止！ボスの攻撃を20秒封印！', '⏳ Time Stop — the boss is frozen for 20s!');
+      msg = t('時間停止！ボスの攻撃を20秒封印！', 'Time Stop — the boss is frozen for 20s!');
     } else if (mode && mode.nextAt) {
       mode.nextAt += 20000;
-      msg = t('⏳ 時間停止！次の波を20秒遅らせた！', '⏳ Time Stop — the next wave is delayed 20s!');
+      msg = t('時間停止！次の波を20秒遅らせた！', 'Time Stop — the next wave is delayed 20s!');
     } else {
       engine.rerolls += 3;
-      msg = t('⏳ 時間停止！リロール+3！', '⏳ Time Stop — +3 rerolls!');
+      msg = t('時間停止！リロール+3！', 'Time Stop — +3 rerolls!');
     }
     view.screenFlash = 0.4;
     audio.combo(7);
@@ -366,7 +371,7 @@ const EFFECTS = {
     view.particles.ring(cx, cy, view.boardSize, '#fff3b0');
     view.particles.confetti(cx, cy, view.cell, 90);
     emit(ctx, { clearedCells: filled, gained, anchor: [filled[0][0], filled[0][1]] });
-    return { msg: t('⚡ 神の裁き！！盤面が消滅した！！', '⚡ DIVINE JUDGEMENT — the board is no more!!') };
+    return { msg: t('神の裁き！！盤面が消滅した！！', 'DIVINE JUDGEMENT — the board is no more!!') };
   },
 
   // 👁️ 断罪の一撃。いちばん埋まった縦1列と横1列を、埋まり具合に関係なく
@@ -388,7 +393,7 @@ const EFFECTS = {
     const [cx, cy] = boardCenter(view);
     view.particles.ring(cx, cy, view.boardSize * 0.7, '#e03546');
     emit(ctx, { ...res, rows: row ? [row.i] : [], cols: col ? [col.i] : [] });
-    return { msg: t('👁️ 断罪の一撃！ 縦横を斬り抜いた！', '👁️ Condemnation — cut clean through!') };
+    return { msg: t('断罪の一撃！ 縦横を斬り抜いた！', 'Condemnation — cut clean through!') };
   },
 
   // 🧲 重力圧縮。盤面のブロックを全部そのまま下端へ落として詰め、
@@ -431,8 +436,8 @@ const EFFECTS = {
     });
     return {
       msg: res.lineCount > 0
-        ? t(`🧲 重力圧縮！盤面が崩れ落ち、${res.lineCount}ライン消えた！`, `🧲 Gravity Crush — the board collapses, ${res.lineCount} lines gone!`)
-        : t('🧲 重力圧縮！盤面を下へ押し固めた！', '🧲 Gravity Crush — the board is packed down!'),
+        ? t(`重力圧縮！盤面が崩れ落ち、${res.lineCount}ライン消えた！`, `Gravity Crush — the board collapses, ${res.lineCount} lines gone!`)
+        : t('重力圧縮！盤面を下へ押し固めた！', 'Gravity Crush — the board is packed down!'),
     };
   },
 
@@ -444,9 +449,9 @@ const EFFECTS = {
     // 効くよう次のタスクで再充填し、トーストの「ゲージ再充填」を実態に一致させる。
     setTimeout(() => { ctx.engine.ult = 100; }, 0);
     if (out.error) {
-      return { msg: t('👑 全能：ゲージを再充填した', '👑 Omnipotence: gauge refilled') };
+      return { msg: t('全能：ゲージを再充填した', 'Omnipotence: gauge refilled') };
     }
-    return { msg: t('👑 全能！！盤面消滅＋ゲージ再充填！', '👑 OMNIPOTENCE — board erased, gauge refilled!') };
+    return { msg: t('全能！！盤面消滅＋ゲージ再充填！', 'OMNIPOTENCE — board erased, gauge refilled!') };
   },
 };
 

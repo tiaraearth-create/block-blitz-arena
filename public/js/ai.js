@@ -1,15 +1,19 @@
 // Heuristic AI player for VS mode. Plays its own Engine instance.
 import { SIZE, SHAPES, shapeSize } from './engine.js';
 
+// avatar（🤖 などの絵文字）は iconName（public/js/icons.js の名前）に移した。
+// 👑 は段位マスター・管理者奧義・王座と四重で、AIの難易度だとは読めなかった。
+// ※ ボタンの中（innerHTML）だけ icon() で出せる。相手の名前は
+//   パネルに textContent で入るので、あそこは言葉だけにすること。
 export const AI_LEVELS = {
-  easy:   { name: '見習い', nameEn: 'Novice',  moveMs: 2600, noise: 0.5,  lookahead: false, avatar: '🤖' },
-  normal: { name: '戦士',   nameEn: 'Warrior', moveMs: 1700, noise: 0.15, lookahead: false, avatar: '🦾' },
-  hard:   { name: '達人',   nameEn: 'Master',  moveMs: 1100, noise: 0.02, lookahead: true,  avatar: '👑' },
-  oni:    { name: '鬼',     nameEn: 'Oni',     moveMs: 700,  noise: 0,    lookahead: true,  deep: true, avatar: '👹' },
+  easy:   { name: '見習い', nameEn: 'Novice',  moveMs: 2600, noise: 0.5,  lookahead: false, iconName: 'mode_ai' },
+  normal: { name: '戦士',   nameEn: 'Warrior', moveMs: 1700, noise: 0.15, lookahead: false, iconName: 'perk_atk' },
+  hard:   { name: '達人',   nameEn: 'Master',  moveMs: 1100, noise: 0.02, lookahead: true,  iconName: 'rank_master' },
+  oni:    { name: '鬼',     nameEn: 'Oni',     moveMs: 700,  noise: 0,    lookahead: true,  deep: true, iconName: 'foe_oni' },
   // Hidden difficulty: only revealed by the secret command (↑↑↓↓←→←→BA / title x10).
-  kami:   { name: '神',     nameEn: 'Kami',    moveMs: 520,  noise: 0,    exhaustive: true, avatar: '🔱', secret: true },
+  kami:   { name: '神',     nameEn: 'Kami',    moveMs: 520,  noise: 0,    exhaustive: true, iconName: 'badge_kami', secret: true },
   // TRUE hidden difficulty: ultra-secret command only (↑↑↓↓←→←→BABA↓↑↓↑).
-  souzou: { name: '創造神', nameEn: 'Creator God', moveMs: 380, noise: 0, exhaustive: true, beam: 14, avatar: '🌌', secret: true },
+  souzou: { name: '創造神', nameEn: 'Creator God', moveMs: 380, noise: 0, exhaustive: true, beam: 14, iconName: 'badge_souzou', secret: true },
 };
 
 // Evaluate the grid after a hypothetical placement.

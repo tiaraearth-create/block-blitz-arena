@@ -77,7 +77,7 @@ guildRouter.get('/api/guilds/:id', (req, res) => {
 guildRouter.post('/api/guilds/create', requireAuth, maintenanceGuard, (req, res) => {
   const user = req.user;
   if (user.role !== 'admin' && user.coins < GUILD_CREATE_COST) {
-    return res.status(402).json({ error: `ギルド設立には🪙${GUILD_CREATE_COST}必要です` });
+    return res.status(402).json({ error: `ギルド設立にはコイン${GUILD_CREATE_COST}が必要です` });
   }
   const out = createGuild(db, user, req.body || {});
   if (out.error) return res.status(400).json({ error: out.error });

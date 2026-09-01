@@ -512,7 +512,11 @@ function attachModalNav(modal, hasBack) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = `chip icon-btn modal-nav-btn ${hasBack ? 'modal-back' : 'modal-x'}`;
-  btn.textContent = hasBack ? '←' : '✕';
+  // 印は icons.js の back / close。以前は '←' / '✕' の文字だったが、
+  // 字体任せで太さも中心も端末ごとにズレるし、モーダルの右上は
+  // 画面中でもっとも押される部品。hasOwnCloseControl() はこのボタンを
+  // data-modal-close / data-modal-back で見分けるので、文字を失っても壊れない。
+  btn.innerHTML = icon(hasBack ? 'back' : 'close', { size: 18 });
   const label = hasBack ? t('戻る', 'Back') : t('閉じる', 'Close');
   btn.title = label;
   btn.setAttribute('aria-label', label);
@@ -592,7 +596,8 @@ function attachPeekButton(root, backdrop, modal) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'modal-peek-btn';
-  btn.textContent = '👁';
+  // 👁 だったところ。盤面を覚かせるボタンなので、観戦（spectate）の目を使う。
+  btn.innerHTML = icon('spectate', { size: 18 });
   const label = t('押している間だけ盤面を見る', 'Hold to peek at the board');
   btn.title = label;
   btn.setAttribute('aria-label', label);

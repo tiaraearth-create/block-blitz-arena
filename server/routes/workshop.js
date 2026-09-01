@@ -280,7 +280,7 @@ function seedWorkshopStages() {
     added++;
   }
   saveDb();
-  if (added) console.log(`[workshop] 🛠パズル工房に住人の初期ステージ ${added}件を並べました`);
+  if (added) console.log(`[workshop] パズル工房に住人の初期ステージ ${added}件を並べました`);
 }
 
 // 配信する形。solution（作者の模範解答）は本人と管理者にしか出さない ──
@@ -349,7 +349,7 @@ workshopRouter.post('/api/workshop/stages', requireAuth, maintenanceGuard, (req,
   // banned しか見ないので、ここで muted を弾く（play / like / delete は
   // 表に出る文字を伴わないので対象外）。HTTP は ws と違い errorEn を同梱する。
   if (req.user.muted) {
-    return res.status(403).json({ error: '🔇 管理者により投稿が制限されています', errorEn: 'Publishing is restricted by an admin' });
+    return res.status(403).json({ error: '管理者により投稿が制限されています', errorEn: 'Publishing is restricted by an admin' });
   }
   // 入口の門は「乱打を止める」ぶんだけ。ここを 5回/時 の公開枠にしていたころは、
   // 盤面やリプレイの形式ミスで 400 になった回も枠を食い、数分かけて作った

@@ -79,6 +79,10 @@ const TESTS = [
   'zero-session.test.mjs',
   'crowd.test.mjs',
   'ranking-ai.test.mjs',
+  // 🗒 住人の戦績が「実際に起きたこと」を映すか（人間が勝つと本当に敗が増える）。
+  // ranking-ai と表裏なので隣に置く ── あちらは「計算で作る基準値」が生きて
+  // いることを、こちらは「その上に乗る実記録」を見る。サーバー不要の安い組。
+  'residentrecord.test.mjs',
   'dbsafety.test.mjs',
   // ここから下はサーバーを起動する。
   // 接続上限まわり。サーバーを2つ立てる（プロキシ有り構成／無し構成）ぶん

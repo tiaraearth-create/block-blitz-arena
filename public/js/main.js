@@ -18,7 +18,7 @@ import { initParty } from './party.js';
 // 説明の本文も数字も一切持たない（数字を直すときに2か所直す羽目にならない）。
 import { ONLINE_MODES, onlineModeLine, rulesSections } from './rules.js';
 // 🎨 絵文字ではなく自前のアイコン。index.html は静的なので、起動時に流し込む。
-import { icon, iconEl, hasIcon } from './icons.js';
+import { icon, iconEl, hasIcon, bossIconName } from './icons.js';
 
 // ---------------------------------------------------------------------------
 // 🧯 クライアントJSエラーの自動報告（POST /api/clienterror）
@@ -227,7 +227,7 @@ function showSoloSetup() {
     ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}</p>` : ''}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="soRules">${rulesIcon(18)} ${t('遊び方', 'How to play')}</button>
-      <button class="btn btn-primary" id="soStart">${t('▶ はじめる', '▶ Play')}</button>
+      <button class="btn btn-primary" id="soStart">${t('はじめる', 'Play')}</button>
     </div>`);
   m.querySelector('#soRules').onclick = () => { audio.click(); showRules({ back: showSoloSetup }); };
   m.querySelector('#soStart').onclick = () => { audio.click(); closeModal(); startSolo(); };
@@ -241,14 +241,14 @@ $('#btnVsAi').onclick = () => {
   const unlocked = key => key === 'kami' ? kamiUnlocked : key === 'souzou' ? souzouUnlocked : true;
   const btnClass = { easy: 'btn-primary', normal: 'btn-ai', hard: 'btn-gold', oni: 'btn-oni', kami: 'btn-kami', souzou: 'btn-souzou' };
   const m = showModal(`
-    <h2 id="aiModalTitle">${t('🤖 AI対戦', '🤖 VS AI')}</h2>
+    <h2 id="aiModalTitle">${icon('mode_ai', { size: 24 })} ${t('AI対戦', 'VS AI')}</h2>
     <p class="muted center" style="margin-bottom:12px">${t('2分間のスコアバトル！同じピースが配られます', 'A 2-minute score battle! You both get the same pieces')}</p>
     <div class="form-col" id="aiLevelList">
       ${Object.entries(AI_LEVELS)
         .filter(([key]) => unlocked(key))
         .map(([key, cfg]) => `
         <button class="btn ${btnClass[key]}" data-ai="${key}">
-          ${cfg.avatar} ${t(cfg.name, cfg.nameEn || cfg.name)}
+          ${icon(cfg.iconName, { size: 20 })} ${t(cfg.name, cfg.nameEn || cfg.name)}
         </button>`).join('')}
     </div>`);
   const wire = () => m.querySelectorAll('[data-ai]').forEach(btn => {
@@ -265,7 +265,9 @@ $('#btnVsAi').onclick = () => {
     const btn = document.createElement('button');
     btn.className = 'btn btn-kami reveal';
     btn.dataset.ai = 'kami';
-    btn.textContent = `${AI_LEVELS.kami.avatar} ${t(AI_LEVELS.kami.name, AI_LEVELS.kami.nameEn || AI_LEVELS.kami.name)}`;
+    // ここは textContent なので SVG を置けない ── 他の行と同じ形になるよう innerHTML で揃える。
+    // 名前は AI_LEVELS の固定値（外部入力ではない）なのでそのまま差してよい。
+    btn.innerHTML = `${icon(AI_LEVELS.kami.iconName, { size: 20 })} ${t(AI_LEVELS.kami.name, AI_LEVELS.kami.nameEn || AI_LEVELS.kami.name)}`;
     m.querySelector('#aiLevelList').appendChild(btn);
     wire();
   });
@@ -277,7 +279,7 @@ function unlockKami() {
   localStorage.setItem('bba_kami', '1');
   audio.kamiDescend();
   confettiBurst(50);
-  toast(t('🔱 天から声が聞こえる……隠し難易度「神」が解放された', '🔱 A voice echoes from the heavens… hidden difficulty "Kami" unlocked!'), 'announce', 5000);
+  toast(t('天から声が聞こえる……隠し難易度「神」が解放された', 'A voice echoes from the heavens… hidden difficulty "Kami" unlocked!'), 'announce', 5000);
 }
 
 function unlockSouzou() {
@@ -287,7 +289,7 @@ function unlockSouzou() {
   audio.kamiDescend();
   audio.bossAttack();
   confettiBurst(80);
-  toast(t('🌌 宇宙の彼方から視線を感じる……真の隠し難易度「創造神」が姿を現した', '🌌 Something watches from beyond the cosmos… the true hidden difficulty "Creator God" has appeared!'), 'announce', 6000);
+  toast(t('宇宙の彼方から視線を感じる……真の隠し難易度「創造神」が姿を現した', 'Something watches from beyond the cosmos… the true hidden difficulty "Creator God" has appeared!'), 'announce', 6000);
 }
 
 // ---- 👻 幽霊屋敷: メニューのロゴを13回連続タップで解放 ----
@@ -302,7 +304,7 @@ function unlockGhost() {
   setTimeout(() => document.body.classList.remove('ghost-flicker'), 3500);
   audio.gameOver();
   setTimeout(() => audio.kamiDescend(), 900);
-  toast(t('👻 ……見つかってしまった。メニューに「幽霊屋敷」への扉が現れた', '👻 …it has noticed you. A door to the Haunted House has appeared on the menu'), 'announce', 6000);
+  toast(t('……見つかってしまった。メニューに「幽霊屋敷」への扉が現れた', '…it has noticed you. A door to the Haunted House has appeared on the menu'), 'announce', 6000);
   updateGhostButton();
 }
 
@@ -322,15 +324,15 @@ $('#btnGhost').onclick = () => {
   const best = Math.max(Number(localStorage.getItem('bba_ghost_best') || 0),
     session.user ? (session.user.stats.ghostBest || 0) : 0);
   const m = showModal(`
-    <h2>👻 ${t('幽霊屋敷', 'Haunted House')}</h2>
+    <h2>${icon('mode_ghost', { size: 24 })} ${t('幽霊屋敷', 'Haunted House')}</h2>
     <p class="muted center" style="margin-bottom:12px">
-      ${t('この屋敷では、置いたブロックが<b>約1秒で透明になる</b>。頼れるのは記憶だけ。<br><small>ラインを消した瞬間だけ、盤面のすべてが姿を現す。ドラッグ中の影が唯一の手がかり — 初回15,000点で👻バッジ＋💎250。</small>',
-          'In this house, placed blocks <b>turn invisible after a second</b>. Memory is all you have.<br><small>Every line clear reveals the whole board for a moment. Your drag shadow is the only other clue — first 15,000 earns the 👻 badge + 250💎.</small>')}
+      ${t('この屋敷では、置いたブロックが<b>約1秒で透明になる</b>。頼れるのは記憶だけ。<br><small>ラインを消した瞬間だけ、盤面のすべてが姿を現す。ドラッグ中の影が唯一の手がかり — 初回15,000点で幽霊屋敷バッジ＋ジェム250。</small>',
+          'In this house, placed blocks <b>turn invisible after a second</b>. Memory is all you have.<br><small>Every line clear reveals the whole board for a moment. Your drag shadow is the only other clue — first 15,000 earns the Haunted House badge + 250 gems.</small>')}
     </p>
     ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}</p>` : ''}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="ghCancel">${t('逃げる', 'Run away')}</button>
-      <button class="btn btn-ghostmode" id="ghStart">👻 ${t('屋敷に入る', 'Enter the house')}</button>
+      <button class="btn btn-ghostmode" id="ghStart">${t('屋敷に入る', 'Enter the house')}</button>
     </div>`);
   m.querySelector('#ghCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#ghStart').onclick = () => { audio.click(); closeModal(); startGhost(); };
@@ -376,7 +378,7 @@ async function openBossSelect(preferIndex = null) {
       ? (data.bossMax || 0)
       : Number(localStorage.getItem('bba_boss_max') || 0);
     const m = showModal(`
-      <h2>${t('🐲 ボス戦', '🐲 Boss Battle')}</h2>
+      <h2>${icon('mode_boss', { size: 24 })} ${t('ボス戦', 'Boss Battle')}</h2>
       <p class="muted center" style="margin-bottom:12px">${t('ラインを消してダメージを与えろ！<br>ボスはお邪魔ブロックで反撃してくる。盤面が埋まったら敗北！', 'Clear lines to damage the boss!<br>It fights back with garbage blocks. Fill up the board and you lose!')}</p>
       <div class="form-col">
         ${data.bosses.map((b, i) => {
@@ -384,7 +386,7 @@ async function openBossSelect(preferIndex = null) {
           const cleared = i < bossMax;
           return `
           <button class="btn boss-select ${locked ? 'btn-ghost' : 'btn-boss'}" data-boss="${i}" ${locked ? 'disabled' : ''}>
-            <span>${locked ? '🔒' : b.emoji} ${catName(b)}</span>
+            <span>${locked ? icon('lock', { size: 18 }) : icon(bossIconName(b.id), { size: 20 })} ${catName(b)}</span>
             <small>${locked ? t('前のボスを倒すと解放', 'Beat the previous boss to unlock') : `HP ${Number(b.hp).toLocaleString()}${cleared ? t(' ・ ✓討伐済', ' ・ ✓cleared') : ''}`}</small>
           </button>`;
         }).join('')}
@@ -395,7 +397,7 @@ async function openBossSelect(preferIndex = null) {
             session.user ? (session.user.stats.rushDepth || 0) : 0);
           return `
           <button class="btn boss-select ${rushOpen ? 'btn-oni' : 'btn-ghost'}" data-rush ${rushOpen ? '' : 'disabled'}>
-            <span>${rushOpen ? '⚔️' : '🔒'} ${t('無限地獄ラッシュ', 'Infinite Hell Rush')}</span>
+            <span>${rushOpen ? icon('mode_bossrush', { size: 20 }) : icon('lock', { size: 18 })} ${t('無限地獄ラッシュ', 'Infinite Hell Rush')}</span>
             <small>${rushOpen
               ? t(`遺物ビルド×無限周回のローグライク連戦${depthBest ? ` ・ 最深記録 ${depthBest}体` : ''}`, `Relic-build roguelike gauntlet${depthBest ? ` ・ best depth ${depthBest}` : ''}`)
               : t('最初の4ボスを討伐すると解放', 'Defeat the first 4 bosses to unlock')}</small>
@@ -699,9 +701,9 @@ function dismissSplash(e) {
     const pick = document.createElement('div');
     pick.style.cssText = 'display:flex;flex-direction:column;gap:12px;margin-top:22px;align-items:center';
     pick.innerHTML = `
-      <button class="btn btn-primary btn-big" data-lang="ja">🇯🇵 日本語ではじめる</button>
-      <button class="btn btn-online btn-big" data-lang="en">🌍 Play in English</button>
-      <small style="opacity:.65">Language / 言語はあとで⚙️設定から変更できます</small>`;
+      <button class="btn btn-primary btn-big" data-lang="ja">日本語ではじめる</button>
+      <button class="btn btn-online btn-big" data-lang="en">Play in English</button>
+      <small style="opacity:.65">Language / 言語はあとで設定から変更できます</small>`;
     splash.appendChild(pick);
     pick.querySelectorAll('[data-lang]').forEach(b => {
       b.addEventListener('click', e => {
@@ -770,14 +772,28 @@ function fmtRemain(ms) {
   return `${s}${u.s}`;
 }
 
+// イベントの絵。第4波の統合で server/events.js が iconName（icons.js の名前）を
+// 送ってくるようになったので、ここに持っていた対応表は捨てた。
+// （同じ対応を main.js と screens.js の2か所に持つと、イベントを
+//   1つ足したときに片方だけ絵が出ないというズレ方をする。）
+// ※ ev.icon（絵文字）はライブフィード専用で、画面では使わない。
+// ⚠️ イベント名は管理者が自由に付けられる（＝外部入力）ので、名前は必ず
+//    テキストノードで入れること。innerHTML に混ぜない。
+const evIcon = ev => (ev && ev.iconName) || 'mode_chaos';
+
+// バナーに「アイコン＋文字」を入れる。文字は textContent 相当（テキストノード）。
+function paintBannerText(el, iconName, text) {
+  el.replaceChildren(iconEl(iconName, { size: 16 }), document.createTextNode(' ' + text));
+}
+
 function updateEventBanner() {
   const banner = $('#eventBanner');
   const btn = $('#btnChaos');
   const ev = window.__bbaEvent;
   if (ev && ev.endsAt > Date.now()) {
-    const icon = ev.icon || '🌪️';
-    banner.textContent = t(`${icon} 期間限定「${ev.name}」開催中！ — 残り${fmtRemain(ev.endsAt - Date.now())}`,
-      `${icon} Limited event "${ev.nameEn || ev.name}" is live! — ${fmtRemain(ev.endsAt - Date.now())} left`);
+    paintBannerText(banner, evIcon(ev),
+      t(`期間限定「${ev.name}」開催中！ — 残り${fmtRemain(ev.endsAt - Date.now())}`,
+        `Limited event "${ev.nameEn || ev.name}" is live! — ${fmtRemain(ev.endsAt - Date.now())} left`));
     banner.classList.remove('hidden');
     // Only the chaos event opens the chaos button for everyone.
     const chaosLive = ev.type === 'chaos';
@@ -837,12 +853,13 @@ function updateNextEventBanner() {
   }
   const el = nextEventBannerEl(true);
   if (!el) return;
-  const icon = ne.icon || '📣';
   const name = t(ne.name || 'お楽しみイベント', ne.nameEn || ne.name || 'a special event');
   const clock = new Date(startsAt).toLocaleTimeString(t('ja-JP', 'en-US'), { hour: '2-digit', minute: '2-digit' });
   const remain = fmtRemain(startsAt - Date.now());
-  el.textContent = t(`${icon} ${whenWord(startsAt)}は「${name}」開催！ ${clock}スタート（あと${remain}）`,
-    `${icon} "${name}" starts ${whenWord(startsAt)} at ${clock}! (in ${remain})`);
+  // 予告も開催中と同じ絵（種類の id から引く）。種類が分からないときは「お知らせ」の絵。
+  paintBannerText(el, (ne && ne.iconName) || 'news',
+    t(`${whenWord(startsAt)}は「${name}」開催！ ${clock}スタート（あと${remain}）`,
+      `"${name}" starts ${whenWord(startsAt)} at ${clock}! (in ${remain})`));
   el.classList.remove('hidden');
 }
 
@@ -853,7 +870,7 @@ async function pollStatus() {
     const data = await api('/api/status');
     // Keep every counter (menu badge + chat drawer) on the same number.
     $('#onlineCount').textContent = data.online;
-    $('#chatOnline').textContent = t(`🟢 ${data.online}人`, `🟢 ${data.online} online`);
+    $('#chatOnline').textContent = t(`${data.online}人`, `${data.online} online`);
     $('#onlineBadge').classList.remove('hidden');
     setMood(data.mood);
     window.__bbaEvent = data.event || null;
@@ -894,10 +911,10 @@ function showChaosSetup() {
   const isPreset = [60, 120, 180, 300].includes(duration);
 
   const m = showModal(`
-    <h2>${t('🌪️ カオスモード', '🌪️ Chaos Mode')}</h2>
+    <h2>${icon('mode_chaos', { size: 24 })} ${t('カオスモード', 'Chaos Mode')}</h2>
     <p class="muted center" style="margin-bottom:10px">${t('一定間隔でルールが激変！コイン1.5倍！', 'The rules mutate on a timer! 1.5x coins!')}${best ? `<br>${t('自己ベスト', 'Personal best')}: <b style="color:var(--yellow)">${fmt(best)}</b>` : ''}</p>
     <div class="form-col">
-      <div class="settings-row"><label>${t('⏱️ プレイ時間', '⏱️ Duration')}</label><div class="seg" data-cs="duration">
+      <div class="settings-row"><label>${t('プレイ時間', 'Duration')}</label><div class="seg" data-cs="duration">
         ${[60, 120, 180, 300].map(d => `<button data-v="${d}" ${duration === d ? 'class="active"' : ''}>${d / 60}${t('分', 'min')}</button>`).join('')}
         <button data-v="custom" ${!isPreset ? 'class="active"' : ''}>${t('自由', 'Custom')}</button>
       </div></div>
@@ -905,14 +922,14 @@ function showChaosSetup() {
         <input id="csMin" type="number" min="0" max="30" value="${Math.floor(duration / 60)}" style="width:52px;text-align:center">${t('分', 'min')}
         <input id="csSec" type="number" min="0" max="59" value="${duration % 60}" style="width:52px;text-align:center">${t('秒', 'sec')}
       </div>
-      <div class="settings-row"><label>${t('🌀 ルール変化の間隔', '🌀 Mutation interval')}</label><div class="seg" data-cs="interval">
+      <div class="settings-row"><label>${t('ルール変化の間隔', 'Mutation interval')}</label><div class="seg" data-cs="interval">
         ${[[20, t('ゆるい 20秒', 'Chill 20s')], [15, t('ふつう 15秒', 'Normal 15s')], [8, t('激辛 8秒', 'Spicy 8s')]].map(([v, l]) =>
           `<button data-v="${v}" ${interval === v ? 'class="active"' : ''}>${l}</button>`).join('')}
       </div></div>
     </div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="csCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-chaos" id="csStart">${t('🌪️ 開始！', '🌪️ Start!')}</button>
+      <button class="btn btn-chaos" id="csStart">${t('開始！', 'Start!')}</button>
     </div>`);
 
   let durChoice = isPreset ? String(duration) : 'custom';
@@ -956,6 +973,12 @@ $('#btnChaos').onclick = () => {
 };
 
 // ---- dungeon tower: pick a starting checkpoint, then climb ----
+// 4つの領域の絵。第4波の統合で modes.js の DUNGEON_REALMS 側を
+// icon（絵文字）→ iconName（icons.js の名前）に移したので、ここに置いていた
+// 対応表は消した ── 同じ対応を2か所に持つと、領域を1つ足したときに
+// 「棚には出るのに絵だけ出ない」というズレ方をする。
+const realmIcon = realm => (realm && realm.iconName) || 'mode_dungeon';
+
 function dungeonBest(realm) {
   const local = Number(localStorage.getItem(realm.bestKey) || 0);
   // Only the classic tower is tracked server-side.
@@ -983,19 +1006,19 @@ function showDungeonSelect(realmId = 'tower') {
   for (let f = 1; f <= realm.floors - (step - 1); f += step) if (f === 1 || best >= f - 1) cps.push(f);
   let startF = cps[cps.length - 1];
   const m = showModal(`
-    <h2>${realm.icon} ${t(realm.name, realm.nameEn)}</h2>
+    <h2>${icon(realmIcon(realm), { size: 24 })} ${t(realm.name, realm.nameEn)}</h2>
     <div class="seg" style="justify-content:center;margin-bottom:10px" data-dr>
       ${Object.values(DUNGEON_REALMS).map(r =>
-        `<button data-r="${r.id}" ${r.id === realm.id ? 'class="active"' : ''}>${realmLocked(r) ? '🔒' : r.icon}${t(r.name.replace('ダンジョン', ''), r.nameEn.split(' ')[0])}</button>`).join('')}
+        `<button data-r="${r.id}" ${r.id === realm.id ? 'class="active"' : ''}>${realmLocked(r) ? icon('lock', { size: 16 }) : icon(realmIcon(r), { size: 16 })}${t(r.name.replace('ダンジョン', ''), r.nameEn.split(' ')[0])}</button>`).join('')}
     </div>
-    <p class="muted center" style="margin-bottom:10px">${t(realm.desc, realm.descEn)}${best ? `<br>${t('最高記録', 'Best')}: <b style="color:var(--yellow)">${P}${best}</b>${t(' クリア', ' cleared')}` : ''}${locked ? `<br><b style="color:var(--red)">🔒 ${t('ダンジョン塔 F100 を制覇すると解放', 'Conquer Tower F100 to unlock')}</b>` : ''}</p>
+    <p class="muted center" style="margin-bottom:10px">${t(realm.desc, realm.descEn)}${best ? `<br>${t('最高記録', 'Best')}: <b style="color:var(--yellow)">${P}${best}</b>${t(' クリア', ' cleared')}` : ''}${locked ? `<br><b style="color:var(--red)">${icon('lock', { size: 16 })} ${t('ダンジョン塔 F100 を制覇すると解放', 'Conquer Tower F100 to unlock')}</b>` : ''}</p>
     <div class="settings-row"><label>${t('開始階', 'Start floor')}</label><div class="seg seg-wrap" data-ds>
       ${cps.map(f => `<button data-v="${f}" ${f === startF ? 'class="active"' : ''}>${P}${f}</button>`).join('')}
     </div></div>
     ${cps.length > 1 ? `<p class="muted center" style="font-size:11px">${t('チェックポイントから始めると強化ボーナス付き', 'Starting from a checkpoint grants bonus perks')}</p>` : ''}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="dgCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-dungeon" id="dgStart">${realm.icon} ${t('挑戦する！', 'Enter!')}</button>
+      <button class="btn btn-dungeon" id="dgStart">${icon(realmIcon(realm), { size: 18 })} ${t('挑戦する！', 'Enter!')}</button>
     </div>`);
   m.querySelectorAll('[data-dr] button').forEach(b => {
     b.onclick = () => { audio.click(); closeModal(); showDungeonSelect(b.dataset.r); };
@@ -1010,7 +1033,7 @@ function showDungeonSelect(realmId = 'tower') {
   });
   m.querySelector('#dgCancel').onclick = () => { audio.click(); closeModal(); };
   const startBtn = m.querySelector('#dgStart');
-  if (locked) { startBtn.disabled = true; startBtn.textContent = `🔒 ${t('未解放', 'Locked')}`; }
+  if (locked) { startBtn.disabled = true; startBtn.textContent = t('未解放', 'Locked'); }
   startBtn.onclick = () => { if (locked) return; audio.click(); closeModal(); startDungeon(startF, realm.id); };
 }
 
@@ -1022,7 +1045,7 @@ $('#btnSurvival').onclick = () => {
   const best = Math.max(Number(localStorage.getItem('bba_survival_wave') || 0),
     session.user ? (session.user.stats.survivalWave || 0) : 0);
   const m = showModal(`
-    <h2>💀 ${t('サバイバル', 'Survival')}</h2>
+    <h2>${icon('mode_survival', { size: 24 })} ${t('サバイバル', 'Survival')}</h2>
     <p class="muted center" style="margin-bottom:12px">
       ${t('<b>ウェーブごとにお邪魔ブロックが降ってくる</b>耐久モード。最初は15秒おき、ウェーブが進むほど<b>間隔はどんどん短く</b>（最短5秒）、降ってくる量も増えていく。<br><small>置ける場所が無くなったら終了 — ラインを消して盤面を空け、1ウェーブでも深く生き延びろ！</small>',
           '<b>Garbage blocks rain down wave after wave</b> — an endurance run. It starts every 15s, but <b>the interval keeps shrinking</b> (down to 5s) and each wave dumps more.<br><small>It ends the moment nothing fits — keep clearing lines to make room and survive one more wave!</small>')}
@@ -1030,7 +1053,7 @@ $('#btnSurvival').onclick = () => {
     ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`最高ウェーブ W${fmt(best)}`, `Best wave W${fmt(best)}`)}</p>` : ''}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="svCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-oni" id="svStart">💀 ${t('生き延びる', 'Survive')}</button>
+      <button class="btn btn-oni" id="svStart">${t('生き延びる', 'Survive')}</button>
     </div>`);
   m.querySelector('#svCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#svStart').onclick = () => { audio.click(); closeModal(); startSurvival(); };
@@ -1042,15 +1065,15 @@ $('#btnMeltdown').onclick = () => {
   const best = Math.max(Number(localStorage.getItem('bba_meltdown_best') || 0),
     session.user ? (session.user.stats.meltdownBest || 0) : 0);
   const m = showModal(`
-    <h2>☢️ ${t('メルトダウン', 'Meltdown')}</h2>
+    <h2>${icon('mode_meltdown', { size: 24 })} ${t('メルトダウン', 'Meltdown')}</h2>
     <p class="muted center" style="margin-bottom:12px">
-      ${t('ラインを消すほど<b>炉心温度＝スコア倍率</b>が上昇（最大×15超）。ただし<b>100%で爆発</b>して即終了！<br><small>盤面に湧く❄️冷却セルを含むラインを消すと熱-35%。臨界(90%+)で置くと倍率さらに1.5倍 — 冷やすか、稼ぐか。</small>',
-          'Every clear heats the core — <b>heat is your score multiplier</b> (up to ×15+). But <b>100% = detonation</b>!<br><small>Clear a line through a ❄️ coolant cell for -35% heat. Placements at 90%+ get an extra ×1.5 — cool it or push it.</small>')}
+      ${t('ラインを消すほど<b>炉心温度＝スコア倍率</b>が上昇（最大×15超）。ただし<b>100%で爆発</b>して即終了！<br><small>盤面に湧く冷却セルを含むラインを消すと熱-35%。臨界(90%+)で置くと倍率さらに1.5倍 — 冷やすか、稼ぐか。</small>',
+          'Every clear heats the core — <b>heat is your score multiplier</b> (up to ×15+). But <b>100% = detonation</b>!<br><small>Clear a line through a coolant cell for -35% heat. Placements at 90%+ get an extra ×1.5 — cool it or push it.</small>')}
     </p>
     ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}</p>` : ''}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="mlCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-melt" id="mlStart">☢️ ${t('炉心起動', 'Ignite the core')}</button>
+      <button class="btn btn-melt" id="mlStart">${t('炉心起動', 'Ignite the core')}</button>
     </div>`);
   m.querySelector('#mlCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#mlStart').onclick = () => { audio.click(); closeModal(); startMeltdown(); };
@@ -1062,7 +1085,7 @@ $('#btnChimera').onclick = () => {
   const best = Math.max(Number(localStorage.getItem('bba_chimera_best') || 0),
     session.user ? (session.user.stats.chimeraBest || 0) : 0);
   const m = showModal(`
-    <h2>🧬 ${t('キメラ工房', 'Chimera Lab')}</h2>
+    <h2>${icon('mode_chimera', { size: 24 })} ${t('キメラ工房', 'Chimera Lab')}</h2>
     <p class="muted center" style="margin-bottom:12px">
       ${t('手札のピースを<b>ピースにドラッグして溶接</b>！自作の巨大キメラは<b>合体数がそのままスコア倍率</b>（2体=×2、3体=×3）<br><small>ただし手札は全部置くまで補充されない — 合体するほど窒息リスクと隣り合わせ。盤面を彫って、怪物を叩き込め！</small>',
           '<b>Drag a piece onto another to weld them</b>! Your monster chimera scores <b>×its weld count</b> (2 pieces = ×2, 3 = ×3)<br><small>But your hand only refills once empty — every weld trades safety for power. Carve the board, then slam the monster in!</small>')}
@@ -1070,7 +1093,7 @@ $('#btnChimera').onclick = () => {
     ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}</p>` : ''}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="chCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-chimera" id="chStart">🧬 ${t('錬成開始', 'Start welding')}</button>
+      <button class="btn btn-chimera" id="chStart">${t('錬成開始', 'Start welding')}</button>
     </div>`);
   m.querySelector('#chCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#chStart').onclick = () => { audio.click(); closeModal(); startChimera(); };
@@ -1090,18 +1113,18 @@ $('#btnPuzzle').onclick = () => {
     const isNext = s2 === next;
     const st = stars[s2] || 0;
     grid += `<button class="pz-stage ${isNext ? 'next' : done ? '' : 'locked'}" data-stage="${s2}" ${done || isNext ? '' : 'disabled'}>
-      ${s2}<span class="pz-stars">${done ? '★'.repeat(st) + '☆'.repeat(Math.max(0, 3 - st)) : isNext ? 'NEW' : '🔒'}</span></button>`;
+      ${s2}<span class="pz-stars">${done ? '★'.repeat(st) + '☆'.repeat(Math.max(0, 3 - st)) : isNext ? 'NEW' : icon('lock', { size: 13 })}</span></button>`;
   }
   const m = showModal(`
-    <h2>🧩 ${t('パズル遺跡', 'Puzzle Ruins')}</h2>
+    <h2>${icon('mode_puzzle', { size: 24 })} ${t('パズル遺跡', 'Puzzle Ruins')}</h2>
     <p class="muted center" style="margin-bottom:10px">
-      ${t('古代遺跡のパズル部屋に挑戦！<b>光るブロックをすべて消せばクリア</b>。<br><small>ピースは決められた分だけ — 全ステージ必ず解けるように封印されている。速く解くほど★が増える（45秒以内で★3）。10ステージごとに💎ボーナス！</small>',
+      ${t('古代遺跡のパズル部屋に挑戦！<b>光るブロックをすべて消せばクリア</b>。<br><small>ピースは決められた分だけ — 全ステージ必ず解けるように封印されている。速く解くほど★が増える（45秒以内で★3）。10ステージごとにジェムボーナス！</small>',
           'Take on the ancient puzzle rooms! <b>Clear every glowing block to win.</b><br><small>You get a fixed set of pieces — every room is sealed with a guaranteed solution. Solve fast for more stars (under 45s = ★3). Gem bonus every 10 stages!</small>')}
     </p>
     <div class="pz-grid">${grid}</div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="pzCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-puzzle" id="pzStart">🧩 ${t(`ステージ${next}に挑む`, `Enter stage ${next}`)}</button>
+      <button class="btn btn-puzzle" id="pzStart">${t(`ステージ${next}に挑む`, `Enter stage ${next}`)}</button>
     </div>`);
   m.querySelector('#pzCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#pzStart').onclick = () => { audio.click(); closeModal(); startPuzzle(next); };
@@ -1116,15 +1139,15 @@ $('#btnDig').onclick = () => {
   const best = Math.max(Number(localStorage.getItem('bba_dig_best') || 0),
     session.user ? (session.user.stats.digDepth || 0) : 0);
   const m = showModal(`
-    <h2>⛏️ ${t('採掘場', 'The Mines')}</h2>
+    <h2>${icon('mode_dig', { size: 24 })} ${t('採掘場', 'The Mines')}</h2>
     <p class="muted center" style="margin-bottom:12px">
-      ${t('数手ごとに<b>地層がせり上がる</b>！岩盤ラインを消して<b>🪙金鉱石・💠クリスタル・🌈虹鉱石</b>を回収しろ。<br><small>深く潜るほど鉱石は高価に、岩は分厚くなる。ブロックが天井に触れたら圧死 — ライン消しで上昇を遅らせろ！</small>',
-          'Every few moves <b>the ground rises</b>! Clear through the rock to mine <b>🪙 gold, 💠 crystal and 🌈 rainbow ore</b>.<br><small>Deeper = richer veins but thicker rock. Touch the ceiling and you get crushed — line clears slow the rise!</small>')}
+      ${t('数手ごとに<b>地層がせり上がる</b>！岩盤ラインを消して<b>金鉱石・クリスタル・虹鉱石</b>を回収しろ。<br><small>深く潜るほど鉱石は高価に、岩は分厚くなる。ブロックが天井に触れたら圧死 — ライン消しで上昇を遅らせろ！</small>',
+          'Every few moves <b>the ground rises</b>! Clear through the rock to mine <b>gold, crystal and rainbow ore</b>.<br><small>Deeper = richer veins but thicker rock. Touch the ceiling and you get crushed — line clears slow the rise!</small>')}
     </p>
     ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`最高深度 ${best}m`, `Best depth ${best}m`)}</p>` : ''}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="dgCancel2">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-dig" id="dgStart2">⛏️ ${t('採掘開始', 'Start digging')}</button>
+      <button class="btn btn-dig" id="dgStart2">${t('採掘開始', 'Start digging')}</button>
     </div>`);
   m.querySelector('#dgCancel2').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#dgStart2').onclick = () => { audio.click(); closeModal(); startDig(); };
@@ -1204,7 +1227,7 @@ function showChainSetup() {
   const best = Math.max(modeLocalBest('bba_chain_best'), modeStatBest('chainBest'));
   const maxChain = Math.max(modeLocalBest('bba_chain_max'), modeStatBest('chainMax'));
   const m = showModal(`
-    <h2>⛓️ ${t('連鎖カスケード', 'Chain Cascade')}</h2>
+    <h2>${icon('mode_chain', { size: 24 })} ${t('連鎖カスケード', 'Chain Cascade')}</h2>
     <p class="muted center" style="margin-bottom:12px">
       ${t('ラインを消すと<b>上のブロックが下に落ちてくる</b>！落ちた先でまたラインが揃えば<b>連鎖</b>し、連鎖が続くほど<b>スコア倍率が跳ね上がる</b>。<br><small>盤面を崩さず「あと1マス」を残して積み、一撃で雪崩を起こせ — 置ける場所が無くなったら終了。</small>',
           'Clearing a line makes <b>everything above it fall</b> — and if the landing forms another line, it <b>chains</b>. The longer the chain, <b>the bigger the score multiplier</b>.<br><small>Stack with one gap left, then trigger the avalanche in a single move. It ends when nothing fits.</small>')}
@@ -1212,7 +1235,7 @@ function showChainSetup() {
     ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}${maxChain ? t(` / 最大${maxChain}連鎖`, ` / longest ${maxChain}-chain`) : ''}</p>` : ''}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="cnCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-coop" id="cnStart">⛓️ ${t('連鎖を起こす', 'Start the cascade')}</button>
+      <button class="btn btn-coop" id="cnStart">${t('連鎖を起こす', 'Start the cascade')}</button>
     </div>`);
   m.querySelector('#cnCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#cnStart').onclick = () => {
@@ -1227,7 +1250,7 @@ function showChainSetup() {
 function showBlueprintSetup() {
   const clears = Math.max(modeLocalBest('bba_blueprint_clears'), modeStatBest('blueprintClears'));
   const m = showModal(`
-    <h2>🏗️ ${t('ブループリント', 'Blueprint')}</h2>
+    <h2>${icon('mode_blueprint', { size: 24 })} ${t('ブループリント', 'Blueprint')}</h2>
     <p class="muted center" style="margin-bottom:12px">
       ${t('<b>日替わりの設計図どおりに</b>ピースを組み上げる、全員同じお題のパズル。<br><small>配られるピースは設計図をちょうど作れるぶんだけ。<b>ラインを揃えてしまうと作品が消えてしまう</b>ので、いつもと逆の頭で置き場所を考えろ！</small>',
           'Build <b>today\'s blueprint</b> exactly as drawn — the same puzzle for everyone, every day.<br><small>You get precisely the pieces the drawing needs. <b>Complete a line and your artwork vanishes</b> — so think the opposite way round!</small>')}
@@ -1235,7 +1258,7 @@ function showBlueprintSetup() {
     ${clears ? `<p class="center" style="font-size:13px;font-weight:800">${t(`これまでに ${fmt(clears)}枚 完成`, `${fmt(clears)} blueprints completed`)}</p>` : ''}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="bpCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-gold" id="bpStart">🏗️ ${t('今日の設計図に挑む', "Build today's blueprint")}</button>
+      <button class="btn btn-gold" id="bpStart">${t('今日の設計図に挑む', "Build today's blueprint")}</button>
     </div>`);
   m.querySelector('#bpCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#bpStart').onclick = () => {
@@ -1249,15 +1272,15 @@ function showBlueprintSetup() {
 function showWorkshopSetup() {
   const canEdit = typeof window.openWorkshopEditor === 'function';
   const m = showModal(`
-    <h2>🛠️ ${t('パズル工房', 'Puzzle Workshop')}</h2>
+    <h2>${icon('mode_workshop', { size: 24 })} ${t('パズル工房', 'Puzzle Workshop')}</h2>
     <p class="muted center" style="margin-bottom:12px">
-      ${t('みんなが作ったパズルで遊べる工房。<b>6文字の共有コード</b>で友達の作品にも飛べる。<br><small>自分で盤面を描いて投稿もできる — 自分でクリアできた図だけが公開されるので、解けない問題は出てこない。遊ばれるほど作者に🪙が入る！</small>',
-          'A workshop full of player-made puzzles — jump straight to a friend\'s stage with its <b>6-letter share code</b>.<br><small>You can build and publish your own, too: only stages you have solved yourself go live, so nothing is unsolvable. Authors earn 🪙 every time their stage is played!</small>')}
+      ${t('みんなが作ったパズルで遊べる工房。<b>6文字の共有コード</b>で友達の作品にも飛べる。<br><small>自分で盤面を描いて投稿もできる — 自分でクリアできた図だけが公開されるので、解けない問題は出てこない。遊ばれるほど作者にコインが入る！</small>',
+          'A workshop full of player-made puzzles — jump straight to a friend\'s stage with its <b>6-letter share code</b>.<br><small>You can build and publish your own, too: only stages you have solved yourself go live, so nothing is unsolvable. Authors earn coins every time their stage is played!</small>')}
     </p>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="wsCancel2">${t('やめる', 'Cancel')}</button>
-      ${canEdit ? `<button class="btn btn-ghost" id="wsMake2">🛠️ ${t('作る', 'Create')}</button>` : ''}
-      <button class="btn btn-puzzle" id="wsOpen2">🧩 ${t('ステージを探す', 'Browse stages')}</button>
+      ${canEdit ? `<button class="btn btn-ghost" id="wsMake2">${t('作る', 'Create')}</button>` : ''}
+      <button class="btn btn-puzzle" id="wsOpen2">${t('ステージを探す', 'Browse stages')}</button>
     </div>`);
   m.querySelector('#wsCancel2').onclick = () => { audio.click(); closeModal(); };
   const make = m.querySelector('#wsMake2');
@@ -1271,12 +1294,12 @@ function showWorkshopSetup() {
 }
 
 function ensureNewModeButtons() {
-  const chain = ensureModeButton('btnChain', 'btn-chain', `⛓️ ${t('連鎖カスケード', 'Chain Cascade')}`, 'btnChimera');
+  const chain = ensureModeButton('btnChain', 'btn-chain', t('連鎖カスケード', 'Chain Cascade'), 'btnChimera');
   if (chain) chain.onclick = () => { audio.click(); showChainSetup(); };
-  const blueprint = ensureModeButton('btnBlueprint', 'btn-blueprint', `🏗️ ${t('ブループリント', 'Blueprint')}`, 'btnDaily');
+  const blueprint = ensureModeButton('btnBlueprint', 'btn-blueprint', t('ブループリント', 'Blueprint'), 'btnDaily');
   if (blueprint) blueprint.onclick = () => { audio.click(); showBlueprintSetup(); };
   // screens.js が先に onclick を入れているので、ここで上書きして開始モーダルを挟む。
-  const workshop = ensureModeButton('btnWorkshop', 'btn-workshop', `🛠️ ${t('パズル工房', 'Puzzle Workshop')}`, 'btnPuzzle');
+  const workshop = ensureModeButton('btnWorkshop', 'btn-workshop', t('パズル工房', 'Puzzle Workshop'), 'btnPuzzle');
   if (workshop) workshop.onclick = () => { audio.click(); showWorkshopSetup(); };
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ensureNewModeButtons, { once: true });
@@ -1334,6 +1357,30 @@ const NAV_BTN_ICONS = {
   btnAdmin: 'admin',
 };
 
+// 試合中の HUD。絵文字を index.html から抜いたので、ここで絵を入れる。
+// #btnReroll / #btnAuto は中に <b>（残り回数・ON/OFF）を抱えていて、
+// modes.js が textContent を書き換える ── だから中身は消さず、
+// **先頭にアイコンを差し込むだけ**にする。名前は title / aria-label が持つ。
+const HUD_BTN_ICONS = {
+  btnQuit: 'quit', btnReroll: 'reroll', btnAuto: 'autopilot',
+  btnAdminCmd: 'admincmd', btnEmote: 'emote', btnClip: 'clip',
+};
+
+// 画面の見出し（.sub-header h2）。i18n.js の applyStaticI18n() が
+// textContent ごと書き換えるので、**そのあと**に塗ること。
+const HEADER_ICONS = [
+  ['#screen-room .sub-header h2', 'mode_room'],
+  ['#screen-leaderboard .sub-header h2', 'leaderboard'],
+  ['#screen-inventory .sub-header h2', 'inventory'],
+  ['#screen-shop .sub-header h2', 'shop'],
+  ['#screen-missions .sub-header h2', 'missions'],
+  ['#screen-battlepass .sub-header h2', 'battlepass'],
+  ['#screen-friends .sub-header h2', 'friends'],
+  ['#screen-guild .sub-header h2', 'guild'],
+  ['#screen-news .sub-header h2', 'news'],
+  ['#screen-admin .sub-header h2', 'admin'],
+];
+
 function paintModeIcon(id, name) {
   const el = $('#' + id);
   if (!el || el.querySelector('svg')) return;        // 二度塗りしない
@@ -1350,16 +1397,33 @@ function paintNavIcon(id, name) {
 }
 
 // 🪙/💎 のチップ。数字の <b> は updateTopbar() が書き換えるので、
-// その手前にある絵文字の文字ノードだけを差し替える。
+// 絵は <b> の**手前へ差し込む**だけにする（index.html から絵文字を抜いたので、
+// 以前のように「先頭の文字ノードを置き換える」形はもう使えない）。
 // 絵を消すと読み上げに「0」しか残らないので、こちらは label 付きで出す。
 function paintChipIcon(sel, name, label) {
   const el = document.querySelector(sel);
   if (!el || el.querySelector('svg')) return;
-  const first = el.firstChild;
-  if (!first || first.nodeType !== 3) return;        // 形が変わっていたら何もしない
   const wrap = document.createElement('span');
   wrap.innerHTML = icon(name, { size: 15, label });
-  first.replaceWith(wrap.firstElementChild, document.createTextNode(' '));
+  const svg = wrap.firstElementChild;
+  if (!svg) return;
+  el.prepend(svg, document.createTextNode(' '));
+}
+
+// HUD のボタン。中身（<b>のカウンタ）は残したまま、先頭にだけ絵を足す。
+function paintHudIcon(id, name) {
+  const el = $('#' + id);
+  if (!el || el.querySelector('svg')) return;
+  el.prepend(iconEl(name, { size: 18 }));
+}
+
+// 見出し。文字は applyStaticI18n() が入れた「正」の言葉をそのまま使い、
+// 先頭にだけ絵を足す（言葉を作り直すと英語面が日本語に戻る）。
+function paintHeaderIcon(sel, name) {
+  const el = document.querySelector(sel);
+  if (!el || el.querySelector('svg')) return;
+  const label = (el.textContent || '').replace(LEAD_EMOJI, '').trim();
+  el.replaceChildren(iconEl(name, { size: 22 }), document.createTextNode(' ' + label));
 }
 
 function paintStaticIcons() {
@@ -1367,13 +1431,21 @@ function paintStaticIcons() {
     for (const [id, name] of Object.entries(MODE_BTN_ICONS)) paintModeIcon(id, name);
     for (const [id, name] of Object.entries(NAV_BTN_ICONS)) paintNavIcon(id, name);
     if (RULES_ICON) paintNavIcon('btnRules', RULES_ICON);   // 絵が入ったら自動で移る
+    for (const [id, name] of Object.entries(HUD_BTN_ICONS)) paintHudIcon(id, name);
+    for (const [sel, name] of HEADER_ICONS) paintHeaderIcon(sel, name);
     paintChipIcon('.coin-chip', 'coins', t('コイン', 'Coins'));
     paintChipIcon('.gem-chip', 'gems', t('ジェム', 'Gems'));
     // ⚙️ 設定。名前は index.html / i18n.js の title・aria-label が持っている。
     const settings = $('#btnSettings');
     if (settings && !settings.querySelector('svg')) settings.replaceChildren(iconEl('settings', { size: 18 }));
+    // 💬 全体チャット。見出しは中に #chatOnline を抱えているので先頭に足すだけ、
+    // 開閉ボタンは #chatUnread（未読バッジ）を抱えているので同じく先頭に足すだけ。
+    const chatHead = document.querySelector('.chat-head');
+    if (chatHead && !chatHead.querySelector('svg')) chatHead.prepend(iconEl('chat', { size: 16 }), document.createTextNode(' '));
+    const chatToggle = $('#chatToggle');
+    if (chatToggle && !chatToggle.querySelector('svg')) chatToggle.prepend(iconEl('chat', { size: 22 }));
   } catch {
-    // 絵が塗れなくても遊べる（絵文字のまま残るだけ）。メニューの配線は道連れにしない。
+    // 絵が塗れなくても遊べる（言葉だけが残る）。メニューの配線は道連れにしない。
   }
 }
 // ⚠️ ensureNewModeButtons のあとに登録すること。あちらは btnChain / btnBlueprint /
@@ -1385,7 +1457,7 @@ else paintStaticIcons();
 $('#btnSprint').onclick = () => {
   audio.click();
   const m = showModal(`
-    <h2>${t('⏱️ タイムアタック', '⏱️ Time Attack')}</h2>
+    <h2>${icon('mode_sprint', { size: 24 })} ${t('タイムアタック', 'Time Attack')}</h2>
     <p class="muted center" style="margin-bottom:12px">
       ${t('制限時間内にどれだけ稼げる？<br><small>専用ランキングあり。公平性のためアイテム・奥義は使えません</small>',
           'How much can you score against the clock?<br><small>Has its own ranking — items and ultimates are disabled for fairness</small>')}
@@ -1401,7 +1473,7 @@ $('#btnSprint').onclick = () => {
     </div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="spCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-ghost" id="spRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
+      <button class="btn btn-ghost" id="spRank">${t('順位を見る', 'Standings')}</button>
     </div>`);
   m.querySelector('#spCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#spRank').onclick = () => { audio.click(); closeModal(); openLeaderboard('sprint'); };
@@ -1438,17 +1510,17 @@ $('#btnWeekly').onclick = async () => {
   })();
   const best = Math.max(info.best || 0, localBest);
   const m = showModal(`
-    <h2>${t('🎯 ウィークリーチャレンジ', '🎯 Weekly Challenge')}</h2>
+    <h2>${icon('mode_weekly', { size: 24 })} ${t('ウィークリーチャレンジ', 'Weekly Challenge')}</h2>
     <p class="muted center" style="margin-bottom:10px">
       ${t(`全プレイヤー共通のピース順で<b>${info.pieces}個</b>限定スコアアタック！`, `Score attack with <b>${info.pieces}</b> pieces — same order for every player!`)}<br>
       ${t('リセットまで残り', 'Resets in')} <b>${fmtWeeklyRemain(info.endsAt - Date.now())}</b>
       ${best ? `<br>${t('今週のベスト', "This week's best")}: <b style="color:var(--yellow)">${fmt(best)}</b>` : ''}
-      ${session.user ? '' : `<br><small>${t('💡 ランキングに載るにはログイン', '💡 Log in to appear on the ranking')}</small>`}
+      ${session.user ? '' : `<br><small>${t('ランキングに載るにはログイン', 'Log in to appear on the ranking')}</small>`}
     </p>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="wkCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-ghost" id="wkRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
-      <button class="btn btn-weekly" id="wkStart">${t('🎯 挑戦する！', '🎯 Play!')}</button>
+      <button class="btn btn-ghost" id="wkRank">${t('順位を見る', 'Standings')}</button>
+      <button class="btn btn-weekly" id="wkStart">${t('挑戦する！', 'Play!')}</button>
     </div>`);
   m.querySelector('#wkCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#wkRank').onclick = () => { audio.click(); closeModal(); openLeaderboard('weekly'); };
@@ -1477,21 +1549,21 @@ $('#btnDaily').onclick = async () => {
   const todayScore = info.played ? info.score : (localRec ? localRec.score : null);
   const mod = info.modifier || {};
   const m = showModal(`
-    <h2>${t('📅 デイリーチャレンジ', '📅 Daily Challenge')}</h2>
-    <p class="center" style="margin:2px 0 6px;font-size:15px"><b>${mod.icon || ''} ${t(mod.ja || '', mod.en || '')}</b><br><small class="muted">${t(mod.descJa || '', mod.descEn || '')}</small></p>
+    <h2>${icon('mode_daily', { size: 24 })} ${t('デイリーチャレンジ', 'Daily Challenge')}</h2>
+    <p class="center" style="margin:2px 0 6px;font-size:15px"><b>${mod.iconName ? icon(mod.iconName, { size: 18 }) : ''} ${t(mod.ja || '', mod.en || '')}</b><br><small class="muted">${t(mod.descJa || '', mod.descEn || '')}</small></p>
     <p class="muted center" style="margin-bottom:10px">
       ${t(`全プレイヤー共通のピース順で<b>${info.pieces}個</b>の一発勝負！目標 <b>${fmt(info.target)}</b>点でクリア`, `One shot with <b>${info.pieces}</b> pieces — same order for everyone! Score <b>${fmt(info.target)}</b> to clear`)}<br>
       ${played
         ? `${t('今日は挑戦済み', 'Today\'s attempt is done')}${todayScore != null ? ` — <b style="color:var(--yellow)">${fmt(todayScore)}</b>` : ''}${t('（ここからは練習）', ' (practice from here)')}`
         : `<b style="color:var(--yellow)">${t('記録に残るのは最初の1回だけ！', 'Only your FIRST run counts!')}</b>${session.user ? `<br><small>${t('※ 始めた時点で今日の1回を使います（途中でやめても記録は確定）', '* Starting uses today\'s attempt — quitting midway still locks it in')}</small>` : ''}`}
       <br>${t('次のお題まで', 'Next challenge in')} <b>${fmtWeeklyRemain(info.endsAt - Date.now())}</b>
-      ${info.streak ? `<br>🔥 ${t(`連続クリア${info.streak}日`, `${info.streak}-day clear streak`)}` : ''}
-      ${session.user ? '' : `<br><small>${t('💡 記録とランキングにはログイン', '💡 Log in for records & the ranking')}</small>`}
+      ${info.streak ? `<br>${t(`連続クリア${info.streak}日`, `${info.streak}-day clear streak`)}` : ''}
+      ${session.user ? '' : `<br><small>${t('記録とランキングにはログイン', 'Log in for records & the ranking')}</small>`}
     </p>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="dcCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-ghost" id="dcRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
-      <button class="btn btn-daily" id="dcStart">${played ? t('🔁 練習する', '🔁 Practice') : t('📅 挑戦する！', '📅 Play!')}</button>
+      <button class="btn btn-ghost" id="dcRank">${t('順位を見る', 'Standings')}</button>
+      <button class="btn btn-daily" id="dcStart">${played ? t('練習する', 'Practice') : t('挑戦する！', 'Play!')}</button>
     </div>`);
   m.querySelector('#dcCancel').onclick = () => { audio.click(); closeModal(); };
   m.querySelector('#dcRank').onclick = () => { audio.click(); closeModal(); openLeaderboard('daily'); };
@@ -1543,7 +1615,7 @@ if (location.search.includes('purchase=success')) {
   setTimeout(async () => {
     try { await refreshMe(); updateTopbar(); } catch { /* ignore */ }
     audio.coin();
-    toast(t('💎 購入ありがとうございます！ジェムを付与しました', '💎 Thank you for your purchase! Gems added'), 'ok', 4000);
+    toast(t('購入ありがとうございます！ジェムを付与しました', 'Thank you for your purchase! Gems added'), 'ok', 4000);
   }, 1500);
 } else if (location.search.includes('purchase=cancel')) {
   history.replaceState(null, '', '/');
@@ -1567,8 +1639,8 @@ function updateOfflineTag(announce) {
     document.createTextNode(' ' + t('オフライン', 'Offline')));
   tag.classList.toggle('hidden', !off);
   if (!announce) return;
-  if (off) toast(t('📴 通信が切れました。つながると自動で元に戻ります', '📴 You are offline — everything resumes once the connection is back'), 'err', 4000);
-  else toast(t('📶 通信が戻りました', '📶 Back online'), 'ok', 2200);
+  if (off) toast(t('通信が切れました。つながると自動で元に戻ります', 'You are offline — everything resumes once the connection is back'), 'err', 4000);
+  else toast(t('通信が戻りました', 'Back online'), 'ok', 2200);
 }
 window.addEventListener('offline', () => updateOfflineTag(true));
 window.addEventListener('online', () => updateOfflineTag(true));
@@ -1610,8 +1682,8 @@ function waitForRestore() {
       refreshMissionDot();
       refreshPollBanner();
       audio.coin();
-      toast(t(`✅ おかえりなさい、${session.user.username}さん！データが復元されました`,
-        `✅ Welcome back, ${session.user.username}! Your data has been restored`), 'ok', 5000);
+      toast(t(`おかえりなさい、${session.user.username}さん！データが復元されました`,
+        `Welcome back, ${session.user.username}! Your data has been restored`), 'ok', 5000);
     } catch (err) {
       if (err.code === 'NO_USER' && err.settled) {
         clearInterval(restoreWaitTimer);
@@ -1631,13 +1703,13 @@ function waitForRestore() {
 // （最後のバックアップ以降に作られたアカウントは復元に含まれない）
 function showRestoreFailedModal() {
   const m = showModal(`
-    <h2>😢 ${t('データを復元できませんでした', 'Your data could not be restored')}</h2>
+    <h2>${icon('warn', { size: 24 })} ${t('データを復元できませんでした', 'Your data could not be restored')}</h2>
     <p class="muted center" style="margin-bottom:12px">
       ${t('サーバーの復元は完了しましたが、このアカウントは直前のバックアップに含まれていませんでした。<br>本当にごめんなさい…！お手数ですが、新しくアカウントを作成してください。<b>同じ名前をもう一度使えます。</b>',
           'The server restore finished, but this account was not in the latest backup.<br>We are really sorry! Please create a new account — <b>you can use the same name again.</b>')}
     </p>
     <div class="modal-buttons">
-      <button class="btn btn-primary" id="rfRestart">${t('🌱 新しく始める', '🌱 Start fresh')}</button>
+      <button class="btn btn-primary" id="rfRestart">${t('新しく始める', 'Start fresh')}</button>
     </div>`, { dismissable: false });
   m.querySelector('#rfRestart').onclick = () => {
     closeModal();
@@ -1666,8 +1738,10 @@ function showRestoreFailedModal() {
         if (data.dailyBonus) {
           const st = data.dailyBonus.streak || 1;
           const tb = data.dailyBonus.throneBonus;
-          toast(t(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? `（🔥${st}日連続！）` : ''}${tb ? `（👑王座の俸給 +${tb.coins}🪙+${tb.gems}💎込み）` : ''}`,
-            `🎁 Daily bonus +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? ` (🔥${st}-day streak!)` : ''}${tb ? ` (incl. 👑 throne stipend +${tb.coins}🪙+${tb.gems}💎)` : ''}`), 'ok', tb ? 4500 : 3500);
+          // トーストは textContent なので SVG を混ぜられない。通貨は絵文字ではなく
+          // 「コイン／ジェム」と言葉で書く（読み上げにも通貨名がそのまま残る）。
+          toast(t(`ログインボーナス コイン+${data.dailyBonus.coins} ジェム+${data.dailyBonus.gems}${st > 1 ? `（${st}日連続！）` : ''}${tb ? `（王座の俸給 コイン+${tb.coins} ジェム+${tb.gems}込み）` : ''}`,
+            `Daily bonus +${data.dailyBonus.coins} coins +${data.dailyBonus.gems} gems${st > 1 ? ` (${st}-day streak!)` : ''}${tb ? ` (incl. throne stipend +${tb.coins} coins +${tb.gems} gems)` : ''}`), 'ok', tb ? 4500 : 3500);
           audio.coin();
         }
         // 週明け: ランキング報酬が待っていたら受け取りダイアログを出す。
@@ -1688,8 +1762,8 @@ function showRestoreFailedModal() {
             showRestoreFailedModal();
             break;
           }
-          toast(t('⚠️ サーバーのアカウントデータが復元待ちです。復元が終わると自動でログインに戻ります',
-            '⚠️ Your account data is waiting to be restored on the server — you will be logged back in automatically'), 'err', 7000);
+          toast(t('サーバーのアカウントデータが復元待ちです。復元が終わると自動でログインに戻ります',
+            'Your account data is waiting to be restored on the server — you will be logged back in automatically'), 'err', 7000);
           waitForRestore();
           break;
         }
@@ -1700,7 +1774,7 @@ function showRestoreFailedModal() {
           updateTopbar();
           break;
         }
-        if (attempt === 0) toast(t('🌙 サーバーを起こしています…そのままお待ちください', '🌙 Waking up the server… please hang on'), '', 8000);
+        if (attempt === 0) toast(t('サーバーを起こしています…そのままお待ちください', 'Waking up the server… please hang on'), '', 8000);
         await new Promise(r => setTimeout(r, 9000));
       }
     }
@@ -1712,8 +1786,8 @@ function showRestoreFailedModal() {
   if (session.season) {
     const days = Math.max(0, Math.ceil((session.season.endsAt - Date.now()) / 86400000));
     const banner = $('#seasonBanner');
-    banner.textContent = t(`✨ ${session.season.name} 開催中 — 残り${days}日`,
-      `✨ ${session.season.nameEn || session.season.name} — ${days} days left`);
+    banner.textContent = t(`${session.season.name} 開催中 — 残り${days}日`,
+      `${session.season.nameEn || session.season.name} — ${days} days left`);
     banner.classList.remove('hidden');
   }
 })();

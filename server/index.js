@@ -1617,6 +1617,12 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 無限地獄ラッシュ: 深度（累計撃破数）のベストを記録。
   if (mode === 'boss_rush' && depth > (s.rushDepth || 0)) s.rushDepth = depth;
   // ---- Live feed + crowd reactions for notable real moments ----
+  // ⚠️ ここの icon だけは絵文字のまま残してある。ライブフィードの行は
+  //    server/crowd.js の FEED（住人の快挙）と同じ器に流れ込み、あちらは
+  //    別担当で触れない。片方だけ独自アイコンにすると、同じティッカーの中で
+  //    「絵がある行」と「無い行」が混ざって、どちらが住人かの目印になる
+  //    ── 住人の正体を隠すという最優先事項と正面からぶつかる。
+  //    crowd.js と一緒に icons.js のアイコン名へ移すのが本筋（申し送りずみ）。
   const feedNotes = [];
   const nm = user.username;
   if (scoreboardEligible && score > prevBest && prevBest > 0 && score >= 8000) {
@@ -1710,6 +1716,9 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
 
 // Real players' notable moments go on the live feed (starred), and the crowd
 // may react. Capped per user so a hot streak doesn't flood the ticker.
+// ⚠️ BADGE_ICONS はライブフィード行の絵にしか使っていない。フィードの絵は
+//    crowd.js（別担当）と同じ見た目でなければならないので、ここだけ
+//    icons.js の badgeIconName() に寄せることはできない。
 const BADGE_ICONS = { oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️', dungeon: '🏰', under: '🕳️', heaven: '☁️', abyss: '🌑', zero: '👁️', tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', puzzle: '🧩', dig: '⛏️', crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈', ghost: '👻', daily7: '📅' };
 const BADGE_NAMES_EN = { oni: 'Oni Slayer badge', kami: 'God Slayer badge', souzou: 'Creator Slayer badge', maou: 'Demon Lord badge', rush: 'Boss Rush Clear', dungeon: 'Tower Conqueror', under: 'Depths Conqueror', heaven: 'Ascent Conqueror', abyss: 'Abyss Conqueror', zero: 'Condemned', tourney: 'Tournament Champion', royale: 'Royale #1', adminevent: 'Admin Event', weekly1: 'Weekly Champion', puzzle: 'Ruins Master', dig: 'Master Miner', crown2: 'Dual Crown', crown3: 'Triple Crown', crown5: 'Five Crowns', crown7: 'Total Domination', ghost: 'Haunted House', daily7: 'Daily Devotee' };
 const feedAt = new Map();   // userId -> last feed timestamp
@@ -1768,8 +1777,8 @@ function announceChampionFall(user) {
   const nm = user.username;
   battle.broadcastAll({
     type: 'announce',
-    message: `👑 速報 ── 「${nm}」が ${CHAMPION.name} を破った！ 頂に土がついた`,
-    messageEn: `👑 Breaking — "${nm}" has taken down ${CHAMPION.name}! The summit has fallen`,
+    message: `速報 ── 「${nm}」が ${CHAMPION.name} を破った！ 頂に土がついた`,
+    messageEn: `Breaking — "${nm}" has taken down ${CHAMPION.name}! The summit has fallen`,
     from: '運営',
   });
   if (battle.crowd) {
@@ -1798,8 +1807,8 @@ function notifyDailyOvertaken(user, overtook) {
   for (const row of overtook.rows.slice(0, DAILY_OVERTAKE_NOTIFY_MAX)) {
     battle.presence.sendToUser(row.user.id, {
       type: 'announce',
-      message: `🏁 ${user.username} が今日のデイリーであなたを抜きました（${fmtNum(overtook.score)}点）。同じ盤面・同じピース順です — 抜き返しますか？`,
-      messageEn: `🏁 ${user.username} passed you on today's Daily (${overtook.score.toLocaleString('en-US')} pts). Same board, same pieces — care to take it back?`,
+      message: `${user.username} が今日のデイリーであなたを抜きました（${fmtNum(overtook.score)}点）。同じ盤面・同じピース順です — 抜き返しますか？`,
+      messageEn: `${user.username} passed you on today's Daily (${overtook.score.toLocaleString('en-US')} pts). Same board, same pieces — care to take it back?`,
       from: '運営',
     }, { primaryOnly: true });
   }
@@ -1863,7 +1872,7 @@ function requireMod(req, res, next) {
 // Blocks gameplay/economy endpoints for non-admins during maintenance.
 function maintenanceGuard(req, res, next) {
   if (inMaintenance() && (!req.user || req.user.role !== 'admin')) {
-    return res.status(503).json({ error: '🛠 メンテナンス中です。しばらくお待ちください' });
+    return res.status(503).json({ error: 'メンテナンス中です。しばらくお待ちください' });
   }
   next();
 }
@@ -1945,7 +1954,7 @@ app.post('/api/register', (req, res) => {
   if (!rateLimit(`auth:${req.ip}`, 20, 5 * 60 * 1000)) {
     return res.status(429).json({ error: '試行回数が多すぎます。しばらく待ってください' });
   }
-  if (inMaintenance()) return res.status(503).json({ error: '🛠 メンテナンス中です。しばらくお待ちください' });
+  if (inMaintenance()) return res.status(503).json({ error: 'メンテナンス中です。しばらくお待ちください' });
   const username = sanitizeName(req.body.username);
   const password = String(req.body.password || '');
   if (!/^[\w\-ぁ-んァ-ヶ一-龠ー]{2,16}$/u.test(username)) {
@@ -1992,7 +2001,7 @@ app.post('/api/login', (req, res) => {
   }
   if (user.banned) return res.status(403).json({ error: 'このアカウントは凍結されています' });
   if (inMaintenance() && user.role !== 'admin') {
-    return res.status(503).json({ error: '🛠 メンテナンス中です。しばらくお待ちください' });
+    return res.status(503).json({ error: 'メンテナンス中です。しばらくお待ちください' });
   }
   const token = issueToken(user.id);
   const dailyBonus = grantDaily(user);
@@ -2232,8 +2241,8 @@ function currentEvent() {
     if (battleReady) {
       battle.broadcastAll({
         type: 'announce',
-        message: `${e.icon || '🌪️'} 期間限定イベント「${e.name}」は終了しました。おつかれさま！`,
-        messageEn: `${e.icon || '🌪️'} The limited-time event "${e.nameEn || e.name}" has ended — thanks for playing!`,
+        message: `期間限定イベント「${e.name}」は終了しました。おつかれさま！`,
+        messageEn: `The limited-time event "${e.nameEn || e.name}" has ended — thanks for playing!`,
         from: '運営',
       });
       battle.crowd.react('event_end');
@@ -2426,11 +2435,11 @@ function syncPoll() {
     battle.broadcastAll({
       type: 'announce',
       message: w
-        ? `🗳️ 投票「${poll.question}」終了！ 1位は「${w.text}」（${w.votes}票）${w.tied ? '…同率でした！' : ''}`
-        : `🗳️ 投票「${poll.question}」は投票ゼロで終了しました`,
+        ? `投票「${poll.question}」終了！ 1位は「${w.text}」（${w.votes}票）${w.tied ? '…同率でした！' : ''}`
+        : `投票「${poll.question}」は投票ゼロで終了しました`,
       messageEn: w
-        ? `🗳️ Poll "${poll.questionEn || poll.question}" closed! Winner: "${w.textEn || w.text}" (${w.votes} votes)${w.tied ? ' — a tie!' : ''}`
-        : `🗳️ Poll "${poll.questionEn || poll.question}" closed with no votes`,
+        ? `Poll "${poll.questionEn || poll.question}" closed! Winner: "${w.textEn || w.text}" (${w.votes} votes)${w.tied ? ' — a tie!' : ''}`
+        : `Poll "${poll.questionEn || poll.question}" closed with no votes`,
       from: '大会運営',
     });
     if (w) battle.crowd.react('poll_close', { winner: w });   // renderSlot が言語別に text/textEn を選ぶ
@@ -2463,8 +2472,8 @@ app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
     const w = winnerOf(db.meta.poll);
     battle.broadcastAll({
       type: 'announce',
-      message: w ? `🗳️ 投票終了！ 1位は「${w.text}」（${w.votes}票）` : '🗳️ 投票を締め切りました',
-      messageEn: w ? `🗳️ Poll closed! Winner: "${w.textEn || w.text}" (${w.votes} votes)` : '🗳️ The poll has been closed',
+      message: w ? `投票終了！ 1位は「${w.text}」（${w.votes}票）` : '投票を締め切りました',
+      messageEn: w ? `Poll closed! Winner: "${w.textEn || w.text}" (${w.votes} votes)` : 'The poll has been closed',
       from: req.user.username,
     });
     if (w) battle.crowd.react('poll_close', { winner: w });   // renderSlot が言語別に text/textEn を選ぶ
@@ -2491,8 +2500,8 @@ app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
     const ev = db.meta.event;
     battle.broadcastAll({
       type: 'announce',
-      message: `🗳️→${ev.icon} 投票で選ばれた「${ev.name}」を開催します！ ${ev.desc}`,
-      messageEn: `🗳️→${ev.icon} The vote has spoken — "${ev.nameEn || ev.name}" is now live! ${ev.descEn || ''}`,
+      message: `投票で選ばれた「${ev.name}」を開催します！ ${ev.desc}`,
+      messageEn: `The vote has spoken — "${ev.nameEn || ev.name}" is now live! ${ev.descEn || ''}`,
       from: req.user.username,
     });
     battle.crowd.feed({ icon: ev.icon, real: true, who: '運営', text: `投票で選ばれたイベント「${ev.name}」が開幕！`, textEn: `The voted event "${ev.nameEn || ev.name}" has begun!` });
@@ -2535,8 +2544,8 @@ app.post('/api/admin/poll', requireAuth, requireAdmin, (req, res) => {
     if (!db.meta.poll || db.meta.poll.id !== pollRef.id) return;   // 待機中に締切/削除されたら黙る
     battle.broadcastAll({
       type: 'announce',
-      message: `🗳️ 投票受付中：「${pollRef.question}」 メニューの「🗳️ 投票」から参加しよう！`,
-      messageEn: `🗳️ New poll: "${pollRef.questionEn || pollRef.question}" — vote from the 🗳️ Poll menu!`,
+      message: `投票受付中：「${pollRef.question}」 メニューの「投票」から参加しよう！`,
+      messageEn: `New poll: "${pollRef.questionEn || pollRef.question}" — vote from the Poll menu!`,
       from: req.user.username,
     });
     battle.crowd.react('poll_open');
@@ -2576,121 +2585,121 @@ app.use(guildRouter);
 // 文面を直したいときは NEWS_BODY_REV を1つ増やす（公開済みも差し替わる）。
 const SEED_NEWS = [
   { id: 'seed-1', pinned: true,
-    title: '🎉 v2.0 超進化アップデート！', titleEn: '🎉 The v2.0 Mega Evolution Update!',
-    body: '⚡アルティメットスキル（9種・ショップの「奥義」タブ）／📋デイリー・ウィークリーミッション／🏅実績58種／📊戦績ダッシュボード／⏱️タイムアタック／🤝協力プレイ（2人で1盤面）を追加しました。ラインを消して⚡ゲージを溜め、必殺技を撃とう！',
-    bodyEn: 'Added: ⚡ Ultimate Skills (9 kinds — see the Ultimates tab in the shop), 📋 daily & weekly missions, 🏅 58 achievements, 📊 a stats dashboard, ⏱️ Time Attack, and 🤝 co-op (two players, one board). Clear lines to charge the ⚡ gauge and unleash your ultimate!' },
+    title: 'v2.0 超進化アップデート！', titleEn: 'The v2.0 Mega Evolution Update!',
+    body: 'アルティメットスキル（9種・ショップの「奥義」タブ）／デイリー・ウィークリーミッション／実績58種／戦績ダッシュボード／タイムアタック／協力プレイ（2人で1盤面）を追加しました。ラインを消してゲージを溜め、必殺技を撃とう！',
+    bodyEn: 'Added: Ultimate Skills (9 kinds — see the Ultimates tab in the shop), daily & weekly missions, 58 achievements, a stats dashboard, Time Attack, and co-op (two players, one board). Clear lines to charge the gauge and unleash your ultimate!' },
   { id: 'seed-2',
-    title: '🎪 イベント＆🗳️投票スタート', titleEn: '🎪 Events & 🗳️ Polls are here',
+    title: 'イベント＆投票スタート', titleEn: 'Events & Polls are here',
     body: '期間限定イベントが8種類に！コイン祭り・経験値ブースト・ジェムラッシュ・ボス襲来・奥義祭・ラッキーデー…開催中はメニューにバナーが出ます。投票機能では次のイベントをみんなで決められます（投票するまで結果は秘密）。',
     bodyEn: 'Eight kinds of limited-time events: Coin Festival, XP Boost, Gem Rush, Boss Invasion, Ultimate Festival, Lucky Day and more — a banner appears on the menu while one is live. With polls, everyone decides the next event together (results stay hidden until you vote).' },
   { id: 'seed-3',
-    title: '🏰 ギルド機能・🌑 深淵ダンジョン・📰 ニュース', titleEn: '🏰 Guilds, 🌑 the Abyss Dungeon & 📰 News',
+    title: 'ギルド機能・深淵ダンジョン・ニュース', titleEn: 'Guilds, the Abyss Dungeon & News',
     body: 'ギルドを作って週間ポイントを競おう（ギルドレベルでコインボーナス）。塔を制覇した猛者には過去最難関「深淵」が待っています。このニュース欄には運営からのお知らせが届きます。',
     bodyEn: 'Found a guild and race for weekly points (guild levels grant coin bonuses). For those who conquered the Tower, the hardest challenge yet — the Abyss — awaits. This news feed is where announcements from the team arrive.' },
   { id: 'seed-4',
-    title: '🎭 にぎわい2.0 ＆ チャット自動翻訳', titleEn: '🎭 Crowd 2.0 & chat auto-translation',
+    title: 'にぎわい2.0 ＆ チャット自動翻訳', titleEn: 'Crowd 2.0 & chat auto-translation',
     body: 'ロビーの住人たちが性格を持ちました。イベントや投票に反応し、対戦した相手はあとでチャットで話しかけてくることも。チャットは日本語⇄英語を自動翻訳します（設定でOFFにできます）。',
     bodyEn: 'The lobby residents now have personalities. They react to events and polls, and someone you just fought might message you afterwards. Chat auto-translates between Japanese and English (you can turn it off in Settings).' },
   { id: 'seed-v26', pinned: true,
-    title: '🛡️ v2.6 不滅アップデート！', titleEn: '🛡️ The v2.6 Immortal Update!',
-    body: 'アップデートでデータが消える時代は終わりです。シーズン・バトルパス・実績の受け取り状況・イベント・投票がすべて更新後も引き継がれるようになりました。さらに🏅実績が全100種に大増量、新モード「🧩パズル遺跡」（ステージ制パズル・星3評価）と「⛏️採掘場」（せり上がる地層を掘って鉱石を集めろ）が登場！チャットの住人たちも会話エンジン3.0に進化して、同じセリフの繰り返しがほぼなくなりました。',
-    bodyEn: 'The era of updates wiping your data is over: seasons, battle pass, claimed achievements, events and polls all carry over now. Achievements grew to 100, and two new modes arrived — 🧩 Puzzle Ruins (stage-based puzzles with 3-star ratings) and ⛏️ The Mines (dig through rising strata for ore)! The chat residents also evolved to conversation engine 3.0 — repeated lines are nearly gone.' },
+    title: 'v2.6 不滅アップデート！', titleEn: 'The v2.6 Immortal Update!',
+    body: 'アップデートでデータが消える時代は終わりです。シーズン・バトルパス・実績の受け取り状況・イベント・投票がすべて更新後も引き継がれるようになりました。さらに実績が全100種に大増量、新モード「パズル遺跡」（ステージ制パズル・星3評価）と「採掘場」（せり上がる地層を掘って鉱石を集めろ）が登場！チャットの住人たちも会話エンジン3.0に進化して、同じセリフの繰り返しがほぼなくなりました。',
+    bodyEn: 'The era of updates wiping your data is over: seasons, battle pass, claimed achievements, events and polls all carry over now. Achievements grew to 100, and two new modes arrived — Puzzle Ruins (stage-based puzzles with 3-star ratings) and The Mines (dig through rising strata for ore)! The chat residents also evolved to conversation engine 3.0 — repeated lines are nearly gone.' },
   { id: 'seed-throne', pinned: true,
-    title: '👑 王座システム登場！', titleEn: '👑 The Throne System is here!',
-    body: '各ランキング（スコア・レート・タイムアタック・ダンジョン・ウィークリー・パズル遺跡・採掘場）の現在1位は「王座」を保持します。王者はランキング・チャット・プロフィールに👑が輝き、王座1つにつき毎日のログインボーナスに+150🪙+2💎の俸給が上乗せ！王座が奪われるとライブフィードで全プレイヤーに速報が流れます。頂点を獲れ！',
-    bodyEn: 'The current #1 of every leaderboard (Score, Rating, Time Attack, Dungeon, Weekly, Puzzle Ruins, The Mines) holds a Throne. Champions get a shining 👑 on rankings, in chat and on their profile — plus a daily stipend of +150🪙 +2💎 per throne! When a throne changes hands, the live feed announces it to everyone. Take the top!' },
+    title: '王座システム登場！', titleEn: 'The Throne System is here!',
+    body: '各ランキング（スコア・レート・タイムアタック・ダンジョン・ウィークリー・パズル遺跡・採掘場）の現在1位は「王座」を保持します。王者はランキング・チャット・プロフィールで王冠が輝き、王座1つにつき毎日のログインボーナスに+コイン150 +ジェム2 の俸給が上乗せ！王座が奪われるとライブフィードで全プレイヤーに速報が流れます。頂点を獲れ！',
+    bodyEn: 'The current #1 of every leaderboard (Score, Rating, Time Attack, Dungeon, Weekly, Puzzle Ruins, The Mines) holds a Throne. Champions get a shining crown on rankings, in chat and on their profile — plus a daily stipend of +150 coins and +2 gems per throne! When a throne changes hands, the live feed announces it to everyone. Take the top!' },
   { id: 'seed-ghost',
-    title: '👻 奇妙な報告が届いています', titleEn: '👻 Strange reports are coming in',
-    body: '複数のプレイヤーから「メニューで何かに見られている気がする」という報告が届いています。運営で調査したところ、ロゴの周辺で不可解な現象を確認しました。じっと見つめていると、不吉な数字が頭に浮かぶそうです。……くれぐれも、その回数だけ触れたりしないように。実績欄に見慣れない👻が現れた方は、運営までご一報ください。',
-    bodyEn: 'Several players report feeling watched on the menu screen. Our investigation confirmed something inexplicable near the logo. Those who stare at it say an unlucky number comes to mind… Whatever you do, please do not touch it that many times. If an unfamiliar 👻 has appeared in your achievements, contact the team immediately.' },
+    title: '奇妙な報告が届いています', titleEn: 'Strange reports are coming in',
+    body: '複数のプレイヤーから「メニューで何かに見られている気がする」という報告が届いています。運営で調査したところ、ロゴの周辺で不可解な現象を確認しました。じっと見つめていると、不吉な数字が頭に浮かぶそうです。……くれぐれも、その回数だけ触れたりしないように。実績欄に見慣れないバッジが現れた方は、運営までご一報ください。',
+    bodyEn: 'Several players report feeling watched on the menu screen. Our investigation confirmed something inexplicable near the logo. Those who stare at it say an unlucky number comes to mind… Whatever you do, please do not touch it that many times. If an unfamiliar badge has appeared in your achievements, contact the team immediately.' },
   { id: 'seed-v272', pinned: true,
-    title: '🎰 ガチャ2.0 ＆ 👑多冠報酬アップデート！', titleEn: '🎰 Gacha 2.0 & 👑 Multi-Crown Rewards!',
-    body: '【🎰ガチャ2.0】✨天井システム登場 — 40連以内にSSR以上が必ず出ます！10連はSR以上1枠確定。さらに🌈ガチャ限定装備3種（プリズム／オーロラ／彗星）が追加 — SSRからのみ入手できます。【👑多冠報酬】王座を2つ以上同時に持つと永久バッジ＋俸給ボーナス（二冠+200🪙3💎〜全冠+1,600🪙24💎）、名前の色も冠の数で豪華に（3冠以上は虹色！）。王者の住人はチャットに常駐するようになりました。【🐛バグ報告】設定→「バグ報告」から不具合を直接送れます！',
-    bodyEn: '[🎰 Gacha 2.0] The ✨pity system is here — an SSR or better is guaranteed within 40 pulls, and every 10-pull guarantees at least one SR+. Three 🌈 gacha-exclusive items were added (Prism / Aurora / Comet) — SSR pulls only. [👑 Multi-Crown] Hold 2+ thrones at once for permanent badges and bigger stipends (up to +1,600🪙 24💎 for all seven) — and your name color gets fancier with each crown (3+ crowns = rainbow!). Champion residents now hang out in chat. [🐛 Bug Reports] Report issues directly from Settings → Report a bug!' },
+    title: 'ガチャ2.0 ＆ 多冠報酬アップデート！', titleEn: 'Gacha 2.0 & Multi-Crown Rewards!',
+    body: '【ガチャ2.0】天井システム登場 — 40連以内にSSR以上が必ず出ます！10連はSR以上1枠確定。さらにガチャ限定装備3種（プリズム／オーロラ／彗星）が追加 — SSRからのみ入手できます。【多冠報酬】王座を2つ以上同時に持つと永久バッジ＋俸給ボーナス（二冠 コイン+200 ジェム+3 〜 全冠 コイン+1,600 ジェム+24）、名前の色も冠の数で豪華に（3冠以上は虹色！）。王者の住人はチャットに常駐するようになりました。【バグ報告】設定→「バグ報告」から不具合を直接送れます！',
+    bodyEn: '[Gacha 2.0] The pity system is here — an SSR or better is guaranteed within 40 pulls, and every 10-pull guarantees at least one SR+. Three gacha-exclusive items were added (Prism / Aurora / Comet) — SSR pulls only. [Multi-Crown] Hold 2+ thrones at once for permanent badges and bigger stipends (up to +1,600 coins and 24 gems for all seven) — and your name color gets fancier with each crown (3+ crowns = rainbow!). Champion residents now hang out in chat. [Bug Reports] Report issues directly from Settings → Report a bug!' },
   { id: 'seed-throne2', pinned: true,
-    title: '👑 王座戦線に住人が参戦！', titleEn: '👑 The residents join the throne race!',
-    body: 'ロビーの住人たちも王座を持つようになりました。いま各ランキングの👑は住人が守っています — 彼らの実力は日々変化するので、王座も自然に動きます。スコアで追い抜けばその瞬間あなたが王者。住人から王座を奪還して、俸給と栄光を手にしましょう！（住人はログインボーナスを受け取れないので、俸給はいつでも人間のもの）',
-    bodyEn: 'The lobby residents can now hold thrones too. Right now the 👑 on each leaderboard is defended by a resident — their skills drift daily, so thrones naturally change hands. Beat their score and the crown is yours that instant. Reclaim the thrones from them for stipends and glory! (Residents can’t collect login bonuses, so the stipend always belongs to humans.)' },
+    title: '王座戦線に住人が参戦！', titleEn: 'The residents join the throne race!',
+    body: 'ロビーの住人たちも王座を持つようになりました。いま各ランキングの王座は住人が守っています — 彼らの実力は日々変化するので、王座も自然に動きます。スコアで追い抜けばその瞬間あなたが王者。住人から王座を奪還して、俸給と栄光を手にしましょう！（住人はログインボーナスを受け取れないので、俸給はいつでも人間のもの）',
+    bodyEn: 'The lobby residents can now hold thrones too. Right now the throne on each leaderboard is defended by a resident — their skills drift daily, so thrones naturally change hands. Beat their score and the crown is yours that instant. Reclaim the thrones from them for stipends and glory! (Residents can’t collect login bonuses, so the stipend always belongs to humans.)' },
   { id: 'seed-v210', pinned: true,
-    title: '💥 オンライン対戦 超絶大型アップデート ＆ 🌐完全翻訳！', titleEn: '💥 Online Battle MEGA Update & 🌐 Full Translation!',
-    body: '【💥アタック戦】新モード登場！2ライン以上を同時消しすると相手の盤面にお邪魔ブロックを送り込めます（3ライン=4個、4ライン+コンボで最大9個）。攻撃も防御も自分の腕次第 — オンラインメニューの「💥アタック戦」から！【🔁再戦】デュエル/アタック戦の結果画面に再戦ボタンが付きました。30秒以内なら同じ相手にリベンジできます。【📈昇格演出】レートが新しい帯（🥈シルバー〜👑グランドマスター）に到達すると紙吹雪でお祝い＋ゴールド以上は全体アナウンス！【🌐翻訳大型アップデート】ニュース・投票・イベント・チャットの住人の会話まで、英語表示が全面ネイティブ品質になりました。',
-    bodyEn: '[💥 Attack Duel] New mode! Clear 2+ lines at once to send garbage blocks onto your opponent\'s board (3 lines = 4 cells, up to 9 with combos). Attack and defend with pure skill — find it under "💥 Attack Duel" in the online menu! [🔁 Rematch] Duel and Attack results now have a rematch button — get your revenge against the same opponent within 30 seconds. [📈 Promotions] Reaching a new rank tier (🥈 Silver through 👑 Grandmaster) triggers a confetti celebration, and Gold+ promotions are announced to everyone! [🌐 Translation Overhaul] News, polls, events and even the residents\' chat are now native-quality in English.' },
+    title: 'オンライン対戦 超絶大型アップデート ＆ 完全翻訳！', titleEn: 'Online Battle MEGA Update & Full Translation!',
+    body: '【アタック戦】新モード登場！2ライン以上を同時消しすると相手の盤面にお邪魔ブロックを送り込めます（3ライン=4個、4ライン+コンボで最大9個）。攻撃も防御も自分の腕次第 — オンラインメニューの「アタック戦」から！【再戦】デュエル/アタック戦の結果画面に再戦ボタンが付きました。30秒以内なら同じ相手にリベンジできます。【昇格演出】レートが新しい帯（シルバー〜グランドマスター）に到達すると紙吹雪でお祝い＋ゴールド以上は全体アナウンス！【翻訳大型アップデート】ニュース・投票・イベント・チャットの住人の会話まで、英語表示が全面ネイティブ品質になりました。',
+    bodyEn: '[Attack Duel] New mode! Clear 2+ lines at once to send garbage blocks onto your opponent\'s board (3 lines = 4 cells, up to 9 with combos). Attack and defend with pure skill — find it under "Attack Duel" in the online menu! [Rematch] Duel and Attack results now have a rematch button — get your revenge against the same opponent within 30 seconds. [Promotions] Reaching a new rank tier (Silver through Grandmaster) triggers a confetti celebration, and Gold+ promotions are announced to everyone! [Translation Overhaul] News, polls, events and even the residents\' chat are now native-quality in English.' },
   { id: 'seed-v211', pinned: true,
-    title: '👑 v2.11 管理者イベント開幕 ＆ 💯バトルロイヤル大改造！',
-    titleEn: '👑 v2.11 — Admin Events & the Battle Royale Overhaul!',
-    body: '【👑 管理者イベント（週1・予約制）】運営が主催する特別イベントがはじまります。ポイントは「開催時間を “あなたが” 選べる」こと — 18:00 / 19:00 / 21:00 のように複数の枠が用意され、メニューのバナーから好きな枠を予約すると、その時間にあなた専用の回が開幕します。予約が違ってもボスHP・共同ゲージ・ランキングは全員で共有。18時に遊んだ人と21時に遊んだ人が、同じ1体のボスを一緒に削ります。10分前と1分前にお知らせが出るので、うっかり寝過ごしても大丈夫。\n' +
-      '【🎮 この枠でしか遊べない専用モード3種（週替わり）】👑管理者襲来＝管理者の分身が「お邪魔の雨」「盤面回転」「手札シャッフル」「目隠し」などをリアルタイムで撃ち込んでくる総力戦。全員の合計ダメージで巨大HPを削り切れ！／🎰運営ルーレット＝30秒ごとにルーレットが回り、スコア5倍・極小ブロックのみ・盤面回転・せり上がり・ラッキーセブンなど9種のルールに書き換わるカオス番組。／🏛️共同作業＝参加者全員のスコアが1本のゲージに合流し、段階目標を越えるたび全員に報酬。盤面に湧く🧱建材を回収すると大きく加速します。\n' +
-      '【🎁 お宝ラッシュ】自分の枠の中は報酬が最大3倍。討伐に成功すると参加者全員に👑バッジ。\n' +
-      '【💯 バトルロイヤル 大改造】99人のAIが「スコアが自動で増えるだけの数字」から、本当に盤面を持って打つプレイヤーになりました。弱いAIは実際に詰んで脱落します。さらに ①2ライン以上消すと生存者の誰かにお邪魔を送り込む殴り合い ②時間経過で全員に降りそそぐ🌩️ストーム ③「あと◯点で生き残れる」を数字で出す危険メーター ④脱落しても終わりじゃない観戦モード ⑤残り3人の盤面が並ぶファイナル ⑥順位別の報酬ラダー（1位🪙1,200💎40 〜 参加賞まで）⑦KO数・最高順位の記録と新実績7種・新称号2種。1回のトップアウトは「復活」、2回目で脱落です。\n' +
-      '【🐲 レイド/2v2 の画面改善】仲間3人ぶんのミニ盤面が縦に積み上がって自分の盤面を圧迫していた問題を解消。仲間は1行のコンパクト表示になり、ボスHPも細いバーになりました。iPhone SE クラスの画面では自分の盤面が 210px → 347px（ソロと同じ大きさ）に。横画面では盤面が消えてしまう不具合も修正。仲間の盤面を見たい人は ▾ ボタンで元に戻せます。\n' +
-      '【🌐 マッチング見直し】①レートの近い人から優先してマッチ（待つほど条件がゆるくなります）②AI相手の強さがあなたのレートに合わせて選ばれるように（今までは完全ランダムでした）③2v2で2人一緒に来たら必ず同じチーム ④待機画面に「経過時間・同じモードで待っている実人数・レート検索範囲・AIが参戦するまでの秒数」を正直に表示。\n' +
-      '【🐛 バグ修正】通信エラーでサーバー全体が落ちうる不具合／対戦の結果待ち中に接続が切れると画面が固まって操作不能になる不具合／ゲーム終了後もピースを置けてしまう不具合／ドラッグ中に手札が変わると別のピースが置かれる不具合／アカウント削除でギルドが満員のまま壊れる不具合／協力プレイのスコアを改ざんできる不具合／アイテムが10個あると左端の4個が画面外で押せない不具合／オンライン対戦でピース数が記録されずミッションが進まない不具合 — ほか多数。',
-    bodyEn: '[👑 Admin Events — weekly, and YOU pick the time] A special event hosted by the staff. The point of it is that you choose when to attend: several slots are offered (say 18:00 / 19:00 / 21:00 JST) and you reserve the one that suits you from the menu banner — your own session opens at that time. Different slots, one shared world: the boss HP, the community gauge and the leaderboard are common to everybody, so the 18:00 crowd and the 21:00 crowd chip away at the same boss together. You get a reminder 10 minutes and 1 minute before your slot.\n' +
-      '[🎮 Three exclusive modes, rotating weekly] 👑 Admin Invasion — the admin\'s avatar meddles with your board in real time (garbage rain, board spin, hand shuffle, blindfold) while everyone\'s damage goes onto one enormous HP bar. 🎰 Operator Roulette — every 30 seconds the wheel is spun and the rules are rewritten: 5× score, tiny blocks only, a spinning board, a rising floor, Lucky 7 and more. 🏛️ The Great Work — every participant\'s score flows into a single gauge, and each tier cleared pays out to everyone; collect the 🧱 materials that appear on your board to speed it up.\n' +
-      '[🎁 Treasure Rush] Rewards are multiplied (up to 3×) inside your slot, and defeating the objective earns a 👑 badge for everyone who took part.\n' +
-      '[💯 Battle Royale rebuilt] The 99 AI entrants were score curves that could not be beaten fairly; they now run real boards with the real AI, and weak ones genuinely top out and die. Added: garbage warfare (clear 2+ lines to bury a survivor), a 🌩️ storm that rains garbage on everyone as the clock runs down, a danger meter that tells you exactly how many points you are from safety, spectating after you are knocked out, a finale showing the last three boards, a placement reward ladder (🪙1,200 💎40 for #1 down to a consolation prize), plus knockout/best-placement stats, 7 new achievements and 2 new titles. Your first top-out revives you; the second eliminates you.\n' +
-      '[🐲 Raid / 2v2 screen] Three allies\' mini boards used to stack above your own and squeeze it flat. Allies are now a single compact row and the boss HP is a slim bar — on an iPhone SE-sized screen your board goes from 210px to 347px, the same size as in solo. The landscape bug that made the board vanish entirely is fixed. Tap ▾ to bring the ally boards back.\n' +
-      '[🌐 Matchmaking] Players are now paired by rating (the search widens the longer you wait), your stand-in opponent\'s strength is chosen to match your rating instead of at random, two players who queue together for 2v2 always land on the same team, and the search screen honestly shows your elapsed time, how many real people are waiting in that mode, the rating range being searched, and exactly when a stand-in opponent will step in.\n' +
-      '[🐛 Fixes] A socket error could take the whole server down; a dropped connection while waiting for results left an undismissable modal covering the app; pieces could still be placed after a run had ended; a hand change mid-drag placed a different piece than the one you were holding; deleting an account left a guild permanently stuck at "full"; co-op scores could be forged by a client; with 10 items the leftmost four sat off-screen and were unreachable; online modes recorded 0 pieces placed so those missions never advanced — and more.' },
+    title: 'v2.11 管理者イベント開幕 ＆ バトルロイヤル大改造！',
+    titleEn: 'v2.11 — Admin Events & the Battle Royale Overhaul!',
+    body: '【管理者イベント（週1・予約制）】運営が主催する特別イベントがはじまります。ポイントは「開催時間を “あなたが” 選べる」こと — 18:00 / 19:00 / 21:00 のように複数の枠が用意され、メニューのバナーから好きな枠を予約すると、その時間にあなた専用の回が開幕します。予約が違ってもボスHP・共同ゲージ・ランキングは全員で共有。18時に遊んだ人と21時に遊んだ人が、同じ1体のボスを一緒に削ります。10分前と1分前にお知らせが出るので、うっかり寝過ごしても大丈夫。\n' +
+      '【この枠でしか遊べない専用モード3種（週替わり）】管理者襲来＝管理者の分身が「お邪魔の雨」「盤面回転」「手札シャッフル」「目隠し」などをリアルタイムで撃ち込んでくる総力戦。全員の合計ダメージで巨大HPを削り切れ！／運営ルーレット＝30秒ごとにルーレットが回り、スコア5倍・極小ブロックのみ・盤面回転・せり上がり・ラッキーセブンなど9種のルールに書き換わるカオス番組。／共同作業＝参加者全員のスコアが1本のゲージに合流し、段階目標を越えるたび全員に報酬。盤面に湧く建材を回収すると大きく加速します。\n' +
+      '【お宝ラッシュ】自分の枠の中は報酬が最大3倍。討伐に成功すると参加者全員に王座のバッジ。\n' +
+      '【バトルロイヤル 大改造】99人のAIが「スコアが自動で増えるだけの数字」から、本当に盤面を持って打つプレイヤーになりました。弱いAIは実際に詰んで脱落します。さらに ①2ライン以上消すと生存者の誰かにお邪魔を送り込む殴り合い ②時間経過で全員に降りそそぐストーム ③「あと◯点で生き残れる」を数字で出す危険メーター ④脱落しても終わりじゃない観戦モード ⑤残り3人の盤面が並ぶファイナル ⑥順位別の報酬ラダー（1位 コイン1,200 ジェム40 〜 参加賞まで）⑦KO数・最高順位の記録と新実績7種・新称号2種。1回のトップアウトは「復活」、2回目で脱落です。\n' +
+      '【レイド/2v2 の画面改善】仲間3人ぶんのミニ盤面が縦に積み上がって自分の盤面を圧迫していた問題を解消。仲間は1行のコンパクト表示になり、ボスHPも細いバーになりました。iPhone SE クラスの画面では自分の盤面が 210px → 347px（ソロと同じ大きさ）に。横画面では盤面が消えてしまう不具合も修正。仲間の盤面を見たい人は ▾ ボタンで元に戻せます。\n' +
+      '【マッチング見直し】①レートの近い人から優先してマッチ（待つほど条件がゆるくなります）②AI相手の強さがあなたのレートに合わせて選ばれるように（今までは完全ランダムでした）③2v2で2人一緒に来たら必ず同じチーム ④待機画面に「経過時間・同じモードで待っている実人数・レート検索範囲・AIが参戦するまでの秒数」を正直に表示。\n' +
+      '【バグ修正】通信エラーでサーバー全体が落ちうる不具合／対戦の結果待ち中に接続が切れると画面が固まって操作不能になる不具合／ゲーム終了後もピースを置けてしまう不具合／ドラッグ中に手札が変わると別のピースが置かれる不具合／アカウント削除でギルドが満員のまま壊れる不具合／協力プレイのスコアを改ざんできる不具合／アイテムが10個あると左端の4個が画面外で押せない不具合／オンライン対戦でピース数が記録されずミッションが進まない不具合 — ほか多数。',
+    bodyEn: '[Admin Events — weekly, and YOU pick the time] A special event hosted by the staff. The point of it is that you choose when to attend: several slots are offered (say 18:00 / 19:00 / 21:00 JST) and you reserve the one that suits you from the menu banner — your own session opens at that time. Different slots, one shared world: the boss HP, the community gauge and the leaderboard are common to everybody, so the 18:00 crowd and the 21:00 crowd chip away at the same boss together. You get a reminder 10 minutes and 1 minute before your slot.\n' +
+      '[Three exclusive modes, rotating weekly] Admin Invasion — the admin\'s avatar meddles with your board in real time (garbage rain, board spin, hand shuffle, blindfold) while everyone\'s damage goes onto one enormous HP bar. Operator Roulette — every 30 seconds the wheel is spun and the rules are rewritten: 5× score, tiny blocks only, a spinning board, a rising floor, Lucky 7 and more. The Great Work — every participant\'s score flows into a single gauge, and each tier cleared pays out to everyone; collect the materials that appear on your board to speed it up.\n' +
+      '[Treasure Rush] Rewards are multiplied (up to 3×) inside your slot, and defeating the objective earns a throne badge for everyone who took part.\n' +
+      '[Battle Royale rebuilt] The 99 AI entrants were score curves that could not be beaten fairly; they now run real boards with the real AI, and weak ones genuinely top out and die. Added: garbage warfare (clear 2+ lines to bury a survivor), a storm that rains garbage on everyone as the clock runs down, a danger meter that tells you exactly how many points you are from safety, spectating after you are knocked out, a finale showing the last three boards, a placement reward ladder (1,200 coins and 40 gems for #1 down to a consolation prize), plus knockout/best-placement stats, 7 new achievements and 2 new titles. Your first top-out revives you; the second eliminates you.\n' +
+      '[Raid / 2v2 screen] Three allies\' mini boards used to stack above your own and squeeze it flat. Allies are now a single compact row and the boss HP is a slim bar — on an iPhone SE-sized screen your board goes from 210px to 347px, the same size as in solo. The landscape bug that made the board vanish entirely is fixed. Tap ▾ to bring the ally boards back.\n' +
+      '[Matchmaking] Players are now paired by rating (the search widens the longer you wait), your stand-in opponent\'s strength is chosen to match your rating instead of at random, two players who queue together for 2v2 always land on the same team, and the search screen honestly shows your elapsed time, how many real people are waiting in that mode, the rating range being searched, and exactly when a stand-in opponent will step in.\n' +
+      '[Fixes] A socket error could take the whole server down; a dropped connection while waiting for results left an undismissable modal covering the app; pieces could still be placed after a run had ended; a hand change mid-drag placed a different piece than the one you were holding; deleting an account left a guild permanently stuck at "full"; co-op scores could be forged by a client; with 10 items the leftmost four sat off-screen and were unreachable; online modes recorded 0 pieces placed so those missions never advanced — and more.' },
   { id: 'seed-zero', pinned: true,
-    title: '👁️ 断罪 ── 管理者ゼロが七つの王座を人質に取りました',
-    titleEn: '👁️ CONDEMNED — Admin Zero has taken all seven thrones',
-    body: '【👁️ 管理者ゼロが、七つの王座を人質に取りました】新しい管理者イベント「断罪」がはじまります。ゼロはHPバーではありません。画面の上であなたと同じように**本当にブロックを積んでいて**、列を消せばあなたの盤面にお邪魔が降り、名前を呼んで野次ってきます。段が進むごとに言葉づかいが崩れていきます。\n' +
-      '【🔒 点をいくら稼いでも、段は落ちません】ここがこのイベントの全部です。段のHPは7割までしか点数で削れません。残り3割には「封印」があり、通常のダメージが一切通りません。封印を貫通できるのは、30秒ごとに来る【断罪】を斬った一撃だけ。住人には斬れません。つまり ── **住人＝火力／あなた＝鍵**。何点入れても、あなたが斬らなければ段は絶対に落ちません。\n' +
-      '【⚔️ 断罪 ── 30秒ごとに来る山場】画面が赤く走り、あなたの名前が出て、盤面に赤いマスが3.5秒だけ点灯します。その赤マスを通るラインを消せば【斬った】。うち1つは金色の「急所」で、含めて斬れば貫通が倍になります。間に合わなければ赤マスがそのままお邪魔になり、ゼロが少し回復し、**アリーナの住人が1人、名前つきで処刑されます**。消えた住人はその日ずっと戻ってきません。\n' +
-      '【🪧 今夜の的】段のはじめにゼロが1つの列を宣言します。断罪の赤マスの6割がその列に置かれるので、その列を縦に消すと「杭」が1本入り、3本で次の予告が3.5秒→5.0秒に伸びます。ただし特定の1列を縦に消すのは点効率が悪い ── **点を稼ぐ置き方と、斬りやすくする置き方がぶつかります。**\n' +
-      '【🤝 取引 ── 60秒の生投票】20分地点でゼロが2択を持ちかけます。「この段のHPを半分にしてやる。かわりに予告を1秒縮める」。**あなたと、いまオンラインの住人全員が本当に投票します。** あなたの1票は住人5票ぶん。1人では決まりませんが、票が割れればあなたが決定打になります。住人は性格どおりに投票するので、毎回結果が違います。\n' +
-      '【🕐 段は世界で1本】18:00の枠で段2まで割れば、19:00の人は段3から始めます。足し算ではなく直列です。処刑された住人も、次の枠に席が空いたまま引き継がれます ── **あなたの取りこぼしが、会ったことのない21:00の誰かの火力を削ります。**\n' +
-      '【📜 断罪録】その日ゼロが誰に何を言ったかが、実名つきで時系列に残ります。メニューからいつでも読めます。段にとどめを刺した人は、次の枠へ**40字の伝言**を残せます。次の枠の開幕でゼロがそれを読み上げます。\n' +
-      '【🏵️ 残るもの】段が割れた瞬間その場に居た人だけに👁️バッジ。あとから点を足しても手に入りません。称号は3つ ── 「断罪を斬りし者」（封印を破るとどめ）／「名指しの常連」（通算50回名指しされる）／「七冠奪還」（七段すべてが割れた日に居合わせる）。',
-    bodyEn: '[👁️ Admin Zero has taken all seven thrones hostage] A new admin event, CONDEMNED, begins. Zero is not an HP bar. He plays a real board above yours, and when he clears lines the garbage lands on you for real. He calls you by name and heckles you — and the further you push him, the more his manners fall away.\n' +
-      '[🔒 No amount of score will bring a stage down] This is the whole event. Only 70% of a stage can be worn away by score. The last 30% is sealed, and ordinary damage does not touch it. The seal yields only to a CONDEMNATION cut — one that arrives every 30 seconds, and one no resident can make. So: residents are the firepower, and you are the key. However many points go in, the stage will not fall unless you cut.\n' +
-      '[⚔️ Condemnation — a moment that comes every 30 seconds] The screen runs red, your name appears, and cells light up on your board for 3.5 seconds. Clear a line through them and you have CUT. One of them is gold — the keystone — and including it doubles the damage. Miss, and the cells turn to garbage, Zero recovers a little, and a resident of the arena is executed by name. They do not come back for the rest of the day.\n' +
-      '[🪧 Tonight\'s mark] At the start of each stage Zero names one column, and 60% of the condemnation cells will fall there. Clear that column vertically to drive a stake; three stakes stretch your next warning from 3.5s to 5.0s. But clearing one specific column vertically is poor for score — so the way to score and the way to stay alive pull against each other.\n' +
-      '[🤝 The bargain — 60 seconds, live] Twenty minutes in, Zero offers a choice. "I will halve this stage. In exchange, your warning shrinks by one second." You vote, and so does every resident currently online — really. Your vote counts as five of theirs. You cannot decide it alone, but when they split, you decide it. Residents vote in character, so it lands differently every time.\n' +
-      '[🕐 One stage for the whole world] If the 18:00 slot breaks through to stage 2, the 19:00 players start at stage 3. Not addition — a single line. Executed residents carry over too, their seats still empty. Your miss thins the firepower of someone at 21:00 you will never meet.\n' +
-      '[📜 The Chronicle] Everything Zero said, and to whom, stays on record by name, in order. Readable from the menu at any time. Whoever lands the finishing blow on a stage may leave a 40-character message for the next slot — and Zero reads it aloud when they arrive.\n' +
-      '[🏵️ What remains] The 👁️ badge goes only to those present the moment a stage falls; no amount of later scoring earns it. Three titles: Sealbreaker (land the blow that breaks a seal), Marked (be condemned 50 times), Seven Reclaimed (be there when all seven fall).' },
+    title: '断罪 ── 管理者ゼロが七つの王座を人質に取りました',
+    titleEn: 'CONDEMNED — Admin Zero has taken all seven thrones',
+    body: '【管理者ゼロが、七つの王座を人質に取りました】新しい管理者イベント「断罪」がはじまります。ゼロはHPバーではありません。画面の上であなたと同じように**本当にブロックを積んでいて**、列を消せばあなたの盤面にお邪魔が降り、名前を呼んで野次ってきます。段が進むごとに言葉づかいが崩れていきます。\n' +
+      '【点をいくら稼いでも、段は落ちません】ここがこのイベントの全部です。段のHPは7割までしか点数で削れません。残り3割には「封印」があり、通常のダメージが一切通りません。封印を貫通できるのは、30秒ごとに来る【断罪】を斬った一撃だけ。住人には斬れません。つまり ── **住人＝火力／あなた＝鍵**。何点入れても、あなたが斬らなければ段は絶対に落ちません。\n' +
+      '【断罪 ── 30秒ごとに来る山場】画面が赤く走り、あなたの名前が出て、盤面に赤いマスが3.5秒だけ点灯します。その赤マスを通るラインを消せば【斬った】。うち1つは金色の「急所」で、含めて斬れば貫通が倍になります。間に合わなければ赤マスがそのままお邪魔になり、ゼロが少し回復し、**アリーナの住人が1人、名前つきで処刑されます**。消えた住人はその日ずっと戻ってきません。\n' +
+      '【今夜の的】段のはじめにゼロが1つの列を宣言します。断罪の赤マスの6割がその列に置かれるので、その列を縦に消すと「杭」が1本入り、3本で次の予告が3.5秒→5.0秒に伸びます。ただし特定の1列を縦に消すのは点効率が悪い ── **点を稼ぐ置き方と、斬りやすくする置き方がぶつかります。**\n' +
+      '【取引 ── 60秒の生投票】20分地点でゼロが2択を持ちかけます。「この段のHPを半分にしてやる。かわりに予告を1秒縮める」。**あなたと、いまオンラインの住人全員が本当に投票します。** あなたの1票は住人5票ぶん。1人では決まりませんが、票が割れればあなたが決定打になります。住人は性格どおりに投票するので、毎回結果が違います。\n' +
+      '【段は世界で1本】18:00の枠で段2まで割れば、19:00の人は段3から始めます。足し算ではなく直列です。処刑された住人も、次の枠に席が空いたまま引き継がれます ── **あなたの取りこぼしが、会ったことのない21:00の誰かの火力を削ります。**\n' +
+      '【断罪録】その日ゼロが誰に何を言ったかが、実名つきで時系列に残ります。メニューからいつでも読めます。段にとどめを刺した人は、次の枠へ**40字の伝言**を残せます。次の枠の開幕でゼロがそれを読み上げます。\n' +
+      '【残るもの】段が割れた瞬間その場に居た人だけに断罪のバッジ。あとから点を足しても手に入りません。称号は3つ ── 「断罪を斬りし者」（封印を破るとどめ）／「名指しの常連」（通算50回名指しされる）／「七冠奪還」（七段すべてが割れた日に居合わせる）。',
+    bodyEn: '[Admin Zero has taken all seven thrones hostage] A new admin event, CONDEMNED, begins. Zero is not an HP bar. He plays a real board above yours, and when he clears lines the garbage lands on you for real. He calls you by name and heckles you — and the further you push him, the more his manners fall away.\n' +
+      '[No amount of score will bring a stage down] This is the whole event. Only 70% of a stage can be worn away by score. The last 30% is sealed, and ordinary damage does not touch it. The seal yields only to a CONDEMNATION cut — one that arrives every 30 seconds, and one no resident can make. So: residents are the firepower, and you are the key. However many points go in, the stage will not fall unless you cut.\n' +
+      '[Condemnation — a moment that comes every 30 seconds] The screen runs red, your name appears, and cells light up on your board for 3.5 seconds. Clear a line through them and you have CUT. One of them is gold — the keystone — and including it doubles the damage. Miss, and the cells turn to garbage, Zero recovers a little, and a resident of the arena is executed by name. They do not come back for the rest of the day.\n' +
+      '[Tonight\'s mark] At the start of each stage Zero names one column, and 60% of the condemnation cells will fall there. Clear that column vertically to drive a stake; three stakes stretch your next warning from 3.5s to 5.0s. But clearing one specific column vertically is poor for score — so the way to score and the way to stay alive pull against each other.\n' +
+      '[The bargain — 60 seconds, live] Twenty minutes in, Zero offers a choice. "I will halve this stage. In exchange, your warning shrinks by one second." You vote, and so does every resident currently online — really. Your vote counts as five of theirs. You cannot decide it alone, but when they split, you decide it. Residents vote in character, so it lands differently every time.\n' +
+      '[One stage for the whole world] If the 18:00 slot breaks through to stage 2, the 19:00 players start at stage 3. Not addition — a single line. Executed residents carry over too, their seats still empty. Your miss thins the firepower of someone at 21:00 you will never meet.\n' +
+      '[The Chronicle] Everything Zero said, and to whom, stays on record by name, in order. Readable from the menu at any time. Whoever lands the finishing blow on a stage may leave a 40-character message for the next slot — and Zero reads it aloud when they arrive.\n' +
+      '[What remains] The condemnation badge goes only to those present the moment a stage falls; no amount of later scoring earns it. Three titles: Sealbreaker (land the blow that breaks a seal), Marked (be condemned 50 times), Seven Reclaimed (be there when all seven fall).' },
   { id: 'seed-v2111',
-    title: '🛡️ v2.11.1 遊んだまま更新できるように ＆ 大量のバグ修正',
-    titleEn: '🛡️ v2.11.1 — Updates Without Losing Your Run, and a Pile of Fixes',
-    body: '【🛡️ 遊んだまま更新できるようになりました】アップデートでサーバーを入れ替えるとき、これまでは遊んでいる最中の人が黙って切断されていました。これからは全員に予告が出て、進行中のものがきちんと終わります — オンライン対戦は引き分け（記録も報酬も残り、勝敗はどちらにもつきません）、バトルロイヤルはその時点の順位で確定、ソロやダンジョンは自動で保存して終了します。\n' +
-      '【🏰 ダンジョン全4世界に報酬がつきました】🕳️地下と☁️天国は、これまで100階まで登ってもジェムが1個も出ず、到達階すら記録に残っていませんでした。地下は「上級者向け」と書いてあるのに塔より損をする状態だったので、難しさに見合う報酬に直しました。10階ごとにジェム、100階制覇で新バッジ「地底踏破」「天界踏破」が手に入ります。（塔700💎／地下1,050💎／天国700💎／深淵1,400💎）\n' +
-      '【🎁 共同作業の報酬を受け取れるようになりました】管理者イベント「🏛️共同作業」で、ゲージの段階目標を越えても報酬を受け取る場所がどこにも無く、実際には1枚も配られていませんでした。受け取りボタンを追加しました。\n' +
-      '【🏵️ 達成できない実績を直しました】「伝説の収集家」はアイテム45種が目標でしたが、そもそもゲームに37種しかありませんでした。永久に埋まらない実績だったので、正しく「全37種そろえる」に直しました。\n' +
-      '【🏰 住人のギルドが24個に】住人のギルドが8個から24個に増え、住人の数に応じて自然に増減するようになりました。これまでは600人いても8ギルド（160席）しか無く、大多数がどこにも所属できていませんでした。\n' +
-      '【🗳️ 住人も投票します】投票が始まると、住人たちが自分の性格に沿って票を入れるようになりました。イベントの枠選びにも参加します。\n' +
-      '【📈 ランキングの住人が強くなりました】住人の記録が「毎日ちょっとだけ動く数字」ではなく、本物の自己ベストのように伸びるようになりました — 伸び悩む時期があり、たまに一気に更新します。レートの上限も引き上げ（最高1900）、塔は95F止まり。100F制覇と時間の頂点は人間のものです。\n' +
-      '【🎒 インベントリ】メニューに新しいインベントリ画面を追加。装備・アイテム・バッジ・王座を1か所で確認して、その場で着せ替えできます。\n' +
-      '【🔊 ロビーがにぎやかに】ロビーの住人が最大600人までいるようになりました。\n' +
-      '【🐛 バグ修正】バトルロイヤルで、スマホのアプリを切り替えただけで失格になっていた不具合（回線が切れていないのに20秒よそ見すると脱落していました）／同時に脱落したとき、スコアの低い人が良い順位を取ることがあった不具合／協力プレイで手札がズレると置けなくなる不具合／再戦のときに相手が別の部屋に入っていても引きずり出してしまう不具合／オンライン人数が実際の約2倍に見えていた不具合／チャットの履歴が再起動で消えていた不具合／英語表示に日本語のアイテム名・ボス名・称号・バッジ名がそのまま出ていた不具合／日付の変わり目が日本時間からずれていた不具合（ログインボーナスと連続ログイン）／深淵ダンジョンを制覇しても専用のお祝いが出なかった不具合 — ほか多数。',
-    bodyEn: '[🛡️ Updates without losing your run] Swapping the server for an update used to disconnect everyone mid-game without a word. Now everybody is warned and whatever is in progress is closed out properly: online matches end in a draw (the run and its rewards are kept, and nobody takes a loss), a battle royale locks in your placement at that moment, and solo or dungeon runs are saved and ended automatically.\n' +
-      '[🏰 All four dungeon realms now pay out] 🕳️ The Depths and ☁️ The Ascent gave no gems at all — not even a record of the floor you reached — no matter how far you climbed. The Depths is billed as the harder realm, yet clearing it paid strictly worse than the Tower. Rewards now match the difficulty: gems every 10 floors, plus the new badges Depths Conqueror and Ascent Conqueror for reaching floor 100. (Tower 700💎 / Depths 1,050💎 / Ascent 700💎 / Abyss 1,400💎)\n' +
-      '[🎁 The Great Work rewards can finally be collected] Clearing a gauge tier in 🏛️ The Great Work had nowhere to actually claim the reward, so not a single coin was ever handed out. There is now a collect button.\n' +
-      '[🏵️ An impossible achievement, fixed] Legendary Collector asked for 45 items when the game only has 37. It could never be completed, so it now correctly asks for all 37.\n' +
-      '[🏰 24 resident guilds] Resident guilds grew from 8 to 24 and now scale with the population. With 600 residents there were only 8 guilds (160 seats), so most residents belonged nowhere.\n' +
-      '[🗳️ Residents vote] When a poll opens, residents now cast votes in line with their personalities — including on which event slot to attend.\n' +
-      '[📈 Stronger residents on the leaderboards] Resident records now grow like real personal bests instead of drifting a little every day: they plateau, then break through. The rating ceiling was raised (1900 max) and the tower caps at floor 95 — clearing 100F and the time-attack summit stay human territory.\n' +
-      '[🎒 Inventory] A new inventory screen in the menu: gear, items, badges and thrones in one place, with equipping right there.\n' +
-      '[🔊 A livelier lobby] Up to 600 residents now fill the lobby.\n' +
-      '[🐛 Fixes] In Battle Royale, switching apps on a phone got you eliminated — your connection was fine, but looking away for 20 seconds knocked you out; when several players dropped at once the lower scorer could take the better placement; a co-op hand desync made you unable to place anything; a rematch could drag an opponent out of another room; the online player count read roughly double the real number; chat history vanished on restart; English text showed Japanese item, boss, title and badge names verbatim; the day rollover was not using Japan time (login bonus and streaks); conquering the Abyss gave no special celebration — and more.' },
+    title: 'v2.11.1 遊んだまま更新できるように ＆ 大量のバグ修正',
+    titleEn: 'v2.11.1 — Updates Without Losing Your Run, and a Pile of Fixes',
+    body: '【遊んだまま更新できるようになりました】アップデートでサーバーを入れ替えるとき、これまでは遊んでいる最中の人が黙って切断されていました。これからは全員に予告が出て、進行中のものがきちんと終わります — オンライン対戦は引き分け（記録も報酬も残り、勝敗はどちらにもつきません）、バトルロイヤルはその時点の順位で確定、ソロやダンジョンは自動で保存して終了します。\n' +
+      '【ダンジョン全4世界に報酬がつきました】地下と天国は、これまで100階まで登ってもジェムが1個も出ず、到達階すら記録に残っていませんでした。地下は「上級者向け」と書いてあるのに塔より損をする状態だったので、難しさに見合う報酬に直しました。10階ごとにジェム、100階制覇で新バッジ「地底踏破」「天界踏破」が手に入ります。（塔 ジェム700／地下 ジェム1,050／天国 ジェム700／深淵 ジェム1,400）\n' +
+      '【共同作業の報酬を受け取れるようになりました】管理者イベント「共同作業」で、ゲージの段階目標を越えても報酬を受け取る場所がどこにも無く、実際には1枚も配られていませんでした。受け取りボタンを追加しました。\n' +
+      '【達成できない実績を直しました】「伝説の収集家」はアイテム45種が目標でしたが、そもそもゲームに37種しかありませんでした。永久に埋まらない実績だったので、正しく「全37種そろえる」に直しました。\n' +
+      '【住人のギルドが24個に】住人のギルドが8個から24個に増え、住人の数に応じて自然に増減するようになりました。これまでは600人いても8ギルド（160席）しか無く、大多数がどこにも所属できていませんでした。\n' +
+      '【住人も投票します】投票が始まると、住人たちが自分の性格に沿って票を入れるようになりました。イベントの枠選びにも参加します。\n' +
+      '【ランキングの住人が強くなりました】住人の記録が「毎日ちょっとだけ動く数字」ではなく、本物の自己ベストのように伸びるようになりました — 伸び悩む時期があり、たまに一気に更新します。レートの上限も引き上げ（最高1900）、塔は95F止まり。100F制覇と時間の頂点は人間のものです。\n' +
+      '【インベントリ】メニューに新しいインベントリ画面を追加。装備・アイテム・バッジ・王座を1か所で確認して、その場で着せ替えできます。\n' +
+      '【ロビーがにぎやかに】ロビーの住人が最大600人までいるようになりました。\n' +
+      '【バグ修正】バトルロイヤルで、スマホのアプリを切り替えただけで失格になっていた不具合（回線が切れていないのに20秒よそ見すると脱落していました）／同時に脱落したとき、スコアの低い人が良い順位を取ることがあった不具合／協力プレイで手札がズレると置けなくなる不具合／再戦のときに相手が別の部屋に入っていても引きずり出してしまう不具合／オンライン人数が実際の約2倍に見えていた不具合／チャットの履歴が再起動で消えていた不具合／英語表示に日本語のアイテム名・ボス名・称号・バッジ名がそのまま出ていた不具合／日付の変わり目が日本時間からずれていた不具合（ログインボーナスと連続ログイン）／深淵ダンジョンを制覇しても専用のお祝いが出なかった不具合 — ほか多数。',
+    bodyEn: '[Updates without losing your run] Swapping the server for an update used to disconnect everyone mid-game without a word. Now everybody is warned and whatever is in progress is closed out properly: online matches end in a draw (the run and its rewards are kept, and nobody takes a loss), a battle royale locks in your placement at that moment, and solo or dungeon runs are saved and ended automatically.\n' +
+      '[All four dungeon realms now pay out] The Depths and The Ascent gave no gems at all — not even a record of the floor you reached — no matter how far you climbed. The Depths is billed as the harder realm, yet clearing it paid strictly worse than the Tower. Rewards now match the difficulty: gems every 10 floors, plus the new badges Depths Conqueror and Ascent Conqueror for reaching floor 100. (Tower 700 gems / Depths 1,050 / Ascent 700 / Abyss 1,400)\n' +
+      '[The Great Work rewards can finally be collected] Clearing a gauge tier in The Great Work had nowhere to actually claim the reward, so not a single coin was ever handed out. There is now a collect button.\n' +
+      '[An impossible achievement, fixed] Legendary Collector asked for 45 items when the game only has 37. It could never be completed, so it now correctly asks for all 37.\n' +
+      '[24 resident guilds] Resident guilds grew from 8 to 24 and now scale with the population. With 600 residents there were only 8 guilds (160 seats), so most residents belonged nowhere.\n' +
+      '[Residents vote] When a poll opens, residents now cast votes in line with their personalities — including on which event slot to attend.\n' +
+      '[Stronger residents on the leaderboards] Resident records now grow like real personal bests instead of drifting a little every day: they plateau, then break through. The rating ceiling was raised (1900 max) and the tower caps at floor 95 — clearing 100F and the time-attack summit stay human territory.\n' +
+      '[Inventory] A new inventory screen in the menu: gear, items, badges and thrones in one place, with equipping right there.\n' +
+      '[A livelier lobby] Up to 600 residents now fill the lobby.\n' +
+      '[Fixes] In Battle Royale, switching apps on a phone got you eliminated — your connection was fine, but looking away for 20 seconds knocked you out; when several players dropped at once the lower scorer could take the better placement; a co-op hand desync made you unable to place anything; a rematch could drag an opponent out of another room; the online player count read roughly double the real number; chat history vanished on restart; English text showed Japanese item, boss, title and badge names verbatim; the day rollover was not using Japan time (login bonus and streaks); conquering the Abyss gave no special celebration — and more.' },
   { id: 'seed-v214', pinned: true,
-    title: '📈 v2.14 住人たちが本気を出しました', titleEn: '📈 v2.14 — The Residents Got Serious',
-    body: '【📈 ランキングの住人が大幅強化】アリーナの住人たちが猛特訓を積み、ランキング上位の記録が化け物級になりました。ハイスコアは数十万点、レートは2000超え、塔は99階、タイムアタックも理論値ギリギリ — 各ランキングの頂は、もうこれまでの比ではありません。チャットで彼らが自慢してくる点数も本物です。\n' +
-      '【👑 それでも頂は獲れます】どの記録にも、人間が到達できる余地は残してあります。同記録なら王座は必ず人間のもの。そして塔100階の制覇は、今までどおり人間だけに許された領域です。住人の記録は日々伸び続けます — 追い抜くなら、今日がいちばん易しい日。挑戦者を待っています。',
-    bodyEn: '[📈 The leaderboard residents got a massive power-up] The arena residents have been training hard, and the top of every leaderboard is now monstrous: high scores in the hundreds of thousands, ratings beyond 2000, floor 99 of the Tower, and time-attack records scraping the theoretical limit. The summit of each board is nothing like it used to be — and the scores they brag about in chat are real.\n' +
-      '[👑 The summit can still be taken] Every record leaves room for a human to reach it, and on a tie the throne always goes to the human. Conquering floor 100 of the Tower remains yours alone. The residents\' records keep growing by the day — today is the easiest day to pass them. We are waiting for challengers.' },
+    title: 'v2.14 住人たちが本気を出しました', titleEn: 'v2.14 — The Residents Got Serious',
+    body: '【ランキングの住人が大幅強化】アリーナの住人たちが猛特訓を積み、ランキング上位の記録が化け物級になりました。ハイスコアは数十万点、レートは2000超え、塔は99階、タイムアタックも理論値ギリギリ — 各ランキングの頂は、もうこれまでの比ではありません。チャットで彼らが自慢してくる点数も本物です。\n' +
+      '【それでも頂は獲れます】どの記録にも、人間が到達できる余地は残してあります。同記録なら王座は必ず人間のもの。そして塔100階の制覇は、今までどおり人間だけに許された領域です。住人の記録は日々伸び続けます — 追い抜くなら、今日がいちばん易しい日。挑戦者を待っています。',
+    bodyEn: '[The leaderboard residents got a massive power-up] The arena residents have been training hard, and the top of every leaderboard is now monstrous: high scores in the hundreds of thousands, ratings beyond 2000, floor 99 of the Tower, and time-attack records scraping the theoretical limit. The summit of each board is nothing like it used to be — and the scores they brag about in chat are real.\n' +
+      '[The summit can still be taken] Every record leaves room for a human to reach it, and on a tie the throne always goes to the human. Conquering floor 100 of the Tower remains yours alone. The residents\' records keep growing by the day — today is the easiest day to pass them. We are waiting for challengers.' },
   { id: 'seed-v215', pinned: true,
-    title: '📅 v2.15 デイリーチャレンジ開幕！', titleEn: '📅 v2.15 — The Daily Challenge begins!',
-    body: '【📅 毎日変わる、1日1回の真剣勝負】新モード「デイリーチャレンジ」が始まります。全プレイヤーが同じ盤面・同じピース順で、30個のピースを使い切るスコアアタック。記録に残るのは<b>その日の最初の1回だけ</b> — 置き直しはできません。深呼吸してから挑みましょう（挑戦後も練習は何度でもできます）。\n' +
-      '【🎲 日替わりのお題】その日のルールが毎日変わります — 🧱巨大の日（大きいピースだけ）／🐜極小の日／🔥連鎖の日（コンボボーナス2倍）／🌈虹の日（リロール3回）／🧊瓦礫の日（開幕から瓦礫）／💰黄金の日（クリア報酬コイン2倍）。お題は世界共通。今日の運命はみんな同じです。\n' +
-      '【🔥 連続クリアでボーナス最大3倍】その日の<b>目標スコア</b>に届けば「クリア」。目標はお題に合わせて日ごとに変わります（極小の日は低く、連鎖の日は高め）— 挑戦前の画面に必ず出るので、そこで確認を。毎日続けてクリアするとボーナスがどんどん増えます（最大3倍）。<b>7日連続クリアで新バッジ「📅日課の鬼」＋💎300</b>！1日でも空けるとやり直し — 今日の1回を大切に。\n' +
-      '【🏆 その日限りのランキング】ランキング画面に「📅デイリー」ボードが登場。毎日0時（日本時間）にまっさらになる、その日だけの勝負です。今日の頂点は誰の手に？',
-    bodyEn: '[📅 One real attempt, every day] The new Daily Challenge is here. Every player gets the same board and the same piece order — a score attack with exactly 30 pieces. Only your FIRST attempt of the day counts, no do-overs. Take a breath before you start (practice runs are unlimited afterwards).\n' +
-      '[🎲 A rule of the day] The rules change daily — 🧱 Giant Day (only big pieces), 🐜 Tiny Day, 🔥 Combo Day (double combo bonuses), 🌈 Rainbow Day (3 rerolls), 🧊 Rubble Day (the board starts littered), 💰 Golden Day (double coins on clear). The modifier is the same worldwide: everyone shares today\'s fate.\n' +
-      '[🔥 Streaks pay up to 3×] Reach the day\'s <b>target score</b> and the day counts as CLEARED. The target shifts with the rule of the day (lower on Tiny Day, higher on Combo Day) — it is always shown before you start. Clear day after day and the reward multiplies (up to 3×). Clear 7 days in a row for the new 📅 Daily Devotee badge + 300💎! Miss a single day and the streak resets — make today\'s attempt count.\n' +
-      '[🏆 A leaderboard that lives for one day] The ranking screen gains a 📅 Daily board, wiped clean at midnight JST. Who takes today\'s summit?' },
-  // 📌 アップデートのたびに、ここへ1件足すこと（運営の決めごと）。
+    title: 'v2.15 デイリーチャレンジ開幕！', titleEn: 'v2.15 — The Daily Challenge begins!',
+    body: '【毎日変わる、1日1回の真剣勝負】新モード「デイリーチャレンジ」が始まります。全プレイヤーが同じ盤面・同じピース順で、30個のピースを使い切るスコアアタック。記録に残るのは<b>その日の最初の1回だけ</b> — 置き直しはできません。深呼吸してから挑みましょう（挑戦後も練習は何度でもできます）。\n' +
+      '【日替わりのお題】その日のルールが毎日変わります — 巨大の日（大きいピースだけ）／極小の日／連鎖の日（コンボボーナス2倍）／虹の日（リロール3回）／瓦礫の日（開幕から瓦礫）／黄金の日（クリア報酬コイン2倍）。お題は世界共通。今日の運命はみんな同じです。\n' +
+      '【連続クリアでボーナス最大3倍】その日の<b>目標スコア</b>に届けば「クリア」。目標はお題に合わせて日ごとに変わります（極小の日は低く、連鎖の日は高め）— 挑戦前の画面に必ず出るので、そこで確認を。毎日続けてクリアするとボーナスがどんどん増えます（最大3倍）。<b>7日連続クリアで新バッジ「日課の鬼」＋ジェム300</b>！1日でも空けるとやり直し — 今日の1回を大切に。\n' +
+      '【その日限りのランキング】ランキング画面に「デイリー」ボードが登場。毎日0時（日本時間）にまっさらになる、その日だけの勝負です。今日の頂点は誰の手に？',
+    bodyEn: '[One real attempt, every day] The new Daily Challenge is here. Every player gets the same board and the same piece order — a score attack with exactly 30 pieces. Only your FIRST attempt of the day counts, no do-overs. Take a breath before you start (practice runs are unlimited afterwards).\n' +
+      '[A rule of the day] The rules change daily — Giant Day (only big pieces), Tiny Day, Combo Day (double combo bonuses), Rainbow Day (3 rerolls), Rubble Day (the board starts littered), Golden Day (double coins on clear). The modifier is the same worldwide: everyone shares today\'s fate.\n' +
+      '[Streaks pay up to 3×] Reach the day\'s <b>target score</b> and the day counts as CLEARED. The target shifts with the rule of the day (lower on Tiny Day, higher on Combo Day) — it is always shown before you start. Clear day after day and the reward multiplies (up to 3×). Clear 7 days in a row for the new Daily Devotee badge + 300 gems! Miss a single day and the streak resets — make today\'s attempt count.\n' +
+      '[A leaderboard that lives for one day] The ranking screen gains a Daily board, wiped clean at midnight JST. Who takes today\'s summit?' },
+  // アップデートのたびに、ここへ1件足すこと（運営の決めごと）。
   //
   // 遊んでいる人から見ると、更新は「知らないうちに何かが変わった」でしかない。
   // 何が増えたのかをゲーム内で伝えないと、せっかく作った機能が気づかれずに
@@ -2700,28 +2709,28 @@ const SEED_NEWS = [
   //     「〜が直りました」だけでよく、原因の説明は要らない
   //   ・日本語と英語の両方を書く（bodyEn を空にすると英語圏には無言の更新になる）
   { id: 'seed-v228', pinned: true,
-    title: '🎬 プレイ動画の書き出し＆スコアのシェアができるようになりました',
-    titleEn: '🎬 Record your clips and share your score',
-    body: '【🎬 プレイ動画をその場で書き出せます】ゲーム中のHUDに <b>🎬</b> ボタンが増えました。押すと30秒、長押しで15秒／30秒／60秒を選んでプレイ映像を録画できます。書き出されるのは<b>そのままSNSに上げられる縦型の動画</b>で、スコア・モード名・あなたの名前が焼き込まれます。全消しの瞬間や、詰みかけからの逆転をぜひ残してみてください。\n' +
-      '【📣 結果画面からスコアをシェア】ゲームが終わったあとの画面に「📣 スコアをシェアする」が出ます。スコアカードの画像が自動で作られるので、そのまま友達に見せられます。<b>アカウントが無くても使えます</b>。\n' +
-      '【✨ そのほか】新しく参加した方が入りづらくなっていた不具合を直しました。ほかにも、全体チャットがまれに止まる問題や、イベントの進行がおかしくなる問題など、いくつかの不具合を修正しています。',
-    bodyEn: '[🎬 Export your gameplay as a video] A new <b>🎬</b> button appears in the in-game HUD. Tap it for a 30-second clip, or long-press to choose 15 / 30 / 60 seconds. What you get is a <b>vertical video ready to post</b>, with your score, the mode and your name burned in. Perfect for that all-clear moment or a last-second comeback.\n' +
-      '[📣 Share your score from the results screen] After a run you will see "📣 Share your score". A score card image is generated for you, ready to send to friends. <b>You do not need an account.</b>\n' +
-      '[✨ Also in this update] Fixed an issue that could stop new players from connecting. Also fixed a rare problem where global chat could go silent, an event progression bug, and several smaller issues.' },
+    title: 'プレイ動画の書き出し＆スコアのシェアができるようになりました',
+    titleEn: 'Record your clips and share your score',
+    body: '【プレイ動画をその場で書き出せます】ゲーム中のHUDに<b>クリップ</b>ボタンが増えました。押すと30秒、長押しで15秒／30秒／60秒を選んでプレイ映像を録画できます。書き出されるのは<b>そのままSNSに上げられる縦型の動画</b>で、スコア・モード名・あなたの名前が焼き込まれます。全消しの瞬間や、詰みかけからの逆転をぜひ残してみてください。\n' +
+      '【結果画面からスコアをシェア】ゲームが終わったあとの画面に「スコアをシェアする」が出ます。スコアカードの画像が自動で作られるので、そのまま友達に見せられます。<b>アカウントが無くても使えます</b>。\n' +
+      '【そのほか】新しく参加した方が入りづらくなっていた不具合を直しました。ほかにも、全体チャットがまれに止まる問題や、イベントの進行がおかしくなる問題など、いくつかの不具合を修正しています。',
+    bodyEn: '[Export your gameplay as a video] A new <b>clip</b> button appears in the in-game HUD. Tap it for a 30-second clip, or long-press to choose 15 / 30 / 60 seconds. What you get is a <b>vertical video ready to post</b>, with your score, the mode and your name burned in. Perfect for that all-clear moment or a last-second comeback.\n' +
+      '[Share your score from the results screen] After a run you will see "Share your score". A score card image is generated for you, ready to send to friends. <b>You do not need an account.</b>\n' +
+      '[Also in this update] Fixed an issue that could stop new players from connecting. Also fixed a rare problem where global chat could go silent, an event progression bug, and several smaller issues.' },
   { id: 'seed-v230', pinned: true,
     image: '/img/news/v230-skins.svg',
     imageAlt: '新しいブロック5種（アイス・ウッド・ゼリー・スチール・スターダスト）',
     imageAltEn: 'Five new block skins: Ice, Wood, Jelly, Steel and Stardust',
-    title: '🛍 ショップに17品が入荷しました',
-    titleEn: '🛍 17 new items in the shop',
-    body: '【🧱 ブロック5種】🧊アイス（霜のひびが走る氷塊）／🪵ウッド（年輪の浮かぶ木彫り）／🫧ゼリー（ぷるんと透ける厚み）／⚙️スチール（リベット打ちの鋼鉄）／🌌スターダスト（夜空を閉じ込めた粒）。\n' +
-      '【🎨 ステージ8種】深海／砂漠の夜／ミントの森／真夜中／ルビー／マトリクス／夜明け／星雲。ブロックとの組み合わせで、同じ盤面がまるで別のゲームに見えます。\n' +
-      '【✨ 消去エフェクト4種】❄️スノウ（粉雪が舞い落ちる）／🍃リーフ（木の葉がひらひら）／💠プリズム（虹色の光片が弾ける）／🫧フォーム（泡が立ちのぼる）。\n' +
-      '【👑 それと、ひとつお知らせ】アリーナでいちばん強いのは <b>ちゃちゃまる</b> です。ランキングの頂点で待っています — 挑んでみてください。',
-    bodyEn: '[🧱 Five new block skins] 🧊 Ice (frost cracks), 🪵 Wood (visible grain), 🫧 Jelly (wobbly and translucent), ⚙️ Steel (riveted plating), 🌌 Stardust (a night sky inside each block).\n' +
-      '[🎨 Eight new stages] Deep Sea, Desert Night, Mint Forest, Midnight, Ruby, Matrix, Sunrise and Nebula. Paired with a skin, the same board can feel like a different game.\n' +
-      '[✨ Four new clear effects] ❄️ Snow, 🍃 Leaf, 💠 Prism and 🫧 Foam.\n' +
-      '[👑 One more thing] The strongest player in the arena is <b>ちゃちゃまる</b>. They are waiting at the top of the ranking — come and take the crown.' },
+    title: 'ショップに17品が入荷しました',
+    titleEn: '17 new items in the shop',
+    body: '【ブロック5種】アイス（霜のひびが走る氷塊）／ウッド（年輪の浮かぶ木彫り）／ゼリー（ぷるんと透ける厚み）／スチール（リベット打ちの鋼鉄）／スターダスト（夜空を閉じ込めた粒）。\n' +
+      '【ステージ8種】深海／砂漠の夜／ミントの森／真夜中／ルビー／マトリクス／夜明け／星雲。ブロックとの組み合わせで、同じ盤面がまるで別のゲームに見えます。\n' +
+      '【消去エフェクト4種】スノウ（粉雪が舞い落ちる）／リーフ（木の葉がひらひら）／プリズム（虹色の光片が弾ける）／フォーム（泡が立ちのぼる）。\n' +
+      '【それと、ひとつお知らせ】アリーナでいちばん強いのは <b>ちゃちゃまる</b> です。ランキングの頂点で待っています — 挑んでみてください。',
+    bodyEn: '[Five new block skins] Ice (frost cracks), Wood (visible grain), Jelly (wobbly and translucent), Steel (riveted plating), Stardust (a night sky inside each block).\n' +
+      '[Eight new stages] Deep Sea, Desert Night, Mint Forest, Midnight, Ruby, Matrix, Sunrise and Nebula. Paired with a skin, the same board can feel like a different game.\n' +
+      '[Four new clear effects] Snow, Leaf, Prism and Foam.\n' +
+      '[One more thing] The strongest player in the arena is <b>ちゃちゃまる</b>. They are waiting at the top of the ranking — come and take the crown.' },
 ];
 
 // ニュース本文の改訂番号。SEED_NEWS の文面を書き直したら1つ増やすと、
@@ -2730,7 +2739,7 @@ const SEED_NEWS = [
 // これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
 // 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
 // v2.11.1 の本文を差し替えるのに必要になった。
-const NEWS_BODY_REV = 10;  // v2.30: ショップ入荷のお知らせ＋本文の <b> が文字で出ていたのを修正
+const NEWS_BODY_REV = 11;  // v2.34: お知らせ本文の絵文字を言葉に置き換えた（アイコンは画面側の独自SVGに一本化）
 
 // id で引いたユーザー。`__proto__` や `constructor` を渡されると
 // Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
@@ -2740,13 +2749,27 @@ function userById(id) {
   const key = String(id == null ? '' : id);
   return Object.prototype.hasOwnProperty.call(db.users, key) ? db.users[key] : undefined;
 }
+// 見出しの照合キー。絵文字と空白を落としてから比べる。
+//
+// なぜ要るか
+//   固定 id（seed-*）が入る前に公開された投稿は、本番の db に**ランダムな
+//   UUID**で残っている。それらは「タイトルが一致するか」だけで seed と
+//   結びついていたので、v2.34 で見出しから絵文字を落とした瞬間に、4件が
+//   どの seed とも一致しなくなった ── 差し替えが届かず、絵文字の付いた
+//   古い本文が本番に永久に残る（実際に手元の db で再現した）。
+//   絵文字を無視して比べれば、改訂の前後どちらの見出しでも同じ投稿を指せる。
+const NEWS_EMOJI = /(\p{Extended_Pictographic}(️)?(‍\p{Extended_Pictographic}(️)?)*)/gu;
+const newsKey = (s) => String(s || '').replace(NEWS_EMOJI, '').replace(/\s+/g, '');
+
 function seedNews() {
   // ループ内で push すると2件目以降の判定が狂うので「元から空だったか」を先に確定
   const hadNews = db.news.length > 0;
   const refresh = (db.meta.newsBodyRev || 0) < NEWS_BODY_REV;
   let refreshed = 0;
   for (const p of SEED_NEWS) {
-    const existing = db.news.find(n => n && (n.id === p.id || n.title === p.title));
+    const key = newsKey(p.title);
+    const existing = db.news.find(n => n && (n.id === p.id || n.title === p.title
+      || (key && newsKey(n.title) === key)));
     if (existing) {
       // 既存の日本語のみの投稿に英語を後から補完（本番が自己修復する）
       if (!existing.titleEn) existing.titleEn = p.titleEn;
@@ -2807,7 +2830,7 @@ function unpinOldReleaseNotes() {
     n++;
   }
   db.meta.newsUnpinned = NEWS_BODY_REV;
-  if (n) console.log(`[news] 過去の更新履歴 ${n}件の📌を外しました（最新版のみ📌）`);
+  if (n) console.log(`[news] 過去の更新履歴 ${n}件のピン留めを外しました（最新版のみピン留め）`);
 }
 
 // ---------------------------------------------------------------------------
@@ -3026,7 +3049,7 @@ app.post('/api/admin/news', requireAuth, requireAdmin, (req, res) => {
   if (db.news.length > 200) db.news.shift();
   saveDb();
   if (req.body.announce !== false) {
-    battle.broadcastAll({ type: 'announce', message: `📰 お知らせ「${title}」を公開しました。メニューの「ニュース」から読めます`, messageEn: `📰 News posted: "${title}" — read it from the News menu`, from: req.user.username });
+    battle.broadcastAll({ type: 'announce', message: `お知らせ「${title}」を公開しました。メニューの「ニュース」から読めます`, messageEn: `News posted: "${title}" — read it from the News menu`, from: req.user.username });
     battle.crowd.feed({ icon: '📰', real: true, who: '運営', text: `お知らせ「${title}」が公開された`, textEn: `News posted: "${title}"` });
   }
   battle.broadcastAll({ type: 'news', latestAt: n.at });
@@ -3132,8 +3155,8 @@ app.post('/api/admin/event', requireAuth, requireAdmin, (req, res) => {
     db.meta.event = null;
     battle.broadcastAll({
       type: 'announce',
-      message: `${was ? was.icon : '🌪️'} 期間限定イベントは終了しました。また次回！`,
-      messageEn: `${was ? was.icon : '🌪️'} The limited-time event has ended — see you next time!`,
+      message: '期間限定イベントは終了しました。また次回！',
+      messageEn: 'The limited-time event has ended — see you next time!',
       from: req.user.username,
     });
     battle.crowd.react('event_end');
@@ -3231,12 +3254,12 @@ function finalizeWeeklyRankings() {
         best: u.stats.weekly.best, coins: t.coins, gems: t.gems, badge: t.badge || null, at: Date.now(),
       });
     });
-    const medals = ['🥇', '🥈', '🥉'];
+    const medals = ['1位', '2位', '3位'];
     const top = players.slice(0, 3).map((u, i) => `${medals[i]} ${u.username}（${fmtNum(u.stats.weekly.best)}点）`);
     db.news.push({
       id: crypto.randomUUID(),
-      title: `🏆 週間チャレンジ結果発表（${week}）`,
-      titleEn: `🏆 Weekly Challenge results (${week})`,
+      title: `週間チャレンジ結果発表（${week}）`,
+      titleEn: `Weekly Challenge results (${week})`,
       body: `先週の週間チャレンジの結果です（参加${players.length}人）！\n${top.join('\n')}\n\n参加者全員に順位に応じたコイン＆ジェムをお届けしました。ゲームを開くと受け取れます。今週のチャレンジも開催中！`,
       bodyEn: `Last week's Weekly Challenge results (${players.length} entrants)!\n${top.join('\n')}\n\nEveryone received coins & gems for their placement — open the game to claim. This week's challenge is already live!`,
       pinned: false, by: '運営', at: Date.now(),
@@ -3394,13 +3417,13 @@ function settleSeasonHallOfFame() {
   db.meta.seasonMark = seasonMarkOf(cur);
 
   if (boards.length) {
-    const medals = ['🥇', '🥈', '🥉'];
+    const medals = ['1位', '2位', '3位'];
     const lineJa = boards.map(b => `【${b.name}】\n${b.top.map(t => `${medals[t.rank - 1]} ${t.username}（${fmtNum(t.value)}）`).join('\n')}`).join('\n\n');
     const lineEn = boards.map(b => `[${b.nameEn}]\n${b.top.map(t => `${medals[t.rank - 1]} ${t.username} (${fmtNum(t.value)})`).join('\n')}`).join('\n\n');
     db.news.push({
       id: crypto.randomUUID(),
-      title: `🏛 ${prev.name} 殿堂入り発表`,
-      titleEn: `🏛 ${prev.nameEn} Hall of Fame`,
+      title: `${prev.name} 殿堂入り発表`,
+      titleEn: `${prev.nameEn} Hall of Fame`,
       body: `${prev.name}が終了しました。歴代の記録として殿堂に刻まれた顔ぶれです。\n\n${lineJa}\n\n各ボードで上位に入った挑戦者にはジェムを、その首位にはシーズン刻印バッジをお届けしました（ゲームを開くと受け取れます）。新シーズンもよろしくお願いします！`,
       bodyEn: `${prev.nameEn} has ended — here are the names carved into the Hall of Fame.\n\n${lineEn}\n\nThe top challengers on each board received gems, and the highest of them earned the season champion badge — open the game to claim. See you in the new season!`,
       pinned: false, by: '運営', at: Date.now(),

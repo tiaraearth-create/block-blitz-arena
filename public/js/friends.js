@@ -25,9 +25,9 @@ function esc(x) {
 }
 
 const STATUS = {
-  menu: () => t('🟢 オンライン', '🟢 Online'),
-  playing: () => t('🎮 対戦中', '🎮 Playing'),
-  offline: () => t('⚫ オフライン', '⚫ Offline'),
+  menu: () => t('オンライン', 'Online'),
+  playing: () => t('対戦中', 'Playing'),
+  offline: () => t('オフライン', 'Offline'),
 };
 
 function ago(ts) {
@@ -50,9 +50,9 @@ function ago(ts) {
 // ---------------------------------------------------------------------------
 
 const BOARD_SECTIONS = [
-  { key: 'daily', icon: '📅', ja: '今日のデイリー', en: "Today's Daily" },
-  { key: 'weekly', icon: '🎯', ja: '今週のウィークリー', en: "This week's Weekly" },
-  { key: 'rating', icon: '⚔️', ja: 'レート', en: 'Rating' },
+  { key: 'daily', icon: 'mode_daily', ja: '今日のデイリー', en: "Today's Daily" },
+  { key: 'weekly', icon: 'mode_weekly', ja: '今週のウィークリー', en: "This week's Weekly" },
+  { key: 'rating', icon: 'seat_play', ja: 'レート', en: 'Rating' },
 ];
 
 const CHALLENGE_COOLDOWN_MS = 60 * 60 * 1000;   // サーバーが返さなかったときの控えめな既定値
@@ -90,7 +90,7 @@ function ensureRivalTab() {
   const b = document.createElement('button');
   b.className = 'tab';
   b.dataset.fr = 'rival';
-  b.textContent = t('🏁 ライバル', '🏁 Rivals');
+  b.textContent = t('ライバル', 'Rivals');
   const settings = tabs.querySelector('[data-fr="settings"]');
   if (settings) tabs.insertBefore(b, settings);
   else tabs.appendChild(b);
@@ -136,9 +136,9 @@ function challengeBtn(key, e) {
   if (session.user && e.id === session.user.id) return '';
   const left = cooldownUntil(e) - Date.now();
   if (left > 0) {
-    return `<button class="fr-b" disabled title="${t('しばらく送れません', 'On cooldown')}">🔔 ${esc(cdLabel(left))}</button>`;
+    return `<button class="fr-b" disabled title="${t('しばらく送れません', 'On cooldown')}">${esc(cdLabel(left))}</button>`;
   }
-  return `<button class="fr-b" data-chal="${esc(e.id)}" data-chalboard="${esc(key)}">🔔 ${t('挑戦状', 'Challenge')}</button>`;
+  return `<button class="fr-b" data-chal="${esc(e.id)}" data-chalboard="${esc(key)}">${t('挑戦状', 'Challenge')}</button>`;
 }
 
 function boardRow(key, e, i) {
@@ -160,10 +160,10 @@ function viewRival() {
   if (!boardData && !boardLoading && !boardError) loadBoard();
   const head = [
     `<p class="muted" style="font-size:11.5px;line-height:1.6">${t(
-      '🏁 デイリーもウィークリーも、<b>全員がまったく同じピース順</b>で挑んでいます。運の差はゼロ — ここに出ている差は、そのまま腕の差です。',
-      '🏁 Daily and Weekly hand <b>every player the exact same pieces</b>. No luck involved — the gap you see here is pure skill.')}</p>`,
+      'デイリーもウィークリーも、<b>全員がまったく同じピース順</b>で挑んでいます。運の差はゼロ — ここに出ている差は、そのまま腕の差です。',
+      'Daily and Weekly hand <b>every player the exact same pieces</b>. No luck involved — the gap you see here is pure skill.')}</p>`,
     `<div style="display:flex;justify-content:flex-end;margin:6px 0 2px">
-       <button class="fr-b" id="frBoardReload">${t('🔄 更新', '🔄 Refresh')}</button>
+       <button class="fr-b" id="frBoardReload">${t('更新', 'Refresh')}</button>
      </div>`,
   ].join('');
 
@@ -181,7 +181,7 @@ function viewRival() {
       ? t('オンライン対戦の実力値', 'Your online battle rating')
       : t('全員共通のシード — 純粋な腕比べ', 'One shared seed — a pure test of skill');
     return [
-      `<h3 class="fr-h">${sec.icon} ${t(sec.ja, sec.en)} <span style="font-weight:600;text-transform:none;letter-spacing:0">— ${note}</span></h3>`,
+      `<h3 class="fr-h">${icon(sec.icon, { size: 18 })} ${t(sec.ja, sec.en)} <span style="font-weight:600;text-transform:none;letter-spacing:0">— ${note}</span></h3>`,
       rows.length
         ? '<div class="fr-list">' + rows.map((e, i) => boardRow(sec.key, e, i)).join('') + '</div>'
         : `<p class="muted" style="font-size:11.5px">${t('まだ記録がありません。', 'No records yet.')}</p>`,
@@ -195,8 +195,8 @@ function viewRival() {
       'Add friends to race them here. Send a request from “Find”.')}</p>`;
   }
   return head + body + `<p class="muted" style="font-size:11px;margin-top:14px">${t(
-    '🔔 挑戦状は「今日は勝負しよう」という合図だけです。文章は付けられません。',
-    '🔔 A challenge is just a nudge saying “race me today”. No message can be attached.')}</p>`;
+    '挑戦状は「今日は勝負しよう」という合図だけです。文章は付けられません。',
+    'A challenge is just a nudge saying “race me today”. No message can be attached.')}</p>`;
 }
 
 async function sendChallenge(b) {
@@ -211,7 +211,7 @@ async function sendChallenge(b) {
     const r = await api('/api/friends/challenge', { method: 'POST', body: { userId: id, board: key } });
     const until = Number(r && (r.cooldownUntil || r.until)) || (Date.now() + CHALLENGE_COOLDOWN_MS);
     challengeCooldown.set(id, until);
-    toast(t('🔔 挑戦状を送りました', '🔔 Challenge sent'), 'ok', 2400);
+    toast(t('挑戦状を送りました', 'Challenge sent'), 'ok', 2400);
   } catch (err) {
     if (err && err.status === 404) {
       toast(t('挑戦状はまだ準備中です', 'Challenges are not available yet'), 'err', 2600);
@@ -353,8 +353,8 @@ function viewList() {
   const head = [
     '<div class="fr-party">',
     p
-      ? `<span>${t(`👥 パーティー中（${p.members.length}/${p.max}）`, `👥 In a party (${p.members.length}/${p.max})`)}</span>`
-      : `<span>${t('👥 パーティーを組むと、いっしょに遊べます', '👥 Make a party to play together')}</span>`,
+      ? `<span>${t(`パーティー中（${p.members.length}/${p.max}）`, `In a party (${p.members.length}/${p.max})`)}</span>`
+      : `<span>${t('パーティーを組むと、いっしょに遊べます', 'Make a party to play together')}</span>`,
     p ? '' : `<button class="btn btn-sm btn-primary" id="frMakeParty">${t('パーティーを作る', 'Create party')}</button>`,
     p ? '' : `<button class="btn btn-sm btn-ghost" id="frJoinParty">${t('合言葉で入る', 'Join by code')}</button>`,
     // サーバーを更新するとパーティーは消える（保存していないので）。

@@ -71,7 +71,7 @@ export function showFeedModal() {
   audio.click();
   const items = feed.slice().reverse();
   const m = showModal(`
-    <h2>📡 ${t('ライブフィード', 'Live Feed')}</h2>
+    <h2>${t('ライブフィード', 'Live Feed')}</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:10px">${t('アリーナで今起きていること', 'What is happening around the arena right now')}</p>
     <div class="feed-list">
       ${items.length ? items.map(it => `
@@ -130,7 +130,7 @@ function showMsgActions(el, msg) {
   const bar = document.createElement('div');
   bar.className = 'cm-actions';
   bar.innerHTML = REACT_EMOJI.map(e => `<button data-re="${e}">${e}</button>`).join('')
-    + `<button class="cm-act-reply" data-reply>↩ ${t('返信', 'Reply')}</button>`;
+    + `<button class="cm-act-reply" data-reply>${t('返信', 'Reply')}</button>`;
   el.appendChild(bar);
   bar.querySelectorAll('[data-re]').forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); sendReact(msg.id, b.dataset.re); closeMsgActions(); };
@@ -141,7 +141,7 @@ function showMsgActions(el, msg) {
 function startReply(msg) {
   replyTarget = { id: msg.id, from: msg.from, text: msg.text };
   const bar = $('#chatReplyBar');
-  $('#chatReplyText').textContent = `↩ ${msg.from}: ${msg.text.slice(0, 40)}`;
+  $('#chatReplyText').textContent = t(`${msg.from} への返信: ${msg.text.slice(0, 40)}`, `Replying to ${msg.from}: ${msg.text.slice(0, 40)}`);
   bar.classList.remove('hidden');
   $('#chatInput').focus();
 }
@@ -205,19 +205,19 @@ async function showProfileCard(name) {
   const m = showModal(`
     <div class="profile-card">
       <div class="pc-head">
-        <span class="pc-avatar">${p.kind === 'resident' ? '🎭' : p.role === 'admin' ? '🛡️' : '😀'}</span>
+        <span class="pc-avatar">${icon(p.role === 'admin' ? 'admin' : p.role === 'mod' ? 'mod' : 'user', { size: 26 })}</span>
         <div class="pc-id">
           <b class="${(p.thrones || []).length ? `crowned${Math.min(3, p.thrones.length)}` : ''}">${p.guildTag ? `<span class="lb-tag">[${escapeHtml(p.guildTag)}]</span>` : ''}${escapeHtml(p.name)}</b>
           ${p.title ? `<span class="pc-title" style="color:${escapeHtml(p.title.color || '#fff')}">《${escapeHtml(p.title.id ? catName(p.title) : p.title.name)}》</span>` : ''}
           <small class="muted">${p.kind === 'resident'
             ? `${escapeHtml((LANG === 'en' && p.archLabelEn) || p.archLabel || '')} ・ ${p.online
-              ? t('🟢 オンライン', '🟢 online')
+              ? t('オンライン', 'online')
               // 出現時間帯もチャットのタイムスタンプと同じ時計で出す（fmtClockHM）。
               // 英語だけ 24時間制で残っていたので、同じ画面の中で時計が2種類あった。
               : (p.hours
-                ? t(`⚫ ${fmtClockHM(p.hours[0])}〜${fmtClockHM(p.hours[1])}に出現`,
-                  `⚫ appears ${fmtClockHM(p.hours[0])}–${fmtClockHM(p.hours[1])}`)
-                : t('⚫ オフライン', '⚫ offline'))}`
+                ? t(`${fmtClockHM(p.hours[0])}〜${fmtClockHM(p.hours[1])}に出現`,
+                  `appears ${fmtClockHM(p.hours[0])}–${fmtClockHM(p.hours[1])}`)
+                : t('オフライン', 'offline'))}`
             : t(`Lv.${p.level} プレイヤー`, `Level ${p.level} player`)}</small>
         </div>
       </div>
@@ -227,9 +227,9 @@ async function showProfileCard(name) {
         <div class="pc-stat"><b>${fmtNum(p.pvpWins)}${t('勝', 'W')}${fmtNum(p.pvpLosses)}${t('敗', 'L')}</b><span>${t('オンライン対戦', 'Online battles')}</span></div>
         <div class="pc-stat"><b>F${fmtNum(p.dungeonMax)}</b><span>${t('ダンジョン', 'Dungeon')}</span></div>
       </div>
-      ${(p.thrones || []).length ? `<p class="center pc-thrones">👑 ${p.thrones.map(b => THRONE_LABELS[b] ? t(THRONE_LABELS[b][0], THRONE_LABELS[b][1]) : b).join(' ・ ')} ${t('王者', 'Champion')}</p>` : ''}
+      ${(p.thrones || []).length ? `<p class="center pc-thrones">${icon('throne', { size: 16 })} ${p.thrones.map(b => THRONE_LABELS[b] ? t(THRONE_LABELS[b][0], THRONE_LABELS[b][1]) : b).join(' ・ ')} ${t('王者', 'Champion')}</p>` : ''}
       ${(p.badges || []).length ? `<p class="center pc-badges">${p.badges.map(b => profileBadgeIcon(b)).join(' ')}</p>` : ''}
-      ${p.kind === 'resident' ? `<p class="muted center" style="font-size:11px">🛡️ ${t('運営のみ表示 ・ 住人アカウント', 'Staff only ・ resident account')}</p>` : ''}
+      ${p.kind === 'resident' ? `<p class="muted center" style="font-size:11px">${icon('admin', { size: 13 })} ${t('運営のみ表示 ・ 住人アカウント', 'Staff only ・ resident account')}</p>` : ''}
     </div>
     <div class="modal-buttons"><button class="btn btn-primary" id="pcClose">${t('閉じる', 'Close')}</button></div>`);
   m.querySelector('#pcClose').onclick = closeModal;
@@ -287,12 +287,12 @@ function appendMsg(msg, scroll = true, box = $('#chatMsgs')) {
   const clock = fmtClock(msg.at || Date.now());
   const useTr = getSettings().chatTranslate && msg.tr && msg.tr.lang === LANG && msgLang(msg.text) !== LANG && !me;
   const tag = msg.tag ? `<span class="cm-tag">[${escapeHtml(msg.tag)}]</span>` : '';
-  const reply = msg.reply ? `<span class="cm-reply">↩ <b>${escapeHtml(msg.reply.from)}</b> ${escapeHtml(msg.reply.text)}</span>` : '';
+  const reply = msg.reply ? `<span class="cm-reply"><b>${escapeHtml(msg.reply.from)}</b> ${escapeHtml(msg.reply.text)}</span>` : '';
   el.innerHTML = `
-    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''} ${isZero ? 'cm-zero' : ''} ${Number(msg.crown) ? `crowned${Math.min(3, Number(msg.crown))}` : ''}">${msg.crown ? '👑' : ''}${isZero ? '👁️' : isAdmin ? '🛡️' : isMod ? '🔧' : ''}${escapeHtml(msg.from)}</button> ・ ${clock}</span>
+    <span class="cm-meta">${tag}<button class="cm-name ${isAdmin ? 'cm-admin' : ''} ${isZero ? 'cm-zero' : ''} ${Number(msg.crown) ? `crowned${Math.min(3, Number(msg.crown))}` : ''}">${msg.crown ? icon('throne', { size: 13 }) : ''}${isAdmin ? icon('admin', { size: 13 }) : isMod ? icon('mod', { size: 13 }) : ''}${escapeHtml(msg.from)}</button> ・ ${clock}</span>
     ${reply}
     <span class="cm-bubble">${escapeHtml(useTr ? msg.tr.text : msg.text)}</span>
-    ${useTr ? `<button class="cm-tr" title="${t('原文を表示', 'Show original')}">🌐 ${msg.tr.engine !== 'table' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}</button>` : ''}
+    ${useTr ? `<button class="cm-tr" title="${t('原文を表示', 'Show original')}">${msg.tr.engine !== 'table' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}</button>` : ''}
     <span class="cm-reacts hidden"></span>`;
   if (useTr) {
     const btn = el.querySelector('.cm-tr');
@@ -302,7 +302,7 @@ function appendMsg(msg, scroll = true, box = $('#chatMsgs')) {
       ev.stopPropagation();
       showingOriginal = !showingOriginal;
       bubble.textContent = showingOriginal ? msg.text : msg.tr.text;
-      btn.textContent = showingOriginal ? `🌐 ${t('翻訳を表示', 'Show translation')}` : `🌐 ${msg.tr.engine !== 'table' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}`;
+      btn.textContent = showingOriginal ? t('翻訳を表示', 'Show translation') : `${msg.tr.engine !== 'table' ? t('翻訳', 'translated') : t('簡易翻訳', 'auto-translated')} ・ ${t('原文', 'original')}`;
     };
   }
   // タップでリアクション/返信。名前タップでプロフィールカード。
@@ -414,11 +414,11 @@ function connect() {
       // 更新でサーバーが落ちる。対戦はサーバー側が引き分けで畳んでくれるので、
       // こちらはソロなどの「まだ結果を送っていない run」を今のうちに確定させる。
       // これをやらないと、終了時の送信が失敗して1回ぶんの記録が黙って消える。
-      toast(t('🔧 アップデートのためサーバーを更新します。プレイ中の記録を保存しました',
-        '🔧 The server is updating. Your current run has been saved'), 'announce', 6000);
+      toast(t('アップデートのためサーバーを更新します。プレイ中の記録を保存しました',
+        'The server is updating. Your current run has been saved'), 'announce', 6000);
       if (window.__bbaSaveNow) window.__bbaSaveNow();
     } else if (msg.type === 'announce') {
-      appendMsg({ from: msg.from || t('運営', 'Staff'), role: 'admin', text: `📢 ${LANG === 'en' && msg.messageEn ? msg.messageEn : msg.message}`, at: Date.now() });
+      appendMsg({ from: msg.from || t('運営', 'Staff'), role: 'admin', text: LANG === 'en' && msg.messageEn ? msg.messageEn : msg.message, at: Date.now() });
     } else if (extraHandlers.has(msg.type)) {
       // パーティー系はここで受ける。常時つながっているこの socket に
       // 相乗りさせるのが、メニュー→ソロ→対戦とパーティーがついてくる理由。
@@ -435,7 +435,7 @@ function connect() {
 }
 
 function setOnlineCount(n) {
-  $('#chatOnline').textContent = t(`🟢 ${n}人`, `🟢 ${n} online`);
+  $('#chatOnline').textContent = t(`${n}人`, `${n} online`);
   $('#onlineCount').textContent = n;
   $('#onlineBadge').classList.remove('hidden');
 }
@@ -444,7 +444,7 @@ function setOnlineCount(n) {
 export function setMood(mood) {
   const el = $('#moodTag');
   if (!el || !mood) return;
-  const tag = { party: ['🔥 大盛況', '🔥 packed'], busy: ['', ''], calm: ['🌙 まったり', '🌙 chill'], off: ['', ''] }[mood] || ['', ''];
+  const tag = { party: ['大盛況', 'packed'], busy: ['', ''], calm: ['まったり', 'chill'], off: ['', ''] }[mood] || ['', ''];
   el.textContent = t(tag[0], tag[1]) ? ` ・ ${t(tag[0], tag[1])}` : '';
   el.dataset.mood = mood;
 }

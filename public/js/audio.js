@@ -257,25 +257,28 @@ TRACKS.kami.bars[3].chord = [N.E4, 415.3, N.B4];
 
 // Jukebox metadata: titles + where each track normally plays.
 // bpm is read from TRACKS so the two never drift apart.
+// 絵は iconName（public/js/icons.js の名前）。以前は 🏠 のような絵文字を直に
+// 持っていて、ジュークボックスの一覧で端末ごとに絵が変わっていた。
+// → 描画は public/js/screens.js の .jb-icon （innerHTML）。
 export const TRACK_INFO = [
-  { id: 'menu',   icon: '🏠', name: 'やすらぎのロビー', nameEn: 'Cozy Lobby',      where: 'メニュー',                 whereEn: 'Menu' },
-  { id: 'solo',   icon: '🧩', name: 'ブロックさんぽ',   nameEn: 'Block Stroll',    where: 'ソロ・ウィークリー',       whereEn: 'Solo / Weekly' },
-  { id: 'battle', icon: '⚔️', name: 'アリーナの熱気',   nameEn: 'Arena Heat',      where: 'オンライン対戦・⛓️連鎖・👻リプレイ', whereEn: 'Online battles / Chain / Replay' },
-  { id: 'hard',   icon: '🔥', name: '限界突破',         nameEn: 'Limit Break',     where: '達人・タイムアタック',     whereEn: 'Expert / Time Attack' },
-  { id: 'boss',   icon: '🐲', name: '巨影せまる',       nameEn: 'Looming Giant',   where: 'ボス戦',                   whereEn: 'Boss fights' },
-  { id: 'oni',    icon: '👹', name: '鬼の巣窟',         nameEn: "Oni's Den",       where: '鬼・深淵',                 whereEn: 'Oni / Abyss' },
-  { id: 'pixel',  icon: '👾', name: 'PIXEL RUSH 182',   nameEn: 'PIXEL RUSH 182',  where: 'バトルロイヤル',           whereEn: 'Battle Royale' },
-  { id: 'kami',   icon: '🔱', name: '天上の光',         nameEn: 'Celestial Light', where: '神・天国ダンジョン',       whereEn: 'Kami / Heaven' },
-  { id: 'ruins',  icon: '🗿', name: '遺跡の囁き',       nameEn: 'Whisper of Ruins', where: 'パズル遺跡・🏗️設計図・🛠️工房', whereEn: 'Puzzle Ruins / Blueprint / Workshop' },
-  { id: 'mine',   icon: '⛏️', name: '地底のハンマー',   nameEn: 'Hammer Below',     where: '採掘場',                  whereEn: 'The Mines' },
-  { id: 'royal',  icon: '👑', name: '王座の間',         nameEn: 'Throne Room',      where: '王者のテーマ（ジュークボックス限定）', whereEn: 'Champions (jukebox exclusive)' },
-  { id: 'ghost',  icon: '👻', name: '幽霊屋敷のオルゴール', nameEn: 'Haunted Music Box', where: '？？？', whereEn: '???', hidden: true },
-  { id: 'blastMenu',  icon: '🧱', name: 'ブラスト・ホーム', nameEn: 'Blast Home',       where: 'ブロックブラストより：メニュー', whereEn: 'From Block Blast: menu' },
-  { id: 'blastGame',  icon: '💠', name: 'ブラスト・パズル', nameEn: 'Blast Puzzle',     where: 'ブロックブラストより：ソロ',     whereEn: 'From Block Blast: solo' },
-  { id: 'blastVs',    icon: '🤖', name: 'ブラスト・バトル', nameEn: 'Blast Battle',     where: 'ブロックブラストより：対戦',     whereEn: 'From Block Blast: versus' },
-  { id: 'blastGod',   icon: '⚡', name: 'ゴッドラッシュ',   nameEn: 'God Rush',         where: 'ブロックブラストより：神モード', whereEn: 'From Block Blast: God mode' },
-  { id: 'blastBoss',  icon: '🌑', name: '終焉のテーマ',     nameEn: 'Theme of the End', where: 'ブロックブラストより：終焉戦',   whereEn: 'From Block Blast: final boss' },
-  { id: 'blastBoss2', icon: '💥', name: '終焉・覚醒',       nameEn: 'The End Awakened', where: 'ブロックブラストより：覚醒形態', whereEn: 'From Block Blast: awakened' },
+  { id: 'menu',   iconName: 'mode_room', name: 'やすらぎのロビー', nameEn: 'Cozy Lobby',      where: 'メニュー',                 whereEn: 'Menu' },
+  { id: 'solo',   iconName: 'mode_solo', name: 'ブロックさんぽ',   nameEn: 'Block Stroll',    where: 'ソロ・ウィークリー',       whereEn: 'Solo / Weekly' },
+  { id: 'battle', iconName: 'mode_online', name: 'アリーナの熱気',   nameEn: 'Arena Heat',      where: 'オンライン対戦・連鎖・リプレイ', whereEn: 'Online battles / Chain / Replay' },
+  { id: 'hard',   iconName: 'fire', name: '限界突破',         nameEn: 'Limit Break',     where: '達人・タイムアタック',     whereEn: 'Expert / Time Attack' },
+  { id: 'boss',   iconName: 'mode_boss', name: '巨影せまる',       nameEn: 'Looming Giant',   where: 'ボス戦',                   whereEn: 'Boss fights' },
+  { id: 'oni',    iconName: 'foe_oni', name: '鬼の巣窟',         nameEn: "Oni's Den",       where: '鬼・深淵',                 whereEn: 'Oni / Abyss' },
+  { id: 'pixel',  iconName: 'mode_royale', name: 'PIXEL RUSH 182',   nameEn: 'PIXEL RUSH 182',  where: 'バトルロイヤル',           whereEn: 'Battle Royale' },
+  { id: 'kami',   iconName: 'badge_kami', name: '天上の光',         nameEn: 'Celestial Light', where: '神・天国ダンジョン',       whereEn: 'Kami / Heaven' },
+  { id: 'ruins',  iconName: 'mode_puzzle', name: '遺跡の囁き',       nameEn: 'Whisper of Ruins', where: 'パズル遺跡・設計図・工房', whereEn: 'Puzzle Ruins / Blueprint / Workshop' },
+  { id: 'mine',   iconName: 'mode_dig', name: '地底のハンマー',   nameEn: 'Hammer Below',     where: '採掘場',                  whereEn: 'The Mines' },
+  { id: 'royal',  iconName: 'throne', name: '王座の間',         nameEn: 'Throne Room',      where: '王者のテーマ（ジュークボックス限定）', whereEn: 'Champions (jukebox exclusive)' },
+  { id: 'ghost',  iconName: 'mode_ghost', name: '幽霊屋敷のオルゴール', nameEn: 'Haunted Music Box', where: '？？？', whereEn: '???', hidden: true },
+  { id: 'blastMenu',  iconName: 'block', name: 'ブラスト・ホーム', nameEn: 'Blast Home',       where: 'ブロックブラストより：メニュー', whereEn: 'From Block Blast: menu' },
+  { id: 'blastGame',  iconName: 'ore_crystal', name: 'ブラスト・パズル', nameEn: 'Blast Puzzle',     where: 'ブロックブラストより：ソロ',     whereEn: 'From Block Blast: solo' },
+  { id: 'blastVs',    iconName: 'mode_ai', name: 'ブラスト・バトル', nameEn: 'Blast Battle',     where: 'ブロックブラストより：対戦',     whereEn: 'From Block Blast: versus' },
+  { id: 'blastGod',   iconName: 'ultimate', name: 'ゴッドラッシュ',   nameEn: 'God Rush',         where: 'ブロックブラストより：神モード', whereEn: 'From Block Blast: God mode' },
+  { id: 'blastBoss',  iconName: 'mode_abyss', name: '終焉のテーマ',     nameEn: 'Theme of the End', where: 'ブロックブラストより：終焉戦',   whereEn: 'From Block Blast: final boss' },
+  { id: 'blastBoss2', iconName: 'combo', name: '終焉・覚醒',       nameEn: 'The End Awakened', where: 'ブロックブラストより：覚醒形態', whereEn: 'From Block Blast: awakened' },
 ].map(t => ({ ...t, bpm: TRACKS[t.id].bpm }));
 
 class AudioEngine {

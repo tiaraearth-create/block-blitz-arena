@@ -5,7 +5,7 @@ import { getSkin, BOARDS, PALETTE } from './themes.js';
 // 独自SVGアイコン。絵文字は端末ごとに絵が変わるうえ、**別々の商品に同じ絵を
 // 当てても誰も止めてくれない**（実際にエフェクト15品のうち8品が ✨ だった）。
 // 商品・バッジ・段位は必ず id 引き（itemIconName / badgeIconName）でここから出す。
-import { icon, itemIconName, badgeIconName } from './icons.js';
+import { icon, itemIconName, badgeIconName, hasIcon } from './icons.js';
 import { rankLadder } from './ranks.js';
 import { audio, TRACK_INFO } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
@@ -32,6 +32,28 @@ const SEP = ` ${MID} `;                   // 前後に空白を付けた区切�
 // 全角括弧のまま（全角括弧は前に空白を入れない）。
 const paren = inner => (LANG === 'en' ? ` (${inner})` : `（${inner}）`);
 const UNKNOWN = LANG === 'en' ? '???' : '？？？';
+
+// ---------------------------------------------------------------------------
+// 見出し・ボタン・ラベルの先頭に置く小さなアイコン（絵文字の置き換え先）。
+//
+// なぜ短縮形を用意するか: この画面ファイルだけで置き換え箇所が数百あり、
+// icon(name, { size }) を毎回書くと1行が読めない長さになる。
+// **文字として入る場所（textContent / toast / escapeHtml の内側 / title 属性）
+// には置けない** ので、そこは絵文字を落として言葉だけにしてある。
+// icons.js に絵が無い意味（ギフト・バッジ一般・ゴミ箱・いいね・投票など）も
+// 同じ理由で言葉に落としてある（勝手にアイコンを足さない約束）。
+// ---------------------------------------------------------------------------
+const ic = (name, size = 16) => icon(name, { size });
+
+// 実績の絵。server/achievements.js の icon 欄は第4波の統合で
+// 「絵文字」から「icons.js のアイコン名」に移した（🎮 → 'mode_solo' など）。
+// 古い db やロールバック中のサーバーが絵文字を返しても壊れないよう、
+// 知らない名前ならその文字をそのまま出す ── icon() に渡すと placeholder に
+// 落ちて「全部おなじ四角」になり、絵文字のほうがまだ読める。
+function achIcon(name) {
+  const s = String(name || '');
+  return hasIcon(s) ? ic(s, 22) : escapeHtml(s);
+}
 
 // ---------------------------------------------------------------------------
 // A11y: ボタンではない要素（カード）を押せる形にしている箇所を、キーボードからも
@@ -66,9 +88,9 @@ function bindActivate(el, handler) {
 function loadFailHtml(err, retryId) {
   const msg = (err && err.message) ? String(err.message) : tr('通信に失敗しました', 'Could not reach the server');
   return `<div class="load-fail">
-    <p>⚠️ ${tr('読み込めませんでした', 'Could not load')}</p>
+    <p>${ic('warn')} ${tr('読み込めませんでした', 'Could not load')}</p>
     <p class="muted">${escapeHtml(msg)}</p>
-    <button class="btn btn-sm btn-ghost" id="${retryId}">🔄 ${tr('再試行', 'Try again')}</button>
+    <button class="btn btn-sm btn-ghost" id="${retryId}">${ic('reroll', 14)} ${tr('再試行', 'Try again')}</button>
   </div>`;
 }
 
@@ -148,8 +170,8 @@ export function showAuthModal(initialMode) {
       toast(sent === 'login' ? tr(`おかえりなさい、${data.user.username}さん！`, `Welcome back, ${data.user.username}!`) : tr(`ようこそ、${data.user.username}さん！`, `Welcome, ${data.user.username}!`), 'ok');
       if (data.dailyBonus) {
         const st = data.dailyBonus.streak || 1;
-        setTimeout(() => toast(tr(`🎁 ログインボーナス +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? `（🔥${st}日連続！）` : ''}`,
-          `🎁 Daily bonus +${data.dailyBonus.coins}🪙 +${data.dailyBonus.gems}💎${st > 1 ? ` (🔥${st}-day streak!)` : ''}`), 'ok', 3500), 900);
+        setTimeout(() => toast(tr(`ログインボーナス コイン+${data.dailyBonus.coins} ジェム+${data.dailyBonus.gems}${st > 1 ? `（${st}日連続！）` : ''}`,
+          `Daily bonus +${data.dailyBonus.coins} coins +${data.dailyBonus.gems} gems${st > 1 ? ` (${st}-day streak!)` : ''}`), 'ok', 3500), 900);
       }
       if (data.user.rankRewards && data.user.rankRewards.length) {
         setTimeout(() => showRankRewardsModal(), 1400);
@@ -216,25 +238,25 @@ function badgeName(id) {
 function showProfileModal() {
   const u = session.user;
   const m = showModal(`
-    <h2>${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '😀'} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
+    <h2>${ic(u.role === 'admin' ? 'admin' : u.role === 'mod' ? 'mod' : 'user', 20)} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
     <div class="result-stats">
       <div class="rs-row"><span>${tr('レベル', 'Level')}</span><b>Lv.${u.level}</b></div>
       <div class="rs-row"><span>${tr('ハイスコア', 'High score')}</span><b>${fmt(u.stats.bestScore)}</b></div>
       <div class="rs-row"><span>${tr('レート', 'Rating')}</span><b>${fmt(u.stats.rating)} ${rankBadge(u.stats.rating)}</b></div>
-      <div class="rs-row"><span>${tr('段位', 'Rank')}</span><button class="btn btn-sm btn-ghost" id="pLadder">🎖️ ${tr('段位一覧を見る', 'View the rank ladder')}</button></div>
+      <div class="rs-row"><span>${tr('段位', 'Rank')}</span><button class="btn btn-sm btn-ghost" id="pLadder">${ic('rank_gold', 14)} ${tr('段位一覧を見る', 'View the rank ladder')}</button></div>
       <div class="rs-row"><span>${tr('オンライン戦績', 'Online record')}</span><b>${tr(`${u.stats.pvpWins}勝 ${u.stats.pvpLosses}敗`, `${u.stats.pvpWins}W ${u.stats.pvpLosses}L`)}</b></div>
       <div class="rs-row"><span>${tr('AI撃破', 'AI wins')}</span><b>${fmt(u.stats.aiWins)}</b></div>
-      ${(u.stats.championWins || 0) > 0 ? `<div class="rs-row"><span>${tr('👑 王者撃破', '👑 Champion defeated')}</span><b style="color:var(--gold)">${tr(`${fmt(u.stats.championWins)}回`, `${fmt(u.stats.championWins)}×`)}</b></div>` : ''}
+      ${(u.stats.championWins || 0) > 0 ? `<div class="rs-row"><span>${ic('throne', 14)} ${tr('王者撃破', 'Champion defeated')}</span><b style="color:var(--gold)">${tr(`${fmt(u.stats.championWins)}回`, `${fmt(u.stats.championWins)}×`)}</b></div>` : ''}
       <div class="rs-row"><span>${tr('プレイ回数', 'Games played')}</span><b>${fmt(u.stats.gamesPlayed)}</b></div>
       <div class="rs-row"><span>${tr('バッジ', 'Badges')}</span><b class="badge-row">${u.badges.length ? u.badges.map(b => `<span title="${escapeHtml(badgeName(b))}">${badgeIcon(b, 20)}</span>`).join('') : tr('なし', 'None')}</b></div>
-      ${u.guild ? `<div class="rs-row"><span>${tr('ギルド', 'Guild')}</span><b>${u.guild.icon} [${escapeHtml(u.guild.tag)}] ${escapeHtml(u.guild.name)}${u.guild.owner ? ' 👑' : ''}</b></div>` : ''}
+      ${u.guild ? `<div class="rs-row"><span>${tr('ギルド', 'Guild')}</span><b>${u.guild.icon} [${escapeHtml(u.guild.tag)}] ${escapeHtml(u.guild.name)}${u.guild.owner ? ` ${ic('throne', 13)}` : ''}</b></div>` : ''}
     </div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="pLogout">${tr('ログアウト', 'Log out')}</button>
-      <button class="btn btn-ghost" id="pRename">${tr('✏️ 名前変更', '✏️ Rename')}</button>
-      <button class="btn btn-online" id="pStats">${tr('📊 戦績', '📊 Stats')}</button>
-      <button class="btn btn-gold" id="pTitles">${tr('👑 称号', '👑 Titles')}</button>
+      <button class="btn btn-ghost" id="pRename">${tr('名前変更', 'Rename')}</button>
+      <button class="btn btn-online" id="pStats">${ic('leaderboard', 14)} ${tr('戦績', 'Stats')}</button>
+      <button class="btn btn-gold" id="pTitles">${tr('称号', 'Titles')}</button>
       <button class="btn btn-primary" id="pClose">${tr('閉じる', 'Close')}</button>
     </div>`);
   m.querySelector('#pClose').onclick = closeModal;
@@ -266,8 +288,8 @@ function showProfileModal() {
 const MODE_LABEL = {
   // 👑 管理者イベントの4種。無いと戦績ダッシュボードに 'ae_invasion' のような
   // 生のIDがそのまま出る。
-  ae_invasion: ['👑 襲来', '👑 Invasion'], ae_roulette: ['🎰 ルーレット', '🎰 Roulette'],
-  ae_communal: ['🏛️ 共同作業', '🏛️ Communal'], ae_zero: ['👁️ 断罪', '👁️ Judgement'],
+  ae_invasion: ['襲来', 'Invasion'], ae_roulette: ['ルーレット', 'Roulette'],
+  ae_communal: ['共同作業', 'Communal'], ae_zero: ['断罪', 'Judgement'],
   solo: ['ソロ', 'Solo'], survival: ['サバイバル', 'Survival'], boss: ['ボス', 'Boss'],
   boss_rush: ['ボスラッシュ', 'Boss Rush'], weekly: ['ウィークリー', 'Weekly'], daily: ['デイリー', 'Daily'],
   chaos: ['カオス', 'Chaos'], pvp: ['オンライン', 'Online'], tournament: ['トーナメント', 'Tournament'],
@@ -335,7 +357,7 @@ function showStatsModal() {
     `<div class="stat-tile"><b style="${color ? `color:${color}` : ''}">${value}</b><span>${label}</span></div>`;
 
   const m = showModal(`
-    <h2>📊 ${tr('戦績ダッシュボード', 'Stats Dashboard')}</h2>
+    <h2>${ic('leaderboard', 20)} ${tr('戦績ダッシュボード', 'Stats Dashboard')}</h2>
     <div class="stat-lv">
       <div class="stat-lv-row"><b>Lv.${u.level}</b><span class="muted">${fmt(xpInLevel)} / 1,000 XP</span></div>
       <div class="ms-bar"><div style="width:${(xpInLevel / 1000) * 100}%"></div></div>
@@ -352,16 +374,16 @@ function showStatsModal() {
       ${tile(tr('レート', 'Rating'), `${rankBadge(s.rating, { withName: false, size: 16 })}${fmt(s.rating || 0)}`, rankOf(s.rating).color)}
       ${winRate !== null ? tile(tr('PvP勝率', 'PvP win rate'), `${winRate}%`, winRate >= 50 ? 'var(--green)' : 'var(--red)') : ''}
       ${tile(tr('最高連勝', 'Best streak'), fmt(s.winStreakBest || s.winStreak || 0), 'var(--pink)')}
-      ${tile(tr('⚡発動回数', '⚡ Ultimates'), fmt(s.ultsUsed || 0), 'var(--cyan)')}
-      ${tile(tr('📋ミッション', '📋 Missions'), fmt(s.missionsDone || 0), 'var(--green)')}
-      ${tile(tr('🏅実績', '🏅 Achievements'), fmt((u.achievements || []).length))}
-      ${tile(tr('🔥連続ログイン', '🔥 Login streak'), tr(`${fmt(s.loginStreak || 1)}日`, `${fmt(s.loginStreak || 1)}d`), 'var(--red)')}
-      ${tile(tr('🏰最高到達階', '🏰 Deepest floor'), `F${fmt(s.dungeonMax || 0)}`)}
-      ${tile(tr('💀最高ウェーブ', '💀 Best wave'), `W${fmt(s.survivalWave || 0)}`)}
+      ${tile(`${ic('ultimate', 13)} ${tr('発動回数', 'Ultimates')}`, fmt(s.ultsUsed || 0), 'var(--cyan)')}
+      ${tile(`${ic('missions', 13)} ${tr('ミッション', 'Missions')}`, fmt(s.missionsDone || 0), 'var(--green)')}
+      ${tile(tr('実績', 'Achievements'), fmt((u.achievements || []).length))}
+      ${tile(`${ic('fire', 13)} ${tr('連続ログイン', 'Login streak')}`, tr(`${fmt(s.loginStreak || 1)}日`, `${fmt(s.loginStreak || 1)}d`), 'var(--red)')}
+      ${tile(`${ic('mode_dungeon', 13)} ${tr('最高到達階', 'Deepest floor')}`, `F${fmt(s.dungeonMax || 0)}`)}
+      ${tile(`${ic('mode_survival', 13)} ${tr('最高ウェーブ', 'Best wave')}`, `W${fmt(s.survivalWave || 0)}`)}
       ${/* 👑 アリーナ最強の相手を破った回数。0 のときは出さない ── 会ったことの
             ない人に「0回」と並べると、取り逃したように見えるうえ、めったに
             会えない相手の存在を先にばらしてしまう。 */''}
-      ${(s.championWins || 0) > 0 ? tile(tr('👑王者撃破', '👑 Champion beaten'), fmt(s.championWins), 'var(--gold)') : ''}
+      ${(s.championWins || 0) > 0 ? tile(`${ic('throne', 13)} ${tr('王者撃破', 'Champion beaten')}`, fmt(s.championWins), 'var(--gold)') : ''}
     </div>
     ${fav ? `<p class="muted center" style="margin-top:10px;font-size:12px">${tr('よく遊ぶモード', 'Most played')}: <b>${escapeHtml(modeLabel(fav[0]))}</b> (${fav[1]}${tr('戦', '')})</p>` : ''}
     <div class="modal-buttons">
@@ -373,7 +395,7 @@ function showStatsModal() {
 // Rename: account name (logged in) — once per day, enforced server-side.
 function showRenameModal() {
   const m = showModal(`
-    <h2>${tr('✏️ 名前変更', '✏️ Change name')}</h2>
+    <h2>${tr('名前変更', 'Change name')}</h2>
     <p class="muted center" style="margin-bottom:10px">${tr('2〜16文字（英数字・日本語）・1日1回まで', '2–16 characters · once per day')}</p>
     <div class="form-col">
       <input id="rnName" type="text" maxlength="16" value="${escapeHtml(session.user.username)}" autocomplete="off">
@@ -407,7 +429,7 @@ function showRenameModal() {
 // 🐛 バグ報告 — ゲストでも送れる。管理者パネルの「🐛 バグ報告」に届く。
 export function showBugReportModal() {
   const m = showModal(`
-    <h2>🐛 ${tr('バグ報告', 'Report a Bug')}</h2>
+    <h2>${tr('バグ報告', 'Report a Bug')}</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:10px">
       ${tr('見つけたバグや気になったことを教えてください！<br><small>「どのモードで・何をしたら・どうなったか」を書いてもらえると直しやすいです。</small>',
           'Tell us about any bug you found!<br><small>Mode, what you did, and what happened — the more detail the faster the fix.</small>')}
@@ -416,7 +438,7 @@ export function showBugReportModal() {
       placeholder="${tr('例）採掘場で地層が上がった瞬間にピースを置いたら、スコアが…', 'e.g. In the Mines, when I placed a piece right as the ground rose…')}"></textarea>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="bugCancel">${tr('やめる', 'Cancel')}</button>
-      <button class="btn btn-primary" id="bugSend">${tr('📮 送信', '📮 Send')}</button>
+      <button class="btn btn-primary" id="bugSend">${tr('送信', 'Send')}</button>
     </div>`);
   m.querySelector('#bugCancel').onclick = closeModal;
   m.querySelector('#bugSend').onclick = async () => {
@@ -427,7 +449,7 @@ export function showBugReportModal() {
       await api('/api/bugreport', { method: 'POST', body: { text } });
       closeModal();
       audio.coin();
-      toast(tr('🐛 報告ありがとうございます！運営が確認します', '🐛 Thank you! The team will take a look'), 'ok', 3500);
+      toast(tr('報告ありがとうございます！運営が確認します', 'Thank you! The team will take a look'), 'ok', 3500);
     } catch (err) {
       m.querySelector('#bugSend').disabled = false;
       toast(err.message, 'err', 2500);
@@ -438,7 +460,7 @@ export function showBugReportModal() {
 function showCreditsModal() {
   const m = showModal(`
     <div class="center" style="margin-bottom:6px">
-      <span style="font-size:28px">🟥🟦<br>🟨🟩</span>
+      <span>${icon('cat_skin', { size: 56 })}</span>
     </div>
     <h2>BLOCK BLITZ ARENA</h2>
     <div class="result-stats" style="margin-top:10px">
@@ -449,7 +471,7 @@ function showCreditsModal() {
       <div class="rs-row"><span>${tr('グラフィック', 'Graphics')}</span><b>${tr('Canvas 手描きレンダリング', 'Hand-drawn Canvas rendering')}</b></div>
       <div class="rs-row"><span>Special Thanks</span><b>${tr('遊んでくれるキミ！', 'YOU, for playing!')}</b></div>
     </div>
-    <p class="muted center" style="font-size:11px;margin-top:10px">© 2026 Block Blitz Arena${SEP}Made with 🧱 & ❤️</p>
+    <p class="muted center" style="font-size:11px;margin-top:10px">© 2026 Block Blitz Arena${SEP}Made with love</p>
     <div class="modal-buttons">
       <button class="btn btn-primary" id="crClose">${tr('閉じる', 'Close')}</button>
     </div>`);
@@ -488,18 +510,18 @@ export async function showGemShop() {
   } catch (err) { toast(err.message, 'err'); return; }
   const isStripe = gemMode === 'stripe';
   const m = showModal(`
-    <h2>${tr('💎 ジェムショップ', '💎 Gem Shop')}</h2>
+    <h2>${ic('gemshop', 20)} ${tr('ジェムショップ', 'Gem Shop')}</h2>
     <p class="muted center" style="margin-bottom:12px">${tr('所持ジェム', 'Your gems')}: <b style="color:var(--cyan)">${fmt(session.user.gems)}</b></p>
     ${isStripe ? '' : `
-    <div class="coming-soon-banner">${tr('🚧 課金機能は製作中です 🚧', '🚧 Payments are under construction 🚧')}<br><small>${tr('もうしばらくお待ちください', 'Check back soon!')}</small></div>`}
+    <div class="coming-soon-banner">${tr('課金機能は製作中です', 'Payments are under construction')}<br><small>${tr('もうしばらくお待ちください', 'Check back soon!')}</small></div>`}
     <div class="form-col">
       ${gemPacks.map(p => `
         <button class="gem-pack ${isStripe ? '' : 'disabled'}" data-pack="${p.id}" ${isStripe ? '' : 'disabled'}>
-          <span class="gp-gems">💎 ${fmt(p.gems)}${p.bonus ? `<small> ${tr(`+${fmt(p.bonus)}ボーナス`, `+${fmt(p.bonus)} bonus`)}</small>` : ''}</span>
+          <span class="gp-gems">${ic('gems')} ${fmt(p.gems)}${p.bonus ? `<small> ${tr(`+${fmt(p.bonus)}ボーナス`, `+${fmt(p.bonus)} bonus`)}</small>` : ''}</span>
           <span class="gp-price">¥${fmt(p.priceJpy)}</span>
         </button>`).join('')}
       ${isStripe
-        ? `<p class="muted center" style="font-size:11px">${tr('🔒 決済はStripeの安全なページで行われます', "🔒 Checkout is handled on Stripe's secure page")}</p>`
+        ? `<p class="muted center" style="font-size:11px">${ic('lock', 13)} ${tr('決済はStripeの安全なページで行われます', "Checkout is handled on Stripe's secure page")}</p>`
         : ''}
     </div>`);
   if (!isStripe) return;
@@ -526,7 +548,7 @@ export async function showTitlesModal() {
     data = await api('/api/titles');
   } catch (err) { toast(err.message, 'err'); return; }
   const m = showModal(`
-    <h2>${tr('👑 称号', '👑 Titles')}</h2>
+    <h2>${ic('throne', 20)} ${tr('称号', 'Titles')}</h2>
     <div class="form-col title-list">
       <button class="title-row ${!data.equipped ? 'equipped' : ''}" data-title="">
         <span class="t-name" style="color:var(--muted)">${tr('称号なし', 'No title')}</span>
@@ -536,7 +558,7 @@ export async function showTitlesModal() {
         const eq = data.equipped === t.id;
         return `
         <button class="title-row ${eq ? 'equipped' : ''} ${earned ? '' : 'locked'}" data-title="${t.id}" ${earned ? '' : 'disabled'}>
-          <span class="t-name" style="color:${t.color}">${earned ? '' : '🔒 '}${catName(t)}</span>
+          <span class="t-name" style="color:${t.color}">${earned ? '' : `${ic('lock', 13)} `}${catName(t)}</span>
           <span class="t-desc">${catDesc(t)}</span>
         </button>`;
       }).join('')}
@@ -562,46 +584,46 @@ export function showSettingsModal() {
   const s = getSettings();
   const guestName = localStorage.getItem('bba_guest_name') || '';
   const m = showModal(`
-    <h2>${tr('⚙️ 設定', '⚙️ Settings')}</h2>
+    <h2>${ic('settings', 20)} ${tr('設定', 'Settings')}</h2>
     <div class="form-col">
       <div class="settings-row">
-        <label>${tr('🌐 言語 / Language', '🌐 Language / 言語')}</label>
+        <label>${tr('言語 / Language', 'Language / 言語')}</label>
         <div class="seg" id="setLang">
           <button data-l="ja" ${LANG === 'ja' ? 'class="active"' : ''}>日本語</button>
           <button data-l="en" ${LANG === 'en' ? 'class="active"' : ''}>English</button>
         </div>
       </div>
       <div class="settings-row">
-        <label>${tr('🔊 効果音', '🔊 Sound FX')}<br><small class="muted" style="font-weight:600">${tr('最大200%（音割れ防止リミッター内蔵）', 'Up to 200% (built-in limiter)')}</small></label>
+        <label>${tr('効果音', 'Sound FX')}<br><small class="muted" style="font-weight:600">${tr('最大200%（音割れ防止リミッター内蔵）', 'Up to 200% (built-in limiter)')}</small></label>
         <input type="range" id="setSfxVol" min="0" max="200" value="${Math.round(s.sfxVol * 100)}">
         <b id="setSfxPct" style="min-width:44px;text-align:right;font-variant-numeric:tabular-nums">${Math.round(s.sfxVol * 100)}%</b>
         <input type="checkbox" id="setSfxOn" ${s.sfxOn ? 'checked' : ''}>
       </div>
       <div class="settings-row">
-        <label>🎵 BGM</label>
+        <label>BGM</label>
         <input type="range" id="setMusicVol" min="0" max="200" value="${Math.round(s.musicVol * 100)}">
         <b id="setMusicPct" style="min-width:44px;text-align:right;font-variant-numeric:tabular-nums">${Math.round(s.musicVol * 100)}%</b>
         <input type="checkbox" id="setMusicOn" ${s.musicOn ? 'checked' : ''}>
       </div>
       <div class="settings-row">
-        <label>🎧 ${tr('サウンドトラック', 'Soundtrack')}<br><small class="muted" style="font-weight:600">${tr('好きな曲を選んでループ再生', 'Pick any track & loop it')}</small></label>
-        <button class="btn btn-sm btn-ghost" id="setJukebox">${(() => { const t = TRACK_INFO.find(x => x.id === s.bgmTrack); return t ? `🔁 ${escapeHtml(tr(t.name, t.nameEn))}` : tr('開く', 'Open'); })()}</button>
+        <label>${tr('サウンドトラック', 'Soundtrack')}<br><small class="muted" style="font-weight:600">${tr('好きな曲を選んでループ再生', 'Pick any track & loop it')}</small></label>
+        <button class="btn btn-sm btn-ghost" id="setJukebox">${(() => { const t = TRACK_INFO.find(x => x.id === s.bgmTrack); return t ? `${ic('reroll', 14)} ${escapeHtml(tr(t.name, t.nameEn))}` : tr('開く', 'Open'); })()}</button>
       </div>
       <div class="settings-row">
-        <label>${tr('📳 画面シェイク', '📳 Screen shake')}</label>
+        <label>${tr('画面シェイク', 'Screen shake')}</label>
         <input type="checkbox" id="setShake" ${s.shake ? 'checked' : ''}>
       </div>
       <div class="settings-row">
-        <label>${tr('🌐 チャット自動翻訳', '🌐 Auto-translate chat')}<br><small class="muted" style="font-weight:600">${tr('日本語⇄英語。原文はタップで表示', 'JA ⇄ EN, tap to see the original')}</small></label>
+        <label>${tr('チャット自動翻訳', 'Auto-translate chat')}<br><small class="muted" style="font-weight:600">${tr('日本語⇄英語。原文はタップで表示', 'JA ⇄ EN, tap to see the original')}</small></label>
         <input type="checkbox" id="setChatTr" ${s.chatTranslate !== false ? 'checked' : ''}>
       </div>
       ${session.user && session.user.role === 'admin' ? `
       <div class="settings-row">
-        <label>🛡️ 管理者専用ボタンを表示<br><small class="muted" style="font-weight:600">カオス／オートパイロット／コマンドパレット／全モードでアイテム</small></label>
+        <label>${ic('admin', 14)} 管理者専用ボタンを表示<br><small class="muted" style="font-weight:600">カオス／オートパイロット／コマンドパレット／全モードでアイテム</small></label>
         <input type="checkbox" id="setStaffUi" ${staffUiOn() ? 'checked' : ''}>
       </div>` : ''}
       <div class="settings-row">
-        <label>${tr('✨ パーティクル量', '✨ Particles')}</label>
+        <label>${tr('パーティクル量', 'Particles')}</label>
         <div class="seg" id="setParticles">
           <button data-p="low" ${s.particles === 'low' ? 'class="active"' : ''}>${tr('少なめ', 'Low')}</button>
           <button data-p="normal" ${s.particles === 'normal' ? 'class="active"' : ''}>${tr('標準', 'Normal')}</button>
@@ -609,37 +631,37 @@ export function showSettingsModal() {
         </div>
       </div>
       <div class="settings-row">
-        <label>${tr('🔣 色にマークを付ける', '🔣 Show shape marks')}<br><small class="muted" style="font-weight:600">${tr('色が見分けにくいときに、ブロックへ形の記号を重ねます', 'Overlays a shape on each block for easier telling apart')}</small></label>
+        <label>${tr('色にマークを付ける', 'Show shape marks')}<br><small class="muted" style="font-weight:600">${tr('色が見分けにくいときに、ブロックへ形の記号を重ねます', 'Overlays a shape on each block for easier telling apart')}</small></label>
         <input type="checkbox" id="setColorMarks" ${s.colorMarks ? 'checked' : ''}>
       </div>
       <div class="settings-row">
-        <label>${tr('✨ 画面フラッシュ', '✨ Screen flash')}<br><small class="muted" style="font-weight:600">${tr('連鎖やボスで画面が白く光る演出を切ります', 'Turns off the full-screen white flash on chains and boss hits')}</small></label>
+        <label>${tr('画面フラッシュ', 'Screen flash')}<br><small class="muted" style="font-weight:600">${tr('連鎖やボスで画面が白く光る演出を切ります', 'Turns off the full-screen white flash on chains and boss hits')}</small></label>
         <input type="checkbox" id="setFlash" ${s.flash !== false ? 'checked' : ''}>
       </div>
       ${session.user ? `
       <div class="settings-row">
-        <label>${tr('✏️ 名前を変更', '✏️ Change name')}</label>
+        <label>${tr('名前を変更', 'Change name')}</label>
         <button class="btn btn-sm btn-ghost" id="setRename">${escapeHtml(session.user.username)}</button>
       </div>` : `
       <div class="settings-row">
-        <label>${tr('✏️ ゲスト名', '✏️ Guest name')}</label>
+        <label>${tr('ゲスト名', 'Guest name')}</label>
         <input id="setGuestName" type="text" maxlength="16" value="${escapeHtml(guestName)}" placeholder="${tr('ゲスト1234', 'Guest1234')}" style="width:130px">
       </div>`}
       <div class="settings-row">
-        <label>${tr('🐛 バグ報告', '🐛 Report a bug')}</label>
+        <label>${tr('バグ報告', 'Report a bug')}</label>
         <button class="btn btn-sm btn-ghost" id="setBugReport">${tr('報告する', 'Report')}</button>
       </div>
       <div class="settings-row">
-        <label>${tr('📜 クレジット', '📜 Credits')}</label>
+        <label>${tr('クレジット', 'Credits')}</label>
         <button class="btn btn-sm btn-ghost" id="setCredits">${tr('見る', 'View')}</button>
       </div>
       <div class="settings-row danger-row">
-        <label>${tr('🗑️ ローカルデータをリセット', '🗑️ Reset local data')}</label>
+        <label>${tr('ローカルデータをリセット', 'Reset local data')}</label>
         <button class="btn btn-sm btn-ghost" id="setResetLocal">${tr('実行', 'Reset')}</button>
       </div>
       ${session.user ? `
       <div class="settings-row danger-row">
-        <label>${tr('⚠️ アカウントを完全削除', '⚠️ Delete account')}</label>
+        <label>${ic('warn', 14)} ${tr('アカウントを完全削除', 'Delete account')}</label>
         <button class="btn btn-sm btn-ghost" id="setDeleteAccount" style="color:var(--red)">${tr('削除', 'Delete')}</button>
       </div>` : ''}
       <div class="modal-buttons">
@@ -685,12 +707,12 @@ export function showSettingsModal() {
   };
   m.querySelector('#setChatTr').onchange = e => {
     updateSettings({ chatTranslate: e.target.checked });
-    toast(e.target.checked ? tr('🌐 チャットを自動翻訳します', '🌐 Chat will be auto-translated') : tr('🌐 自動翻訳をオフにしました', '🌐 Auto-translation off'), 'ok');
+    toast(e.target.checked ? tr('チャットを自動翻訳します', 'Chat will be auto-translated') : tr('自動翻訳をオフにしました', 'Auto-translation off'), 'ok');
   };
   const staffToggle = m.querySelector('#setStaffUi');
   if (staffToggle) staffToggle.onchange = e => {
     setStaffUi(e.target.checked);
-    toast(e.target.checked ? '🛡️ 管理者専用ボタンを表示します' : '👤 プレイヤーと同じ表示にしました', 'ok');
+    toast(e.target.checked ? '管理者専用ボタンを表示します' : 'プレイヤーと同じ表示にしました', 'ok');
   };
   m.querySelector('#setSfxVol').oninput = e => {
     updateSettings({ sfxVol: e.target.value / 100 });
@@ -713,7 +735,7 @@ export function showSettingsModal() {
 
   m.querySelector('#setResetLocal').onclick = () => {
     const c = showModal(`
-      <h2>${tr('🗑️ ローカルデータをリセット', '🗑️ Reset local data')}</h2>
+      <h2>${tr('ローカルデータをリセット', 'Reset local data')}</h2>
       <p class="muted center" style="margin-bottom:14px">${tr('設定・ゲストのベストスコア・隠し難易度の解放状態を消去します。', 'This clears your settings, guest best score and hidden-difficulty unlocks.')}<br>${tr('アカウントのデータ（コイン・スコア等）は残ります。', 'Your account data (coins, scores, etc.) is kept.')}</p>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rlNo">${tr('やめる', 'Cancel')}</button>
@@ -744,7 +766,7 @@ export function showSettingsModal() {
   const delBtn = m.querySelector('#setDeleteAccount');
   if (delBtn) delBtn.onclick = () => {
     const c = showModal(`
-      <h2>${tr('⚠️ アカウント削除', '⚠️ Delete account')}</h2>
+      <h2>${ic('warn', 20)} ${tr('アカウント削除', 'Delete account')}</h2>
       <p class="muted center" style="margin-bottom:14px">${tr(`「${escapeHtml(session.user.username)}」を完全に削除します。`, `This will permanently delete “${escapeHtml(session.user.username)}”.`)}<br>${tr('コイン・スコア・購入アイテムはすべて失われ、元に戻せません。', 'All coins, scores and purchases will be lost — this cannot be undone.')}</p>
       <div class="form-col">
         <input id="delPass" type="password" placeholder="${tr('パスワードを入力して確認', 'Enter password to confirm')}" autocomplete="current-password">
@@ -782,22 +804,22 @@ export function showJukeboxModal() {
   let sel = savedPin || audio.playing || null;   // いま選択中のトラック
 
   const m = showModal(`
-    <h2>🎧 ${tr('サウンドトラック', 'Soundtrack')}</h2>
+    <h2>${tr('サウンドトラック', 'Soundtrack')}</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:10px">
-      ${tr('タップで再生。🔁をONにすると、どの画面でもその曲がループ再生され続けます', 'Tap a track to play it. Turn 🔁 on and it keeps looping on every screen')}
+      ${tr('タップで再生。「ループ固定」をONにすると、どの画面でもその曲がループ再生され続けます', 'Tap a track to play it. Turn loop-lock on and it keeps looping on every screen')}
     </p>
     <div class="settings-row">
-      <label>🔊 ${tr('BGM音量', 'Music volume')}</label>
+      <label>${tr('BGM音量', 'Music volume')}</label>
       <input type="range" id="jbVol" min="0" max="200" value="${Math.round(s.musicVol * 100)}">
       <b id="jbVolPct" style="min-width:42px;text-align:right;font-variant-numeric:tabular-nums">${Math.round(s.musicVol * 100)}%</b>
     </div>
     <div class="settings-row">
-      <label>🔁 ${tr('選んだ曲をループ固定', 'Loop my pick everywhere')}</label>
+      <label>${ic('reroll', 14)} ${tr('選んだ曲をループ固定', 'Loop my pick everywhere')}</label>
       <input type="checkbox" id="jbLock" ${lock ? 'checked' : ''}>
     </div>
     <div class="jb-list" id="jbList"></div>
     <div class="modal-buttons">
-      <button class="btn btn-ghost" id="jbYt">🎬 ${tr('YouTube書き出し', 'YouTube export')}</button>
+      <button class="btn btn-ghost" id="jbYt">${ic('clip', 14)} ${tr('YouTube書き出し', 'YouTube export')}</button>
       <button class="btn btn-primary" id="jbClose">${tr('閉じる', 'Close')}</button>
     </div>`,
   // 背景タップで閉じると stopPreview が走らず試聴が鳴りっぱなしになるため、
@@ -813,17 +835,17 @@ export function showJukeboxModal() {
     list.innerHTML = `
       ${visibleTracks.map(t => `
         <button class="jb-row ${now === t.id ? 'playing' : ''}" data-jb="${t.id}">
-          <span class="jb-icon">${t.icon}</span>
+          <span class="jb-icon">${ic(t.iconName, 20)}</span>
           <span class="jb-meta">
-            <b>${escapeHtml(tr(t.name, t.nameEn))}${lock && sel === t.id ? ' <span class="jb-pin">🔁</span>' : ''}</b>
+            <b>${escapeHtml(tr(t.name, t.nameEn))}${lock && sel === t.id ? ` <span class="jb-pin">${ic('reroll', 12)}</span>` : ''}</b>
             <small>${escapeHtml(tr(t.where, t.whereEn))}${SEP}${t.bpm} BPM</small>
           </span>
-          ${now === t.id ? '<span class="jb-eq"><i></i><i></i><i></i></span>' : '<span class="jb-play">▶</span>'}
+          ${now === t.id ? '<span class="jb-eq"><i></i><i></i><i></i></span>' : `<span class="jb-play">${tr('再生', 'Play')}</span>`}
         </button>`).join('')}
       <button class="jb-row jb-auto ${autoActive ? 'playing' : ''}" data-jb="">
-        <span class="jb-icon">🔄</span>
+        <span class="jb-icon">${ic('reroll', 20)}</span>
         <span class="jb-meta"><b>${tr('おまかせ', 'Auto')}</b><small>${tr('画面ごとにBGMを自動で切り替え（通常モード）', 'Music switches with each screen (default)')}</small></span>
-        ${autoActive ? '<span class="jb-play">✓</span>' : ''}
+        ${autoActive ? `<span class="jb-play">${ic('check', 14)}</span>` : ''}
       </button>`;
     list.querySelectorAll('[data-jb]').forEach(b => {
       b.onclick = () => {
@@ -840,7 +862,7 @@ export function showJukeboxModal() {
           // 曲をタップした＝聴きたいということ。BGMがOFFでも鳴らす。
           if (!getSettings().musicOn) {
             updateSettings({ musicOn: true });
-            toast(tr('🎵 BGMをONにしました', '🎵 Music turned on'), 'ok', 1800);
+            toast(tr('BGMをONにしました', 'Music turned on'), 'ok', 1800);
           }
           audio.preview(id);
           if (lock) updateSettings({ bgmTrack: id });
@@ -865,8 +887,8 @@ export function showJukeboxModal() {
     }
     updateSettings({ bgmTrack: lock ? sel : null });
     toast(lock
-      ? tr('🔁 この曲をどの画面でもループ再生します', '🔁 This track now loops on every screen')
-      : tr('🔄 画面ごとの自動BGMに戻しました', '🔄 Back to automatic per-screen music'), 'ok', 2200);
+      ? tr('この曲をどの画面でもループ再生します', 'This track now loops on every screen')
+      : tr('画面ごとの自動BGMに戻しました', 'Back to automatic per-screen music'), 'ok', 2200);
     render();
   };
   m.querySelector('#jbYt').onclick = () => {
@@ -1035,9 +1057,9 @@ export async function openLeaderboard(board = 'score') {
           : t.upTo === prev + 1 ? tr(`${t.upTo}位`, `#${t.upTo}`)
           : tr(`${prev + 1}〜${t.upTo}位`, `#${prev + 1}-${t.upTo}`);
         prev = t.upTo === null ? prev : t.upTo;
-        return `<span>${label} ${fmt(t.coins)}🪙+${fmt(t.gems)}💎${t.badge ? '+🏅' : ''}</span>`;
+        return `<span>${label} ${fmt(t.coins)}${ic('coins', 13)}+${fmt(t.gems)}${ic('gems', 13)}${t.badge ? `+${ic('badge_weekly1', 13)}` : ''}</span>`;
       }).join('');
-      rewardHead = `<div class="lb-rewards">🎁 <b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
+      rewardHead = `<div class="lb-rewards"><b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
     }
     list.innerHTML = navLinks + lbYouHtml(board, data.rows, ranks) + rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
@@ -1045,7 +1067,7 @@ export async function openLeaderboard(board = 'score') {
         <div class="lb-name ${r.crowns ? `crowned${Math.min(3, r.crowns)}` : ''}">${r.throne ? `<span class="lb-crown" title="${tr('現王者', 'Reigning champion')}">${icon('throne', { size: 14, label: tr('現王者', 'Reigning champion') })}</span>` : ''}${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
           <span class="lb-badges">${(r.badges || []).map(b => `<span title="${escapeHtml(badgeName(b))}">${badgeIcon(b, 13)}</span>`).join('')}</span>
           ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.id ? catName(r.title) : r.title.name)}》</span>` : ''}
-          <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? `${SEP}${lbRecordHtml(r)}` : ''}${board === 'sprint' && r.sprint180 ? `${SEP}${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? `${SEP}🌑A${fmt(r.abyssMax)}` : ''}</div>
+          <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? `${SEP}${lbRecordHtml(r)}` : ''}${board === 'sprint' && r.sprint180 ? `${SEP}${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? `${SEP}${ic('mode_abyss', 12)}A${fmt(r.abyssMax)}` : ''}</div>
         </div>
         <div class="lb-score">${lbValueHtml(board, lbValue(board, r))}</div>
       </div>`).join('')
@@ -1066,12 +1088,12 @@ export async function openLeaderboard(board = 'score') {
 function lbYouHtml(board, rows, ranks) {
   const u = session.user;
   if (!u) {
-    return `<div class="lb-you guest">${tr('💡 ログインすると、ここに自分の順位が出ます', '💡 Log in to see your own place here')}</div>`;
+    return `<div class="lb-you guest">${tr('ログインすると、ここに自分の順位が出ます', 'Log in to see your own place here')}</div>`;
   }
   // 運営は公開ランキングから除外されている（server/index.js が role !== 'admin'
   // で絞っている）。「圏外です」と出すと不具合に見えるので、理由を言う。
   if (u.role === 'admin') {
-    return `<div class="lb-you guest">${tr('👑 運営アカウントは公開ランキングに載りません', '👑 Staff accounts are excluded from public rankings')}</div>`;
+    return `<div class="lb-you guest">${ic('admin', 14)} ${tr('運営アカウントは公開ランキングに載りません', 'Staff accounts are excluded from public rankings')}</div>`;
   }
   const i = rows.findIndex(r => r.username === u.username);
   if (i >= 0) {
@@ -1110,14 +1132,14 @@ function lbYouHtml(board, rows, ranks) {
 // ボードの見出し。サーバーの各シーズンが name / nameEn を持って来るので、
 // それを優先し、ここは絵文字つきの既定ラベルとして使う（未知の id はそのまま）。
 const HOF_BOARD_LABEL = {
-  rating:  ['📈 レート',           '📈 Rating'],
-  score:   ['🏆 ハイスコア',       '🏆 High Score'],
-  wins:    ['🎯 週間チャレンジ優勝', '🎯 Weekly Challenge wins'],
-  sprint:  ['⏱️ タイムアタック',   '⏱️ Time Attack'],
-  dungeon: ['🏰 ダンジョン',       '🏰 Dungeon'],
-  weekly:  ['🎯 ウィークリー',     '🎯 Weekly'],
-  puzzle:  ['🧩 パズル遺跡',       '🧩 Puzzle Ruins'],
-  dig:     ['⛏️ 採掘場',           '⛏️ The Mines'],
+  rating:  ['レート',           'Rating'],
+  score:   ['ハイスコア',       'High Score'],
+  wins:    ['週間チャレンジ優勝', 'Weekly Challenge wins'],
+  sprint:  ['タイムアタック',   'Time Attack'],
+  dungeon: ['ダンジョン',       'Dungeon'],
+  weekly:  ['ウィークリー',     'Weekly'],
+  puzzle:  ['パズル遺跡',       'Puzzle Ruins'],
+  dig:     ['採掘場',           'The Mines'],
 };
 const HOF_BOARD_ORDER = ['rating', 'score', 'wins', 'sprint', 'dungeon', 'weekly', 'puzzle', 'dig'];
 // サーバーが送ってきたボード名（日英）。id -> [ja, en]
@@ -1190,7 +1212,7 @@ let hofGen = 0;   // モーダル内の非同期レース対策（画面用の v
 export async function showHallOfFame() {
   audio.click();
   const m = showModal(`
-    <h2>🏛️ ${tr('シーズン殿堂', 'Hall of Fame')}</h2>
+    <h2>${ic('hall', 20)} ${tr('シーズン殿堂', 'Hall of Fame')}</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:8px">${tr('歴代シーズンの上位3名', 'The top 3 of every past season')}</p>
     <div class="tabs" id="hofTabs" style="justify-content:center;flex-wrap:wrap"></div>
     <div id="hofBody" class="lb-list" style="max-height:52vh;overflow-y:auto"><p class="muted center">${tr('読み込み中…', 'Loading…')}</p></div>
@@ -1275,7 +1297,7 @@ function ensureHallOfFameNav() {
       btn = document.createElement('button');
       btn.className = 'nav-btn';
       btn.id = 'btnHallOfFame';
-      btn.innerHTML = `<span>🏛️</span>${tr('殿堂', 'Hall of Fame')}`;
+      btn.innerHTML = `<span>${ic('hall', 20)}</span>${tr('殿堂', 'Hall of Fame')}`;
       const after = $('#btnLeaderboard');
       if (after && after.parentNode === nav) nav.insertBefore(btn, after.nextSibling);
       else nav.appendChild(btn);
@@ -1346,8 +1368,8 @@ export function showRankLadder(rating, { back = null } = {}) {
       </div>
       <div class="rk-bar"><span style="width:${pct}%"></span></div>
       <p class="rk-next">${cur.nextAt === null
-        ? tr('🎉 最高段位です。ここから上はレートの数字がそのまま記録になります',
-             '🎉 Top rank reached — from here your rating number is the record')
+        ? tr('最高段位です。ここから上はレートの数字がそのまま記録になります',
+             'Top rank reached — from here your rating number is the record')
         : tr(`次の段まで あと <b>${fmt(cur.toNext)}</b>（${fmt(cur.nextAt)} で昇格）`,
              `<b>${fmt(cur.toNext)}</b> to the next rank (promotes at ${fmt(cur.nextAt)})`)}</p>
     </div>`;
@@ -1507,7 +1529,7 @@ function priceLabel(cur, item, deal) {
 
 function saleBadge(deal) {
   if (!deal) return '';
-  return `<div class="shop-sale" style="font-size:11px;font-weight:800;color:var(--red)">🔥 ${tr(`${deal.off}%OFF`, `${deal.off}% OFF`)}${
+  return `<div class="shop-sale" style="font-size:11px;font-weight:800;color:var(--red)">${ic('fire', 13)} ${tr(`${deal.off}%OFF`, `${deal.off}% OFF`)}${
     deal.endsAt ? ` <span class="muted" style="font-weight:600" data-deal-end="${deal.endsAt}">…</span>` : ''}</div>`;
 }
 
@@ -1544,10 +1566,10 @@ function appendGiftBanner(grid) {
   el.className = 'shop-gift';
   el.style.cssText = 'grid-column:1 / -1;display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:10px;border:1px dashed var(--gold);border-radius:12px;background:rgba(255,215,94,0.08)';
   el.innerHTML = `
-    <b>🎁 ${tr('本日の無料ギフト', 'Today\'s free gift')}</b>
+    <b>${tr('本日の無料ギフト', 'Today\'s free gift')}</b>
     <span class="muted" style="font-size:12px">${tr('中身は開けてのお楽しみ（1日1回）', 'A surprise every day — once per day')}</span>
     ${g.claimed
-      ? `<span class="muted">✓ ${tr('受取済み', 'Claimed')}${g.nextAt > Date.now() ? `${SEP}${tr(`次は${fmtResetIn(g.nextAt - Date.now())}後`, `next in ${fmtResetIn(g.nextAt - Date.now())}`)}` : ''}</span>`
+      ? `<span class="muted">${ic('check', 13)} ${tr('受取済み', 'Claimed')}${g.nextAt > Date.now() ? `${SEP}${tr(`次は${fmtResetIn(g.nextAt - Date.now())}後`, `next in ${fmtResetIn(g.nextAt - Date.now())}`)}` : ''}</span>`
       : `<button class="btn btn-sm btn-gold" id="shopGiftClaim">${tr('受け取る', 'Claim')}</button>`}`;
   grid.appendChild(el);
   const btn = el.querySelector('#shopGiftClaim');
@@ -1566,8 +1588,9 @@ async function claimShopGift(btn) {
     audio.coin();
     confettiBurst(25);
     updateTopbar();
-    toast(tr(`🎁 無料ギフト： ${g.icon || ''}${gname}${g.amount ? ` ×${fmt(g.amount)}` : ''}`,
-      `🎁 Free gift: ${g.icon || ''}${gname}${g.amount ? ` ×${fmt(g.amount)}` : ''}`), 'ok', 3500);
+    // トーストは textContent。g.icon（サーバーが送る絵文字）は出さない。
+    toast(tr(`無料ギフト： ${gname}${g.amount ? ` ×${fmt(g.amount)}` : ''}`,
+      `Free gift: ${gname}${g.amount ? ` ×${fmt(g.amount)}` : ''}`), 'ok', 3500);
     shopFetchedAt = 0;   // 受取済みの状態を取り直す
     openShop(shopTab);
   } catch (err) {
@@ -1589,8 +1612,8 @@ function renderShop() {
     note.className = 'muted center';
     note.style.gridColumn = '1 / -1';
     note.innerHTML = tr(
-      'ラインを消すと⚡ゲージが溜まり、MAXでHUDの⚡ボタンから<b>奥義</b>が撃てる！装備できるのは1つだけ。<br><small>'+JA+'</small>',
-      'Clearing lines charges the ⚡ gauge — at MAX, fire your <b>ultimate</b> from the HUD button. One equipped at a time.<br><small>'+EN+'</small>');
+      'ラインを消すとゲージが溜まり、MAXでHUDのボタンから<b>奥義</b>が撃てる！装備できるのは1つだけ。<br><small>'+JA+'</small>',
+      'Clearing lines charges the gauge — at MAX, fire your <b>ultimate</b> from the HUD button. One equipped at a time.<br><small>'+EN+'</small>');
     grid.appendChild(note);
   }
   items.forEach((item, idx) => {
@@ -1603,7 +1626,7 @@ function renderShop() {
     const equipped = item.cat === 'ult'
       ? equippedUlt() === item.id
       : u ? u.equipped[item.cat] === item.id : !!item.default;
-    const cur = item.currency === 'gems' ? '💎' : '🪙';
+    const cur = item.currency === 'gems' ? ic('gems', 14) : ic('coins', 14);
     // 値引きは「まだ買っていない・買える品」にだけ意味がある。
     const deal = (!owned && !item.adminOnly && !item.throneOnly && !item.gachaOnly) ? dealFor(item) : null;
     const el = document.createElement('div');
@@ -1611,19 +1634,19 @@ function renderShop() {
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
     el.innerHTML = `
       <div class="shop-preview" data-pv="${item.id}"></div>
-      <div class="shop-name">${item.adminOnly || item.throneOnly ? '👑 ' : ''}${catName(item)}</div>
+      <div class="shop-name">${item.adminOnly || item.throneOnly ? `${ic('throne', 14)} ` : ''}${catName(item)}</div>
       <div class="shop-desc">${catDesc(item)}</div>
       ${saleBadge(deal)}
       ${equipped
-        ? `<button class="btn btn-sm btn-ghost" disabled>${tr('✓ 装備中', '✓ Equipped')}</button>`
+        ? `<button class="btn btn-sm btn-ghost" disabled>${ic('check', 13)} ${tr('装備中', 'Equipped')}</button>`
         : owned
           ? `<button class="btn btn-sm btn-primary" data-act="equip">${tr('装備する', 'Equip')}</button>`
           : item.adminOnly
-            ? `<button class="btn btn-sm btn-ghost" disabled>${tr('👑 運営専用', '👑 Staff only')}</button>`
+            ? `<button class="btn btn-sm btn-ghost" disabled>${ic('admin', 13)} ${tr('運営専用', 'Staff only')}</button>`
             : item.throneOnly
-              ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${tr('👑 イベント専用', '👑 Event only')}</button>`
+              ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${ic('throne', 13)} ${tr('イベント専用', 'Event only')}</button>`
             : item.gachaOnly
-              ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${tr('🎰 ガチャ限定', '🎰 Gacha only')}</button>`
+              ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${ic('gacha', 13)} ${tr('ガチャ限定', 'Gacha only')}</button>`
               : `<button class="btn btn-sm btn-gold" data-act="buy">${priceLabel(cur, item, deal)}</button>`}
     `;
     grid.appendChild(el);
@@ -1658,8 +1681,8 @@ const BADGE_INFO = {
   under:      { ja: '地底踏破',      en: 'Depths Conqueror', cja: '地下ダンジョンB100を制覇',         cen: 'Conquer floor B100 of the Depths' },
   heaven:     { ja: '天界踏破',      en: 'Ascent Conqueror', cja: '天国ダンジョンH100を制覇',         cen: 'Conquer floor H100 of the Ascent' },
   abyss:      { ja: '深淵踏破',      en: 'Abyss Conqueror', cja: '深淵ダンジョンA100を制覇',          cen: 'Conquer floor A100 of the Abyss' },
-  zero:       { ja: '断罪',          en: 'Condemned',       cja: '👁️断罪で段を割った回に参加する', cen: 'Be present when a stage falls in Condemned' },
-  zero7:      { ja: '七冠奪還',      en: 'Seven Crowns',    cja: '👁️断罪で七段すべてが陥落した回に居合わせる', cen: 'Be present when all seven stages fall in Condemned' },
+  zero:       { ja: '断罪',          en: 'Condemned',       cja: '断罪で段を割った回に参加する', cen: 'Be present when a stage falls in Condemned' },
+  zero7:      { ja: '七冠奪還',      en: 'Seven Crowns',    cja: '断罪で七段すべてが陥落した回に居合わせる', cen: 'Be present when all seven stages fall in Condemned' },
   tourney:    { ja: '大会優勝',      en: 'Tournament Champ', cja: 'オンライントーナメントで優勝',     cen: 'Win an online tournament' },
   royale:     { ja: '百人の頂点',    en: 'Apex of 100',     cja: 'バトルロイヤルで1位',               cen: 'Take #1 in Battle Royale' },
   adminevent: { ja: '管理者イベント制覇', en: 'Admin Event', cja: '管理者イベントの目標を達成',        cen: 'Complete an Admin Event objective' },
@@ -1686,13 +1709,13 @@ const BADGE_ORDER = ['oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'under'
 // （chat.js のプロフィールカードは対訳表を持っていて英語化されるので、
 //   同じ王座がインベントリとチャットで違う言語に見えていた）
 const THRONE_LABEL = {
-  score:  ['🏆 ハイスコア',   '🏆 High Score'],
-  rating: ['📈 レート',       '📈 Rating'],
-  dungeon:['🏰 ダンジョン',   '🏰 Dungeon'],
-  weekly: ['🎯 ウィークリー', '🎯 Weekly'],
-  sprint: ['⏱️ タイムアタック', '⏱️ Time Attack'],
-  puzzle: ['🧩 パズル遺跡',   '🧩 Puzzle Ruins'],
-  dig:    ['⛏️ 採掘場',       '⛏️ The Mines'],
+  score:  ['ハイスコア',   'High Score'],
+  rating: ['レート',       'Rating'],
+  dungeon:['ダンジョン',   'Dungeon'],
+  weekly: ['ウィークリー', 'Weekly'],
+  sprint: ['タイムアタック', 'Time Attack'],
+  puzzle: ['パズル遺跡',   'Puzzle Ruins'],
+  dig:    ['採掘場',       'The Mines'],
 };
 
 let invTab = 'gear';
@@ -1735,7 +1758,7 @@ function ensureInvDexTab() {
     const b = document.createElement('button');
     b.className = 'tab';
     b.dataset.inv = 'dex';
-    b.textContent = tr('📚 図鑑', '📚 Collection');
+    b.textContent = tr('図鑑', 'Collection');
     b.onclick = () => { audio.click(); openInventory('dex'); };
     tabs.appendChild(b);
   } catch { /* タブ列の形が変わっても他のタブは死なせない */ }
@@ -1757,23 +1780,23 @@ function renderInvSummary() {
     return;
   }
   if (invIsStaff()) {
-    el.innerHTML = `<span>👑 ${tr('運営アカウント', 'Staff account')}</span><span class="muted">${tr('すべて解放されています', 'Everything is unlocked')}</span>`;
+    el.innerHTML = `<span>${ic('throne', 14)} ${tr('運営アカウント', 'Staff account')}</span><span class="muted">${tr('すべて解放されています', 'Everything is unlocked')}</span>`;
     return;
   }
   const all = invCollectibles();
   const have = all.filter(i => (u.owned || []).includes(i.id)).length;
   const pct = Math.round((have / Math.max(1, all.length)) * 100);
   el.innerHTML = `
-    <span>📚 ${tr('コレクション', 'Collection')} <b>${have} / ${all.length}</b></span>
+    <span>${tr('コレクション', 'Collection')} <b>${have} / ${all.length}</b></span>
     <span class="inv-bar"><span style="width:${pct}%"></span></span>
     <span class="muted">${pct}%</span>`;
 }
 
 const CAT_TITLE = {
-  skin: { ja: '🧱 ブロックスキン', en: '🧱 Block skins' },
-  board: { ja: '🎨 ボードテーマ', en: '🎨 Board themes' },
-  fx: { ja: '✨ 消去エフェクト', en: '✨ Clear effects' },
-  ult: { ja: '⚡ 奥義', en: '⚡ Ultimates' },
+  skin: { ja: 'ブロックスキン', en: 'Block skins' },
+  board: { ja: 'ボードテーマ', en: 'Board themes' },
+  fx: { ja: '消去エフェクト', en: 'Clear effects' },
+  ult: { ja: '奥義', en: 'Ultimates' },
 };
 
 function renderInvGear() {
@@ -1800,7 +1823,7 @@ function renderInvGear() {
       </div>
       <div class="inv-grid"></div>
       ${missing > 0 && !invIsStaff()
-        ? `<button class="btn btn-sm btn-ghost inv-more" data-shop-cat="${cat}">🛍️ ${tr(`ショップで見る（あと${missing}種）`, `See ${missing} more in the shop`)}</button>`
+        ? `<button class="btn btn-sm btn-ghost inv-more" data-shop-cat="${cat}">${ic('shop', 13)} ${tr(`ショップで見る（あと${missing}種）`, `See ${missing} more in the shop`)}</button>`
         : ''}`;
     const grid = sec.querySelector('.inv-grid');
     for (const item of owned) {
@@ -1808,7 +1831,7 @@ function renderInvGear() {
       const card = document.createElement('button');
       card.className = `inv-card ${isEq ? 'equipped' : ''}`;
       card.innerHTML = `<div class="inv-pv" data-pv="${item.id}"></div>
-        <div class="inv-name">${item.adminOnly || item.throneOnly ? '👑 ' : ''}${catName(item)}</div>
+        <div class="inv-name">${item.adminOnly || item.throneOnly ? `${ic('throne', 13)} ` : ''}${catName(item)}</div>
         ${isEq ? `<div class="inv-eq">${tr('装備中', 'Equipped')}</div>` : ''}`;
       renderPreview(card.querySelector('.inv-pv'), item);
       // card は <button> なので、そのまま二度押し止めに渡せる。
@@ -1841,7 +1864,7 @@ function renderInvItems() {
         return `<div class="inv-item ${zero ? 'off' : ''}">
           <span class="inv-item-icon">${icon(itemIconName(i), { size: 24, label: catName(i) })}</span>
           <span class="inv-item-body">
-            <b>${i.adminOnly ? '👑 ' : ''}${catName(i)}</b>
+            <b>${i.adminOnly ? `${ic('throne', 13)} ` : ''}${catName(i)}</b>
             <small>${catDesc(i)}</small>
           </span>
           <span class="inv-item-n">×${n}</span>
@@ -1849,8 +1872,8 @@ function renderInvItems() {
       }).join('')}
     </div>
     <div class="inv-links">
-      <button class="btn btn-sm btn-ghost" id="invToShop">🛍️ ${tr('ショップで補充', 'Restock in the shop')}</button>
-      <button class="btn btn-sm btn-ghost" id="invToGacha">🎰 ${tr('ガチャを引く', 'Pull the gacha')}</button>
+      <button class="btn btn-sm btn-ghost" id="invToShop">${ic('shop', 13)} ${tr('ショップで補充', 'Restock in the shop')}</button>
+      <button class="btn btn-sm btn-ghost" id="invToGacha">${ic('gacha', 13)} ${tr('ガチャを引く', 'Pull the gacha')}</button>
     </div>`;
   $('#invToShop').onclick = () => { audio.click(); openShop('item'); };
   $('#invToGacha').onclick = () => { audio.click(); openGacha(); };
@@ -1877,7 +1900,7 @@ async function renderInvTitles() {
   const shown = invTitleFilter === 'earned' ? list.filter(t => earned.has(t.id)) : list;
   body.innerHTML = `
     <div class="inv-sec-head">
-      <span>👑 ${tr('称号', 'Titles')}</span>
+      <span>${ic('throne', 14)} ${tr('称号', 'Titles')}</span>
       <span class="muted">${earned.size} / ${data.titles.length}</span>
     </div>
     <div class="seg" id="invTitleSeg" style="justify-content:center;margin-bottom:8px">
@@ -1890,7 +1913,7 @@ async function renderInvTitles() {
         const eq = data.equipped === t2.id;
         return `<button class="inv-title ${has ? '' : 'locked'} ${eq ? 'equipped' : ''}" data-title="${t2.id}" ${has ? '' : 'disabled'}>
           <span class="inv-title-name" style="color:${has ? escapeHtml(t2.color) : 'var(--dim)'}">《${escapeHtml(catName(t2))}》</span>
-          <span class="inv-title-desc">${has ? (eq ? tr('装備中', 'Equipped') : tr('タップで装備', 'Tap to equip')) : `🔒 ${escapeHtml(catDesc(t2))}`}</span>
+          <span class="inv-title-desc">${has ? (eq ? tr('装備中', 'Equipped') : tr('タップで装備', 'Tap to equip')) : `${ic('lock', 13)} ${escapeHtml(catDesc(t2))}`}</span>
         </button>`;
       }).join('')}
     </div>`;
@@ -1906,7 +1929,7 @@ async function renderInvTitles() {
         // プロフィール側（このファイルの showTitlesModal）と同じ形に揃える。
         await api('/api/titles/equip', { method: 'POST', body: { id: b.dataset.title } });
         updateTopbar();
-        toast(tr('👑 称号を変更しました', '👑 Title equipped'), 'ok');
+        toast(tr('称号を変更しました', 'Title equipped'), 'ok');
         renderInvTitles();
       } catch (err) { toast(err.message, 'err'); }
     };
@@ -1921,7 +1944,7 @@ function renderInvBadges() {
   body.innerHTML = `
     ${thrones.length ? `
       <div class="inv-thrones">
-        <div class="inv-sec-head"><span>👑 ${tr('保持中の王座', 'Thrones you hold')}</span><span class="muted">${thrones.length} / 7</span></div>
+        <div class="inv-sec-head"><span>${ic('throne', 14)} ${tr('保持中の王座', 'Thrones you hold')}</span><span class="muted">${thrones.length} / 7</span></div>
         <div class="inv-throne-row">${thrones.map(b => {
           // Array.isArray で引く。素の `THRONE_LABEL[b] ||` だと constructor 等の
           // プロトタイプ由来の値まで拾ってしまうため。未知のボードは id をそのまま出す。
@@ -1930,8 +1953,8 @@ function renderInvBadges() {
         }).join('')}</div>
       </div>` : ''}
     <div class="inv-sec-head">
-      <span>🎖️ ${tr('バッジ', 'Badges')}</span>
-      <span class="muted">${invIsStaff() ? '👑' : `${[...have].filter(b => BADGE_INFO[b]).length} / ${BADGE_ORDER.length}`}</span>
+      <span>${tr('バッジ', 'Badges')}</span>
+      <span class="muted">${invIsStaff() ? ic('throne', 14) : `${[...have].filter(b => BADGE_INFO[b]).length} / ${BADGE_ORDER.length}`}</span>
     </div>
     <p class="muted center inv-note">${tr('解除条件つき。灰色はまだ持っていないバッジです', 'With unlock conditions — greyed badges are still locked')}</p>
     <div class="inv-badges">
@@ -1942,7 +1965,7 @@ function renderInvBadges() {
           <span class="inv-badge-icon">${badgeIcon(id, 24)}</span>
           <span class="inv-badge-body">
             <b>${tr(b.ja, b.en)}</b>
-            <small>${has ? `✅ ${tr('獲得済み', 'Earned')}` : tr(b.cja, b.cen)}</small>
+            <small>${has ? `${ic('check', 13)} ${tr('獲得済み', 'Earned')}` : tr(b.cja, b.cen)}</small>
           </span>
         </div>`;
       }).join('')}
@@ -1954,7 +1977,7 @@ function renderInvBadges() {
           <span class="inv-badge-icon">${badgeIcon(id, 24)}</span>
           <span class="inv-badge-body">
             <b>${tr(b.ja, b.en)}</b>
-            <small>✅ ${tr('獲得済み', 'Earned')}</small>
+            <small>${ic('check', 13)} ${tr('獲得済み', 'Earned')}</small>
           </span>
         </div>`;
       }).join('')}
@@ -1972,15 +1995,15 @@ function renderInvBadges() {
 // ---------------------------------------------------------------------------
 
 const DEX_SOURCE = {
-  shop:       ['🛍️ ショップで購入', '🛍️ Buy in the shop'],
-  gacha:      ['🎰 ガチャ（SSR以上）', '🎰 Gacha (SSR+)'],
-  throne:     ['👑 王座の欠片と交換', '👑 Trade throne shards'],
-  battlepass: ['🎫 バトルパスの報酬', '🎫 Battle pass reward'],
-  event:      ['🎪 イベント報酬', '🎪 Event reward'],
+  shop:       ['ショップで購入', 'Buy in the shop'],
+  gacha:      ['ガチャ（SSR以上）', 'Gacha (SSR+)'],
+  throne:     ['王座の欠片と交換', 'Trade throne shards'],
+  battlepass: ['バトルパスの報酬', 'Battle pass reward'],
+  event:      ['イベント報酬', 'Event reward'],
 };
 function dexSourceLabel(src) {
   const L = DEX_SOURCE[src];
-  return Array.isArray(L) ? tr(L[0], L[1]) : tr('🛍️ ショップで購入', '🛍️ Buy in the shop');
+  return Array.isArray(L) ? tr(L[0], L[1]) : tr('ショップで購入', 'Buy in the shop');
 }
 
 // 図鑑1マスぶんの情報。セットの kind で引き先が変わる:
@@ -1997,14 +2020,14 @@ function dexEntryInfo(kind, id) {
   }
   if (kind === 'title') {
     const t = titlesCatalog && titlesCatalog.find(x => x.id === id);
-    // 称号だけは icons.js にまだ絵が無いので 👑 のまま（要望として申し送り済み）。
-    return { name: t ? catName(t) : id, icon: '👑', iconName: null,
+    // 称号は専用の絵がまだ無いので、王座（throne）を借りる。
+    return { name: t ? catName(t) : id, icon: null, iconName: 'throne',
       how: t ? catDesc(t) : tr('条件を満たすと獲得', 'Unlocked by meeting its condition'), item: null, go: null };
   }
   if (kind === 'boost') {
     const it = (shopBoosters || []).find(x => x.id === id);
     return { name: it ? catName(it) : id, icon: null, iconName: itemIconName(it || id),
-      how: tr('🛍️ ショップの「アイテム」で購入', '🛍️ Buy from the shop’s Items tab'),
+      how: tr('ショップの「アイテム」で購入', 'Buy from the shop’s Items tab'),
       item: null, go: () => openShop('item') };
   }
   const it = (shopItems || []).find(x => x.id === id);
@@ -2025,7 +2048,7 @@ function normalizeDexSets(data) {
     const ownedIds = new Set(Array.isArray(s.ownedIds) ? s.ownedIds : []);
     return {
       id: String(s.id || ''),
-      icon: s.icon || '📦',
+      iconName: s.iconName || '',
       kind: s.kind || 'item',
       name: (LANG === 'en' && s.nameEn ? s.nameEn : s.name) || String(s.id || ''),
       desc: (LANG === 'en' && s.descEn ? s.descEn : s.desc) || '',
@@ -2054,7 +2077,7 @@ function dexFallbackSets() {
     const list = shopItems.filter(i => i.cat === cat && !i.adminOnly);
     const ownedIds = new Set(list.filter(has).map(i => i.id));
     return {
-      id: `set_${cat}`, icon: '📦', kind: 'item',
+      id: `set_${cat}`, icon: '', kind: 'item',
       name: tr(CAT_TITLE[cat].ja, CAT_TITLE[cat].en), desc: '',
       ids: list.map(i => i.id), ownedIds,
       owned: ownedIds.size, total: list.length,
@@ -2094,33 +2117,34 @@ async function renderInvDex() {
     const pv = info.item
       ? `<div class="inv-pv" data-dexpv="${escapeHtml(id)}"${owned ? '' : ' style="filter:grayscale(1) brightness(.25) contrast(.6)"'}></div>`
       : `<div class="inv-pv" style="display:flex;align-items:center;justify-content:center;font-size:26px${owned ? '' : ';filter:grayscale(1) brightness(.25) contrast(.6)'}">${
-        info.iconName ? icon(info.iconName, { size: 34, label: owned ? info.name : '' }) : escapeHtml(info.icon || '❓')}</div>`;
+        info.iconName ? icon(info.iconName, { size: 34, label: owned ? info.name : '' })
+          : info.icon ? escapeHtml(info.icon) : icon('placeholder', { size: 34 })}</div>`;
     return `<div class="inv-card"${owned ? ' style="cursor:default"' : ` style="opacity:.75" data-dexgo="${escapeHtml(kind)}|${escapeHtml(id)}"`}>
       ${pv}
       <div class="inv-name"${owned ? '' : ' style="color:var(--dim)"'}>${owned ? escapeHtml(info.name) : UNKNOWN}</div>
       <div class="inv-eq"${owned ? '' : ' style="background:none;color:var(--muted);font-size:10px;font-weight:600"'}>${
-        owned ? `✅ ${tr('所持', 'Owned')}` : escapeHtml(info.how)}</div>
+        owned ? `${ic('check', 13)} ${tr('所持', 'Owned')}` : escapeHtml(info.how)}</div>
     </div>`;
   };
 
   body.innerHTML = `
     <div class="inv-sec-head">
-      <span>📚 ${tr('コレクション図鑑', 'Collection')}</span>
+      <span>${tr('コレクション図鑑', 'Collection')}</span>
       <span class="muted">${fmt(got)} / ${fmt(slots)}${paren(`${rate}%`)}</span>
     </div>
     <span class="inv-bar"><span style="width:${rate}%"></span></span>
     <p class="muted center inv-note">${tr('灰色はまだ持っていない品です。入手できる場所を各マスに書いています',
       'Greyed-out entries are still missing — each one lists where to get it')}</p>
     ${claimable && session.user
-      ? `<button class="btn btn-gold" id="dexClaimAll" style="width:100%;margin-bottom:${capHint ? '4' : '10'}px">🎁 ${tr(`受け取れるセット報酬が${claimable}件あります`, `${claimable} set reward${claimable > 1 ? 's' : ''} ready to claim`)}</button>${
-          capHint ? `<p class="muted center" style="font-size:12px;margin:0 0 10px">🎁 ${escapeHtml(capHint)}</p>` : ''}`
+      ? `<button class="btn btn-gold" id="dexClaimAll" style="width:100%;margin-bottom:${capHint ? '4' : '10'}px">${tr(`受け取れるセット報酬が${claimable}件あります`, `${claimable} set reward${claimable > 1 ? 's' : ''} ready to claim`)}</button>${
+          capHint ? `<p class="muted center" style="font-size:12px;margin:0 0 10px">${escapeHtml(capHint)}</p>` : ''}`
       : ''}
     ${sets.map(s => {
       const pct = Math.round((s.owned / Math.max(1, s.total)) * 100);
       return `
       <div class="inv-sec">
         <div class="inv-sec-head">
-          <span>${escapeHtml(s.icon)} ${escapeHtml(s.name)}</span>
+          <span>${s.iconName ? `${ic(s.iconName, 18)} ` : ''}${escapeHtml(s.name)}</span>
           <span class="muted">${fmt(s.owned)} / ${fmt(s.total)}${paren(`${pct}%`)}</span>
         </div>
         ${s.desc ? `<p class="muted inv-note" style="margin:0">${escapeHtml(s.desc)}</p>` : ''}
@@ -2131,14 +2155,14 @@ async function renderInvDex() {
         ${hasReward(s) ? `
           <div class="ms-row ${s.claimed ? 'claimed' : s.done ? 'done' : ''}">
             <div class="ms-info">
-              <div class="ms-name">🎁 ${tr('セットコンプ報酬', 'Set completion reward')}</div>
+              <div class="ms-name">${tr('セットコンプ報酬', 'Set completion reward')}</div>
               <div class="ms-prog">${s.titleName
                 ? tr(`全部そろえると受け取れます ・ 称号《${s.titleName}》つき`, `Claimable once the set is complete — includes the title “${s.titleName}”`)
                 : tr('全部そろえると受け取れます', 'Claimable once the set is complete')}</div>
             </div>
             ${rewardChip(s.coins, s.gems)}
             ${s.claimed
-              ? '<span class="ms-check">✓</span>'
+              ? `<span class="ms-check">${ic('check', 14)}</span>`
               : `<button class="btn btn-sm ${s.done ? 'btn-gold' : 'btn-ghost'}" data-dexclaim="${escapeHtml(s.id)}" ${s.done ? '' : 'disabled'}>${s.done ? tr('受取', 'Claim') : tr('未達成', 'Locked')}</button>`}
           </div>` : ''}
       </div>`;
@@ -2168,8 +2192,8 @@ async function renderInvDex() {
       audio.coin();
       confettiBurst(r.ids && r.ids.length > 1 ? 60 : 30);
       updateTopbar();
-      toast(tr(`🎁 セットコンプ報酬を受け取りました！${r.coins ? ` 🪙${fmt(r.coins)}` : ''}${r.gems ? ` 💎${fmt(r.gems)}` : ''}${r.titles && r.titles.length ? ' ＋👑称号' : ''}`,
-        `🎁 Set reward claimed!${r.coins ? ` 🪙${fmt(r.coins)}` : ''}${r.gems ? ` 💎${fmt(r.gems)}` : ''}${r.titles && r.titles.length ? ' + 👑 title' : ''}`), 'ok', 3500);
+      toast(tr(`セットコンプ報酬を受け取りました！${r.coins ? ` コイン${fmt(r.coins)}` : ''}${r.gems ? ` ジェム${fmt(r.gems)}` : ''}${r.titles && r.titles.length ? ' ＋称号' : ''}`,
+        `Set reward claimed!${r.coins ? ` ${fmt(r.coins)} coins` : ''}${r.gems ? ` ${fmt(r.gems)} gems` : ''}${r.titles && r.titles.length ? ' + a title' : ''}`), 'ok', 3500);
       renderInvDex();
     } catch (err) {
       audio.error();
@@ -2198,7 +2222,7 @@ function renderPreview(el, item) {
     const b = BOARDS[item.id];
     el.style.background = b ? `linear-gradient(160deg, ${b.bg[0]}, ${b.bg[1]})` : '#222';
     el.style.border = `1px solid ${b ? b.accent : '#555'}`;
-    el.textContent = '▦';
+    el.innerHTML = icon('cat_board', { size: 44 });
     el.style.color = b ? b.accent : '#fff';
   } else {
     // 奥義とエフェクトは id 引きの独自アイコン。
@@ -2263,7 +2287,7 @@ function renderBoosterShop() {
       <div class="shop-name">${catName(item)}${count !== null ? ` <span class="muted">×${fmt(count)}</span>` : ''}</div>
       <div class="shop-desc">${catDesc(item)}</div>
       ${saleBadge(deal)}
-      <button class="btn btn-sm btn-gold" data-act="buy">${priceLabel('🪙', item, deal)}</button>
+      <button class="btn btn-sm btn-gold" data-act="buy">${priceLabel(ic('coins', 14), item, deal)}</button>
     `;
     grid.appendChild(el);
     const bbtn = el.querySelector('[data-act]');
@@ -2278,7 +2302,8 @@ function renderBoosterShop() {
         await api('/api/items/buy', { method: 'POST', body: { itemId: item.id } });
         await refreshMe();
         audio.coin();
-        toast(tr(`${item.icon} ${item.name} を購入しました！`, `Bought ${item.icon} ${catName(item)}!`), 'ok');
+        // トーストは textContent なので絵は出せない。item.icon（絵文字）は使わない。
+        toast(tr(`${item.name} を購入しました！`, `Bought ${catName(item)}!`), 'ok');
         updateTopbar();
         renderShop();   // 棚ごと描き直す
       } catch (err) {
@@ -2310,23 +2335,23 @@ export function openGacha() {
   // 管理者は無課金で回せる（server 側で coins を引かない）ので、値段を出すと嘘になる。
   const freePull = session.user.role === 'admin';
   const m = showModal(`
-    <h2>${tr('🎰 カプセルマシン', '🎰 Capsule Machine')}</h2>
+    <h2>${ic('gacha', 20)} ${tr('カプセルマシン', 'Capsule Machine')}</h2>
     <p class="muted center" style="margin-bottom:4px">${tr('コインで回して お宝ゲット！', 'Spin with coins and win treasure!')}</p>
-    <p class="center" style="margin-bottom:6px">${tr('所持コイン', 'Your coins')}: <b id="gcCoins">🪙 ${fmt(session.user.coins)}</b></p>
+    <p class="center" style="margin-bottom:6px">${tr('所持コイン', 'Your coins')}: <b id="gcCoins">${ic('coins', 14)} ${fmt(session.user.coins)}</b></p>
     <div class="gc-pity">
-      <div class="gc-pity-head"><span>✨ ${tr('天井', 'Pity')}</span><b id="gcPityText">…</b></div>
+      <div class="gc-pity-head"><span>${tr('天井', 'Pity')}</span><b id="gcPityText">…</b></div>
       <div class="gc-pity-bar"><div id="gcPityFill" class="gc-pity-fill" style="width:0%"></div></div>
-      <div class="gc-pity-head" style="margin-top:4px"><span>📚 ${tr('コレクション', 'Collection')}</span><b id="gcColText">…</b></div>
+      <div class="gc-pity-head" style="margin-top:4px"><span>${tr('コレクション', 'Collection')}</span><b id="gcColText">…</b></div>
       <div class="gc-pity-bar"><div id="gcColFill" class="gc-pity-fill col" style="width:0%"></div></div>
     </div>
     <p id="gcEvent" class="center hidden" style="font-size:11px;margin-bottom:6px"></p>
     <div id="gcResults" class="gacha-results"></div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="gcClose">${tr('閉じる', 'Close')}</button>
-      <button class="btn btn-primary" id="gcPull1">${tr('1回', '1 pull')} <span id="gcCost1">🪙${fmt(GACHA_BASE_1)}</span></button>
-      <button class="btn btn-gold" id="gcPull10">${tr('10連', '10 pulls')} <span id="gcCost10">🪙${fmt(GACHA_BASE_10)}</span><small style="display:block;font-size:9px">${tr('SR以上1枠確定', '1 SR+ guaranteed')}</small></button>
+      <button class="btn btn-primary" id="gcPull1">${tr('1回', '1 pull')} <span id="gcCost1">${ic('coins', 13)}${fmt(GACHA_BASE_1)}</span></button>
+      <button class="btn btn-gold" id="gcPull10">${tr('10連', '10 pulls')} <span id="gcCost10">${ic('coins', 13)}${fmt(GACHA_BASE_10)}</span><small style="display:block;font-size:9px">${tr('SR以上1枠確定', '1 SR+ guaranteed')}</small></button>
     </div>
-    <p class="muted center" style="font-size:10px;margin-top:8px">${tr('N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム最大150 3%', 'N Coins 50% · R Items 22% · SR Gems 15% · SSR Cosmetics 10% · UR up to 150 Gems 3%')}<br>${tr(`✨ ${pityMax}連以内にSSR以上が必ず出ます（天井） ・ 🌈 ガチャ限定装備はSSRからのみ入手`, `✨ SSR+ guaranteed within ${pityMax} pulls (pity) · 🌈 Gacha-exclusive gear drops only from SSR`)}<br>${tr('スキン等をコンプ済みのときはブースターが3個届きます ・ 💎には1日の獲得上限があります', 'Once cosmetics are complete you get a 3× booster bundle instead · gem payouts have a daily cap')}</p>`);
+    <p class="muted center" style="font-size:10px;margin-top:8px">${tr('N コイン 50% ・ R アイテム 22% ・ SR ジェム 15% ・ SSR スキン等 10% ・ UR ジェム最大150 3%', 'N Coins 50% · R Items 22% · SR Gems 15% · SSR Cosmetics 10% · UR up to 150 Gems 3%')}<br>${tr(`${pityMax}連以内にSSR以上が必ず出ます（天井） ・ ガチャ限定装備はSSRからのみ入手`, `SSR+ guaranteed within ${pityMax} pulls (pity) · Gacha-exclusive gear drops only from SSR`)}<br>${tr('スキン等をコンプ済みのときはブースターが3個届きます ・ ジェムには1日の獲得上限があります', 'Once cosmetics are complete you get a 3× booster bundle instead · gem payouts have a daily cap')}</p>`);
   m.querySelector('#gcClose').onclick = closeModal;
   const setBars = (pity, collection) => {
     if (pity) {
@@ -2349,15 +2374,15 @@ export function openGacha() {
     const b1 = num(d.base1, GACHA_BASE_1), b10 = num(d.base10, GACHA_BASE_10);
     const price = (cost, base) => freePull
       ? tr('無料', 'Free')
-      : cost < base ? `<s style="opacity:.55">🪙${fmt(base)}</s> 🪙${fmt(cost)}` : `🪙${fmt(cost)}`;
+      : cost < base ? `<s style="opacity:.55">${ic('coins', 13)}${fmt(base)}</s> ${ic('coins', 13)}${fmt(cost)}` : `${ic('coins', 13)}${fmt(cost)}`;
     m.querySelector('#gcCost1').innerHTML = price(c1, b1);
     m.querySelector('#gcCost10').innerHTML = price(c10, b10);
     const notes = [];
     if (!freePull && c1 < b1) {
       const off = Math.round((1 - c1 / b1) * 100);
-      notes.push(tr(`🍀 イベント割引 ${off}%オフ`, `🍀 Event discount: ${off}% off`));
+      notes.push(tr(`イベント割引 ${off}%オフ`, `Event discount: ${off}% off`));
     }
-    if (d.lucky) notes.push(tr('✨ レア排出率アップ中', '✨ Rare rates boosted'));
+    if (d.lucky) notes.push(tr('レア排出率アップ中', 'Rare rates boosted'));
     const ev = m.querySelector('#gcEvent');
     ev.textContent = notes.join(SEP);
     ev.classList.toggle('hidden', notes.length === 0);
@@ -2371,7 +2396,7 @@ export function openGacha() {
       const data = await api('/api/gacha', { method: 'POST', body: { count } });
       session.user = data.user;
       updateTopbar();
-      m.querySelector('#gcCoins').textContent = `🪙 ${fmt(data.user.coins)}`;
+      m.querySelector('#gcCoins').innerHTML = `${ic('coins', 14)} ${fmt(data.user.coins)}`;
       setBars(data.pity, data.collection);
       // モーダルを開いたままイベントが始まる／終わることがあるので、値段も引き直す。
       // （表示だけ古いままだと、また「表示と請求額が違う」に戻ってしまう）
@@ -2402,7 +2427,7 @@ export function openGacha() {
           : r.type === 'gems' ? tr(`ジェム +${fmt(r.amount)}${r.complete ? '（コンプ済）' : ''}`, `Gems +${fmt(r.amount)}${r.complete ? ' (all collected)' : ''}`)
           : r.type === 'item' ? catName(r)
           : catName(r);
-        card.innerHTML = `<span class="gc-rarity">${r.limited ? '🌈' : ''}${r.rarity}</span><span class="gc-icon${isPv ? ' gc-pv' : ''}">${iconHtml}</span><span class="gc-label">${escapeHtml(label)}</span>`;
+        card.innerHTML = `<span class="gc-rarity">${r.limited ? ic('fx_prism', 12) : ''}${r.rarity}</span><span class="gc-icon${isPv ? ' gc-pv' : ''}">${iconHtml}</span><span class="gc-label">${escapeHtml(label)}</span>`;
         // renderPreview は id と cat しか見ないので、ガチャの結果をそのまま渡せる
         // （/api/shop を読み込んでいない状態でも動く）。
         if (isPv) { try { renderPreview(card.querySelector('.gc-pv'), { id: r.id, cat: r.cat }); } catch { /* 絵が出ないだけで結果は読める */ } }
@@ -2411,7 +2436,7 @@ export function openGacha() {
         if (r.limited) limited = true;
       });
       if (bigWin) { setTimeout(() => { audio.victory(); confettiBurst(limited ? 90 : 50); }, count * 120 + 300); }
-      if (limited) setTimeout(() => toast(tr('🌈 ガチャ限定装備を引き当てた！！', '🌈 You pulled GACHA-EXCLUSIVE gear!!'), 'announce', 4000), count * 120 + 500);
+      if (limited) setTimeout(() => toast(tr('ガチャ限定装備を引き当てた！！', 'You pulled GACHA-EXCLUSIVE gear!!'), 'announce', 4000), count * 120 + 500);
     } catch (err) {
       audio.error();
       toast(err.message, 'err');
@@ -2479,7 +2504,7 @@ function loginPrompt(what) {
 }
 
 function rewardChip(coins, gems) {
-  return `<span class="ms-reward">${coins ? `🪙${fmt(coins)}` : ''}${gems ? ` 💎${fmt(gems)}` : ''}</span>`;
+  return `<span class="ms-reward">${coins ? `${ic('coins', 13)}${fmt(coins)}` : ''}${gems ? ` ${ic('gems', 13)}${fmt(gems)}` : ''}</span>`;
 }
 
 function fmtResetIn(ms) {
@@ -2547,17 +2572,17 @@ function renderMissions() {
   const rrOut = rrLeft !== null && rrLeft <= 0;
   const rrLeftJa = rrLeft === null ? '' : `（あと${rrLeft}回）`;
   const rrLeftEn = rrLeft === null ? '' : ` (${rrLeft} left)`;
-  const rrLabel = rrFree ? tr('無料', 'Free') : `🪙${fmt(rrCost)}`;
+  const rrLabel = rrFree ? tr('無料', 'Free') : `${ic('coins', 12)}${fmt(rrCost)}`;
   const rrHint = rrOut
-    ? tr('🔁 引き直しは本日ぶんを使い切りました', '🔁 No rerolls left today')
+    ? `${ic('reroll', 13)} ${tr('引き直しは本日ぶんを使い切りました', 'No rerolls left today')}`
     : rrFree
-      ? tr(`🔁 引き直し 本日1回無料${rrLeftJa}`, `🔁 Reroll: free today${rrLeftEn}`)
-      : tr(`🔁 引き直し 1回 🪙${fmt(rrCost)}${rrLeftJa}`, `🔁 Reroll: 🪙${fmt(rrCost)} each${rrLeftEn}`);
+      ? `${ic('reroll', 13)} ${tr(`引き直し 本日1回無料${rrLeftJa}`, `Reroll: free today${rrLeftEn}`)}`
+      : `${ic('reroll', 13)} ${tr(`引き直し 1回 ${ic('coins', 12)}${fmt(rrCost)}${rrLeftJa}`, `Reroll: ${ic('coins', 12)}${fmt(rrCost)} each${rrLeftEn}`)}`;
   // 受け取りそびれたランキング報酬の入口（起動時のダイアログを閉じてもここから受け取れる）
   const rankPending = session.user && Array.isArray(session.user.rankRewards) ? session.user.rankRewards.length : 0;
 
   body.innerHTML = `
-    ${rankPending ? `<button class="btn btn-gold" id="msRankRewards" style="width:100%;margin-bottom:10px">🏆 ${tr(`ランキング報酬が${rankPending}件届いています — タップで受け取る`, `${rankPending} ranking reward${rankPending > 1 ? 's' : ''} waiting — tap to claim`)}</button>` : ''}
+    ${rankPending ? `<button class="btn btn-gold" id="msRankRewards" style="width:100%;margin-bottom:10px">${tr(`ランキング報酬が${rankPending}件届いています — タップで受け取る`, `${rankPending} ranking reward${rankPending > 1 ? 's' : ''} waiting — tap to claim`)}</button>` : ''}
     <div class="ms-head">
       <div>
         <b>${daily ? tr('デイリーミッション', 'Daily Missions') : tr('ウィークリーミッション', 'Weekly Missions')}</b>
@@ -2583,25 +2608,25 @@ function renderMissions() {
           </div>
           ${rewardChip(r.coins, r.gems)}
           ${r.claimed
-            ? `<span class="ms-check">✓</span>`
+            ? `<span class="ms-check">${ic('check', 14)}</span>`
             : `${rrOut ? '' : `<button class="btn btn-sm btn-ghost" data-reroll="${escapeHtml(String(r.id))}"${r.done ? ' data-reroll-done="1"' : ''} title="${rrFree
                   ? tr('別のミッションに引き直す（本日1回無料）', 'Swap for another mission (free today)')
-                  : tr(`別のミッションに引き直す（🪙${fmt(rrCost)}）`, `Swap for another mission (🪙${fmt(rrCost)})`)}"
-                style="padding:4px 8px;line-height:1.1">🔁<small style="display:block;font-size:9px">${rrLabel}</small></button>${
+                  : tr(`別のミッションに引き直す（コイン${fmt(rrCost)}）`, `Swap for another mission (${fmt(rrCost)} coins)`)}"
+                style="padding:4px 8px;line-height:1.1">${ic('reroll', 14)}<small style="display:block;font-size:9px">${rrLabel}</small></button>${
                 !rrFree && rrCostGems > 0
-                  ? `<button class="btn btn-sm btn-ghost" data-reroll-gems="${escapeHtml(String(r.id))}"${r.done ? ' data-reroll-done="1"' : ''} title="${tr(`💎で引き直す（💎${fmt(rrCostGems)}）`, `Reroll with gems (💎${fmt(rrCostGems)})`)}"
-                    style="padding:4px 8px;line-height:1.1">🔁<small style="display:block;font-size:9px">💎${fmt(rrCostGems)}</small></button>` : ''}`}
+                  ? `<button class="btn btn-sm btn-ghost" data-reroll-gems="${escapeHtml(String(r.id))}"${r.done ? ' data-reroll-done="1"' : ''} title="${tr(`ジェムで引き直す（ジェム${fmt(rrCostGems)}）`, `Reroll with gems (${fmt(rrCostGems)} gems)`)}"
+                    style="padding:4px 8px;line-height:1.1">${ic('reroll', 14)}<small style="display:block;font-size:9px">${ic('gems', 12)}${fmt(rrCostGems)}</small></button>` : ''}`}
               <button class="btn btn-sm ${r.done ? 'btn-gold' : 'btn-ghost'}" data-claim="${r.id}" ${r.done ? '' : 'disabled'}>${r.done ? tr('受取', 'Claim') : tr('未達成', 'Locked')}</button>`}
         </div>`;
       }).join('')}
       <div class="ms-row bonus ${bonusClaimed ? 'claimed' : allClaimed ? 'done' : ''}">
         <div class="ms-info">
-          <div class="ms-name">🎁 ${tr('コンプリートボーナス', 'Completion Bonus')}</div>
+          <div class="ms-name">${tr('コンプリートボーナス', 'Completion Bonus')}</div>
           <div class="ms-prog">${tr('すべて受け取ると解放', 'Unlocks once every mission is claimed')}</div>
         </div>
         ${rewardChip(bonus.coins, bonus.gems)}
         ${bonusClaimed
-          ? `<span class="ms-check">✓</span>`
+          ? `<span class="ms-check">${ic('check', 14)}</span>`
           : `<button class="btn btn-sm ${allClaimed ? 'btn-gold' : 'btn-ghost'}" data-claim="${daily ? 'daily_bonus' : 'weekly_bonus'}" ${allClaimed ? '' : 'disabled'}>${tr('受取', 'Claim')}</button>`}
       </div>
     </div>`;
@@ -2635,12 +2660,12 @@ function renderMissions() {
       const paidGems = Number(rw.gems) || 0;
       const paidCoins = Number(rw.cost) || 0;
       const cost = rw.currency === 'gems' || paidGems
-        ? (paidGems ? `（-💎${fmt(paidGems)}）` : '')
-        : (paidCoins ? `（-🪙${fmt(paidCoins)}）` : '');
+        ? (paidGems ? `（ジェム-${fmt(paidGems)}）` : '')
+        : (paidCoins ? `（コイン-${fmt(paidCoins)}）` : '');
       const costEn = rw.currency === 'gems' || paidGems
-        ? (paidGems ? ` (-💎${fmt(paidGems)})` : '')
-        : (paidCoins ? ` (-🪙${fmt(paidCoins)})` : '');
-      toast(tr(`🔁 ミッションを引き直しました！${cost}`, `🔁 Mission rerolled!${costEn}`), 'ok');
+        ? (paidGems ? ` (-${fmt(paidGems)} gems)` : '')
+        : (paidCoins ? ` (-${fmt(paidCoins)} coins)` : '');
+      toast(tr(`ミッションを引き直しました！${cost}`, `Mission rerolled!${costEn}`), 'ok');
       renderMissions();
       refreshMissionDot();
     } catch (err) {
@@ -2664,8 +2689,8 @@ function renderMissions() {
         missionsCache = res.missions;
         audio.coin();
         confettiBurst(20);
-        toast(tr(`🎁 報酬を受け取りました！ 🪙${fmt(res.reward.coins)}${res.reward.gems ? ` 💎${fmt(res.reward.gems)}` : ''}`,
-          `🎁 Reward claimed! 🪙${fmt(res.reward.coins)}${res.reward.gems ? ` 💎${fmt(res.reward.gems)}` : ''}`), 'ok');
+        toast(tr(`報酬を受け取りました！ コイン${fmt(res.reward.coins)}${res.reward.gems ? ` ジェム${fmt(res.reward.gems)}` : ''}`,
+          `Reward claimed! ${fmt(res.reward.coins)} coins${res.reward.gems ? `, ${fmt(res.reward.gems)} gems` : ''}`), 'ok');
         updateTopbar();
         renderMissions();
         refreshMissionDot();
@@ -2688,24 +2713,24 @@ function renderAchievements() {
   body.innerHTML = `
     <div class="ms-head">
       <div>
-        <b>🏅 ${tr('実績', 'Achievements')}</b>
+        <b>${tr('実績', 'Achievements')}</b>
         <div class="muted" style="font-size:12px">${tr(`解除 ${data.unlocked} / ${data.total} ・ 受取済 ${data.claimedCount}`,
           `Unlocked ${data.unlocked} / ${data.total} · Claimed ${data.claimedCount}`)}</div>
       </div>
       ${claimable.length && session.user
-        ? `<button class="btn btn-sm btn-gold" id="achAll">${tr(`✨ ${claimable.length}件まとめて受取`, `✨ Claim all (${claimable.length})`)}</button>`
+        ? `<button class="btn btn-sm btn-gold" id="achAll">${tr(`${claimable.length}件まとめて受取`, `Claim all (${claimable.length})`)}</button>`
         : `<div class="ms-progress-ring">${Math.round((data.unlocked / data.total) * 100)}%</div>`}
     </div>
     <div class="ach-cats">
       ${cats.map(c => `<button class="ach-cat ${achCat === c.id ? 'active' : ''}" data-cat="${c.id}">${tr(c.name, c.nameEn)}</button>`).join('')}
     </div>
-    ${session.user ? '' : `<p class="muted center" style="margin-bottom:10px">${tr('💡 ログインすると進捗が記録され、報酬を受け取れます', '💡 Log in to track progress and claim rewards')}</p>`}
+    ${session.user ? '' : `<p class="muted center" style="margin-bottom:10px">${tr('ログインすると進捗が記録され、報酬を受け取れます', 'Log in to track progress and claim rewards')}</p>`}
     <div class="ach-grid">
       ${rows.map(r => {
         const pct = Math.min(100, Math.round((r.progress / r.goal) * 100));
         return `
         <div class="ach-card ${r.claimed ? 'claimed' : r.done ? 'done' : 'locked'}">
-          <div class="ach-icon">${r.done ? r.icon : '🔒'}</div>
+          <div class="ach-icon">${r.done ? achIcon(r.icon) : ic('lock', 22)}</div>
           <div class="ach-name">${escapeHtml(tr(r.name, r.nameEn))}</div>
           <div class="ach-desc">${escapeHtml(tr(r.desc, r.descEn))}</div>
           <div class="ms-bar"><div style="width:${pct}%"></div></div>
@@ -2714,7 +2739,7 @@ function renderAchievements() {
             ${rewardChip(r.coins, r.gems)}
           </div>
           ${r.claimed
-            ? `<div class="ach-claimed">✓ ${tr('受取済', 'Claimed')}</div>`
+            ? `<div class="ach-claimed">${ic('check', 13)} ${tr('受取済', 'Claimed')}</div>`
             : r.done && session.user
               ? `<button class="btn btn-sm btn-gold" data-ach="${r.id}">${tr('受取', 'Claim')}</button>`
               : ''}
@@ -2731,8 +2756,8 @@ function renderAchievements() {
       achCache = res.achievements;
       audio.coin();
       confettiBurst(res.reward.ids.length > 1 ? 60 : 25);
-      toast(tr(`🏅 実績${res.reward.ids.length}件！ 🪙${fmt(res.reward.coins)} 💎${fmt(res.reward.gems)}`,
-        `🏅 ${res.reward.ids.length} achievement(s)! 🪙${fmt(res.reward.coins)} 💎${fmt(res.reward.gems)}`), 'ok', 3500);
+      toast(tr(`実績${res.reward.ids.length}件！ コイン${fmt(res.reward.coins)} ジェム${fmt(res.reward.gems)}`,
+        `${res.reward.ids.length} achievement(s)! ${fmt(res.reward.coins)} coins, ${fmt(res.reward.gems)} gems`), 'ok', 3500);
       updateTopbar();
       renderAchievements();
       refreshMissionDot();
@@ -2755,19 +2780,19 @@ export function showRankRewardsModal(force = false) {
   // 自動表示は他のモーダル（復元ダイアログ等）を奪わない。
   if (!force && $('#modal-root').querySelector('.modal')) return;
   const total = pending.reduce((a, r) => ({ coins: a.coins + (r.coins || 0), gems: a.gems + (r.gems || 0) }), { coins: 0, gems: 0 });
-  const medal = r => (r.rank <= 3 ? lbMedal(r.rank) : '🎖️');
+  const medal = r => (r.rank <= 3 ? lbMedal(r.rank) : '');
   const m = showModal(`
-    <h2>🏆 ${tr('ランキング報酬', 'Ranking Rewards')}</h2>
+    <h2>${ic('leaderboard', 20)} ${tr('ランキング報酬', 'Ranking Rewards')}</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:10px">${tr('週間チャレンジの最終結果が出ました！', 'The weekly challenge results are in!')}</p>
     <div class="rank-reward-list">
       ${pending.map(r => `
         <div class="rank-reward-row">
-          <span><b>${medal(r)} ${tr(`${r.rank}位`, `#${r.rank}`)}</b> <small class="muted">/ ${r.of}${tr('人中', ' players')}${SEP}${escapeHtml(r.week)}${SEP}${fmt(r.best)}${tr('点', ' pts')}</small></span>
-          <b>+${fmt(r.coins)}🪙 +${fmt(r.gems)}💎${r.badge ? ` +${badgeIcon(r.badge, 16)}` : ''}</b>
+          <span><b>${medal(r) ? `${medal(r)} ` : ''}${tr(`${r.rank}位`, `#${r.rank}`)}</b> <small class="muted">/ ${r.of}${tr('人中', ' players')}${SEP}${escapeHtml(r.week)}${SEP}${fmt(r.best)}${tr('点', ' pts')}</small></span>
+          <b>+${fmt(r.coins)}${ic('coins', 13)} +${fmt(r.gems)}${ic('gems', 13)}${r.badge ? ` +${badgeIcon(r.badge, 16)}` : ''}</b>
         </div>`).join('')}
     </div>
     <div class="modal-buttons">
-      <button class="btn btn-primary" id="rkClaim">🎁 ${tr('受け取る', 'Claim')}${paren(`+${fmt(total.coins)}🪙 +${fmt(total.gems)}💎`)}</button>
+      <button class="btn btn-primary" id="rkClaim">${tr('受け取る', 'Claim')}${paren(`+${fmt(total.coins)}${ic('coins', 13)} +${fmt(total.gems)}${ic('gems', 13)}`)}</button>
       <button class="btn btn-ghost" id="rkLater">${tr('あとで', 'Later')}</button>
     </div>`);
   m.querySelector('#rkLater').onclick = closeModal;
@@ -2785,8 +2810,8 @@ export function showRankRewardsModal(force = false) {
       const got = (res.reward.badges || []).map(b => badgeInfoOf(b)).filter(Boolean);
       // トーストは textContent なので SVG を置けない。バッジは名前だけ並べる
       // （BADGE_INFO から icon を外したので、絵文字を混ぜると undefined が出る）。
-      toast(tr(`🏆 ランキング報酬を受け取りました！ +${fmt(res.reward.coins)}🪙 +${fmt(res.reward.gems)}💎${got.length ? `（🎖️${got.map(b => b.ja).join('・')}獲得！）` : ''}`,
-        `🏆 Rewards claimed! +${fmt(res.reward.coins)}🪙 +${fmt(res.reward.gems)}💎${got.length ? ` (🎖️ ${got.map(b => b.en).join(', ')}!)` : ''}`), 'ok', 4500);
+      toast(tr(`ランキング報酬を受け取りました！ コイン+${fmt(res.reward.coins)} ジェム+${fmt(res.reward.gems)}${got.length ? `（${got.map(b => b.ja).join('・')}獲得！）` : ''}`,
+        `Rewards claimed! +${fmt(res.reward.coins)} coins, +${fmt(res.reward.gems)} gems${got.length ? ` (${got.map(b => b.en).join(', ')}!)` : ''}`), 'ok', 4500);
       const banner = $('#msRankRewards');
       if (banner) banner.remove();
       refreshMissionDot();
@@ -2853,12 +2878,12 @@ export async function openBattlePass() {
 // id 引きに寄せたので、どのバッジが来ても正しい絵が出る。
 function rewardLabel(r) {
   if (!r) return { icon: '—', iconHtml: '—', label: '' };
-  if (r.type === 'coins') return { icon: '🪙', iconHtml: icon('coins', { size: 22 }), label: fmt(r.amount) };
-  if (r.type === 'gems') return { icon: '💎', iconHtml: icon('gems', { size: 22 }), label: fmt(r.amount) };
-  if (r.type === 'badge') return { icon: '🎖️', iconHtml: badgeIcon(r.id, 22), label: tr('バッジ', 'Badge') };
+  if (r.type === 'coins') return { icon: tr('コイン', 'Coins'), iconHtml: icon('coins', { size: 22 }), label: fmt(r.amount) };
+  if (r.type === 'gems') return { icon: tr('ジェム', 'Gems'), iconHtml: icon('gems', { size: 22 }), label: fmt(r.amount) };
+  if (r.type === 'badge') return { icon: '', iconHtml: badgeIcon(r.id, 22), label: tr('バッジ', 'Badge') };
   const names = { skin_neon: 'ネオン', skin_candy: 'キャンディ', skin_gold: 'ゴールド', board_ocean: 'オーシャン', board_sunset: 'サンセット', fx_fireworks: '花火' };
   const label = catName({ id: r.id, name: names[r.id] || tr('アイテム', 'Item') });
-  return { icon: '🎁', iconHtml: icon(itemIconName(r.id), { size: 22, label }), label };
+  return { icon: '', iconHtml: icon(itemIconName(r.id), { size: 22, label }), label };
 }
 
 function renderBattlePass(data) {
@@ -2874,7 +2899,7 @@ function renderBattlePass(data) {
 
   header.innerHTML = `
     <div class="bp-row">
-      <h3>✨ ${escapeHtml(LANG === 'en' && data.season.nameEn ? data.season.nameEn : data.season.name)}</h3>
+      <h3>${ic('battlepass', 18)} ${escapeHtml(LANG === 'en' && data.season.nameEn ? data.season.nameEn : data.season.name)}</h3>
       <span class="muted" style="font-size:13px">${tr(`残り ${daysLeft}日`, `${daysLeft} days left`)}</span>
     </div>
     <div class="bp-xpbar"><div style="width:${pct}%"></div></div>
@@ -2882,8 +2907,8 @@ function renderBattlePass(data) {
       <span style="font-size:13px;font-weight:700">${tr('ティア', 'Tier')} ${Math.min(unlockedTier, maxTier)} / ${maxTier}
         <span class="muted">${tr(`（次まで ${unlockedTier >= maxTier ? '—' : fmt(data.xpPerTier - inTier) + ' XP'}）`, `(${unlockedTier >= maxTier ? '—' : fmt(data.xpPerTier - inTier) + ' XP'} to next)`)}</span></span>
       ${prog && !prog.premium
-        ? `<button class="btn btn-sm btn-gold" id="bpBuyPremium">${tr(`💎 ${fmt(data.premiumPriceGems)} でプレミアム解放`, `Unlock Premium 💎 ${fmt(data.premiumPriceGems)}`)}</button>`
-        : prog ? `<span style="color:var(--gold);font-weight:800">${tr('👑 プレミアム', '👑 Premium')}</span>`
+        ? `<button class="btn btn-sm btn-gold" id="bpBuyPremium">${tr(`${ic('gems', 13)} ${fmt(data.premiumPriceGems)} でプレミアム解放`, `Unlock Premium ${ic('gems', 13)} ${fmt(data.premiumPriceGems)}`)}</button>`
+        : prog ? `<span style="color:var(--gold);font-weight:800">${ic('throne', 14)} ${tr('プレミアム', 'Premium')}</span>`
         : `<span class="muted" style="font-size:12px">${tr('ログインで進行が有効になります', 'Log in to track your progress')}</span>`}
     </div>`;
 
@@ -2892,15 +2917,15 @@ function renderBattlePass(data) {
     // 500💎 が確認なしのワンタップで飛んでいた。しかもシーズンが終われば
     // 効果は消えるので、残り日数を必ず見せてから確認を取る。
     const m = showModal([
-      `<h2>👑 ${tr('プレミアムパス', 'Premium Pass')}</h2>`,
-      `<p class="center">${tr(`💎 ${fmt(data.premiumPriceGems)} を使って解放します。`, `Unlock for 💎 ${fmt(data.premiumPriceGems)}.`)}</p>`,
+      `<h2>${ic('throne', 20)} ${tr('プレミアムパス', 'Premium Pass')}</h2>`,
+      `<p class="center">${tr(`${ic('gems', 13)} ${fmt(data.premiumPriceGems)} を使って解放します。`, `Unlock for ${ic('gems', 13)} ${fmt(data.premiumPriceGems)}.`)}</p>`,
       `<p class="muted center" style="font-size:12px">${tr(
         `このシーズン（残り ${daysLeft}日）だけ有効です。シーズンが変わると効果は無くなります。`,
         `Valid for this season only — ${daysLeft} days left. It does not carry over.`)}</p>`,
       daysLeft <= 3
         ? `<p class="center" style="color:#ffa93d;font-size:12.5px;font-weight:700">${tr(
-            '⚠️ シーズン終了が近いです。次のシーズンまで待つほうがお得かもしれません。',
-            '⚠️ The season ends soon — waiting for the next one may be better value.')}</p>`
+            `${ic('warn', 13)} シーズン終了が近いです。次のシーズンまで待つほうがお得かもしれません。`,
+            `${ic('warn', 13)} The season ends soon — waiting for the next one may be better value.`)}</p>`
         : '',
       '<div class="modal-buttons">',
       `  <button class="btn btn-ghost" id="bpNo">${tr('やめる', 'Cancel')}</button>`,
@@ -2932,7 +2957,7 @@ function renderBattlePass(data) {
   head.innerHTML = `
     <div class="bp-tier-num"></div>
     <div class="bp-cell bp-col-head">${tr('無料', 'Free')}</div>
-    <div class="bp-cell bp-col-head premium-cell">${(prog && prog.premium) ? tr('👑 プレミアム', '👑 Premium') : tr('👑 プレミアム（未解放）', '👑 Premium (locked)')}</div>`;
+    <div class="bp-cell bp-col-head premium-cell">${ic('throne', 14)} ${(prog && prog.premium) ? tr('プレミアム', 'Premium') : tr('プレミアム（未解放）', 'Premium (locked)')}</div>`;
   tiersEl.appendChild(head);
 
   data.tiers.forEach((t, idx) => {
@@ -2954,7 +2979,7 @@ function renderBattlePass(data) {
         <div class="bp-cell ${track === 'premium' ? 'premium-cell' : ''} ${!unlocked ? 'locked' : ''} ${claimed ? 'claimed' : ''}">
           <span class="rw-icon">${iconHtml}</span><span>${label}</span>
           ${claimable ? `<button class="bp-claim-btn" data-tier="${t.tier}" data-track="${track}">${tr('受取', 'Claim')}</button>` : ''}
-          ${needPremium ? `<button class="bp-need-premium" data-need="1">${tr('👑 プレミアムで解放', '👑 Unlock with Premium')}</button>` : ''}
+          ${needPremium ? `<button class="bp-need-premium" data-need="1">${ic('throne', 13)} ${tr('プレミアムで解放', 'Unlock with Premium')}</button>` : ''}
         </div>`;
     };
     el.innerHTML = `
@@ -2982,7 +3007,9 @@ function renderBattlePass(data) {
         audio.coin();
         // toast は textContent なので、ここは文字の icon（絵文字）を使う。
         const rw = rewardLabel(res.reward);
-        toast(tr(`${rw.icon} ${rw.label} を受け取りました！`, `Claimed ${rw.icon} ${rw.label}!`), 'ok');
+        // アイコンは文字（言葉）。空のこともあるので、空白が余らないよう詰める。
+        const what = [rw.icon, rw.label].filter(Boolean).join(' ');
+        toast(tr(`${what} を受け取りました！`, `Claimed ${what}!`), 'ok');
         updateTopbar();
         openBattlePass();   // 描き直すのでボタンごと差し替わる
       } catch (err) { audio.error(); toast(err.message, 'err'); btn.disabled = false; }
@@ -3010,12 +3037,17 @@ export async function openAdmin() {
     try {
       const data = await api('/api/mod/users');
       statsEl.innerHTML = `
-        <div class="stat-card"><b>🔧</b><span>モデレーター</span></div>
+        <div class="stat-card"><b>${ic('mod', 22)}</b><span>モデレーター</span></div>
         <div class="stat-card"><b>${fmt(data.users.length)}</b><span>登録ユーザー</span></div>`;
       renderModUsers(data.users);
     } catch (err) {
       statsEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
     }
+    // モデレーターにはマッチングの内訳を出さない（実プレイヤーの待機状況は
+    // 住人の正体に直結する情報で、サーバー側も requireAdmin で弾く）。
+    // 前に管理者で開いていた残骸があれば必ず畳む。
+    const mmBox = $('#adminMatchmaking');
+    if (mmBox) mmBox.remove();
     return;
   }
   try {
@@ -3035,10 +3067,13 @@ export async function openAdmin() {
       <div class="stat-card"><b>${fmt(stats.bannedUsers)}</b><span>凍結中</span></div>
       <div class="stat-card"><b>×${stats.popScale ?? 1}</b><span>にぎわい倍率</span></div>
       <div class="stat-card"><b>${fmt(stats.crowd ? stats.crowd.activeResidents : 0)}</b><span>住人オンライン</span></div>
-      <div class="stat-card"><b>${stats.crowd ? ({ party: '🔥', busy: '🙂', calm: '😴', off: '⚫' }[stats.crowd.mood.id] || '🙂') : '🙂'}</b><span>${stats.crowd ? ({ party: '大盛況', busy: 'にぎやか', calm: 'まったり', off: 'オフ' }[stats.crowd.mood.id] || '') : ''}${stats.crowd && stats.crowd.quietNow ? '（静かな時間帯）' : ''}</span></div>
+      ${/* にぎわいの空気。以前は 🔥🙂😴⚫ の絵文字を大きい数字の位置に置いていたが、
+            端末によって顔が変わるうえ「⚫＝オフ」は絵から意味を引けない。
+            言葉そのものを値にして、下段には何を表しているかを書く。 */''}
+      <div class="stat-card"><b style="font-size:16px">${stats.crowd ? ({ party: '大盛況', busy: 'にぎやか', calm: 'まったり', off: 'オフ' }[stats.crowd.mood.id] || '—') : '—'}</b><span>にぎわい${stats.crowd && stats.crowd.quietNow ? '（静かな時間帯）' : ''}</span></div>
       <div class="stat-card"><b>S${stats.season.number}</b><span>${escapeHtml(stats.season.name)}</span></div>
-      <div class="stat-card" style="${stats.maintenance ? 'border-color:var(--red)' : ''}"><b>${stats.maintenance ? '🛠' : '✅'}</b><span>${stats.maintenance ? 'メンテナンス中' : '稼働中'}</span></div>
-      <div class="stat-card" style="${stats.sessionsPersist ? '' : 'border-color:var(--yellow)'}" title="SESSION_SECRET 環境変数が設定されているとON。更新してもログイン状態が維持されます"><b>${stats.sessionsPersist ? '🔐' : '⚠️'}</b><span>${stats.sessionsPersist ? 'セッション維持 ON' : 'セッション維持 OFF（SESSION_SECRET未設定）'}</span></div>
+      <div class="stat-card" style="${stats.maintenance ? 'border-color:var(--red)' : ''}"><b>${stats.maintenance ? ic('warn', 22) : ic('check', 22)}</b><span>${stats.maintenance ? 'メンテナンス中' : '稼働中'}</span></div>
+      <div class="stat-card" style="${stats.sessionsPersist ? '' : 'border-color:var(--yellow)'}" title="SESSION_SECRET 環境変数が設定されているとON。更新してもログイン状態が維持されます"><b>${stats.sessionsPersist ? ic('lock', 22) : ic('warn', 22)}</b><span>${stats.sessionsPersist ? 'セッション維持 ON' : 'セッション維持 OFF（SESSION_SECRET未設定）'}</span></div>
       <div class="stat-card"><b>¥${fmt(txData.totalJpy)}</b><span>売上(デモ) ${fmt(txData.totalCount)}件</span></div>
       ${statCard(stats.dbBytes == null ? null : fmtBytes(stats.dbBytes), 'DBサイズ')}
       ${statCard(stats.saveMs == null ? null : `${Math.round(Number(stats.saveMs))}ms`, '保存にかかる時間')}
@@ -3046,11 +3081,15 @@ export async function openAdmin() {
       ${statCard(stats.txArchived == null ? null : fmt(stats.txArchived), '取引ログ（保管済）')}
       ${statCard(eventLoopText(stats), 'イベントループ遅延(P99)')}
       ${statCard(perfRssText(stats), 'メモリ(RSS)')}
-      ${statCard(stats.persistError ? '⚠️' : null, `保存エラー: ${String(stats.persistError || '').slice(0, 60)}`, 'border-color:var(--red)')}
+      ${statCard(stats.persistError ? ic('warn', 22) : null, `保存エラー: ${String(stats.persistError || '').slice(0, 60)}`, 'border-color:var(--red)')}
       ${statCard(stats.clientErrors && stats.clientErrors.open != null ? fmt(stats.clientErrors.open) : null, 'クライアントエラー(未解決)')}
       ${connCards(stats.conn)}`;
     renderLivePlayers(stats.livePlayers || []);
-    $('#btnMaintenance').textContent = stats.maintenance ? '✅ メンテ解除' : '🛠 メンテナンス開始';
+    // マッチングの内訳は別の口（/api/admin/matchmaking）。統計の取得を
+    // 待たせないよう、投げっぱなしにして5秒ごとの更新に任せる。
+    refreshMatchmaking();
+    startMatchmakingTimer();
+    $('#btnMaintenance').textContent = stats.maintenance ? 'メンテ解除' : 'メンテナンス開始';
     renderAdminUsers(usersData.users);
   } catch (err) {
     statsEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
@@ -3083,13 +3122,13 @@ function showSeasonModal() {
   const season = adminStats ? adminStats.season : { number: 1, name: '', endsAt: Date.now() };
   const daysLeft = Math.max(1, Math.ceil((season.endsAt - Date.now()) / 86400000));
   const m = showModal(`
-    <h2>🗓️ シーズン管理</h2>
+    <h2>シーズン管理</h2>
     <p class="muted center" style="margin-bottom:12px">現在: ${escapeHtml(season.name)}（S${season.number}）</p>
     <div class="form-col">
       <div class="settings-row"><label>番号</label><input id="ssNum" type="number" min="1" max="999" value="${season.number}" style="width:80px;text-align:center"></div>
       <div class="settings-row"><label>名前</label><input id="ssName" type="text" maxlength="16" value="${escapeHtml(season.name)}" style="width:150px"></div>
       <div class="settings-row"><label>残り日数</label><input id="ssDays" type="number" min="1" max="365" value="${daysLeft}" style="width:80px;text-align:center"></div>
-      <div class="settings-row"><label>🎫 全員のパス進行を維持する</label><input id="ssKeep" type="checkbox" checked></div>
+      <div class="settings-row"><label>${ic('battlepass', 14)} 全員のパス進行を維持する</label><input id="ssKeep" type="checkbox" checked></div>
       <p class="muted center" style="font-size:12px">維持ONなら番号や名前を変えても（例: S2→S1に戻しても）<br>バトルパスの進行はリセットされません</p>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="ssCancel">やめる</button>
@@ -3120,21 +3159,21 @@ function showSeasonModal() {
 // Moderator view: mute toggles + chat clear, nothing else.
 function renderModUsers(users) {
   const usersEl = $('#adminUsers');
-  const roleIcon = r => r === 'admin' ? '🛡️' : r === 'mod' ? '🔧' : '👤';
+  const roleIcon = r => ic(r === 'admin' ? 'admin' : r === 'mod' ? 'mod' : 'user', 14);
   usersEl.innerHTML = `
     <div class="admin-actions">
-      <button class="btn btn-ghost btn-sm" id="modChatClear" style="color:var(--red)">🧹 チャット全消去</button>
+      <button class="btn btn-ghost btn-sm" id="modChatClear" style="color:var(--red)">チャット全消去</button>
     </div>` + users.map(u => `
     <div class="admin-user-row ${u.banned ? 'banned' : ''}" data-uid="${u.id}">
       <span class="au-name">${roleIcon(u.role)} ${escapeHtml(u.username)}</span>
-      <span class="au-meta">${u.banned ? '⛔凍結中 ' : ''}${u.muted ? '🔇ミュート中' : ''}</span>
-      <span class="au-actions">${u.role === 'user' ? `<button class="btn btn-sm btn-ghost" data-a="mute">${u.muted ? '🔈 解除' : '🔇 ミュート'}</button>` : ''}</span>
+      <span class="au-meta">${u.banned ? '凍結中 ' : ''}${u.muted ? 'ミュート中' : ''}</span>
+      <span class="au-actions">${u.role === 'user' ? `<button class="btn btn-sm btn-ghost" data-a="mute">${u.muted ? 'ミュート解除' : 'ミュート'}</button>` : ''}</span>
     </div>`).join('');
   $('#modChatClear').onclick = async () => {
     if (!confirm('全体チャットの履歴を全員分クリアします。よろしいですか？')) return;
     try {
       await api('/api/mod/chat/clear', { method: 'POST', body: {} });
-      toast('🧹 チャットをクリアしました', 'ok');
+      toast('チャットをクリアしました', 'ok');
     } catch (err) { toast(err.message, 'err'); }
   };
   usersEl.querySelectorAll('[data-a="mute"]').forEach(btn => {
@@ -3142,7 +3181,7 @@ function renderModUsers(users) {
       const u = users.find(x => x.id === btn.closest('.admin-user-row').dataset.uid);
       try {
         await api('/api/mod/mute', { method: 'POST', body: { id: u.id, muted: !u.muted } });
-        toast(!u.muted ? '🔇 ミュートしました' : '🔈 ミュートを解除しました', 'ok');
+        toast(!u.muted ? 'ミュートしました' : 'ミュートを解除しました', 'ok');
         openAdmin();
       } catch (err) { toast(err.message, 'err'); }
     };
@@ -3172,7 +3211,7 @@ function connCards(c) {
   return `
     <div class="stat-card"><b>${fmt(c.open)}/${fmt(c.max)}</b><span>WS接続</span></div>
     <div class="stat-card" style="${ipWarn ? 'border-color:var(--yellow)' : ''}" title="接続元IPの種類数。人数に対して極端に少ないときは前段プロキシの設定（TRUST_PROXY）を疑う">
-      <b>${fmt(c.distinctIps ?? 0)}</b><span>${ipWarn ? '⚠️ IPが1つに潰れている' : '接続元IPの種類'}</span></div>
+      <b>${fmt(c.distinctIps ?? 0)}</b><span>${ipWarn ? `${ic('warn', 13)} IPが1つに潰れている` : '接続元IPの種類'}</span></div>
     <div class="stat-card" style="${rejected ? 'border-color:var(--red)' : ''}" title="全体上限 ${c.rejectedMax || 0} ／ IPごと ${c.rejectedPerIp || 0} ／ アカウントごと ${c.rejectedPerUser || 0}">
       <b>${fmt(rejected)}</b><span>上限で断った回数</span></div>
     ${c.chatChainErrors ? `<div class="stat-card" style="border-color:var(--red)"><b>${fmt(c.chatChainErrors)}</b><span>チャット処理の失敗</span></div>` : ''}`;
@@ -3187,17 +3226,19 @@ function renderLivePlayers(list) {
   const el = $('#adminLive');
   if (!el) return;
   if (!list.length) {
-    el.innerHTML = `<p class="live-head">👥 実プレイヤー <b>0</b></p>
+    el.innerHTML = `<p class="live-head">${ic('friends', 14)} 実プレイヤー <b>0</b></p>
       <p class="muted" style="font-size:12px">いま本当につないでいる人はいません（表示人数の中身は住人です）</p>`;
     return;
   }
+  // 値は icons.js のアイコン名。**変数名を icon にしない** ── import した
+  // icon() をこの関数の中でだけ隠してしまう。
   const WHERE = {
-    playing: ['⚔️', '対戦中'],
-    queue: ['⏳', 'マッチング待ち'],
-    menu: ['🏠', 'メニュー'],
+    playing: ['seat_play', '対戦中'],
+    queue: ['mode_sprint', 'マッチング待ち'],
+    menu: ['mode_room', 'メニュー'],
   };
   const rows = list.map(p => {
-    const [icon, label] = WHERE[p.where] || WHERE.menu;
+    const [whereIcon, label] = WHERE[p.where] || WHERE.menu;
     const badge = p.admin ? '<span class="live-tag admin">運営</span>'
       : p.guest ? '<span class="live-tag guest">ゲスト</span>'
       : '<span class="live-tag user">登録</span>';
@@ -3209,15 +3250,152 @@ function renderLivePlayers(list) {
       p.conns > 1 ? `${p.conns}接続` : null,
     ].filter(Boolean).join(' ・ ');
     return `<div class="live-row">
-      <span class="live-where" title="${label}">${icon}</span>
+      <span class="live-where" title="${label}">${ic(whereIcon, 15)}</span>
       <span class="live-name">${escapeHtml(p.name)}${badge}</span>
       <span class="live-sub">${escapeHtml(sub)}</span>
     </div>`;
   }).join('');
   const real = list.filter(p => !p.guest).length;
-  el.innerHTML = `<p class="live-head">👥 実プレイヤー <b>${list.length}</b>
+  el.innerHTML = `<p class="live-head">${ic('friends', 14)} 実プレイヤー <b>${list.length}</b>
     <span class="muted" style="font-weight:400;font-size:11px">（登録 ${real} ・ ゲスト ${list.length - real}）</span></p>
     <div class="live-list">${rows}</div>`;
+}
+
+// ---------------------------------------------------------------------------
+// マッチングの状況（管理者パネル）
+//
+// ■ なぜここにあるか
+// マッチング画面から「あと N 秒で対戦相手が見つかります」と「このモードで
+// 待っている人: N人」を消した（予告が外れると壊れて見えるうえ、人数が
+// そのまま手がかりになる）。ただし運営には必要な数字なので、ここへ移す。
+//
+// ■ 出どころは /api/admin/matchmaking の1本だけ
+// requireAuth + requireAdmin で守られていて、非管理者は 401/403 で弾かれる。
+// 画面側でも role を見て、管理者以外では**箱そのものを作らない**。
+// 二重に止めているのは、どちらか一方が将来ゆるんでも漏れないようにするため。
+//
+// ■ CSS は増やさない（style.css は別担当）
+// 実プレイヤー一覧と同じ live-head / live-list / live-row / live-tag を借りる。
+// ---------------------------------------------------------------------------
+
+const MM_MODE_ICON = {
+  duel: 'mode_online', attack: 'mode_online', team: 'mode_coop', raid: 'mode_raid',
+  tourney: 'mode_tourney', royale: 'mode_royale', coop: 'mode_coop', room: 'mode_room',
+};
+let mmTimer = null;
+
+// index.html の管理パネルにはまだ枠が無い（あちらは別担当）。無ければここで
+// 実プレイヤー一覧の直後に足し、あとから生えたらそれを拾うだけで二重にしない。
+function ensureMatchmakingBox() {
+  let box = $('#adminMatchmaking');
+  if (box) return box;
+  const after = $('#adminLive');
+  if (!after || !after.parentNode) return null;
+  box = document.createElement('div');
+  box.id = 'adminMatchmaking';
+  after.parentNode.insertBefore(box, after.nextSibling);
+  return box;
+}
+
+function mmWaitText(e) {
+  const parts = [`${fmt(e.waited)}秒待ち`];
+  // matchInSec は「席が埋まるまで」の残り。0 は「もう埋まる」なので、
+  // 値が無いときの空欄と混ざらないように 0 も明示して出す。
+  if (Number.isFinite(e.matchInSec)) parts.push(`成立まで${fmt(e.matchInSec)}秒`);
+  if (e.rating != null) parts.push(`R${fmt(e.rating)}`);
+  return parts.join(' ・ ');
+}
+
+function renderMatchmaking(data) {
+  const box = ensureMatchmakingBox();
+  if (!box) return;
+  const t = (data && data.totals) || {};
+  const modes = (data && data.modes) || [];
+  const detailed = !!(data && data.detailed);
+  const crowd = (data && data.crowd) || {};
+  // 待機も試合も無いモードは並べない（0 が7行並ぶと本命の行が埋もれる）。
+  const shown = modes.filter(m => (m.waiting || 0) > 0 || (m.matches || 0) > 0 || (m.entries || []).length);
+  const rows = shown.map(m => {
+    const entries = m.entries || [];
+    // 「待機なし」と「まだ分からない」を同じ顔にしない。内訳の取れない
+    // サーバーでは人数を — にして、理由は見出しの下に1行だけ添える。
+    const sub = entries.length
+      ? entries.map(e => `${e.name}（${mmWaitText(e)}）`).join(' ・ ')
+      : m.matches ? `進行中 ${fmt(m.matches)}試合`
+      : detailed ? '待機なし' : '待機人数は不明';
+    const count = m.waiting == null ? '—' : `${fmt(m.waiting)}人`;
+    return `<div class="live-row">
+      <span class="live-where" title="${escapeHtml(m.label)}">${ic(MM_MODE_ICON[m.id] || 'mode_online', 15)}</span>
+      <span class="live-name">${escapeHtml(m.label)}<span class="live-tag user">待機 ${escapeHtml(count)}</span>${
+        m.matches ? `<span class="live-tag guest">対戦 ${fmt(m.matches)}</span>` : ''}</span>
+      <span class="live-sub">${escapeHtml(sub)}</span>
+    </div>`;
+  }).join('');
+
+  // 内訳が取れないサーバーでも、待っている人だけは実プレイヤー一覧から分かる
+  // （モードと待ち秒は分からない）。0 と「不明」を同じ顔で出さないため、
+  // どちらなのかを必ず言葉で添える。
+  const waiting = (data && data.waitingPlayers) || [];
+  const waitingRows = waiting.map(p => `<div class="live-row">
+      <span class="live-where" title="マッチング待ち">${ic('mode_sprint', 15)}</span>
+      <span class="live-name">${escapeHtml(p.name)}<span class="live-tag ${p.guest ? 'guest' : 'user'}">${p.guest ? 'ゲスト' : '登録'}</span></span>
+      <span class="live-sub">接続から${fmt(p.minutes)}分${p.rating != null ? ` ・ R${fmt(p.rating)}` : ''}</span>
+    </div>`).join('');
+  const nothing = !rows && !waitingRows && !(t.queueing || 0) && !(t.activeMatches || 0);
+
+  box.innerHTML = `
+    <p class="live-head">${ic('mode_online', 14)} マッチングの状況
+      <b>${t.queueing == null ? '—' : fmt(t.queueing)}</b>
+      <span class="muted" style="font-weight:400;font-size:11px">人が待機（対戦中 ${fmt(t.activeMatches || 0)} ・ ルーム ${fmt(t.openRooms || 0)} ・ 接続 ${fmt(t.online || 0)}）</span>
+      <button class="btn btn-sm btn-ghost" id="mmRefresh" style="margin-left:6px">更新</button></p>
+    ${detailed ? '' : `<p class="muted" style="font-size:11px;margin:0 0 4px">
+      モード別の待ち時間・成立までの秒数はこのサーバーではまだ取れません（総数と対戦数は正確です）</p>`}
+    ${rows ? `<div class="live-list">${rows}</div>` : ''}
+    ${waitingRows ? `<div class="live-list">${waitingRows}</div>` : ''}
+    ${nothing ? '<p class="muted" style="font-size:12px">いま待っている人も、進行中の対戦もありません</p>' : ''}
+    ${/* ⚠ 住人（にぎわい）の数は実プレイヤーと必ず別の行に出す。同じ数字に
+          足してしまうと、この画面を見た運営が「実際に何人待っているか」を
+          読めなくなる（そして混ざった値は他所へ流用されやすい）。 */''}
+    <p class="muted" style="font-size:11px;margin-top:2px">
+      住人の待機 ${fmt(crowd.queueing || 0)} ・ 住人オンライン ${fmt(crowd.activeResidents || 0)}
+      <span style="opacity:.7">（上の数字は実プレイヤーのみ）</span></p>`;
+  const rb = box.querySelector('#mmRefresh');
+  if (rb) rb.onclick = () => { audio.click(); refreshMatchmaking(); };
+}
+
+export async function refreshMatchmaking() {
+  // 管理者以外には箱ごと作らない（サーバー側の requireAdmin と二重の壁）。
+  if (!session.user || session.user.role !== 'admin') {
+    const box = $('#adminMatchmaking');
+    if (box) box.remove();
+    return;
+  }
+  const box = ensureMatchmakingBox();
+  if (!box) return;
+  try {
+    renderMatchmaking(await api('/api/admin/matchmaking'));
+  } catch (err) {
+    // 404（この口をまだ持たないサーバー）は「機能が無い」だけなので静かに畳む。
+    box.innerHTML = err.status === 404 ? ''
+      : `<p class="muted" style="font-size:12px">${ic('warn', 13)} マッチングの状況を取得できません: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+// 5秒ごとに引き直す。待ち行列は数秒で入れ替わるので、開いたまま見ていられないと
+// 意味がない。タイマーは「箱がもうDOMに無い／管理画面から離れた」時点で自分で
+// 止まる（画面を離れても回りっぱなしにしない ── セール表示の tickDeals と同じ作法）。
+function startMatchmakingTimer() {
+  clearInterval(mmTimer);
+  mmTimer = setInterval(() => {
+    const box = $('#adminMatchmaking');
+    if (!box || !box.isConnected || document.body.dataset.screen !== 'admin'
+      || !session.user || session.user.role !== 'admin') {
+      clearInterval(mmTimer);
+      mmTimer = null;
+      return;
+    }
+    refreshMatchmaking();
+  }, 5000);
 }
 
 function renderAdminUsers(users) {
@@ -3226,19 +3404,19 @@ function renderAdminUsers(users) {
     .sort((a, b) => b.createdAt - a.createdAt)
     .map(u => `
     <div class="admin-user-row ${u.banned ? 'banned' : ''}" data-uid="${u.id}">
-      <span class="au-name">${u.role === 'admin' ? '🛡️' : u.role === 'mod' ? '🔧' : '👤'} ${escapeHtml(u.username)}${u.role === 'mod' ? ' <small style="color:var(--cyan)">MOD</small>' : ''}</span>
-      <span class="au-meta">Lv.${u.level} ・ 🪙${fmt(u.coins)} ・ 💎${fmt(u.gems)} ・ 🏆${fmt(u.stats.bestScore)} ・ R${u.stats.rating}${u.banned ? ' ・ ⛔凍結中' : ''}${u.muted ? ' ・ 🔇ミュート中' : ''}</span>
+      <span class="au-name">${ic(u.role === 'admin' ? 'admin' : u.role === 'mod' ? 'mod' : 'user', 14)} ${escapeHtml(u.username)}${u.role === 'mod' ? ' <small style="color:var(--cyan)">MOD</small>' : ''}</span>
+      <span class="au-meta">Lv.${u.level} ・ ${ic('coins', 12)}${fmt(u.coins)} ・ ${ic('gems', 12)}${fmt(u.gems)} ・ ${ic('leaderboard', 12)}${fmt(u.stats.bestScore)} ・ R${u.stats.rating}${u.banned ? ' ・ 凍結中' : ''}${u.muted ? ' ・ ミュート中' : ''}</span>
       <span class="au-actions">
-        <button class="btn btn-sm btn-ghost" data-a="edit" title="インベントリを編集（通貨・アイテム・所持品・バッジ・記録）">🎒編集</button>
-        <button class="btn btn-sm btn-ghost" data-a="coins">+🪙</button>
-        <button class="btn btn-sm btn-ghost" data-a="gems">+💎</button>
+        <button class="btn btn-sm btn-ghost" data-a="edit" title="インベントリを編集（通貨・アイテム・所持品・バッジ・記録）">${ic('inventory', 13)} 編集</button>
+        <button class="btn btn-sm btn-ghost" data-a="coins" title="コインを付与">+${ic('coins', 13)}</button>
+        <button class="btn btn-sm btn-ghost" data-a="gems" title="ジェムを付与">+${ic('gems', 13)}</button>
         <button class="btn btn-sm btn-ghost" data-a="rating" title="レートを設定">R</button>
         <button class="btn btn-sm btn-ghost" data-a="level" title="レベルを設定">Lv</button>
-        <button class="btn btn-sm btn-ghost" data-a="badge" title="バッジを付与">🎖️</button>
-        <button class="btn btn-sm btn-ghost" data-a="pass" title="パスワードを再設定">🔑</button>
-        ${session.user && u.id !== session.user.id ? `<button class="btn btn-sm btn-ghost" data-a="role" title="権限を変更（admin/mod/user）">👤⚙</button>` : ''}
+        <button class="btn btn-sm btn-ghost" data-a="badge" title="バッジを付与">バッジ</button>
+        <button class="btn btn-sm btn-ghost" data-a="pass" title="パスワードを再設定">PW</button>
+        ${session.user && u.id !== session.user.id ? `<button class="btn btn-sm btn-ghost" data-a="role" title="権限を変更（admin/mod/user）">権限</button>` : ''}
         ${u.role !== 'admin' ? `
-          <button class="btn btn-sm btn-ghost" data-a="mute" title="チャット禁止の切替">${u.muted ? '🔈' : '🔇'}</button>
+          <button class="btn btn-sm btn-ghost" data-a="mute" title="チャット禁止の切替">${u.muted ? 'ミュート解除' : 'ミュート'}</button>
           <button class="btn btn-sm btn-ghost" data-a="ban">${u.banned ? '解除' : '凍結'}</button>
           <button class="btn btn-sm btn-ghost" data-a="del" style="color:var(--red)" title="アカウントを完全に削除（復元でも戻りません）">削除</button>` : ''}
       </span>
@@ -3283,21 +3461,21 @@ function renderAdminUsers(users) {
             if (!['admin', 'mod', 'user'].includes(role)) { toast('admin / mod / user のいずれかで入力してください', 'err'); return; }
             if (role === 'admin' && !confirm(`${user.username} を管理者にします。全機能（配布・凍結・削除）が使えるようになりますが、よろしいですか？`)) return;
             await api(`/api/admin/users/${uid}`, { method: 'POST', body: { role } });
-            toast(role === 'admin' ? '🛡️ 管理者に任命しました' : role === 'mod' ? '🔧 モデレーターに任命しました' : '👤 一般ユーザーに戻しました', 'ok');
+            toast(role === 'admin' ? '管理者に任命しました' : role === 'mod' ? 'モデレーターに任命しました' : '一般ユーザーに戻しました', 'ok');
           } else if (act === 'badge') {
             const id = prompt(`${user.username} に付与するバッジID\n(bronze / silver / gold / oni / kami / souzou / maou / rush / dungeon / tourney)\n先頭に - で剥奪 (例: -gold)`, 'gold');
             if (!id) return;
             const body = id.startsWith('-') ? { revokeBadge: id.slice(1) } : { grantBadge: id };
             await api(`/api/admin/users/${uid}`, { method: 'POST', body });
-            toast(id.startsWith('-') ? '🎖️ バッジを剥奪しました' : '🎖️ バッジを付与しました', 'ok');
+            toast(id.startsWith('-') ? 'バッジを剥奪しました' : 'バッジを付与しました', 'ok');
           } else if (act === 'pass') {
             const pw = prompt(`${user.username} の新しいパスワード（6文字以上）\n※本人は全端末で再ログインが必要になります`, '');
             if (pw === null) return;
             await api(`/api/admin/users/${uid}`, { method: 'POST', body: { setPassword: pw } });
-            toast('🔑 パスワードを再設定しました', 'ok');
+            toast('パスワードを再設定しました', 'ok');
           } else if (act === 'mute') {
             await api(`/api/admin/users/${uid}`, { method: 'POST', body: { muted: !user.muted } });
-            toast(user.muted ? '🔈 ミュートを解除しました' : '🔇 チャットを禁止しました', 'ok');
+            toast(user.muted ? 'ミュートを解除しました' : 'チャットを禁止しました', 'ok');
           } else if (act === 'ban') {
             await api(`/api/admin/users/${uid}`, { method: 'POST', body: { banned: !user.banned } });
             toast(user.banned ? '凍結を解除しました' : 'アカウントを凍結しました', 'ok');
@@ -3330,7 +3508,7 @@ function renderAdminUsers(users) {
             if (!confirm([
               `${user.username} を完全に削除します。`,
               '',
-              '⚠️ バックアップから復元しても元に戻りません（削除の記録が残るため、復元しても復活しません）。',
+              'バックアップから復元しても元に戻りません（削除の記録が残るため、復元しても復活しません）。',
               stageLine,
               '',
               '※ 一時的に止めたいだけなら「凍結」を使ってください（こちらは元に戻せます）。',
@@ -3355,7 +3533,7 @@ function renderAdminUsers(users) {
 // POST にまとめる（途中で失敗して中途半端な状態になるのを避けるため）。
 // ---------------------------------------------------------------------------
 
-const CAT_LABEL = { skin: '🧱 ブロックスキン', board: '🎨 ボードテーマ', fx: '✨ 消去エフェクト', ult: '⚡ 奥義' };
+const CAT_LABEL = { skin: 'ブロックスキン', board: 'ボードテーマ', fx: '消去エフェクト', ult: '奥義' };
 // バッジ名の表はここには持たない ── BADGE_INFO（プレイヤー向けの表）が
 // 唯一の正解で、絵は badgeIcon(id) から出す。
 // 以前はここが絵文字つきの4つ目のコピーで、👑 が管理者イベント・二冠・三冠・
@@ -3385,23 +3563,24 @@ export async function showUserEditor(uid) {
   const byCat = cat => c.shop.filter(i => i.cat === cat);
 
   const m = showModal(`
-    <h2>🎒 ${escapeHtml(u.username)}</h2>
+    <h2>${ic('inventory', 20)} ${escapeHtml(u.username)}</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:10px">
-      ${u.role === 'admin' ? '🛡️管理者' : u.role === 'mod' ? '🔧モデレーター' : '👤一般'}
+      ${ic(u.role === 'admin' ? 'admin' : u.role === 'mod' ? 'mod' : 'user', 13)} ${u.role === 'admin' ? '管理者' : u.role === 'mod' ? 'モデレーター' : '一般'}
       ・ 登録 ${new Date(u.createdAt).toLocaleDateString('ja-JP')}
-      ${u.guildName ? ` ・ 🏰${escapeHtml(u.guildName)}` : ''}
-      ${u.banned ? ' ・ ⛔凍結中' : ''}${u.muted ? ' ・ 🔇ミュート中' : ''}
+      ${u.guildName ? ` ・ ${ic('guild', 13)}${escapeHtml(u.guildName)}` : ''}
+      ${u.banned ? ' ・ 凍結中' : ''}${u.muted ? ' ・ ミュート中' : ''}
     </p>
-    ${u.role === 'admin' ? '<p class="ae-note">🛡️ 管理者は所持品も通貨も無制限として扱われるため、ここでの編集は表示上ほとんど意味がありません。</p>' : ''}
+    ${u.role === 'admin' ? `<p class="ae-note">${ic('admin', 13)} 管理者は所持品も通貨も無制限として扱われるため、ここでの編集は表示上ほとんど意味がありません。</p>` : ''}
 
     <div class="ue-body">
-      <h3 class="ue-h">💰 通貨・レベル</h3>
-      ${num('ueCoins', '🪙 コイン', u.coins)}
-      ${num('ueGems', '💎 ジェム', u.gems)}
-      ${num('ueXp', '⭐ XP', u.xp, `いまは Lv.${u.level}（1000ごとに1レベル）`)}
-      ${num('ueRating', '📈 レート', u.stats.rating || 1000)}
+      ${/* num() のラベルは escapeHtml を通るので、ここに SVG は置けない（言葉だけ）。 */''}
+      <h3 class="ue-h">${ic('coins', 16)} 通貨・レベル</h3>
+      ${num('ueCoins', 'コイン', u.coins)}
+      ${num('ueGems', 'ジェム', u.gems)}
+      ${num('ueXp', 'XP', u.xp, `いまは Lv.${u.level}（1000ごとに1レベル）`)}
+      ${num('ueRating', 'レート', u.stats.rating || 1000)}
 
-      <h3 class="ue-h">🎫 バトルパス</h3>
+      <h3 class="ue-h">${ic('battlepass', 16)} バトルパス</h3>
       ${num('uePassXp', 'パスXP', (u.battlePass && u.battlePass.xp) || 0)}
       <div class="settings-row">
         <label>プレミアム<br><span class="muted" style="font-size:10px">ジェムで購入した権利の復元用</span></label>
@@ -3411,16 +3590,16 @@ export async function showUserEditor(uid) {
         </div>
       </div>
 
-      <h3 class="ue-h">🧪 アイテム（ブースター）</h3>
+      <h3 class="ue-h">${ic('cat_boost', 16)} アイテム（ブースター）</h3>
       <div class="ue-grid">
         ${c.boosters.filter(i => !i.adminOnly).map(i => `
           <label class="ue-item">
-            <span>${i.icon} ${escapeHtml(i.name)}</span>
+            <span>${icon(itemIconName(i.id), { size: 16 })} ${escapeHtml(i.name)}</span>
             <input type="number" data-item="${i.id}" value="${(u.items && u.items[i.id]) || 0}" min="0" max="999">
           </label>`).join('')}
       </div>
 
-      <h3 class="ue-h">🎨 所持品</h3>
+      <h3 class="ue-h">${ic('inventory', 16)} 所持品</h3>
       ${c.slots.map(cat => `
         <div class="ue-cat">
           <div class="ue-cat-head">
@@ -3434,7 +3613,7 @@ export async function showUserEditor(uid) {
             ${byCat(cat).map(i => `
               <label class="ue-own${i.adminOnly ? ' staff' : ''}">
                 <input type="checkbox" data-own="${i.id}" data-cat="${cat}" ${owned.has(i.id) ? 'checked' : ''}>
-                <span>${i.icon ? i.icon + ' ' : ''}${escapeHtml(i.name)}</span>
+                <span>${icon(itemIconName({ id: i.id, cat: i.cat }), { size: 15 })} ${escapeHtml(i.name)}</span>
               </label>`).join('')}
           </div>
           <div class="settings-row">
@@ -3445,7 +3624,7 @@ export async function showUserEditor(uid) {
           </div>
         </div>`).join('')}
 
-      <h3 class="ue-h">👑 称号</h3>
+      <h3 class="ue-h">${ic('throne', 16)} 称号</h3>
       <div class="settings-row">
         <label>装備中の称号</label>
         <select id="ueTitle" style="font-family:inherit;padding:5px 8px;border-radius:8px;max-width:200px">
@@ -3454,7 +3633,7 @@ export async function showUserEditor(uid) {
         </select>
       </div>
 
-      <h3 class="ue-h">🎖️ バッジ</h3>
+      <h3 class="ue-h">バッジ</h3>
       <div class="ue-grid">
         ${c.badges.map(id => `
           <label class="ue-own">
@@ -3463,7 +3642,7 @@ export async function showUserEditor(uid) {
           </label>`).join('')}
       </div>
 
-      <h3 class="ue-h">📊 記録</h3>
+      <h3 class="ue-h">${ic('leaderboard', 16)} 記録</h3>
       ${c.stats.map(s => num(`ueSt_${s.key}`, s.label, (u.stats && u.stats[s.key]) || 0)).join('')}
     </div>
 
@@ -3548,7 +3727,7 @@ export async function showUserEditor(uid) {
     }
     try {
       await api(`/api/admin/users/${uid}`, { method: 'POST', body });
-      toast(`🎒 ${u.username} を保存しました`, 'ok', 3000);
+      toast(`${u.username} を保存しました`, 'ok', 3000);
       closeModal();
       openAdmin();
     } catch (err) {
@@ -3590,21 +3769,22 @@ async function showBugReportsAdminModal() {
     const wsCode = wsCodeOf(b);
     return `
     <div class="feed-row ${b.status === 'done' ? '' : 'real'}" data-bug="${b.id}" style="align-items:flex-start">
-      <span class="feed-icon">${b.status === 'done' ? '✅' : b.kind === 'workshop' || wsCode ? '🚩' : '🐛'}</span>
+      <span class="feed-icon">${b.status === 'done' ? ic('check', 18)
+        : (b.kind === 'workshop' || wsCode) ? ic('mode_workshop', 18) : ic('warn', 18)}</span>
       <span class="feed-text" style="white-space:pre-wrap">${escapeHtml(b.text)}${
         b.kind === 'workshop' && b.stage ? `
-        <small class="muted" style="display:block;margin-top:2px">🧩 ${escapeHtml(b.stage.title || '(無題)')} ・ 👤 ${escapeHtml(b.stage.author || '(不明)')} ・ コード ${escapeHtml(String(b.stage.code || wsCode))}</small>` : ''}
+        <small class="muted" style="display:block;margin-top:2px">${ic('mode_puzzle', 13)} ${escapeHtml(b.stage.title || '(無題)')} ・ ${ic('user', 13)} ${escapeHtml(b.stage.author || '(不明)')} ・ コード ${escapeHtml(String(b.stage.code || wsCode))}</small>` : ''}
         <small class="muted" style="display:block;margin-top:2px">${escapeHtml(b.by)}${b.role === 'guest' ? '（ゲスト）' : ''} ・ ${new Date(b.at).toLocaleString('ja-JP')}</small></span>
       <span style="display:flex;flex-direction:column;gap:4px">
-        ${b.status === 'done' ? '' : `<button class="btn btn-sm btn-ghost" data-done="${b.id}">✅</button>`}
-        ${wsCode ? `<button class="btn btn-sm btn-ghost" data-wsdel="${escapeHtml(wsCode)}" style="color:var(--red)" title="該当ステージを削除">🗑ステージ</button>` : ''}
-        <button class="btn btn-sm btn-ghost" data-del="${b.id}" style="color:var(--red)">🗑</button>
+        ${b.status === 'done' ? '' : `<button class="btn btn-sm btn-ghost" data-done="${b.id}" title="処理済みにする">${ic('check', 14)}</button>`}
+        ${wsCode ? `<button class="btn btn-sm btn-ghost" data-wsdel="${escapeHtml(wsCode)}" style="color:var(--red)" title="該当ステージを削除">ステージ削除</button>` : ''}
+        <button class="btn btn-sm btn-ghost" data-del="${b.id}" style="color:var(--red)">削除</button>
       </span>
     </div>`;
   };
   const open = reports.filter(b => b.status !== 'done').length;
   const m = showModal(`
-    <h2>🐛 バグ報告（未処理 ${open} / 全 ${reports.length}）</h2>
+    <h2>バグ報告（未処理 ${open} / 全 ${reports.length}）</h2>
     <div class="feed-list" style="max-height:52vh">
       ${reports.length ? reports.map(row).join('') : '<p class="muted center">報告はまだありません</p>'}
     </div>
@@ -3672,26 +3852,26 @@ async function showClientErrorsAdminModal() {
   }
   const row = e => `
     <div class="feed-row ${e.resolved ? '' : 'real'}" style="align-items:flex-start">
-      <span class="feed-icon">${e.resolved ? '✅' : '⚠️'}</span>
+      <span class="feed-icon">${e.resolved ? ic('check', 18) : ic('warn', 18)}</span>
       <span class="feed-text" style="white-space:pre-wrap;min-width:0;word-break:break-word">${escapeHtml(e.message)}
-        ${e.where ? `<small class="muted" style="display:block">📄 ${escapeHtml(e.where)}</small>` : ''}
+        ${e.where ? `<small class="muted" style="display:block">${escapeHtml(e.where)}</small>` : ''}
         ${e.stack ? `<small class="muted" style="display:block">${escapeHtml(e.stack)}</small>` : ''}
         <small class="muted" style="display:block;margin-top:2px">×${fmt(e.count)} ・ 最終 ${e.lastAt ? new Date(e.lastAt).toLocaleString('ja-JP') : '—'}${e.by ? ` ・ ${escapeHtml(e.by)}` : ''}${e.screen ? ` ・ ${escapeHtml(e.screen)}` : ''}${e.lang ? ` ・ ${escapeHtml(e.lang)}` : ''}</small>
         ${e.ua ? `<small class="muted" style="display:block">${escapeHtml(e.ua)}</small>` : ''}</span>
       <span style="display:flex;flex-direction:column;gap:4px">
-        ${e.resolved ? '' : `<button class="btn btn-sm btn-ghost" data-ce-done="${escapeHtml(e.id)}" title="解決済みにする">✅</button>`}
-        <button class="btn btn-sm btn-ghost" data-ce-del="${escapeHtml(e.id)}" style="color:var(--red)" title="この記録を削除">🗑</button>
+        ${e.resolved ? '' : `<button class="btn btn-sm btn-ghost" data-ce-done="${escapeHtml(e.id)}" title="解決済みにする">${ic('check', 14)}</button>`}
+        <button class="btn btn-sm btn-ghost" data-ce-del="${escapeHtml(e.id)}" style="color:var(--red)" title="この記録を削除">削除</button>
       </span>
     </div>`;
   const open = rows.filter(e => !e.resolved).length;
   const m = showModal(`
-    <h2>⚠️ クライアントエラー（未解決 ${open} / 全 ${rows.length}）</h2>
+    <h2>${ic('warn', 20)} クライアントエラー（未解決 ${open} / 全 ${rows.length}）</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:8px">プレイヤーのブラウザで起きた例外の集計です</p>
     <div class="feed-list" style="max-height:52vh">
       ${rows.length ? rows.map(row).join('') : `<p class="muted center">${escapeHtml(errMsg || 'クライアントエラーの報告はまだありません')}</p>`}
     </div>
     <div class="modal-buttons">
-      ${rows.length ? '<button class="btn btn-ghost" id="ceClear" style="color:var(--red)">🧹 全消去</button>' : ''}
+      ${rows.length ? '<button class="btn btn-ghost" id="ceClear" style="color:var(--red)">全消去</button>' : ''}
       <button class="btn btn-primary" id="ceClose">閉じる</button>
     </div>`);
   m.querySelector('#ceClose').onclick = closeModal;
@@ -3725,7 +3905,7 @@ export async function showRestoreModal() {
   const isAdmin = !!session.user && session.user.role === 'admin';
 
   const m = showModal(`
-    <h2>♻️ データ復元</h2>
+    <h2>${ic('reroll', 20)} データ復元</h2>
     <p class="muted center" style="margin-bottom:10px;font-size:12px">
       バックアップJSONを読み込んでプレイヤーデータを復旧します。<br>
       <b style="color:var(--green)">マージ</b>＝復元後に登録した人も残す（推奨）／
@@ -3737,8 +3917,8 @@ export async function showRestoreModal() {
         <button data-v="replace">置き換え</button>
       </div></div>
       <div class="settings-row"><label>読み込み方法</label><div class="seg" id="rsSrc">
-        <button data-v="file" class="active">📁 ファイル</button>
-        <button data-v="paste">📋 貼り付け</button>
+        <button data-v="file" class="active">ファイル</button>
+        <button data-v="paste">貼り付け</button>
       </div></div>
       <input type="file" id="rsFile">
       <textarea id="rsPaste" rows="4" class="hidden" placeholder="バックアップJSONの中身をここに貼り付け"></textarea>
@@ -3749,7 +3929,7 @@ export async function showRestoreModal() {
       <div class="form-error" id="rsError"></div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rsClose">やめる</button>
-        <button class="btn btn-primary" id="rsApply" disabled>♻️ 復元する</button>
+        <button class="btn btn-primary" id="rsApply" disabled>復元する</button>
       </div>
     </div>
     <div id="rsSnaps"></div>`);
@@ -3804,14 +3984,14 @@ export async function showRestoreModal() {
   const verify = async () => {
     if (!payload) return;
     if (!isAdmin && !passValue()) {
-      info.innerHTML = `② 読み込みOK：${payloadLabel}<br>③ 管理者パスワードを入力して「♻️ 復元する」を押してください`;
+      info.innerHTML = `② 読み込みOK：${payloadLabel}<br>③ 管理者パスワードを入力して「復元する」を押してください`;
       return;
     }
     info.innerHTML = `② 読み込みOK：${payloadLabel}<br><span class="muted">サーバーで検証中…</span>`;
     try {
       const res = await api('/api/admin/restore', { method: 'POST', body: { data: payload, mode, dryRun: true, password: passValue() } });
       const p = res.preview;
-      info.innerHTML = `✅ 検証OK：<b>${fmt(p.users)}人</b>（管理者${p.admins}人）・取引${fmt(p.transactions)}件${p.savedAt ? `<br>取得日時: ${new Date(p.savedAt).toLocaleString('ja-JP')}` : ''}<br>③「♻️ 復元する」を押してください`;
+      info.innerHTML = `${ic('check', 14)} 検証OK：<b>${fmt(p.users)}人</b>（管理者${p.admins}人）・取引${fmt(p.transactions)}件${p.savedAt ? `<br>取得日時: ${new Date(p.savedAt).toLocaleString('ja-JP')}` : ''}<br>③「復元する」を押してください`;
     } catch (e) {
       // Server-side validation failed (wrong password, bad file): say so, but
       // the button stays enabled — the real request will report the same error.
@@ -3828,7 +4008,7 @@ export async function showRestoreModal() {
     let text;
     try {
       text = await (file.text ? file.text() : new Promise((ok, ng) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = ng; r.readAsText(file); }));
-    } catch { fail('ファイルを読み取れませんでした。「📋 貼り付け」をお試しください'); return; }
+    } catch { fail('ファイルを読み取れませんでした。「貼り付け」をお試しください'); return; }
     let obj;
     try { obj = JSON.parse(text); } catch { fail('JSONとして読み取れませんでした'); return; }
     loaded(obj, `${file.name} ・ ${fmtBytes(file.size)}`);
@@ -3847,10 +4027,10 @@ export async function showRestoreModal() {
     if (!isAdmin && !passValue()) { fail('管理者パスワードを入力してください'); return; }
     if (!armed) {
       armed = true;
-      apply.textContent = mode === 'replace' ? '⚠️ もう一度押すと置き換えます' : '✅ もう一度押すと復元します';
+      apply.textContent = mode === 'replace' ? 'もう一度押すと置き換えます' : 'もう一度押すと復元します';
       apply.classList.add('btn-gold');
       clearTimeout(armTimer);
-      armTimer = setTimeout(() => { armed = false; apply.textContent = '♻️ 復元する'; apply.classList.remove('btn-gold'); }, 6000);
+      armTimer = setTimeout(() => { armed = false; apply.textContent = '復元する'; apply.classList.remove('btn-gold'); }, 6000);
       return;
     }
     armed = false;
@@ -3878,18 +4058,18 @@ export async function showRestoreModal() {
       // （undefined＝この項目を返さないサーバーでは誤警報を出さないよう、
       //   厳密に null のときだけ警告する）
       if (res.snapshot === null) {
-        toast(`⚠️ 復元しました（${counts}）が、巻き戻し用のスナップショットを保存できませんでした。この復元は元に戻せません`, 'err', 9000);
+        toast(`復元しました（${counts}）が、巻き戻し用のスナップショットを保存できませんでした。この復元は元に戻せません`, 'err', 9000);
       } else {
         audio.coin();
         confettiBurst(40);
-        toast(`♻️ 復元完了！ ${counts}`, 'ok', 6000);
+        toast(`復元完了！ ${counts}`, 'ok', 6000);
       }
       await refreshMe().catch(() => {});
       updateTopbar();
       if (session.user && session.user.role === 'admin') openAdmin();
     } catch (e) {
       apply.disabled = false;
-      apply.textContent = '♻️ 復元する';
+      apply.textContent = '復元する';
       apply.classList.remove('btn-gold');
       info.textContent = '';
       fail(e.message || '復元に失敗しました');
@@ -3904,7 +4084,7 @@ export async function showRestoreModal() {
       const box = m.querySelector('#rsSnaps');
       box.innerHTML = `
         <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
-        <p class="muted center" style="font-size:12px;margin-bottom:8px">📸 このサーバーのスナップショット（起動時・復元前に自動保存／再デプロイで消えます）</p>
+        <p class="muted center" style="font-size:12px;margin-bottom:8px">このサーバーのスナップショット（起動時・復元前に自動保存／再デプロイで消えます）</p>
         <div class="ms-list" style="max-height:190px;overflow-y:auto">
           ${snapshots.map(s => `
             <div class="ms-row">
@@ -3916,7 +4096,7 @@ export async function showRestoreModal() {
             </div>`).join('')}
         </div>
         <div class="modal-buttons" style="margin-top:12px">
-          <button class="btn btn-sm btn-ghost" id="rsSnapNow">📸 いまスナップショットを作る</button>
+          <button class="btn btn-sm btn-ghost" id="rsSnapNow">いまスナップショットを作る</button>
         </div>`;
       box.querySelectorAll('[data-snap]').forEach(b => {
         let armedSnap = false;
@@ -3929,9 +4109,9 @@ export async function showRestoreModal() {
             // 巻き戻しは「戻しすぎた」ときにもう一度戻す必要が出やすいので、
             // 退避が無いことはこちらのほうが痛い。
             if (res.snapshot === null) {
-              toast(`⚠️ 巻き戻しました（${fmt(res.report.after)}人）が、退避スナップショットを保存できませんでした。この操作は取り消せません`, 'err', 9000);
+              toast(`巻き戻しました（${fmt(res.report.after)}人）が、退避スナップショットを保存できませんでした。この操作は取り消せません`, 'err', 9000);
             } else {
-              toast(`♻️ 巻き戻しました（${fmt(res.report.after)}人）`, 'ok', 5000);
+              toast(`巻き戻しました（${fmt(res.report.after)}人）`, 'ok', 5000);
             }
             await refreshMe().catch(() => {});
             updateTopbar();
@@ -3942,7 +4122,7 @@ export async function showRestoreModal() {
       box.querySelector('#rsSnapNow').onclick = async () => {
         try {
           await api('/api/admin/snapshots/create', { method: 'POST', body: {} });
-          toast('📸 スナップショットを作成しました', 'ok');
+          toast('スナップショットを作成しました', 'ok');
           closeModal();
           showRestoreModal();
         } catch (e) { fail(e.message); }
@@ -3970,7 +4150,7 @@ export function bindAdminActions() {
       : 'メンテナンスモードを終了しますか？')) return;
     try {
       await api('/api/admin/maintenance', { method: 'POST', body: { on: turningOn } });
-      toast(turningOn ? '🛠 メンテナンスを開始しました' : '✅ メンテナンスを終了しました', 'ok');
+      toast(turningOn ? 'メンテナンスを開始しました' : 'メンテナンスを終了しました', 'ok');
       openAdmin();
     } catch (err) { toast(err.message, 'err'); }
   };
@@ -3992,13 +4172,13 @@ export function bindAdminActions() {
       a.download = `block-blitz-backup-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(a.href);
-      toast('💾 バックアップをダウンロードしました', 'ok');
+      toast('バックアップをダウンロードしました', 'ok');
       if (trimmed) {
-        toast(tr(`🎞 サイズ上限のため一部（${trimmed}）を省いて保存しました`,
-          `🎞 Some data (${trimmed}) was left out to fit the size limit`), 'err', 5000);
+        toast(tr(`サイズ上限のため一部（${trimmed}）を省いて保存しました`,
+          `Some data (${trimmed}) was left out to fit the size limit`), 'err', 5000);
       } else if (limit > 0 && bytes > limit * 0.8) {
-        toast(tr(`⚠️ バックアップが上限の${Math.round((bytes / limit) * 100)}%に達しています`,
-          `⚠️ Backup is at ${Math.round((bytes / limit) * 100)}% of the size limit`), 'err', 5000);
+        toast(tr(`バックアップが上限の${Math.round((bytes / limit) * 100)}%に達しています`,
+          `Backup is at ${Math.round((bytes / limit) * 100)}% of the size limit`), 'err', 5000);
       }
     } catch (err) { toast(err.message, 'err'); }
   };
@@ -4016,7 +4196,7 @@ export function bindAdminActions() {
         ce = document.createElement('button');
         ce.className = 'btn btn-ghost btn-sm';
         ce.id = 'btnClientErrors';
-        ce.textContent = '⚠️ クライアントエラー';
+        ce.textContent = 'クライアントエラー';
         bug.parentNode.insertBefore(ce, bug.nextSibling);
       }
     }
@@ -4035,7 +4215,7 @@ export function bindAdminActions() {
       await refreshMe();
       updateTopbar();
       audio.coin();
-      toast(`${kind === 'coins' ? '💰' : '💎'} ${fmt(amount)} を付与しました`, 'ok');
+      toast(`${kind === 'coins' ? 'コイン' : 'ジェム'} ${fmt(amount)} を付与しました`, 'ok');
       openAdmin();
     } catch (err) { toast(err.message, 'err'); }
   };
@@ -4050,7 +4230,7 @@ export function bindAdminActions() {
       await refreshMe();
       updateTopbar();
       audio.coin();
-      toast(`🧪 💣🧹⭐ を各${fmt(amount)}個付与しました`, 'ok');
+      toast(`ブースターを各${fmt(amount)}個付与しました`, 'ok');
     } catch (err) { toast(err.message, 'err'); }
   };
 
@@ -4058,7 +4238,7 @@ export function bindAdminActions() {
     if (!confirm('全ユーザーの今週のウィークリーチャレンジ記録を削除します。よろしいですか？')) return;
     try {
       const res = await api('/api/admin/weekly/reset', { method: 'POST', body: {} });
-      toast(`🎯 ${res.affected}人のウィークリー記録をリセットしました`, 'ok');
+      toast(`${res.affected}人のウィークリー記録をリセットしました`, 'ok');
     } catch (err) { toast(err.message, 'err'); }
   };
 
@@ -4066,7 +4246,7 @@ export function bindAdminActions() {
     try {
       await api('/api/admin/missions/complete', { method: 'POST', body: {} });
       audio.coin();
-      toast('📋 自分のデイリー／ウィークリーを全達成にしました（受け取りはミッション画面から）', 'ok', 3500);
+      toast('自分のデイリー／ウィークリーを全達成にしました（受け取りはミッション画面から）', 'ok', 3500);
       refreshMissionDot();
     } catch (err) { toast(err.message, 'err'); }
   };
@@ -4075,7 +4255,7 @@ export function bindAdminActions() {
     if (!confirm('自分の実績の「受け取り済み」記録を消去します。よろしいですか？')) return;
     try {
       await api('/api/admin/achievements/reset', { method: 'POST', body: {} });
-      toast('🏅 実績の受け取り記録をリセットしました', 'ok');
+      toast('実績の受け取り記録をリセットしました', 'ok');
       refreshMissionDot();
     } catch (err) { toast(err.message, 'err'); }
   };
@@ -4084,7 +4264,7 @@ export function bindAdminActions() {
     localStorage.setItem('bba_kami', '1');
     localStorage.setItem('bba_souzou', '1');
     audio.kamiDescend();
-    toast('🔓 「神」「創造神」を解放しました（この端末のみ）', 'announce', 3500);
+    toast('「神」「創造神」を解放しました（この端末のみ）', 'announce', 3500);
   };
 
   $('#btnEvent').onclick = () => showEventModal();
@@ -4102,7 +4282,7 @@ export function bindAdminActions() {
     if (!confirm('進行中のオンライン対戦をすべて引き分けで終了し、プレイ中の人に保存を促します。よろしいですか？')) return;
     try {
       const r = await api('/api/admin/prepare-update', { method: 'POST' });
-      toast(`🔧 ${r.ended}件の対戦を引き分けで終了しました。いま push すると安全です`, 'ok', 5000);
+      toast(`${r.ended}件の対戦を引き分けで終了しました。いま push すると安全です`, 'ok', 5000);
     } catch (err) { toast(err.message, 'err'); }
   };
 
@@ -4117,14 +4297,14 @@ export function bindAdminActions() {
   // ---- gift to everyone ----
   $('#btnGrantAll').onclick = () => {
     const m = showModal(`
-      <h2>🎁 全員に配布</h2>
+      <h2>全員に配布</h2>
       <p class="muted center" style="margin-bottom:10px">凍結中を除く全アカウントに一斉配布します。<br>全員へのお知らせも自動送信されます。</p>
       <div class="form-col">
-        <div class="settings-row"><label>🪙 コイン</label><input id="gaCoins" type="number" min="0" max="1000000" value="500" style="width:110px;text-align:center"></div>
-        <div class="settings-row"><label>💎 ジェム</label><input id="gaGems" type="number" min="0" max="100000" value="0" style="width:110px;text-align:center"></div>
+        <div class="settings-row"><label>${ic('coins', 14)} コイン</label><input id="gaCoins" type="number" min="0" max="1000000" value="500" style="width:110px;text-align:center"></div>
+        <div class="settings-row"><label>${ic('gems', 14)} ジェム</label><input id="gaGems" type="number" min="0" max="100000" value="0" style="width:110px;text-align:center"></div>
         <div class="modal-buttons">
           <button class="btn btn-ghost" id="gaCancel">やめる</button>
-          <button class="btn btn-gold" id="gaSend">🎁 配布する！</button>
+          <button class="btn btn-gold" id="gaSend">配布する！</button>
         </div>
       </div>`);
     m.querySelector('#gaCancel').onclick = closeModal;
@@ -4132,12 +4312,12 @@ export function bindAdminActions() {
       const coins = Math.max(0, Math.floor(Number(m.querySelector('#gaCoins').value) || 0));
       const gems = Math.max(0, Math.floor(Number(m.querySelector('#gaGems').value) || 0));
       if (!coins && !gems) { toast('コインかジェムを入力してください', 'err'); return; }
-      if (!confirm(`全員に ${coins ? `${fmt(coins)}🪙 ` : ''}${gems ? `${fmt(gems)}💎` : ''} を配布します。よろしいですか？`)) return;
+      if (!confirm(`全員に ${coins ? `コイン${fmt(coins)} ` : ''}${gems ? `ジェム${fmt(gems)}` : ''} を配布します。よろしいですか？`)) return;
       try {
         const res = await api('/api/admin/grant-all', { method: 'POST', body: { coins, gems } });
         closeModal();
         audio.coin();
-        toast(`🎁 ${res.affected}人に配布しました！`, 'ok', 3000);
+        toast(`${res.affected}人に配布しました！`, 'ok', 3000);
         openAdmin();
       } catch (err) { toast(err.message, 'err'); }
     };
@@ -4151,7 +4331,7 @@ export function bindAdminActions() {
     if (text === null) return;
     try {
       const res = await api('/api/admin/chat/say', { method: 'POST', body: { text } });
-      toast(`💬 ${res.from}「${res.text}」`, 'ok', 3000);
+      toast(`${res.from}「${res.text}」`, 'ok', 3000);
     } catch (err) { toast(err.message, 'err'); }
   };
 
@@ -4159,7 +4339,7 @@ export function bindAdminActions() {
     if (!confirm('全体チャットの履歴を全員分クリアします。よろしいですか？')) return;
     try {
       await api('/api/admin/chat/clear', { method: 'POST', body: {} });
-      toast('🧹 チャットをクリアしました', 'ok');
+      toast('チャットをクリアしました', 'ok');
     } catch (err) { toast(err.message, 'err'); }
   };
 
@@ -4167,7 +4347,7 @@ export function bindAdminActions() {
     if (!confirm('全ユーザーのハイスコア・レート・PvP戦績をリセットします。よろしいですか？')) return;
     try {
       const res = await api('/api/admin/leaderboard/reset', { method: 'POST', body: {} });
-      toast(`🏆 ${res.affected}人の戦績をリセットしました`, 'ok');
+      toast(`${res.affected}人の戦績をリセットしました`, 'ok');
       openAdmin();
     } catch (err) { toast(err.message, 'err'); }
   };
@@ -4212,11 +4392,11 @@ function aeFmtDate(ts) {
 // 🧾 管理者操作の履歴。🎒編集で何でも書けるようになった以上、
 // 「誰がいつ何を変えたか」を見られる場所が要る。
 const ADMIN_ACTION_LABEL = {
-  user_edit: '🎒 ユーザー編集',
-  user_delete: '🗑️ ユーザー削除',
-  restore: '♻️ データ復元',
-  grant_all: '🎁 全員に配布',
-  leaderboard_reset: '🏆 ランキング初期化',
+  user_edit: 'ユーザー編集',
+  user_delete: 'ユーザー削除',
+  restore: 'データ復元',
+  grant_all: '全員に配布',
+  leaderboard_reset: 'ランキング初期化',
 };
 
 async function showAdminLogModal() {
@@ -4230,7 +4410,7 @@ async function showAdminLogModal() {
     return parts.length ? parts.join(' ・ ') : '—';
   };
   const m = showModal(`
-    <h2>🧾 操作ログ</h2>
+    <h2>操作ログ</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:10px">
       通貨・権限・バッジの書き換え、削除、復元、全体配布を記録しています（最新${data.max}件）。<br>
       パスワードなどの値そのものは記録されません。
@@ -4244,7 +4424,7 @@ async function showAdminLogModal() {
               <span class="muted">${new Date(r.at).toLocaleString('ja-JP')}</span>
             </div>
             <div class="alog-sub">
-              👤 ${escapeHtml(r.by)}${r.target ? ` → <b>${escapeHtml(r.target)}</b>` : ''}
+              ${ic('user', 13)} ${escapeHtml(r.by)}${r.target ? ` → <b>${escapeHtml(r.target)}</b>` : ''}
             </div>
             <div class="alog-detail">${escapeHtml(fmtDetail(r.detail))}</div>
           </div>`).join('')}
@@ -4264,11 +4444,12 @@ async function showAdminEventModal() {
 
   const s = data.schedule;
   const occ = data.occurrences && data.occurrences[0];
-  const modeOpts = [{ id: 'auto', icon: '🔄', name: '週替わりローテ（おまかせ）' }]
-    .concat(data.modes.map(m => ({ id: m.id, icon: m.icon, name: m.name })));
+  // <option> には SVG を置けないので、ここのアイコンは持たない（言葉だけ）。
+  const modeOpts = [{ id: 'auto', name: '週替わりローテ（おまかせ）' }]
+    .concat(data.modes.map(m => ({ id: m.id, name: m.name })));
 
   const m = showModal(`
-    <h2>👑 管理者イベント</h2>
+    <h2>${ic('throne', 20)} 管理者イベント</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:10px">
       週1回・プレイヤーが自分の時間帯を予約する形式です。<br>
       どの枠を選んでも <b>進捗（ボスHP・ゲージ・ランキング）は全員で共有</b> されます。
@@ -4317,12 +4498,12 @@ async function showAdminEventModal() {
     <div class="settings-row">
       <label>モード</label>
       <select id="aeMode" style="font-family:inherit;padding:6px 10px;border-radius:8px">
-        ${modeOpts.map(o => `<option value="${o.id}" ${o.id === s.rotation ? 'selected' : ''}>${o.icon} ${o.name}</option>`).join('')}
+        ${modeOpts.map(o => `<option value="${o.id}" ${o.id === s.rotation ? 'selected' : ''}>${escapeHtml(o.name)}</option>`).join('')}
       </select>
     </div>
 
     <div class="settings-row">
-      <label>🎁 お宝ラッシュ</label>
+      <label>お宝ラッシュ</label>
       <div class="seg" id="aeMult">
         ${[1, 1.5, 2, 3].map(v => `<button data-v="${v}" class="${s.rewardMult === v ? 'active' : ''}">${v}倍</button>`).join('')}
       </div>
@@ -4401,9 +4582,9 @@ async function showAdminEventModal() {
           note: m.querySelector('#aeNote').value,
         },
       });
-      toast(!enabled ? '👑 管理者イベントをOFFにしました'
-        : staffOnly ? '🔒 試運転で設定しました（いま見えるのは運営だけです）'
-        : '👑 管理者イベントを設定しました（全員にアナウンス済み）', 'ok', 4000);
+      toast(!enabled ? '管理者イベントをOFFにしました'
+        : staffOnly ? '試運転で設定しました（いま見えるのは運営だけです）'
+        : '管理者イベントを設定しました（全員にアナウンス済み）', 'ok', 4000);
       closeModal();
       showAdminEventModal();
     } catch (err) {
@@ -4423,7 +4604,7 @@ async function showEventModal() {
 
   if (active) {
     const m = showModal(`
-      <h2>${active.icon || '🌪️'} 開催中のイベント</h2>
+      <h2>${ic(active.iconName || 'mode_chaos', 20)} 開催中のイベント</h2>
       <div class="result-stats" style="margin-bottom:12px">
         <div class="rs-row"><span>イベント名</span><b>${escapeHtml(active.name)}</b></div>
         <div class="rs-row"><span>効果</span><b>${escapeHtml(active.desc || '—')}</b></div>
@@ -4445,7 +4626,7 @@ async function showEventModal() {
           const res = await api('/api/admin/event', { method: 'POST', body: { extend: Number(b.dataset.v) } });
           window.__bbaEvent = res.event;
           audio.coin();
-          toast(`⏱️ 延長しました（残り${evRemainText(res.event.endsAt - Date.now())}）`, 'ok');
+          toast(`延長しました（残り${evRemainText(res.event.endsAt - Date.now())}）`, 'ok');
           closeModal();
           showEventModal();
         } catch (err) { toast(err.message, 'err'); }
@@ -4464,14 +4645,14 @@ async function showEventModal() {
 
   let typeId = types[0] ? types[0].id : 'chaos';
   const m = showModal(`
-    <h2>🎪 期間限定イベント</h2>
+    <h2>${ic('mode_adminevent', 20)} 期間限定イベント</h2>
     <p class="muted center" style="margin-bottom:10px;font-size:12px">
       種類を選んで開催すると、全員に効果が適用され全体チャットでアナウンスされます
     </p>
     <div class="ev-types" id="evTypes">
       ${types.map(ty => `
         <button class="ev-type ${ty.id === typeId ? 'active' : ''}" data-ty="${ty.id}">
-          <span class="ev-icon">${ty.icon}</span>
+          <span class="ev-icon">${ic(ty.iconName || 'mode_chaos', 24)}</span>
           <b>${escapeHtml(ty.name)}</b>
           <small>${escapeHtml(ty.desc)}</small>
         </button>`).join('')}
@@ -4485,7 +4666,7 @@ async function showEventModal() {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="evClose">やめる</button>
-        <button class="btn btn-chaos" id="evStart">🎪 開催する！</button>
+        <button class="btn btn-chaos" id="evStart">開催する！</button>
       </div>
     </div>`);
 
@@ -4513,7 +4694,8 @@ async function showEventModal() {
       closeModal();
       audio.coin();
       confettiBurst(40);
-      toast(`${res.event.icon} 「${res.event.name}」を開始しました！全員にアナウンス済み`, 'ok', 4000);
+      // トーストは textContent なので SVG を置けない。絵を落として言葉だけにする。
+      toast(`「${res.event.name}」を開始しました！全員にアナウンス済み`, 'ok', 4000);
     } catch (err) { toast(err.message, 'err'); }
   };
 }
@@ -4544,7 +4726,7 @@ function renderPollModal(poll) {
   const closed = poll.closed;
   const canVote = !!session.user && !closed;
   const m = showModal(`
-    <h2>🗳️ ${escapeHtml(LANG === 'en' && poll.questionEn ? poll.questionEn : poll.question)}</h2>
+    <h2>${escapeHtml(LANG === 'en' && poll.questionEn ? poll.questionEn : poll.question)}</h2>
     <p class="muted center" style="margin-bottom:12px;font-size:12px">
       ${closed
         ? tr('この投票は終了しました', 'This poll has closed')
@@ -4561,12 +4743,12 @@ function renderPollModal(poll) {
         <button class="poll-option ${mine ? 'mine' : ''} ${poll.reveal ? 'revealed' : ''}"
                 data-opt="${o.id}" ${canVote ? '' : 'disabled'}>
           ${poll.reveal ? `<span class="poll-fill" style="width:${pct}%"></span>` : ''}
-          <span class="poll-text">${mine ? '✅ ' : ''}${escapeHtml(LANG === 'en' && o.textEn ? o.textEn : o.text)}</span>
+          <span class="poll-text">${mine ? `${ic('check', 13)} ` : ''}${escapeHtml(LANG === 'en' && o.textEn ? o.textEn : o.text)}</span>
           ${poll.reveal ? `<span class="poll-pct">${pct}% <small>(${fmt(o.votes)})</small></span>` : ''}
         </button>`;
       }).join('')}
     </div>
-    ${closed && poll.winner ? `<p class="center" style="margin-top:12px;font-weight:800">🏆 ${tr('1位', 'Winner')}: ${escapeHtml(LANG === 'en' && poll.winner.textEn ? poll.winner.textEn : poll.winner.text)}${poll.winner.tied ? tr('（同率）', ' (tied)') : ''}</p>` : ''}
+    ${closed && poll.winner ? `<p class="center" style="margin-top:12px;font-weight:800">${ic('mode_tourney', 14)} ${tr('1位', 'Winner')}: ${escapeHtml(LANG === 'en' && poll.winner.textEn ? poll.winner.textEn : poll.winner.text)}${poll.winner.tied ? tr('（同率）', ' (tied)') : ''}</p>` : ''}
     <div class="modal-buttons">
       ${!session.user && !closed ? `<button class="btn btn-primary" id="plLogin">${tr('ログイン', 'Log in')}</button>` : ''}
       <button class="btn btn-ghost" id="plClose">${tr('閉じる', 'Close')}</button>
@@ -4580,7 +4762,7 @@ function renderPollModal(poll) {
       try {
         const res = await api('/api/poll/vote', { method: 'POST', body: { optionId: b.dataset.opt } });
         audio.coin();
-        toast(res.changed ? tr('投票を変更しました！', 'Vote changed!') : tr('🗳️ 投票しました！', '🗳️ Vote counted!'), 'ok');
+        toast(res.changed ? tr('投票を変更しました！', 'Vote changed!') : tr('投票しました！', 'Vote counted!'), 'ok');
         closeModal();
         renderPollModal(res.poll);
         refreshPollBanner();
@@ -4606,7 +4788,7 @@ export async function refreshPollBanner() {
       voted = !!(p && p.myVote);
     } catch { /* keep nudging */ }
   }
-  el.innerHTML = `🗳️ <b>${escapeHtml(LANG === 'en' && brief.questionEn ? brief.questionEn : brief.question)}</b> — ${voted
+  el.innerHTML = `<b>${escapeHtml(LANG === 'en' && brief.questionEn ? brief.questionEn : brief.question)}</b> — ${voted
     ? tr('投票済み・結果を見る', 'Voted — see results')
     : tr('投票受付中！', 'Vote now!')} <small>(${tr(`残り${pollRemainText(brief.endsAt - Date.now())}`, `${pollRemainText(brief.endsAt - Date.now())} left`)})</small>`;
   el.classList.toggle('unvoted', !voted && !!session.user);
@@ -4622,23 +4804,23 @@ export async function showPollAdminModal() {
 
   if (poll) {
     const m = showModal(`
-      <h2>🗳️ 投票の管理</h2>
+      <h2>投票の管理</h2>
       <p class="center" style="margin-bottom:10px"><b>${escapeHtml(LANG === 'en' && poll.questionEn ? poll.questionEn : poll.question)}</b><br>
-        <small class="muted">${poll.closed ? '終了済み' : `受付中 ・ 残り${pollRemainText(poll.endsAt - Date.now())}`} ・ ${poll.voterCount}人が投票${poll.aiVoters !== undefined ? `（👤実人 ${poll.realVoters} ／ 🎭住人 ${poll.aiVoters}）` : ''}</small></p>
+        <small class="muted">${poll.closed ? '終了済み' : `受付中 ・ 残り${pollRemainText(poll.endsAt - Date.now())}`} ・ ${poll.voterCount}人が投票${poll.aiVoters !== undefined ? `（実プレイヤー ${poll.realVoters} ／ 住人 ${poll.aiVoters}）` : ''}</small></p>
       <div class="poll-options">
         ${poll.options.map(o => `
           <div class="poll-option revealed" style="cursor:default">
             <span class="poll-fill" style="width:${o.pct || 0}%"></span>
             <span class="poll-text">${escapeHtml(o.text)}${o.archs && o.archs.length
-              ? `<small class="muted" style="display:block;font-size:10px">🤖 ${o.archs.map(a => `${escapeHtml(a.label)}×${a.n}`).join('・')}</small>` : ''}</span>
-            <span class="poll-pct">${o.pct || 0}% <small>(${fmt(o.votes || 0)}${o.ai !== undefined ? ` = 👤${o.real}+🤖${o.ai}` : ''})</small></span>
+              ? `<small class="muted" style="display:block;font-size:10px">${ic('mode_ai', 12)} ${o.archs.map(a => `${escapeHtml(a.label)}×${a.n}`).join('・')}</small>` : ''}</span>
+            <span class="poll-pct">${o.pct || 0}% <small>(${fmt(o.votes || 0)}${o.ai !== undefined ? ` = ${ic('user', 11)}${o.real}+${ic('mode_ai', 11)}${o.ai}` : ''})</small></span>
           </div>`).join('')}
       </div>
-      ${poll.kind === 'event' ? `<p class="muted center" style="font-size:12px;margin-top:10px">🎪 イベント投票：1位のイベントをそのまま開催できます${poll.applied ? '<br><b style="color:var(--green)">開催済み</b>' : ''}</p>` : ''}
+      ${poll.kind === 'event' ? `<p class="muted center" style="font-size:12px;margin-top:10px">イベント投票：1位のイベントをそのまま開催できます${poll.applied ? '<br><b style="color:var(--green)">開催済み</b>' : ''}</p>` : ''}
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="plClose">閉じる</button>
         ${!poll.closed ? '<button class="btn btn-ghost" id="plCloseNow">締め切る</button>' : ''}
-        ${poll.kind === 'event' && !poll.applied ? '<button class="btn btn-gold" id="plApply">🏆 1位でイベント開催</button>' : ''}
+        ${poll.kind === 'event' && !poll.applied ? `<button class="btn btn-gold" id="plApply">1位でイベント開催</button>` : ''}
         <button class="btn btn-ai" id="plDelete">削除</button>
       </div>`);
     m.querySelector('#plClose').onclick = closeModal;
@@ -4647,7 +4829,7 @@ export async function showPollAdminModal() {
       try {
         await api('/api/admin/poll', { method: 'POST', body: { action: 'close' } });
         closeModal();
-        toast('🗳️ 投票を締め切りました', 'ok');
+        toast('投票を締め切りました', 'ok');
         showPollAdminModal();
       } catch (err) { toast(err.message, 'err'); }
     };
@@ -4661,7 +4843,7 @@ export async function showPollAdminModal() {
         closeModal();
         audio.coin();
         confettiBurst(50);
-        toast(`${res.event.icon} 投票1位の「${res.event.name}」を開催しました！`, 'ok', 4500);
+        toast(`投票1位の「${res.event.name}」を開催しました！`, 'ok', 4500);
       } catch (err) { toast(err.message, 'err'); }
     };
     m.querySelector('#plDelete').onclick = async () => {
@@ -4679,10 +4861,10 @@ export async function showPollAdminModal() {
 
   let kind = 'event';
   const m = showModal(`
-    <h2>🗳️ 投票を作る</h2>
+    <h2>投票を作る</h2>
     <div class="settings-row"><label>種類</label><div class="seg" id="plKind">
-      <button data-v="event" class="active">🎪 次のイベント投票</button>
-      <button data-v="plain">💬 自由な質問</button>
+      <button data-v="event" class="active">次のイベント投票</button>
+      <button data-v="plain">自由な質問</button>
     </div></div>
     <div class="form-col" style="margin-top:10px">
       <input id="plQ" type="text" maxlength="80" value="つぎの期間限定イベント、どれがいい？" placeholder="質問">
@@ -4705,7 +4887,7 @@ export async function showPollAdminModal() {
       <div class="form-error" id="plErr"></div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="plCancel">やめる</button>
-        <button class="btn btn-primary" id="plCreate">🗳️ 投票を開始</button>
+        <button class="btn btn-primary" id="plCreate">投票を開始</button>
       </div>
     </div>`);
 
@@ -4745,7 +4927,7 @@ export async function showPollAdminModal() {
       closeModal();
       audio.coin();
       confettiBurst(30);
-      toast('🗳️ 投票を開始しました！全員にアナウンス済み', 'ok', 4000);
+      toast('投票を開始しました！全員にアナウンス済み', 'ok', 4000);
       refreshPollBanner();
     } catch (e) { err.textContent = e.message; }
   };
@@ -4756,17 +4938,17 @@ export async function showPollAdminModal() {
 // にぎわい設定 2.0 — crowd simulation control room (admin)
 // ---------------------------------------------------------------------------
 
-const MOOD_LABEL = { party: '🔥 大盛況', busy: '🙂 にぎやか', calm: '😴 まったり', off: '⚫ オフ' };
+const MOOD_LABEL = { party: '大盛況', busy: 'にぎやか', calm: 'まったり', off: 'オフ' };
 const TOGGLE_LABELS = [
-  ['chat', '💬 住人のチャット'], ['dialogues', '🗣️ 住人どうしの会話'], ['feed', '📡 ライブフィード'],
-  ['greetings', '👋 入室した人への挨拶'], ['reactions', '⚡ 返事・イベント/投票/対戦への反応'],
-  ['ghosts', '🏆 ランキングの住人'], ['bots', '🤖 対戦ボットを住人に'], ['votes', '🗳️ 住人の投票'],
+  ['chat', '住人のチャット'], ['dialogues', '住人どうしの会話'], ['feed', 'ライブフィード'],
+  ['greetings', '入室した人への挨拶'], ['reactions', '返事・イベント/投票/対戦への反応'],
+  ['ghosts', 'ランキングの住人'], ['bots', '対戦ボットを住人に'], ['votes', '住人の投票'],
   // guilds だけ一覧から漏れていた。サーバー側のトグルは9つあり
   // （server/ambient.js の DEFAULT_TOGGLES）、guilds はギルドランキングに
   // 住人のギルドを並べるかを決める。ここに無いとチェックボックスが出ず、
-  // 一度オフにするプリセット（🐣 開店直後 / 🧑 人間だけの記録）を押したあと
+  // 一度オフにするプリセット（開店直後 / 人間だけの記録）を押したあと
   // 画面から戻す手段が無くなる。
-  ['guilds', '🏰 ギルドランキングの住人'],
+  ['guilds', 'ギルドランキングの住人'],
 ];
 // プリセットは「にぎわいの強さ」だけでなく「世界の性格」も切り替える。
 // 25個を1枚のグリッドに流すと目的のボタンを探せなくなるので、狙い別に
@@ -4775,40 +4957,40 @@ const TOGGLE_LABELS = [
 // 何が変わるのか分からず、運営が本番でしか確かめられなくなる。
 const PRESET_GROUPS = [
   ['にぎわいの強さ', [
-    ['normal', '🙂 標準', '人口×1・ふつうのにぎわい'], ['party', '🎉 お祭り', '人口×3・おしゃべり×2.5'],
-    ['fever', '🔥 フィーバー', '人口×25・住人320人'], ['mega', '🌋 伝説の夜', '人口×88・住人600人(上限)'],
-    ['ultra', '🌠 祭りの極み', '人口×500・表示30万人'],
-    ['quiet', '🤫 しずか', '人口×0.5・会話と挨拶なし'], ['night', '🌙 深夜の秘密基地', '人口×0.7・ゆったり'],
-    ['silent', '🔇 人口だけ', '人数は出るが誰も喋らない'], ['off', '⚫ 完全オフ', '住人をすべて停止'],
-    ['ghosttown', '🫧 ゴーストタウン', '人口×0.1・ほぼ無言'],
-    ['cozy', '🐣 開店直後', '人口×0.75・挨拶は多め'],
-    ['rushhour', '🏙️ 夕方の駅前', '人口×20・1人あたりは静か'],
-    ['carnival', '🎊 カーニバル', '人口×120・会話×12'],
-    ['overload', '💥 限界試験', '人口×500・会話×16（常用しない）'],
-    ['world', '🌍 世界規模', '人口×1000・表示58万人'],
-    ['million', '🌎 100万人', '人口×2000・表示116万人'],
+    ['normal', '標準', '人口×1・ふつうのにぎわい'], ['party', 'お祭り', '人口×3・おしゃべり×2.5'],
+    ['fever', 'フィーバー', '人口×25・住人320人'], ['mega', '伝説の夜', '人口×88・住人600人(上限)'],
+    ['ultra', '祭りの極み', '人口×500・表示30万人'],
+    ['quiet', 'しずか', '人口×0.5・会話と挨拶なし'], ['night', '深夜の秘密基地', '人口×0.7・ゆったり'],
+    ['silent', '人口だけ', '人数は出るが誰も喋らない'], ['off', '完全オフ', '住人をすべて停止'],
+    ['ghosttown', 'ゴーストタウン', '人口×0.1・ほぼ無言'],
+    ['cozy', '開店直後（挨拶多め）', '人口×0.75・挨拶は多め'],
+    ['rushhour', '夕方の駅前', '人口×20・1人あたりは静か'],
+    ['carnival', 'カーニバル', '人口×120・会話×12'],
+    ['overload', '限界試験', '人口×500・会話×16（常用しない）'],
+    ['world', '世界規模', '人口×1000・表示58万人'],
+    ['million', '100万人', '人口×2000・表示116万人'],
   ]],
   ['時間帯と空気', [
-    ['commute', '🌅 朝の通勤帯', '人口×1.5・会話×0.5・挨拶多め'],
-    ['sunday', '🌸 のんびり日曜', '人口×2・会話×0.5でゆっくり'],
-    ['dawn', '🌃 過疎の夜明け', '人口×0.35・会話×3で濃い空気'],
-    ['afterparty', '🎆 祭りのあと', '人口×5・会話×0.35／余韻だけ'],
-    ['gust', '⚡ 瞬間最大風速', '人口×1のまま会話×8(限界)'],
-    ['stream', '📺 配信向け', '人口×6・会話×1.5／住人の会話オフ'],
+    ['commute', '朝の通勤帯', '人口×1.5・会話×0.5・挨拶多め'],
+    ['sunday', 'のんびり日曜', '人口×2・会話×0.5でゆっくり'],
+    ['dawn', '過疎の夜明け', '人口×0.35・会話×3で濃い空気'],
+    ['afterparty', '祭りのあと', '人口×5・会話×0.35／余韻だけ'],
+    ['gust', '瞬間最大風速', '人口×1のまま会話×8(限界)'],
+    ['stream', '配信向け', '人口×6・会話×1.5／住人の会話オフ'],
   ]],
   ['競技とギルド', [
-    ['eve', '🏆 大会前夜', '人口×8・会話×0.75／順位と対戦が主役'],
-    ['guildwar', '🏰 ギルド戦争', '人口×20・会話×1.5・ギルド強調'],
-    ['arena', '🤖 対戦だけ', '人口×4・チャット全オフ／対戦と順位'],
-    ['townhall', '🗳️ 住民集会', '人口×6・会話×2／投票が主役'],
+    ['eve', '大会前夜', '人口×8・会話×0.75／順位と対戦が主役'],
+    ['guildwar', 'ギルド戦争', '人口×20・会話×1.5・ギルド強調'],
+    ['arena', '対戦だけ', '人口×4・チャット全オフ／対戦と順位'],
+    ['townhall', '住民集会', '人口×6・会話×2／投票が主役'],
   ]],
   ['運営むけ', [
-    ['spectate', '👀 観戦者だらけ', '人口×12・対戦なし／フィードだけ'],
-    ['opening', '🐣 開店直後', '人口×0.2／順位も対戦も人間だけ'],
-    ['humanonly', '🧑 人間だけの記録', '人口×1.5・賑やか／成績は人間だけ'],
-    ['overseas', '🌍 海外時間', '人口×2・JST9〜18時は静か（夜型）'],
-    ['officehours', '🏢 営業時間だけ', '人口×3・JST0〜9時は静か'],
-    ['debug', '🔍 デバッグ用', '人口×0.2（最少）・全9機能オン＋会話×8'],
+    ['spectate', '観戦者だらけ', '人口×12・対戦なし／フィードだけ'],
+    ['opening', '開店直後（人間だけ）', '人口×0.2／順位も対戦も人間だけ'],
+    ['humanonly', '人間だけの記録', '人口×1.5・賑やか／成績は人間だけ'],
+    ['overseas', '海外時間', '人口×2・JST9〜18時は静か（夜型）'],
+    ['officehours', '営業時間だけ', '人口×3・JST0〜9時は静か'],
+    ['debug', 'デバッグ用', '人口×0.2（最少）・全9機能オン＋会話×8'],
   ]],
 ];
 
@@ -4819,15 +5001,15 @@ async function showCrowdModal(tab = 'basic') {
   const amb = st.ambient;
 
   const m = showModal(`
-    <h2>🎭 にぎわい設定 2.0</h2>
+    <h2>にぎわい設定 2.0</h2>
     <div class="crowd-status">
       <span>表示人数 <b>${fmt(st.online)}</b></span>
       <span>住人オンライン <b>${st.activeResidents}</b>/${data.residents.length}</span>
       <span>${MOOD_LABEL[st.mood.id] || st.mood.id}</span>
-      ${st.quietNow ? '<span style="color:var(--yellow)">🤫 静かな時間帯</span>' : ''}
+      ${st.quietNow ? '<span style="color:var(--yellow)">静かな時間帯</span>' : ''}
     </div>
     <div class="tabs" id="crTabs" style="margin:10px 0 12px;justify-content:center">
-      ${[['basic', '基本'], ['cast', '👥 住人'], ['lines', '💭 セリフ'], ['test', '🧪 テスト']].map(([id, l]) =>
+      ${[['basic', '基本'], ['cast', '住人'], ['lines', 'セリフ'], ['test', 'テスト']].map(([id, l]) =>
         `<button class="tab ${tab === id ? 'active' : ''}" data-ct="${id}">${l}</button>`).join('')}
     </div>
     <div id="crBody"></div>
@@ -4854,12 +5036,12 @@ async function showCrowdModal(tab = 'basic') {
         <div class="preset-grid">
           ${items.map(([id, l, d]) => `<button class="preset-btn" data-preset="${id}"><b>${l}</b><small>${d}</small></button>`).join('')}
         </div>`).join('')}
-      <div class="settings-row" style="margin-top:12px"><label>👥 人口倍率 <b>×${st.scale}</b></label></div>
+      <div class="settings-row" style="margin-top:12px"><label>${ic('friends', 14)} 人口倍率 <b>×${st.scale}</b></label></div>
       <p class="muted" style="font-size:11px;margin:-4px 0 6px">住人の実数は ×88 で上限（600人）。それより上は表示人数だけが増えます</p>
       <div class="seg seg-wrap" id="popSeg" style="justify-content:center">
         ${[0, 0.1, 0.2, 0.25, 0.35, 0.5, 0.7, 0.75, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 25, 35, 50, 65, 88, 120, 150, 200, 300, 400, 500, 700, 1000, 1500, 2000].map(v => `<button data-v="${v}" ${v === st.scale ? 'class="active"' : ''}>×${v}</button>`).join('')}
       </div>
-      <div class="settings-row" style="margin-top:10px"><label>💬 チャット頻度<br><span class="muted" style="font-size:10px">住人の発言とライブフィードの速さ</span></label><div class="seg" id="paceSeg">
+      <div class="settings-row" style="margin-top:10px"><label>${ic('chat', 14)} チャット頻度<br><span class="muted" style="font-size:10px">住人の発言とライブフィードの速さ</span></label><div class="seg" id="paceSeg">
         ${[[0.1, 'ほぼ無言'], [0.25, 'しずか'], [0.5, 'ひかえめ'], [0.75, 'ゆるめ'], [1, '標準'], [1.5, '活発'], [2, 'おしゃべり'], [3, '賑やか'], [4, '大騒ぎ'], [6, '爆速'], [8, '限界'], [12, '祭り'], [16, '過密']].map(([v, l]) =>
           `<button data-v="${v}" ${Number(amb.chatPace) === v ? 'class="active"' : ''}>${l}</button>`).join('')}
       </div></div>
@@ -4868,20 +5050,20 @@ async function showCrowdModal(tab = 'basic') {
         ${TOGGLE_LABELS.map(([k, l]) => `<label class="toggle-item"><input type="checkbox" data-tg="${k}" ${amb.toggles[k] ? 'checked' : ''}><span>${l}</span></label>`).join('')}
       </div>
       <div class="settings-row" style="margin-top:12px">
-        <label>🤫 静かな時間帯（JST）</label>
+        <label>静かな時間帯（JST）</label>
         <input type="checkbox" id="quietOn" ${amb.quiet ? 'checked' : ''}>
         <input type="number" id="quietFrom" min="0" max="23" value="${amb.quiet ? amb.quiet.from : 2}" style="width:54px;text-align:center">時 〜
         <input type="number" id="quietTo" min="0" max="24" value="${amb.quiet ? amb.quiet.to : 6}" style="width:54px;text-align:center">時
       </div>
       <p class="muted" style="font-size:11px">静かな時間帯はチャット・フィード・反応が止まります（人数表示はそのまま）</p>
-      <div class="modal-buttons" style="margin-top:10px"><button class="btn btn-primary" id="crSaveBasic">💾 保存する</button></div>`;
+      <div class="modal-buttons" style="margin-top:10px"><button class="btn btn-primary" id="crSaveBasic">保存する</button></div>`;
 
     body.querySelectorAll('[data-preset]').forEach(b => {
       b.onclick = async () => {
         try {
           const res = await post({ preset: b.dataset.preset });
           audio.coin();
-          toast(`🎭 プリセット適用 — 表示人数 ${fmt(res.online)}人 / ${MOOD_LABEL[res.mood.id]}`, 'ok', 3000);
+          toast(`プリセット適用 — 表示人数 ${fmt(res.online)}人 / ${MOOD_LABEL[res.mood.id]}`, 'ok', 3000);
           closeModal(); showCrowdModal('basic');
         } catch (err) { toast(err.message, 'err'); }
       };
@@ -4893,7 +5075,7 @@ async function showCrowdModal(tab = 'basic') {
           body.querySelectorAll('#popSeg button').forEach(x => x.classList.remove('active'));
           b.classList.add('active');
           audio.click();
-          toast(`🎭 人口 ×${res.scale} — 表示人数 ${fmt(res.online)}人・住人${res.activeResidents}人がオンライン`, 'ok', 2600);
+          toast(`人口 ×${res.scale} — 表示人数 ${fmt(res.online)}人・住人${res.activeResidents}人がオンライン`, 'ok', 2600);
         } catch (err) { toast(err.message, 'err'); }
       };
     });
@@ -4912,7 +5094,7 @@ async function showCrowdModal(tab = 'basic') {
       try {
         await post({ chatPace: pace, toggles, quiet });
         audio.coin();
-        toast('🎭 保存しました', 'ok');
+        toast('保存しました', 'ok');
         closeModal(); showCrowdModal('basic');
       } catch (err) { toast(err.message, 'err'); }
     };
@@ -4922,29 +5104,29 @@ async function showCrowdModal(tab = 'basic') {
   if (tab === 'cast') {
     const rows = data.residents.slice().sort((a, b) => (b.online - a.online) || b.rating - a.rating);
     body.innerHTML = `
-      <p class="muted" style="font-size:12px;margin-bottom:6px">${rows.length}人の住人がチャット・ランキング・対戦ボットに同じ名前で登場します。🟢=いまオンライン</p>
+      <p class="muted" style="font-size:12px;margin-bottom:6px">${rows.length}人の住人がチャット・ランキング・対戦ボットに同じ名前で登場します。●=いまオンライン</p>
       <div class="cast-list">
         ${rows.map(r => `
           <div class="cast-row ${r.online ? 'on' : ''}">
-            <span class="cast-dot">${r.online ? '🟢' : '⚫'}</span>
+            <span class="cast-dot" style="color:${r.online ? 'var(--green)' : 'var(--dim)'}">●</span>
             <span class="cast-name">${escapeHtml(r.name)}${r.custom ? ' <small class="muted">(追加)</small>' : ''}</span>
             <span class="cast-arch">${escapeHtml(r.archLabel)}</span>
-            <span class="cast-meta">${r.lang === 'en' ? '🌍' : '🇯🇵'} ${r.registered ? `R${r.rating} Lv${r.level}` : 'ゲスト'} ・ ${r.hours[0]}時〜${r.hours[1] % 24}時</span>
-            <button class="btn btn-sm btn-ghost" data-rm="${escapeHtml(r.id)}" title="この住人を引退させる">✕</button>
+            <span class="cast-meta">${r.lang === 'en' ? 'EN' : 'JA'} ${r.registered ? `R${r.rating} Lv${r.level}` : 'ゲスト'} ・ ${r.hours[0]}時〜${r.hours[1] % 24}時</span>
+            <button class="btn btn-sm btn-ghost" data-rm="${escapeHtml(r.id)}" title="この住人を引退させる">${ic('close', 14)}</button>
           </div>`).join('')}
       </div>
       ${data.retired.length ? `
         <p class="muted" style="font-size:12px;margin:10px 0 4px">引退した住人（${data.retired.length}）</p>
-        <div class="cast-retired">${data.retired.map(r => `<button class="btn btn-sm btn-ghost" data-restore="${escapeHtml(r.id)}">↩️ ${escapeHtml(r.name)}</button>`).join('')}</div>` : ''}
-      <p class="muted" style="font-size:12px;margin:12px 0 6px">➕ 住人を追加</p>
+        <div class="cast-retired">${data.retired.map(r => `<button class="btn btn-sm btn-ghost" data-restore="${escapeHtml(r.id)}">戻す ${escapeHtml(r.name)}</button>`).join('')}</div>` : ''}
+      <p class="muted" style="font-size:12px;margin:12px 0 6px">住人を追加</p>
       <div class="settings-row">
         <input id="castName" type="text" maxlength="16" placeholder="名前" style="width:130px">
         <select id="castArch">${data.archetypes.map(a => `<option value="${a.id}">${escapeHtml(a.label)}</option>`).join('')}</select>
-        <select id="castLang"><option value="ja">🇯🇵 日本語</option><option value="en">🌍 English</option></select>
+        <select id="castLang"><option value="ja">日本語</option><option value="en">English</option></select>
         <button class="btn btn-sm btn-primary" id="castAdd">追加</button>
       </div>
       <div class="modal-buttons" style="margin-top:12px">
-        <button class="btn btn-sm btn-ghost" id="castReseed" style="color:var(--red)">🔄 住人を総入れ替え</button>
+        <button class="btn btn-sm btn-ghost" id="castReseed" style="color:var(--red)">${ic('reroll', 13)} 住人を総入れ替え</button>
       </div>`;
     body.querySelectorAll('[data-rm]').forEach(b => {
       b.onclick = async () => {
@@ -4964,13 +5146,13 @@ async function showCrowdModal(tab = 'basic') {
       try {
         await post({ addResident: { name, arch: body.querySelector('#castArch').value, lang: body.querySelector('#castLang').value } });
         audio.coin();
-        toast(`👥 「${name}」が住人になりました`, 'ok');
+        toast(`「${name}」が住人になりました`, 'ok');
         closeModal(); showCrowdModal('cast');
       } catch (err) { toast(err.message, 'err'); }
     };
     body.querySelector('#castReseed').onclick = async () => {
       if (!confirm('住人64人を新しい顔ぶれに総入れ替えします（追加した住人は残ります）。よろしいですか？')) return;
-      try { await post({ reseed: true }); audio.coin(); toast('🔄 住人を入れ替えました', 'ok'); closeModal(); showCrowdModal('cast'); }
+      try { await post({ reseed: true }); audio.coin(); toast('住人を入れ替えました', 'ok'); closeModal(); showCrowdModal('cast'); }
       catch (err) { toast(err.message, 'err'); }
     };
   }
@@ -4979,18 +5161,18 @@ async function showCrowdModal(tab = 'basic') {
   if (tab === 'lines') {
     body.innerHTML = `
       <div class="form-col">
-        <label class="muted" style="font-size:12px">🤖 追加のAI名（改行かカンマ区切り）— ゲストや一時ボットの名前に混ざります</label>
+        <label class="muted" style="font-size:12px">追加のAI名（改行かカンマ区切り）— ゲストや一時ボットの名前に混ざります</label>
         <textarea id="popNames" rows="3" maxlength="1800" style="width:100%;resize:vertical" placeholder="例: たろう, PixelHero, ざわ子">${escapeHtml((amb.names || []).join('\n'))}</textarea>
-        <label class="muted" style="font-size:12px">💭 カスタムセリフ（改行区切り）— 住人のチャットに混ざります。{me}=自分の名前 {mode}=得意モード {event}=イベント名 {name}=他の住人 が使えます</label>
+        <label class="muted" style="font-size:12px">カスタムセリフ（改行区切り）— 住人のチャットに混ざります。{me}=自分の名前 {mode}=得意モード {event}=イベント名 {name}=他の住人 が使えます</label>
         <textarea id="popLines" rows="5" maxlength="6000" style="width:100%;resize:vertical" placeholder="例: このゲーム最高！&#10;{mode}いっしょにやろ！">${escapeHtml((amb.lines || []).join('\n'))}</textarea>
       </div>
-      <div class="modal-buttons" style="margin-top:10px"><button class="btn btn-primary" id="crSaveLines">💾 保存する</button></div>`;
+      <div class="modal-buttons" style="margin-top:10px"><button class="btn btn-primary" id="crSaveLines">保存する</button></div>`;
     body.querySelector('#crSaveLines').onclick = async () => {
       const split = s => s.split(/[\n,]/).map(x => x.trim()).filter(Boolean);
       try {
         const res = await post({ names: split(body.querySelector('#popNames').value), lines: body.querySelector('#popLines').value.split('\n').map(x => x.trim()).filter(Boolean) });
         audio.coin();
-        toast(`💭 保存しました！追加名${res.ambient.names.length}件・セリフ${res.ambient.lines.length}件`, 'ok', 3000);
+        toast(`保存しました！追加名${res.ambient.names.length}件・セリフ${res.ambient.lines.length}件`, 'ok', 3000);
       } catch (err) { toast(err.message, 'err'); }
     };
   }
@@ -5000,7 +5182,7 @@ async function showCrowdModal(tab = 'basic') {
     body.innerHTML = `
       <p class="muted" style="font-size:12px;margin-bottom:8px">いますぐ1つ流して動作を確かめます（全員に見えます）</p>
       <div class="preset-grid">
-        ${[['line', '💬 セリフを1行'], ['dialogue', '🗣️ 会話を1本'], ['feed', '📡 フィードを1件'], ['greet', '👋 挨拶'], ['reaction', '⚡ 反応（イベント/投票）']].map(([w, l]) =>
+        ${[['line', 'セリフを1行'], ['dialogue', '会話を1本'], ['feed', 'フィードを1件'], ['greet', '挨拶'], ['reaction', '反応（イベント/投票）']].map(([w, l]) =>
           `<button class="preset-btn" data-test="${w}"><b>${l}</b></button>`).join('')}
       </div>
       <div id="crTestOut" class="test-out muted">結果がここに表示されます</div>`;
@@ -5052,7 +5234,7 @@ function guildCard(g, { rank = null, clickable = true } = {}) {
       <div class="guild-info">
         <div class="guild-name"><span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)} <small class="muted">Lv.${g.level}</small></div>
         <div class="guild-meta">${escapeHtml(g.desc || '')}</div>
-        <div class="guild-meta">👥 ${g.memberCount}/${g.maxMembers}${SEP}${g.open ? tr('🔓 公開', '🔓 Open') : tr('🔒 招待制', '🔒 Invite only')}${SEP}🪙+${g.bonusPct}%</div>
+        <div class="guild-meta">${ic('friends', 13)} ${g.memberCount}/${g.maxMembers}${SEP}${g.open ? tr('公開', 'Open') : `${ic('lock', 12)} ${tr('招待制', 'Invite only')}`}${SEP}${ic('coins', 13)}+${g.bonusPct}%</div>
       </div>
       <div class="guild-pts"><b>${fmt(g.weeklyPoints)}</b><small>${tr('週間pt', 'weekly pts')}</small></div>
     </div>`;
@@ -5071,8 +5253,8 @@ function renderMyGuild() {
     body.innerHTML = `
       <div class="ms-head"><div><b>${tr('ギルド未所属', 'No guild yet')}</b><div class="muted" style="font-size:12px">${tr('ギルドに入ると毎試合のスコアが週間ポイントになり、ギルドレベルに応じてコインボーナス（最大+20%）がつきます', 'Every game feeds your guild\'s weekly points, and the guild level pays a coin bonus (up to +20%)')}</div></div></div>
       <div class="modal-buttons" style="justify-content:center;margin:14px 0">
-        <button class="btn btn-gold" id="gdCreate">${tr(`🏰 ギルドを設立（🪙${fmt(d.createCost)}）`, `🏰 Found a guild (🪙${fmt(d.createCost)})`)}</button>
-        <button class="btn btn-online" id="gdFind">${tr('🔍 ギルドをさがす', '🔍 Find a guild')}</button>
+        <button class="btn btn-gold" id="gdCreate">${tr(`ギルドを設立（${ic('coins', 13)}${fmt(d.createCost)}）`, `Found a guild (${ic('coins', 13)}${fmt(d.createCost)})`)}</button>
+        <button class="btn btn-online" id="gdFind">${tr('ギルドをさがす', 'Find a guild')}</button>
       </div>
       <div class="settings-row" style="justify-content:center"><label>${tr('招待コードで参加', 'Join with a code')}</label>
         <input id="gdCode" type="text" maxlength="6" placeholder="ABC123" style="width:110px;text-transform:uppercase"><button class="btn btn-sm btn-primary" id="gdJoinCode">${tr('参加', 'Join')}</button></div>`;
@@ -5090,9 +5272,9 @@ function renderMyGuild() {
   const questsHtml = q && Array.isArray(q.quests) && q.quests.length ? `
     <div class="ms-head" style="margin-top:4px">
       <div>
-        <b>${tr('🗡️ 週間クエスト', '🗡️ Weekly quests')}</b>
+        <b>${ic('seat_play', 14)} ${tr('週間クエスト', 'Weekly quests')}</b>
         <div class="muted" style="font-size:12px">${tr(`達成 ${q.doneCount} / ${q.total}`, `Done ${q.doneCount} / ${q.total}`)}${
-          q.badgeEarned ? tr(' ・ 🎖️ ギルドの誉れ 獲得済み', ' · 🎖️ Guild Honors earned') : ''}<br>${
+          q.badgeEarned ? tr(' ・ ギルドの誉れ 獲得済み', ' · Guild Honors earned') : ''}<br>${
           tr('達成したクエストの金庫は、メンバーが1人1回ずつ開けられます', 'Each completed quest is a vault every member can open once')}</div>
       </div>
     </div>
@@ -5108,7 +5290,7 @@ function renderMyGuild() {
           </div>
           ${rewardChip(quest.coins, quest.gems)}
           ${quest.claimed
-            ? '<span class="ms-check">✓</span>'
+            ? `<span class="ms-check">${ic('check', 14)}</span>`
             : quest.done
               ? `<button class="btn btn-sm btn-gold" data-gquest="${escapeHtml(String(quest.id))}">${tr('受取', 'Claim')}</button>`
               : `<button class="btn btn-sm btn-ghost" disabled>${tr('未達成', 'Locked')}</button>`}
@@ -5122,23 +5304,23 @@ function renderMyGuild() {
         <div class="guild-hero-name"><span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)}</div>
         <div class="muted" style="font-size:12px">${escapeHtml(g.desc || tr('（説明なし）', '(no description)'))}</div>
         <div class="guild-hero-stats">
-          <span>Lv.<b>${g.level}</b></span><span>${tr('週間', 'Weekly')} <b>${fmt(g.weeklyPoints)}</b>pt</span><span>${tr('順位', 'Rank')} <b>${g.rank ? `#${g.rank}` : '-'}</b></span><span>🪙<b>+${g.bonusPct}%</b></span><span>👥 <b>${g.memberCount}</b>/${g.maxMembers}</span>
+          <span>Lv.<b>${g.level}</b></span><span>${tr('週間', 'Weekly')} <b>${fmt(g.weeklyPoints)}</b>pt</span><span>${tr('順位', 'Rank')} <b>${g.rank ? `#${g.rank}` : '-'}</b></span><span>${ic('coins', 13)}<b>+${g.bonusPct}%</b></span><span>${ic('friends', 13)} <b>${g.memberCount}</b>/${g.maxMembers}</span>
         </div>
       </div>
     </div>
-    ${isOwner ? `<div class="settings-row" style="justify-content:center"><label>${tr('🔑 招待コード', '🔑 Invite code')}</label><b style="font-size:18px;letter-spacing:.12em">${escapeHtml(g.code || '')}</b><span class="muted" style="font-size:11px">${tr('（フレンドに教えると参加できます）', '(share it with friends)')}</span></div>` : ''}
+    ${isOwner ? `<div class="settings-row" style="justify-content:center"><label>${tr('招待コード', 'Invite code')}</label><b style="font-size:18px;letter-spacing:.12em">${escapeHtml(g.code || '')}</b><span class="muted" style="font-size:11px">${tr('（フレンドに教えると参加できます）', '(share it with friends)')}</span></div>` : ''}
     ${questsHtml}
-    <div class="ms-head" style="margin-top:4px"><div><b>${tr('👥 メンバー', '👥 Members')}</b></div></div>
+    <div class="ms-head" style="margin-top:4px"><div><b>${ic('friends', 14)} ${tr('メンバー', 'Members')}</b></div></div>
     <div class="ms-list">
       ${g.members.map(mb => `
         <div class="ms-row">
-          <div class="ms-info"><div class="ms-name">${mb.role === 'owner' ? '👑 ' : ''}${escapeHtml(mb.username)}${mb.id === me ? tr('（あなた）', ' (you)') : ''}</div>
+          <div class="ms-info"><div class="ms-name">${mb.role === 'owner' ? `${ic('host_crown', 13)} ` : ''}${escapeHtml(mb.username)}${mb.id === me ? tr('（あなた）', ' (you)') : ''}</div>
             <div class="ms-prog">Lv.${mb.level}${SEP}R${fmt(mb.rating)}${SEP}${tr('今週', 'this week')} ${fmt(mb.weeklyPts)}pt</div></div>
           ${isOwner && mb.role !== 'owner' ? `<button class="btn btn-sm btn-ghost" data-kick="${escapeHtml(mb.id)}" style="color:var(--red)">${tr('除名', 'Kick')}</button>` : ''}
         </div>`).join('')}
     </div>
     <div class="modal-buttons" style="margin-top:12px">
-      ${isOwner ? `<button class="btn btn-sm btn-ghost" id="gdSettings">${tr('⚙️ ギルド設定', '⚙️ Guild settings')}</button>` : ''}
+      ${isOwner ? `<button class="btn btn-sm btn-ghost" id="gdSettings">${ic('settings', 13)} ${tr('ギルド設定', 'Guild settings')}</button>` : ''}
       <button class="btn btn-sm btn-ghost" id="gdLeave" style="color:var(--red)">${tr('脱退する', 'Leave guild')}</button>
     </div>`;
   body.querySelectorAll('[data-kick]').forEach(b => {
@@ -5160,11 +5342,12 @@ function renderMyGuild() {
         const rw = (res && res.reward) || {};
         audio.coin(); confettiBurst(30);
         const parts = [];
-        if (rw.coins) parts.push(`🪙${fmt(rw.coins)}`);
-        if (rw.gems) parts.push(`💎${fmt(rw.gems)}`);
-        toast(tr(`🎁 クエスト報酬を受け取りました！${parts.length ? ` ${parts.join(' ')}` : ''}`,
-          `🎁 Quest reward claimed!${parts.length ? ` ${parts.join(' ')}` : ''}`), 'ok', 3000);
-        if (rw.badge) toast(tr('🎖️ 「ギルドの誉れ」を獲得しました！', '🎖️ You earned Guild Honors!'), 'ok', 3500);
+        // トーストは textContent なので通貨は言葉で書く（SVG は入らない）。
+        if (rw.coins) parts.push(tr(`コイン${fmt(rw.coins)}`, `${fmt(rw.coins)} coins`));
+        if (rw.gems) parts.push(tr(`ジェム${fmt(rw.gems)}`, `${fmt(rw.gems)} gems`));
+        toast(tr(`クエスト報酬を受け取りました！${parts.length ? ` ${parts.join(' ')}` : ''}`,
+          `Quest reward claimed!${parts.length ? ` ${parts.join(' ')}` : ''}`), 'ok', 3000);
+        if (rw.badge) toast(tr('「ギルドの誉れ」を獲得しました！', 'You earned Guild Honors!'), 'ok', 3500);
         openGuild('mine');
       } catch (err) { audio.error(); toast(err.message, 'err'); b.disabled = false; }
     };
@@ -5178,9 +5361,9 @@ function renderMyGuild() {
     const alone = isOwner && (g.members || []).length <= 1;
     const msg = alone
       ? tr('あなた以外にメンバーがいません。脱退するとギルドは解散し、'
-         + 'ギルド名も設立に使った 2,000🪙 も戻りません。本当に解散しますか？',
+         + 'ギルド名も設立に使った 2,000コイン も戻りません。本当に解散しますか？',
            'You are the only member. Leaving DISBANDS the guild for good — '
-         + 'the name and the 2,000🪙 you paid are not refunded. Disband it?')
+         + 'the name and the 2,000 coins you paid are not refunded. Disband it?')
       : isOwner
         ? tr('リーダーを離れるとメンバーの最古参に引き継がれます。脱退しますか？（1時間は再加入できません）',
              'Leadership passes to the longest-serving member. Leave? (you cannot rejoin for an hour)')
@@ -5213,7 +5396,7 @@ function renderGuildFind() {
       <input id="gdCode2" type="text" maxlength="6" placeholder="ABC123" style="width:110px;text-transform:uppercase"><button class="btn btn-sm btn-primary" id="gdJoinCode2">${tr('参加', 'Join')}</button></div>
     <p class="muted center" style="font-size:12px;margin-bottom:8px">${tr('公開ギルド（空きあり）', 'Open guilds with room')}</p>
     <div class="ms-list">${rows.map(g => guildCard(g)).join('') || `<p class="muted center">${tr('いま募集中の公開ギルドはありません', 'No open guilds right now')}</p>`}</div>
-    ${session.user && !guildData.mine ? `<div class="modal-buttons" style="margin-top:12px"><button class="btn btn-gold" id="gdCreate2">${tr(`🏰 自分でギルドを設立（🪙${fmt(guildData.createCost)}）`, `🏰 Found your own (🪙${fmt(guildData.createCost)})`)}</button></div>` : ''}`;
+    ${session.user && !guildData.mine ? `<div class="modal-buttons" style="margin-top:12px"><button class="btn btn-gold" id="gdCreate2">${tr(`自分でギルドを設立（${ic('coins', 13)}${fmt(guildData.createCost)}）`, `Found your own (${ic('coins', 13)}${fmt(guildData.createCost)})`)}</button></div>` : ''}`;
   body.querySelector('#gdJoinCode2').onclick = () => joinGuildBy({ code: body.querySelector('#gdCode2').value.trim() });
   body.querySelectorAll('[data-guild]').forEach(el => { bindActivate(el, () => showGuildModal(el.dataset.guild)); });
   const c = body.querySelector('#gdCreate2');
@@ -5229,9 +5412,9 @@ async function showGuildModal(id) {
   const m = showModal(`
     <h2>${escapeHtml(g.icon)} <span class="lb-tag">[${escapeHtml(g.tag)}]</span>${escapeHtml(g.name)}</h2>
     <p class="muted center" style="margin-bottom:8px">${escapeHtml(g.desc || '')}</p>
-    <div class="guild-hero-stats" style="justify-content:center;margin-bottom:10px"><span>Lv.<b>${g.level}</b></span><span>${tr('週間', 'Weekly')} <b>${fmt(g.weeklyPoints)}</b>pt</span><span>👥 <b>${g.memberCount}</b>/${g.maxMembers}</span><span>🪙<b>+${g.bonusPct}%</b></span></div>
+    <div class="guild-hero-stats" style="justify-content:center;margin-bottom:10px"><span>Lv.<b>${g.level}</b></span><span>${tr('週間', 'Weekly')} <b>${fmt(g.weeklyPoints)}</b>pt</span><span>${ic('friends', 13)} <b>${g.memberCount}</b>/${g.maxMembers}</span><span>${ic('coins', 13)}<b>+${g.bonusPct}%</b></span></div>
     <div class="ms-list" style="max-height:40vh;overflow-y:auto">
-      ${(g.members || []).map(mb => `<div class="ms-row"><div class="ms-info"><div class="ms-name">${mb.role === 'owner' ? '👑 ' : ''}${escapeHtml(mb.username)}</div><div class="ms-prog">Lv.${mb.level}${SEP}R${fmt(mb.rating)}${SEP}${fmt(mb.weeklyPts)}pt</div></div></div>`).join('')}
+      ${(g.members || []).map(mb => `<div class="ms-row"><div class="ms-info"><div class="ms-name">${mb.role === 'owner' ? `${ic('host_crown', 13)} ` : ''}${escapeHtml(mb.username)}</div><div class="ms-prog">Lv.${mb.level}${SEP}R${fmt(mb.rating)}${SEP}${fmt(mb.weeklyPts)}pt</div></div></div>`).join('')}
     </div>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="gmClose">${tr('閉じる', 'Close')}</button>
@@ -5257,16 +5440,16 @@ async function joinGuildBy(body) {
 function showGuildCreateModal(d) {
   if (!session.user) { showAuthModal(); return; }
   const m = showModal(`
-    <h2>🏰 ${tr('ギルドを設立', 'Found a guild')}</h2>
-    <p class="muted center" style="font-size:12px;margin-bottom:10px">${tr(`設立費用 🪙${fmt(d.createCost)}（所持 🪙${fmt(session.user.coins)}）`, `Cost 🪙${fmt(d.createCost)} (you have 🪙${fmt(session.user.coins)})`)}</p>
+    <h2>${ic('guild', 20)} ${tr('ギルドを設立', 'Found a guild')}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">${tr(`設立費用 ${ic('coins', 13)}${fmt(d.createCost)}（所持 ${ic('coins', 13)}${fmt(session.user.coins)}）`, `Cost ${ic('coins', 13)}${fmt(d.createCost)} (you have ${ic('coins', 13)}${fmt(session.user.coins)})`)}</p>
     <div class="form-col">
       <input id="gcName" type="text" maxlength="16" placeholder="${tr('ギルド名（2〜16文字）', 'Guild name (2–16 chars)')}">
       <input id="gcTag" type="text" maxlength="4" placeholder="${tr('タグ（1〜4文字・例 BLZ）', 'Tag (1–4 chars, e.g. BLZ)')}" style="text-transform:uppercase">
       <input id="gcDesc" type="text" maxlength="60" placeholder="${tr('ひとこと説明（任意）', 'Short description (optional)')}">
       <div class="settings-row"><label>${tr('アイコン', 'Icon')}</label><div class="seg seg-wrap" id="gcIcon">${d.icons.map((ic, i) => `<button data-v="${ic}" ${i === 0 ? 'class="active"' : ''}>${ic}</button>`).join('')}</div></div>
-      <div class="settings-row"><label>${tr('🔓 誰でも参加OK', '🔓 Anyone can join')}</label><input type="checkbox" id="gcOpen" checked></div>
+      <div class="settings-row"><label>${tr('誰でも参加OK', 'Anyone can join')}</label><input type="checkbox" id="gcOpen" checked></div>
       <div class="form-error" id="gcErr"></div>
-      <div class="modal-buttons"><button class="btn btn-ghost" id="gcCancel">${tr('やめる', 'Cancel')}</button><button class="btn btn-gold" id="gcGo">🏰 ${tr('設立する', 'Found it')}</button></div>
+      <div class="modal-buttons"><button class="btn btn-ghost" id="gcCancel">${tr('やめる', 'Cancel')}</button><button class="btn btn-gold" id="gcGo">${tr('設立する', 'Found it')}</button></div>
     </div>`);
   // 変数名は pickedIcon。素の `icon` だと icons.js から import した icon()
   // （SVGを返す関数）をこの関数の中でだけ隠してしまい、あとでここに
@@ -5287,13 +5470,13 @@ function showGuildCreateModal(d) {
 
 function showGuildSettingsModal(g, d) {
   const m = showModal(`
-    <h2>⚙️ ${tr('ギルド設定', 'Guild settings')}</h2>
+    <h2>${ic('settings', 20)} ${tr('ギルド設定', 'Guild settings')}</h2>
     <div class="form-col">
       <input id="gsName" type="text" maxlength="16" value="${escapeHtml(g.name)}">
       <input id="gsTag" type="text" maxlength="4" value="${escapeHtml(g.tag)}" style="text-transform:uppercase">
       <input id="gsDesc" type="text" maxlength="60" value="${escapeHtml(g.desc || '')}" placeholder="${tr('ひとこと説明', 'Description')}">
       <div class="settings-row"><label>${tr('アイコン', 'Icon')}</label><div class="seg seg-wrap" id="gsIcon">${d.icons.map(ic => `<button data-v="${ic}" ${ic === g.icon ? 'class="active"' : ''}>${ic}</button>`).join('')}</div></div>
-      <div class="settings-row"><label>${tr('🔓 誰でも参加OK', '🔓 Anyone can join')}</label><input type="checkbox" id="gsOpen" ${g.open ? 'checked' : ''}></div>
+      <div class="settings-row"><label>${tr('誰でも参加OK', 'Anyone can join')}</label><input type="checkbox" id="gsOpen" ${g.open ? 'checked' : ''}></div>
       <div class="form-error" id="gsErr"></div>
       <div class="modal-buttons"><button class="btn btn-ghost" id="gsCancel">${tr('やめる', 'Cancel')}</button><button class="btn btn-primary" id="gsSave">${tr('保存', 'Save')}</button></div>
     </div>`);
@@ -5359,13 +5542,13 @@ export async function openNews() {
   body.innerHTML = data.news.length ? data.news.map(n => `
     <article class="news-card ${n.pinned ? 'pinned' : ''}">
       <div class="news-head">
-        <h3>${n.pinned ? '📌 ' : ''}${escapeHtml(LANG === 'en' && n.titleEn ? n.titleEn : n.title)}</h3>
+        <h3>${n.pinned ? `<span class="news-pin">${tr('固定', 'Pinned')}</span> ` : ''}${escapeHtml(LANG === 'en' && n.titleEn ? n.titleEn : n.title)}</h3>
         <span class="news-date">${new Date(n.at).toLocaleDateString(LANG === 'en' ? 'en-US' : 'ja-JP', { year: 'numeric', month: 'short', day: 'numeric' })}</span>
       </div>
       ${newsImage(n)}
       <p class="news-body">${newsHtml(LANG === 'en' && n.bodyEn ? n.bodyEn : n.body)}</p>
       <div class="news-foot"><span class="muted">— ${escapeHtml(n.by || '運営')}</span>
-        ${isAdmin ? `<span><button class="btn btn-sm btn-ghost" data-pin="${escapeHtml(n.id)}">${n.pinned ? '📌解除' : '📌固定'}</button> <button class="btn btn-sm btn-ghost" data-del="${escapeHtml(n.id)}" style="color:var(--red)">削除</button></span>` : ''}
+        ${isAdmin ? `<span><button class="btn btn-sm btn-ghost" data-pin="${escapeHtml(n.id)}">${n.pinned ? '固定を解除' : '上部に固定'}</button> <button class="btn btn-sm btn-ghost" data-del="${escapeHtml(n.id)}" style="color:var(--red)">削除</button></span>` : ''}
       </div>
     </article>`).join('') : `<p class="muted center">${tr('お知らせはまだありません', 'No news yet')}</p>`;
   body.querySelectorAll('[data-pin]').forEach(b => {
@@ -5384,12 +5567,12 @@ export async function openNews() {
 
 function showNewsPostModal() {
   const m = showModal(`
-    <h2>✍️ お知らせを投稿</h2>
+    <h2>お知らせを投稿</h2>
     <div class="form-col">
       <input id="npTitle" type="text" maxlength="60" placeholder="タイトル">
       <textarea id="npBody" rows="6" maxlength="2000" placeholder="本文（改行OK）"></textarea>
-      <div class="settings-row"><label>📌 上部に固定</label><input type="checkbox" id="npPin"></div>
-      <div class="settings-row"><label>📢 全員にアナウンス＋フィードに流す</label><input type="checkbox" id="npAnn" checked></div>
+      <div class="settings-row"><label>上部に固定</label><input type="checkbox" id="npPin"></div>
+      <div class="settings-row"><label>全員にアナウンス＋フィードに流す</label><input type="checkbox" id="npAnn" checked></div>
       <div class="form-error" id="npErr"></div>
       <div class="modal-buttons"><button class="btn btn-ghost" id="npCancel">やめる</button><button class="btn btn-primary" id="npGo">投稿する</button></div>
     </div>`);
@@ -5397,7 +5580,7 @@ function showNewsPostModal() {
   m.querySelector('#npGo').onclick = async () => {
     try {
       await api('/api/admin/news', { method: 'POST', body: { title: m.querySelector('#npTitle').value, body: m.querySelector('#npBody').value, pinned: m.querySelector('#npPin').checked, announce: m.querySelector('#npAnn').checked } });
-      closeModal(); audio.coin(); toast('📰 投稿しました', 'ok'); openNews();
+      closeModal(); audio.coin(); toast('投稿しました', 'ok'); openNews();
     } catch (err) { m.querySelector('#npErr').textContent = err.message; }
   };
 }
@@ -5523,7 +5706,7 @@ function wsPreviewHtml(grid, cell = 7) {
   const side = cell * 8 + 7;
   if (!grid) {
     return `<div style="width:${side}px;height:${side}px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
-      border-radius:8px;background:rgba(255,255,255,0.06);font-size:${Math.round(side / 2.4)}px">🧩</div>`;
+      border-radius:8px;background:rgba(255,255,255,0.06)">${icon('mode_puzzle', { size: Math.round(side * 0.62) })}</div>`;
   }
   const cells = grid.map(v => {
     const col = v ? (PALETTE[v] || PALETTE[1])[0] : 'rgba(255,255,255,0.07)';
@@ -5533,7 +5716,8 @@ function wsPreviewHtml(grid, cell = 7) {
     flex:0 0 auto;padding:3px;border-radius:8px;background:rgba(0,0,0,0.28)">${cells}</div>`;
 }
 
-function wsLikeLabel(st) { return `${st.liked ? '❤️' : '🤍'} ${fmt(st.likes)}`; }
+// いいねのボタンは textContent で書き換える（SVG が入らない）ので言葉で出す。
+function wsLikeLabel(st) { return `${st.liked ? tr('いいね済み', 'Liked') : tr('いいね', 'Like')} ${fmt(st.likes)}`; }
 
 function wsCardHtml(st) {
   const code = escapeHtml(st.code);
@@ -5542,12 +5726,12 @@ function wsCardHtml(st) {
       ${wsPreviewHtml(st.grid)}
       <div class="ms-info">
         <div class="ms-name">${escapeHtml(st.name)}</div>
-        <div class="ms-prog"><span style="white-space:nowrap">👤 ${escapeHtml(st.author)}</span>${
-          st.pieceCount ? ` <span style="white-space:nowrap">${MID} 🧩 ${tr(`${st.pieceCount}ピース`, `${st.pieceCount} pieces`)}</span>` : ''}</div>
-        <div class="ms-prog"><span style="white-space:nowrap">❤️ ${fmt(st.likes)}</span> <span style="white-space:nowrap">${MID} ▶ ${tr(`${fmt(st.plays)}回`, `${fmt(st.plays)} plays`)}</span> <span style="white-space:nowrap">${MID} <b style="letter-spacing:.1em">${code}</b></span></div>
+        <div class="ms-prog"><span style="white-space:nowrap">${ic('user', 13)} ${escapeHtml(st.author)}</span>${
+          st.pieceCount ? ` <span style="white-space:nowrap">${MID} ${ic('mode_puzzle', 13)} ${tr(`${st.pieceCount}ピース`, `${st.pieceCount} pieces`)}</span>` : ''}</div>
+        <div class="ms-prog"><span style="white-space:nowrap">${tr('いいね', 'Likes')} ${fmt(st.likes)}</span> <span style="white-space:nowrap">${MID} ${tr(`${fmt(st.plays)}回プレイ`, `${fmt(st.plays)} plays`)}</span> <span style="white-space:nowrap">${MID} <b style="letter-spacing:.1em">${code}</b></span></div>
       </div>
       <div style="display:flex;flex-direction:column;gap:5px;flex:0 0 auto">
-        <button class="btn btn-sm btn-primary" data-ws-play="${code}">▶ ${tr('遊ぶ', 'Play')}</button>
+        <button class="btn btn-sm btn-primary" data-ws-play="${code}">${tr('遊ぶ', 'Play')}</button>
         <button class="btn btn-sm btn-ghost" data-ws-like="${code}">${wsLikeLabel(st)}</button>
       </div>
     </div>`;
@@ -5556,7 +5740,7 @@ function wsCardHtml(st) {
 function wsEmptyHtml() {
   return `<div class="ms-empty">
       <p>${tr('まだ公開されたステージがありません', 'No stages published yet')}</p>
-      <button class="btn btn-gold" id="wsMakeFirst">🛠️ ${tr('最初の1作を作る', 'Build the first one')}</button>
+      <button class="btn btn-gold" id="wsMakeFirst">${tr('最初の1作を作る', 'Build the first one')}</button>
     </div>`;
 }
 
@@ -5567,21 +5751,21 @@ export async function openWorkshop(sort = wsSort) {
   // 「自分の作品」はログイン中だけ。ログアウト状態で残っていたら人気に戻す。
   if (wsSort === 'mine' && !session.user) wsSort = 'popular';
   const m = showModal(`
-    <h2>🧩 ${tr('パズル工房', 'Puzzle Workshop')}</h2>
-    <p class="muted center" style="font-size:12px;margin-bottom:8px">${tr('みんなが作ったステージで遊ぼう。気に入ったら❤️を送ろう',
-      'Play stages built by other players — send a ❤️ if you like one')}</p>
+    <h2>${ic('mode_workshop', 20)} ${tr('パズル工房', 'Puzzle Workshop')}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:8px">${tr('みんなが作ったステージで遊ぼう。気に入ったら「いいね」を送ろう',
+      'Play stages built by other players — send a Like if you like one')}</p>
     <div class="settings-row" style="justify-content:center;gap:6px;flex-wrap:wrap">
       <input id="wsCode" type="text" maxlength="6" placeholder="ABC123" style="width:110px;text-transform:uppercase" autocomplete="off">
-      <button class="btn btn-sm btn-primary" id="wsGo">🔍 ${tr('コードで開く', 'Open code')}</button>
-      <button class="btn btn-sm btn-gold" id="wsNew">🛠️ ${tr('作る', 'Create')}</button>
+      <button class="btn btn-sm btn-primary" id="wsGo">${tr('コードで開く', 'Open code')}</button>
+      <button class="btn btn-sm btn-gold" id="wsNew">${tr('作る', 'Create')}</button>
     </div>
     <div class="tabs" id="wsTabs" style="justify-content:center;flex-wrap:wrap">
-      <button class="tab ${wsSort === 'popular' ? 'active' : ''}" data-ws="popular">🔥 ${tr('人気', 'Popular')}</button>
-      <button class="tab ${wsSort === 'new' ? 'active' : ''}" data-ws="new">🆕 ${tr('新着', 'Newest')}</button>
-      ${session.user ? `<button class="tab ${wsSort === 'mine' ? 'active' : ''}" data-ws="mine">🛠️ ${tr('自分の作品', 'My stages')}</button>` : ''}
+      <button class="tab ${wsSort === 'popular' ? 'active' : ''}" data-ws="popular">${ic('fire', 13)} ${tr('人気', 'Popular')}</button>
+      <button class="tab ${wsSort === 'new' ? 'active' : ''}" data-ws="new">${tr('新着', 'Newest')}</button>
+      ${session.user ? `<button class="tab ${wsSort === 'mine' ? 'active' : ''}" data-ws="mine">${ic('mode_workshop', 13)} ${tr('自分の作品', 'My stages')}</button>` : ''}
     </div>
     ${session.user && session.user.role === 'admin'
-      ? `<div class="settings-row" style="justify-content:center"><button class="btn btn-sm btn-ghost" id="wsAdmin">🛡️ ${tr('全ステージを管理', 'Manage all stages')}</button></div>` : ''}
+      ? `<div class="settings-row" style="justify-content:center"><button class="btn btn-sm btn-ghost" id="wsAdmin">${ic('admin', 13)} ${tr('全ステージを管理', 'Manage all stages')}</button></div>` : ''}
     <div id="wsBody" class="ms-list" style="max-height:50vh;overflow-y:auto"><p class="muted center">${tr('読み込み中…', 'Loading…')}</p></div>
     <div class="modal-buttons"><button class="btn btn-primary" id="wsClose">${tr('閉じる', 'Close')}</button></div>`);
   m.querySelector('#wsClose').onclick = closeModal;
@@ -5642,7 +5826,7 @@ async function loadMoreWorkshop(m, btn) {
   // 追加読み込みの失敗で、すでに出ている一覧まで消してはいけない。
   // ボタンを押せる形に戻して、失敗したことだけ伝える。
   if (failed) {
-    if (btn) { btn.disabled = false; btn.textContent = `🔄 ${tr('読み込めませんでした — もう一度', 'Could not load — try again')}`; }
+    if (btn) { btn.disabled = false; btn.textContent = tr('読み込めませんでした — もう一度', 'Could not load — try again'); }
     toast(failed.message || tr('読み込めませんでした', 'Could not load'), 'err');
     return;
   }
@@ -5662,7 +5846,7 @@ function renderWorkshopList(m) {
     if (wsSort === 'mine') {
       body.innerHTML = `<div class="ms-empty">
           <p>${tr('まだ自分のステージがありません', 'You have not published any stages yet')}</p>
-          <button class="btn btn-gold" id="wsMakeFirst">🛠️ ${tr('作ってみる', 'Build one')}</button>
+          <button class="btn btn-gold" id="wsMakeFirst">${tr('作ってみる', 'Build one')}</button>
         </div>`;
     } else {
       body.innerHTML = wsEmptyHtml();
@@ -5672,7 +5856,7 @@ function renderWorkshopList(m) {
     return;
   }
   body.innerHTML = wsStages.map(wsCardHtml).join('')
-    + (wsMore ? `<button class="btn btn-ghost" id="wsMore" style="width:100%;margin-top:8px">⬇️ ${tr('もっと見る', 'Show more')}${wsMatched ? tr(`（${wsStages.length} / ${wsMatched}）`, ` (${wsStages.length} / ${wsMatched})`) : ''}</button>` : '');
+    + (wsMore ? `<button class="btn btn-ghost" id="wsMore" style="width:100%;margin-top:8px">${tr('もっと見る', 'Show more')}${wsMatched ? tr(`（${wsStages.length} / ${wsMatched}）`, ` (${wsStages.length} / ${wsMatched})`) : ''}</button>` : '');
   bindWorkshopCards(body);
   const more = body.querySelector('#wsMore');
   if (more) more.onclick = () => loadMoreWorkshop(m, more);
@@ -5723,24 +5907,24 @@ async function openWorkshopByCode(code) {
 // 1件の詳細。ここからも遊ぶ／いいね／コードのコピーができる。
 function showWorkshopStageModal(st) {
   const m = showModal(`
-    <h2>🧩 ${escapeHtml(st.name)}</h2>
-    <p class="muted center" style="font-size:12px;margin-bottom:8px">👤 ${escapeHtml(st.author)}${
-      st.pieceCount ? `${SEP}🧩 ${tr(`${st.pieceCount}ピース`, `${st.pieceCount} pieces`)}` : ''}</p>
+    <h2>${ic('mode_workshop', 20)} ${escapeHtml(st.name)}</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:8px">${ic('user', 13)} ${escapeHtml(st.author)}${
+      st.pieceCount ? `${SEP}${ic('mode_puzzle', 13)} ${tr(`${st.pieceCount}ピース`, `${st.pieceCount} pieces`)}` : ''}</p>
     <div style="display:flex;justify-content:center;margin-bottom:10px">${wsPreviewHtml(st.grid, 16)}</div>
     <div class="guild-hero-stats" style="justify-content:center;margin-bottom:10px">
-      <span>❤️ <b>${fmt(st.likes)}</b></span><span>▶ <b>${fmt(st.plays)}</b></span>
+      <span>${tr('いいね', 'Likes')} <b>${fmt(st.likes)}</b></span><span>${tr('プレイ', 'Plays')} <b>${fmt(st.plays)}</b></span>
       <span>${tr('コード', 'Code')} <b style="letter-spacing:.12em">${escapeHtml(st.code)}</b></span>
     </div>
     <div class="settings-row" style="justify-content:center;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-sm btn-ghost" id="wsCopy">📋 ${tr('コードをコピー', 'Copy code')}</button>
+      <button class="btn btn-sm btn-ghost" id="wsCopy">${tr('コードをコピー', 'Copy code')}</button>
       <button class="btn btn-sm btn-ghost" id="wsLike1">${wsLikeLabel(st)}</button>
-      <button class="btn btn-sm btn-ghost" id="wsReport1">🚩 ${tr('通報', 'Report')}</button>
+      <button class="btn btn-sm btn-ghost" id="wsReport1">${tr('通報', 'Report')}</button>
       ${(st.mine || (session.user && session.user.role === 'admin'))
-        ? `<button class="btn btn-sm btn-ghost" id="wsDelete1" style="color:var(--red)">🗑 ${tr('削除', 'Delete')}</button>` : ''}
+        ? `<button class="btn btn-sm btn-ghost" id="wsDelete1" style="color:var(--red)">${tr('削除', 'Delete')}</button>` : ''}
     </div>
     <div class="modal-buttons">
-      <button class="btn btn-ghost" id="wsBack">← ${tr('一覧へ', 'Back')}</button>
-      <button class="btn btn-primary" id="wsPlay1">▶ ${tr('遊ぶ', 'Play')}</button>
+      <button class="btn btn-ghost" id="wsBack">${ic('back', 14)} ${tr('一覧へ', 'Back')}</button>
+      <button class="btn btn-primary" id="wsPlay1">${tr('遊ぶ', 'Play')}</button>
     </div>`);
   m.querySelector('#wsBack').onclick = () => openWorkshop();
   m.querySelector('#wsPlay1').onclick = () => playWorkshopStage(st);
@@ -5798,10 +5982,10 @@ async function deleteWorkshopStage(st, btn) {
 let wsAdminGen = 0;
 async function showWorkshopAdminModal(q = '') {
   const m = showModal(`
-    <h2>🛡️ ${tr('工房ステージ管理', 'Workshop stages')}</h2>
+    <h2>${ic('admin', 20)} ${tr('工房ステージ管理', 'Workshop stages')}</h2>
     <div class="settings-row" style="justify-content:center;gap:6px">
       <input id="waQ" type="text" maxlength="40" placeholder="${tr('コード・題名・作者で検索', 'Search code / title / author')}" value="${escapeHtml(q)}" style="width:200px">
-      <button class="btn btn-sm btn-primary" id="waSearch">🔍 ${tr('検索', 'Search')}</button>
+      <button class="btn btn-sm btn-primary" id="waSearch">${tr('検索', 'Search')}</button>
     </div>
     <div id="waBody" class="feed-list" style="max-height:52vh"><p class="muted center">${tr('読み込み中…', 'Loading…')}</p></div>
     <div class="modal-buttons"><button class="btn btn-primary" id="waClose">${tr('閉じる', 'Close')}</button></div>`);
@@ -5832,19 +6016,19 @@ async function loadWorkshopAdmin(m, q = '') {
     return;
   }
   const flag = r => [
-    r.banned ? tr('🚫凍結中', '🚫 banned') : '',
-    r.orphan ? tr('👻作者退会', '👻 no author') : '',
-    r.seed ? tr('🌱初期', '🌱 seed') : '',
+    r.banned ? tr('凍結中', 'banned') : '',
+    r.orphan ? tr('作者退会', 'no author') : '',
+    r.seed ? tr('初期ステージ', 'seed') : '',
   ].filter(Boolean).join(' ・ ');
   body.innerHTML = `<p class="muted center" style="font-size:12px;margin-bottom:6px">${tr(`全 ${fmt(data.total || rows.length)} 件`, `${fmt(data.total || rows.length)} total`)}</p>`
     + rows.map(r => `
     <div class="feed-row real" style="align-items:flex-start" data-wa-row="${escapeHtml(r.code)}">
       <span class="feed-text" style="white-space:normal;min-width:0;word-break:break-word">
         <b>${escapeHtml(LANG === 'en' && r.titleEn ? r.titleEn : (r.title || tr('（無題）', '(untitled)')))}</b>
-        <small class="muted" style="display:block;margin-top:2px">👤 ${escapeHtml(r.author || tr('（不明）', '(unknown)'))} ・ <b style="letter-spacing:.1em">${escapeHtml(r.code)}</b> ・ ❤️${fmt(r.likes || 0)} ・ ▶${fmt(r.plays || 0)}</small>
+        <small class="muted" style="display:block;margin-top:2px">${ic('user', 13)} ${escapeHtml(r.author || tr('（不明）', '(unknown)'))} ・ <b style="letter-spacing:.1em">${escapeHtml(r.code)}</b> ・ ${tr('いいね', 'likes')}${fmt(r.likes || 0)} ・ ${tr('プレイ', 'plays')}${fmt(r.plays || 0)}</small>
         ${flag(r) ? `<small class="muted" style="display:block">${flag(r)}</small>` : ''}</span>
       <span style="display:flex;flex-direction:column;gap:4px">
-        <button class="btn btn-sm btn-ghost" data-wa-del="${escapeHtml(r.code)}" style="color:var(--red)" title="${tr('このステージを削除', 'Delete this stage')}">🗑</button>
+        <button class="btn btn-sm btn-ghost" data-wa-del="${escapeHtml(r.code)}" style="color:var(--red)" title="${tr('このステージを削除', 'Delete this stage')}">${tr('削除', 'Delete')}</button>
       </span>
     </div>`).join('');
   body.querySelectorAll('[data-wa-del]').forEach(b => {
@@ -5870,11 +6054,11 @@ async function likeWorkshopStage(code, btn, single = null) {
   const st = single && single.code === c ? single : wsFind(c);
   if (!session.user) {
     audio.error();
-    toast(tr('❤️ はアカウント登録で押せます', 'Create an account to send a ❤️'), 'err');
+    toast(tr('「いいね」はアカウント登録で押せます', 'Create an account to send a Like'), 'err');
     showAuthModal();
     return;
   }
-  if (st && st.liked) { toast(tr('もう❤️を送っています', 'You already liked this stage')); return; }
+  if (st && st.liked) { toast(tr('もう「いいね」を送っています', 'You already liked this stage')); return; }
   if (btn) btn.disabled = true;
   try {
     const res = await api(`/api/workshop/stages/${encodeURIComponent(c)}/like`, { method: 'POST', body: {} });
@@ -5946,7 +6130,7 @@ function ensureWorkshopNav() {
       btn = document.createElement('button');
       btn.className = 'nav-btn';
       btn.id = 'btnWorkshop';
-      btn.innerHTML = `<span>🧩</span>${tr('工房', 'Workshop')}`;
+      btn.innerHTML = `<span>${ic('mode_workshop', 20)}</span>${tr('工房', 'Workshop')}`;
       const before = $('#btnAdmin');
       if (before && before.parentNode === nav) nav.insertBefore(btn, before);
       else nav.appendChild(btn);

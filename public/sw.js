@@ -39,10 +39,10 @@ const OFFLINE_HTML = `<!DOCTYPE html>
 </style></head>
 <body><div class="card">
   <div class="blocks"><span style="background:#ff5d5d"></span><span style="background:#5b8bff"></span><span style="background:#ffe14d"></span><span style="background:#5ee86e"></span></div>
-  <h1>📴 オフラインです<br>You're offline</h1>
+  <h1>オフラインです<br>You're offline</h1>
   <p>通信が戻ったら、続きから遊べます。</p>
   <p>Everything is waiting for you — come back when the connection returns.</p>
-  <button onclick="location.reload()">🔄 再読み込み / Reload</button>
+  <button onclick="location.reload()">再読み込み / Reload</button>
 </div></body></html>`;
 
 function offlineCard() {

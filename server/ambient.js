@@ -12,7 +12,7 @@
 import {
   buildRoster, customResident, residentStats, residentDailyScore, onlineResidents, residentsForLevel,
   archetype, ARCHETYPES, jstHour, jstWeekday, jstDay, unit, mulberry32, strHash, JA_NAMES, EN_NAMES,
-  isChampion,
+  isChampion, residentRecord,
 } from './residents.js';
 import { dailyGhostFactor } from './daily.js';
 import { composeLine, chooseReplies as crowdReplies, buildCtx } from './crowd.js';
@@ -222,8 +222,36 @@ export function clashingResidentIds(seed, takenNames) {
     .map(r => r.id);
 }
 
+// いま出ている名簿（getRoster）のほうを優先して引く。
+//
+// ⚠ ここを予約表だけで引いていたころ、**同じ住人がプロフィールとランキングで
+//   違う数字になっていた**。理由は id のズレ:
+//     ・予約表は MAX_ROSTER(600) で組む（倍率を下げても名前を守るため）
+//     ・ランキングは getRoster()＝rosterSize()（×1 なら64人）で組む
+//     ・buildRoster は最後に「王者が引かれなかったら **いちばん強い住人** を
+//       差し替える」ので、名簿の大きさが変わると王者の席（＝id）が動く
+//       実測: ちゃちゃまるが 64人名簿では r21、600人名簿では r122
+//   residentStats は unit(r.id, …) で数字を作るので、id が違えばレートも
+//   自己ベストも変わる（実測 2594 と 2591 / 895,220 と 894,622）。
+//   本番は倍率が高くて rosterSize() が 600 に張り付くので出なかったが、
+//   倍率を下げた機体では見える食い違いだった。
+//
+// 予約（「その名前は住人が使っているか？」）の意味は落とさない ── 出ていない
+// 住人は予約表のほうで拾うので、真偽の答えは今までどおり600人ぶん。
+// 変わるのは「見つかった住人の実体をどちらの名簿から返すか」だけ。
+let liveNameIndex = null;
+let liveNameIndexFor = null;
 export function residentByName(name) {
-  return residentNameIndex().get(String(name == null ? '' : name).toLowerCase()) || null;
+  const key = String(name == null ? '' : name).toLowerCase();
+  if (!key) return null;
+  const roster = getRoster();
+  // 名簿は起動時に1度組んで使い回すので、同じ配列のあいだは索引も使い回す。
+  if (liveNameIndexFor !== roster) {
+    liveNameIndex = new Map();
+    for (const r of roster) liveNameIndex.set(r.name.toLowerCase(), r);
+    liveNameIndexFor = roster;
+  }
+  return liveNameIndex.get(key) || residentNameIndex().get(key) || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -585,11 +613,19 @@ export function rosterView(now = Date.now()) {
   return getRoster().map(r => {
     const st = residentStats(r, now);
     const a = archetype(r.arch);
+    // 🗒 実際に人間と当たったぶんの差分。ここは /api/admin/* なので
+    // sanitize.js の関門を通らない ＝ 運営だけが見る面。この表を
+    // 非管理者に出す口はここ以外に無い（residentStats が返すのは
+    // 差分を **足したあとの** 合計値だけで、内訳は載っていない）。
+    const rec = residentRecord(r);
     return {
       id: r.id, name: r.name, arch: r.arch, archLabel: a.label, lang: r.lang,
       skill: r.skill, chatty: r.chatty, favMode: r.favMode, hours: r.hours,
       registered: r.registered, custom: r.custom,
       rating: st.rating, level: st.level, tier: st.tier.name, online: online.has(r.id),
+      // 差分が無い住人（＝まだ誰とも当たっていない）は null。行が無いことと
+      // 「0勝0敗の行がある」ことを運営が見分けられるようにしておく。
+      record: rec ? { w: rec.w || 0, l: rec.l || 0, rd: rec.rd || 0, lastAt: rec.at || 0 } : null,
     };
   });
 }

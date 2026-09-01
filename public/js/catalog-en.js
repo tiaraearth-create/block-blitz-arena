@@ -165,7 +165,7 @@ export const CATALOG_EN = {
   // 📕 図鑑のセットコンプ称号
   ultcollector: { name: 'Arts Collector', desc: 'Own every ultimate skill' },
   rainbowtrio: { name: 'The Rainbow Three', desc: 'Own all gacha-exclusive gear' },
-  thronekeeper: { name: 'Keeper of the Vault', desc: 'Own every item from the 👑 vault' },
+  thronekeeper: { name: 'Keeper of the Vault', desc: 'Own every item from the Throne Vault' },
   curator: { name: 'The Curator', desc: 'Fill in the whole catalog' },
   mecha: { name: 'Deus Ex Machina', desc: '' },
   frost: { name: 'Frost Queen Frione', desc: '' },
@@ -178,7 +178,7 @@ export const CATALOG_EN = {
   set_ult: { name: 'Arts Collection', desc: 'Own every ultimate skill' },
   set_boost: { name: 'Booster Shelf', desc: 'Hold at least one of every booster' },
   set_gacha: { name: 'Gacha Exclusives', desc: 'Own all gacha-exclusive gear' },
-  set_throne: { name: 'The Throne Vault', desc: 'Own every item from the 👑 vault' },
+  set_throne: { name: 'The Throne Vault', desc: 'Own every item from the Throne Vault' },
   set_trial: { name: 'Marks of the Three Trials', desc: 'Earn the Oni, Kami and Creator God badges' },
   set_slayer: { name: 'Slayer Titles', desc: 'Earn every boss-slaying title' },
   set_master: { name: 'Full Catalog', desc: 'Own every item in the catalog' },

@@ -1128,10 +1128,7 @@ export class GameView {
       ctx.fillStyle = '#4dd0ff';
       ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
       ctx.globalAlpha = 1;
-      ctx.font = `${cell * 0.5}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('❄️', x + cell / 2, y + cell / 2);
+      this.drawFrostMark(x + cell / 2, y + cell / 2, cell * 0.26);
     }
     ctx.globalAlpha = 1;
   }
@@ -1142,7 +1139,6 @@ export class GameView {
     if (!this.oreCells || !this.oreCells.size) return;
     const { ctx, cell } = this;
     const TINT = { gold: '#ffd75e', crystal: '#4dd0ff', rainbow: '#ff6bd4' };
-    const ICON = { gold: '🪙', crystal: '💠', rainbow: '🌈' };
     const glint = 0.16 + 0.12 * Math.sin(this.time * 3);
     for (const [k, type] of this.oreCells) {
       const r = (k / SIZE) | 0, c = k % SIZE;
@@ -1151,12 +1147,91 @@ export class GameView {
       ctx.fillStyle = TINT[type] || '#ffd75e';
       ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
       ctx.globalAlpha = 1;
-      ctx.font = `${cell * 0.52}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(ICON[type] || '🪙', x + cell / 2, y + cell / 2);
+      this.drawOreMark(x + cell / 2, y + cell / 2, cell * 0.26, type);
     }
     ctx.globalAlpha = 1;
+  }
+
+  // 鉱石の粒。以前は 🪙 / 💠 / 🌈 を fillText で描いていたが、canvas に出る
+  // 絵文字は端末のフォント任せで、Windows では 🌈 が横に潰れて 💠 と見分けが
+  // 付かなかった（盤面でいちばん判断に使う印なのに）。3種を **形** で描き分ける:
+  //   金＝丸 / クリスタル＝菱形 / 虹＝三重の弧
+  // icons.js の SVG は canvas に直接は置けないので、ここは同じ意匠を手で描く。
+  drawOreMark(cx, cy, r, type) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.lineWidth = Math.max(1.5, r * 0.34);
+    ctx.lineCap = 'round';
+    if (type === 'crystal') {
+      ctx.fillStyle = '#eaf9ff';
+      ctx.strokeStyle = '#0e5c7d';
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy); ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r, cy);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    } else if (type === 'rainbow') {
+      // 三重の弧。色を落としても「重なった弧」で虹だと分かる。
+      const bands = ['#ff6bd4', '#ffd75e', '#4dd0ff'];
+      ctx.lineWidth = Math.max(1.4, r * 0.3);
+      bands.forEach((col, i) => {
+        ctx.strokeStyle = col;
+        ctx.beginPath();
+        ctx.arc(cx, cy + r * 0.55, r * (1 - i * 0.3), Math.PI, 0);
+        ctx.stroke();
+      });
+    } else {
+      ctx.fillStyle = '#ffd75e';
+      ctx.strokeStyle = '#8a5a00';
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.5, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 氷の印（メルトダウンの冷却セル・凍結した手持ち）。
+  // ❄️ は端末で絵が大きく違い、小さいセルではつぶれて青い点になっていた。
+  drawFrostMark(cx, cy, r) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = '#eaf9ff';
+    ctx.lineWidth = Math.max(1.4, r * 0.26);
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const a = (Math.PI / 3) * i;
+      const dx = Math.cos(a) * r, dy = Math.sin(a) * r;
+      ctx.beginPath();
+      ctx.moveTo(cx - dx, cy - dy); ctx.lineTo(cx + dx, cy + dy);
+      ctx.stroke();
+      // 枝。これが無いと「米印」に見えて雪だと分からない。
+      for (const sgn of [-1, 1]) {
+        const bx = cx + dx * 0.6 * sgn, by = cy + dy * 0.6 * sgn;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(bx - dy * 0.3 - dx * 0.2 * sgn, by + dx * 0.3 - dy * 0.2 * sgn);
+        ctx.moveTo(bx, by);
+        ctx.lineTo(bx + dy * 0.3 - dx * 0.2 * sgn, by - dx * 0.3 - dy * 0.2 * sgn);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  // キメラ工房の溶接ピースの印。二重らせん（交差する2本の弧）。
+  drawWeldMark(cx, cy, r) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx - r * sgn, cy - r);
+      ctx.bezierCurveTo(cx + r * sgn, cy - r * 0.4, cx - r * sgn, cy + r * 0.4, cx + r * sgn, cy + r);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.7, cy); ctx.lineTo(cx + r * 0.7, cy);
+    ctx.stroke();
+    ctx.restore();
   }
 
   // Boss telegraph: target cells pulse red until the attack lands (or is cut).
@@ -1283,13 +1358,11 @@ export class GameView {
       ctx.strokeStyle = '#b06bff';
       ctx.lineWidth = 2;
       ctx.strokeRect(sx, sy, slotW - 8, slotH - 6);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 13px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
       // 印も枠と同じ場所へ。y を trayY(=0) のままにしていると、
-      // 横持ちでは盤面の上に 🧬 が浮いていた。
-      ctx.fillText('🧬', sx + (slotW - 8) / 2, sy + 14);
+      // 横持ちでは盤面の上に印が浮いていた。
+      // 絵文字の 🧬 をやめて二重らせんを直接描く（端末によっては
+      // モノクロの四角い箱になり、何の印か分からなかった。
+      this.drawWeldMark(sx + (slotW - 8) / 2, sy + 14, 7);
     }
 
     // ghost on board
@@ -1458,10 +1531,7 @@ export class GameView {
         ctx.fillStyle = '#9bd8ff';
         ctx.fillRect(ox - 3, oy + bob - 3, pw + 6, ph + 6);
         ctx.globalAlpha = 1;
-        ctx.font = `${Math.max(16, maxCell)}px sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('❄️', ox + pw / 2, oy + bob + ph / 2);
+        this.drawFrostMark(ox + pw / 2, oy + bob + ph / 2, Math.max(8, maxCell * 0.42));
       }
     }
   }

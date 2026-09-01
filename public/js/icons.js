@@ -1232,6 +1232,523 @@ Object.assign(ICONS, {
 });
 
 // ---------------------------------------------------------------------------
+// 第4波の統合で足したぶん（v2.36）
+//
+// なぜここでまとめて足すのか
+//   絵文字の置き換えは4人が並列で進めたが、そのあいだ **このファイルは凍結**
+//   していた（同じ id を別々に足して衝突するのを避けるため）。結果、
+//   「絵が無いので言葉だけにした」場所が各担当の報告に列挙された。ここは
+//   その回収。**セット単位で足す**のが肝で、3枚並ぶ選択カードのうち1枚だけ
+//   SVG にすると粒がそろわず壊れて見える ── 実際、遺物8種・ごほうび6種は
+//   それが理由でまるごと絵文字のまま残されていた。
+//
+// 形を決めるときの制約（このファイルの冒頭の約束の続き）
+//   ・色を落としても他と区別できること。以下は特に近い形なので、
+//     わざと系統を変えてある:
+//       ult_fortress(盾) / guild(盾＋十字) / relic_shield(城壁) / perk_shield(盾＋鎖)
+//       mod(スパナ) / maintenance(スパナ＋ドライバー交差)
+//       missions(クリップボード＋チェック) / clipboard(板＋行) / receipt(伝票の波形)
+//       ultimate(稲妻) / relic_ult(菱形の中の稲妻) / storm(雲＋稲妻)
+//       spectate(目) / eye_zero(縦長の瞳＋光条)
+//   ・heart は「残機」と「工房のいいね」で共用する。同じ「1つぶん」の意味で、
+//     絵を分けると逆に別物に見えるため。押していない状態だけ heart_outline。
+// ---------------------------------------------------------------------------
+Object.assign(ICONS, {
+  // ===== 遺物 RUSH_RELICS（8種・セット） ===================================
+  // 無限地獄ラッシュの選択カード。3枚並ぶので8種そろわないと棚が混ざる。
+  relic_atk: {
+    a: '#ff9d6b', b: '#7a3208',
+    p: `<path d="M13.4 3h5.4v5.4l-8.6 8.6-5.4-5.4z" fill="var(--ic-a)"/>
+        <path d="M4.2 15.4 8.6 19.8l-2.4 1.4-3.4-3.4z" fill="var(--ic-b)"/>
+        <path d="M13.4 3h5.4v5.4z" fill="var(--ic-b)"/>`,
+  },
+  relic_counter: {
+    a: '#ff6b6b', b: '#4a1414',
+    p: `<rect x="5" y="9.6" width="14" height="9.4" rx="1.8" fill="var(--ic-a)"/>
+        <path d="M9.6 9.6v9.4M14.4 9.6v9.4" stroke="var(--ic-b)" stroke-width="1.6"/>
+        <path d="M12 9.4V6.6c0-1.6 2.2-1.6 2.2-3.4" fill="none" stroke="var(--ic-b)" stroke-width="1.8" stroke-linecap="round"/>`,
+  },
+  relic_reroll: {
+    a: '#9fe4ff', b: '#1c6a86',
+    p: `<path d="M3 8.4h11a2.8 2.8 0 1 0-2.8-2.8" fill="none" stroke="var(--ic-a)" stroke-width="1.9" stroke-linecap="round"/>
+        <path d="M3 13.2h13.6a2.8 2.8 0 1 1-2.8 2.8" fill="none" stroke="var(--ic-b)" stroke-width="1.9" stroke-linecap="round"/>
+        <path d="M3 18h7" stroke="var(--ic-a)" stroke-width="1.9" stroke-linecap="round"/>`,
+  },
+  relic_ult: {
+    a: '#fff3b0', b: '#8a6b00',
+    // 稲妻は「抜き」。塗り重ねだと、色を落としたとき ore_crystal と同じ菱形。
+    p: `<path fill-rule="evenodd" d="M12 2.2 21.4 12 12 21.8 2.6 12zm.9 4.2-4.5 6.2h3l-1.3 5 4.9-6.6h-3.1z" fill="var(--ic-a)"/>`,
+  },
+  relic_heal: {
+    a: '#5ee86e', b: '#125c22',
+    p: `<path d="M12 20.6 4.2 13a4.7 4.7 0 0 1 7.8-5 4.7 4.7 0 0 1 7.8 5z" fill="var(--ic-a)"/>
+        <path d="M12 8.6v6.4M8.8 11.8h6.4" stroke="var(--ic-b)" stroke-width="2" stroke-linecap="round"/>`,
+  },
+  relic_calm: {
+    a: '#ffd75e', b: '#7a5200',
+    p: `<circle cx="12" cy="12" r="8.6" fill="none" stroke="var(--ic-a)" stroke-width="2"/>
+        <circle cx="12" cy="12" r="4.8" fill="none" stroke="var(--ic-b)" stroke-width="2"/>
+        <circle cx="12" cy="12" r="1.8" fill="var(--ic-a)"/>`,
+  },
+  // 城壁。盾ではなく「狭間つきの壁」で、ult_fortress（盾）と描き分ける。
+  relic_shield: {
+    a: '#b9c6e4', b: '#3c4665',
+    p: `<path d="M3 7.6h3.2V5.4h3.2v2.2h4.2V5.4h3.2v2.2H21v11.4H3z" fill="var(--ic-a)"/>
+        <path d="M3 12.4h18M8.4 12.4v6.6M15.6 12.4v6.6" stroke="var(--ic-b)" stroke-width="1.6"/>`,
+  },
+  relic_phoenix: {
+    a: '#ff9d3d', b: '#8a2f00',
+    p: `<path d="M12 3.4c1.7 1.6 2.4 3.4 2.2 5.4l5.6-2.6-3.2 5.4 3.6.6-5.4 3.2 1 4.6-3.8-3-3.8 3 1-4.6-5.4-3.2 3.6-.6L4.2 6.2l5.6 2.6c-.2-2 .5-3.8 2.2-5.4z" fill="var(--ic-a)"/>
+        <circle cx="12" cy="10.6" r="1.7" fill="var(--ic-b)"/>`,
+  },
+
+  // ===== ダンジョンのごほうび DUNGEON_PERKS（6種・セット） =================
+  // 1フロアごとに3枚提示される。ここも欠けると並びが崩れる。
+  perk_atk: {
+    a: '#ff8a5c', b: '#5c2408',
+    p: `<path d="M6 12.6h4.2V9.4c0-2 1.5-3.4 3.5-3.4h3.7c1.6 0 2.6 1.1 2.6 2.6v7.6c0 1.6-1.2 2.8-2.8 2.8H6z" fill="var(--ic-a)"/>
+        <path d="M3 11.4h3.4v8.2H3z" fill="var(--ic-b)"/>
+        <path d="M13.6 9.6h4.8" stroke="var(--ic-b)" stroke-width="1.6" stroke-linecap="round"/>`,
+  },
+  // リロール補充。relic_reroll（風＝流れる線）と違い、閉じた2本の環にする。
+  perk_reroll: {
+    a: '#8fd8ff', b: '#1b5f80',
+    p: `<path d="M19.4 10.4A7.6 7.6 0 0 0 6 7.4" fill="none" stroke="var(--ic-a)" stroke-width="2" stroke-linecap="round"/>
+        <path d="M4.6 13.6A7.6 7.6 0 0 0 18 16.6" fill="none" stroke="var(--ic-b)" stroke-width="2" stroke-linecap="round"/>
+        <path d="M6.2 3.4v4.2h4.2M17.8 20.6v-4.2h-4.2" fill="none" stroke="var(--ic-a)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  perk_heal: {
+    a: '#ff8fa8', b: '#f4f7ff',
+    p: `<rect x="2.6" y="8.2" width="18.8" height="7.6" rx="3.8" fill="var(--ic-a)" transform="rotate(-38 12 12)"/>
+        <path d="M8.4 15.6 15.6 8.4" stroke="var(--ic-b)" stroke-width="7.6" stroke-linecap="butt" opacity=".95"/>`,
+  },
+  perk_slow: {
+    a: '#ffd75e', b: '#6b4a00',
+    p: `<path d="M5.6 3h12.8v2H5.6zM5.6 19h12.8v2H5.6z" fill="var(--ic-b)"/>
+        <path d="M7 5h10v2.4L12.8 12 17 16.6V19H7v-2.4L11.2 12 7 7.4z" fill="var(--ic-a)"/>`,
+  },
+  // 追加ライフとハート（いいね・残機）は同じ絵で通す ── 「1つぶん」という
+  // 同じ意味なので、絵を分けると別の資源に見えてしまう。
+  perk_life: {
+    a: '#ff5d7d', b: '#7a0f27',
+    // ＋はハートの中の「抜き」。外に置くと、色を落としたとき heart と同じ形。
+    p: `<path fill-rule="evenodd" d="M12 20.6 4.2 13a4.7 4.7 0 0 1 7.8-5 4.7 4.7 0 0 1 7.8 5zM11 10.2v2.2H8.8v2H11v2.2h2v-2.2h2.2v-2H13v-2.2z" fill="var(--ic-a)"/>`,
+  },
+  // コンボプロテクト。盾＋鎖の輪（＝つながりを守る）。
+  perk_shield: {
+    a: '#9fd8ff', b: '#1d4e70',
+    // 鎖の2輪は「抜き」。線で描くと、色を落としたとき ult_fortress と同じ盾。
+    p: `<path fill-rule="evenodd" d="M12 2.8 20 6v6.4c0 4.4-3.3 7.8-8 9-4.7-1.2-8-4.6-8-9V6zM9.6 8.2a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8zm0 1.9a1 1 0 1 1 0 2 1 1 0 0 1 0-2zM14.4 11.4a2.9 2.9 0 1 0 0 5.8 2.9 2.9 0 0 0 0-5.8zm0 1.9a1 1 0 1 1 0 2 1 1 0 0 1 0-2z" fill="var(--ic-a)"/>`,
+  },
+
+  // ===== 採掘場の鉱石 DIG_ORES（3種・セット） =============================
+  // 棚（結果画面の内訳）に3行そろって出る。canvas 上の粒は engine 側の
+  // 描画なのでここでは扱わない ── 使うのは HUD と結果の内訳だけ。
+  ore_gold: {
+    a: '#ffd75e', b: '#8a5a00',
+    // 2つの塊は必ず離す。重ねて描いていたころ、色を落とすと1つの大きな塊に
+    // なって ore_rainbow と見分けが付かなかった。
+    p: `<path d="M2.6 13.4 6.4 7h6.8l3.8 6.4-3.8 6.4H6.4z" fill="var(--ic-a)"/>
+        <path d="M16.6 6.6 18.5 3.2h3.7l1.8 3.4-1.8 3.4h-3.7z" fill="var(--ic-b)"/>`,
+  },
+  ore_crystal: {
+    a: '#4dd0ff', b: '#0e5c7d',
+    p: `<path d="M12 2.4 18 9l-6 12.6L6 9z" fill="var(--ic-a)"/>
+        <path d="M12 2.4 18 9h-6zM6 9h6v12.6z" fill="var(--ic-b)" opacity=".6"/>
+        <path d="M6 9h12" stroke="#eaf9ff" stroke-width="1.2"/>`,
+  },
+  ore_rainbow: {
+    a: '#ff6bd4', b: '#4dd0ff',
+    // 3本の「く」の字。隙間を空けてあるので、色を落としても3本と分かる。
+    p: `<path d="M3.4 12.4 6 6.2h2.4l-2.6 6.2 2.6 6.2H6z" fill="var(--ic-a)"/>
+        <path d="M9 12.4 11.6 6.2H14l-2.6 6.2L14 18.6h-2.4z" fill="var(--ic-b)"/>
+        <path d="M14.6 12.4 17.2 6.2h2.4l-2.6 6.2 2.6 6.2h-2.4z" fill="var(--ic-a)"/>`,
+  },
+
+  // ===== 時間・進行 ========================================================
+  // ⏱️ 経過時間・討伐タイム・試合時間。perk_slow（砂時計）とは別物。
+  clock: {
+    a: '#9fd8ff', b: '#1d4e70',
+    // 文字盤は輪。塗りつぶすと、色を落としたとき play / rescue と同じ白い丸。
+    p: `<circle cx="12" cy="13.2" r="8" fill="none" stroke="var(--ic-a)" stroke-width="2.2"/>
+        <path d="M12 9v4.4l3 1.8" fill="none" stroke="var(--ic-b)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M9.6 2.4h4.8M12 2.4v2.8" stroke="var(--ic-a)" stroke-width="2" stroke-linecap="round"/>`,
+  },
+  // ⌛ の絵は perk_slow（スロウの呪文）が既に持っている。ここに hourglass を
+  // 足していたが、SOLID CHECK（2色とも白）で並べると perk_slow と同じ砂時計に
+  // なっていた ── icons.js が潰したはずの「別 id ・同じ絵」がまた生えていた。
+  // 実績の ⏳（累計プレイ時間）は perk_slow を引く。
+  calendar: {
+    a: '#8fb6ff', b: '#28345c',
+    p: `<rect x="3.2" y="5" width="17.6" height="15.8" rx="2.4" fill="var(--ic-a)"/>
+        <path d="M3.2 9.8h17.6" stroke="var(--ic-b)" stroke-width="1.8"/>
+        <path d="M7.6 3v4M16.4 3v4" stroke="var(--ic-b)" stroke-width="2.1" stroke-linecap="round"/>
+        <rect x="6.6" y="12.2" width="3.2" height="3.2" rx=".8" fill="var(--ic-b)"/>
+        <rect x="12.4" y="12.2" width="3.2" height="3.2" rx=".8" fill="var(--ic-b)"/>`,
+  },
+  // 🔁 再戦。restore（1本の巻き戻し矢印）とは別に、往復の2本にする。
+  rematch: {
+    a: '#5ee86e', b: '#1d6b2c',
+    p: `<path d="M4.4 9.4h12.2l-2.8-3M19.6 14.6H7.4l2.8 3" fill="none" stroke="var(--ic-a)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M16.6 9.4h3v2.4M7.4 14.6h-3v-2.4" fill="none" stroke="var(--ic-b)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  // 復元（管理）。1本の反時計回り。
+  restore: {
+    a: '#8fd8ff', b: '#1b5f80',
+    p: `<path d="M4.6 12a7.4 7.4 0 1 0 2.4-5.5" fill="none" stroke="var(--ic-a)" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M3.4 3.6v5h5" fill="none" stroke="var(--ic-b)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  play: {
+    a: '#5ee86e', b: '#125c22',
+    // 丸を塗りつぶすと、色を落としたとき rescue（丸＋十字）と同じ「白い丸」に
+    // なる。輪にして三角を残せばシルエットだけで「再生」と読める。
+    p: `<circle cx="12" cy="12" r="9" fill="none" stroke="var(--ic-b)" stroke-width="2.2"/>
+        <path d="M9.6 7.6 17 12l-7.4 4.4z" fill="var(--ic-a)"/>`,
+  },
+
+  // ===== 報酬・所持品 ======================================================
+  gift: {
+    a: '#ff6b9d', b: '#7a1338',
+    p: `<rect x="2.8" y="8.6" width="18.4" height="4" rx="1.2" fill="var(--ic-a)"/>
+        <path d="M4.6 12.6h14.8v8.2H4.6z" fill="var(--ic-a)"/>
+        <path d="M10.4 8.6h3.2v12.2h-3.2z" fill="var(--ic-b)"/>
+        <path d="M12 8.2c-2.6-4.4-6.6-1.6-3.6 .8M12 8.2c2.6-4.4 6.6-1.6 3.6 .8" fill="none" stroke="var(--ic-b)" stroke-width="1.7" stroke-linecap="round"/>`,
+  },
+  // 🏅 実績。medal_1/2/3（順位）とは違い「花形の勲章」。
+  achievement: {
+    a: '#ffd75e', b: '#8a5a00',
+    p: `<path d="m8.6 13.4-2.4 7.4 5.8-2.8 5.8 2.8-2.4-7.4z" fill="var(--ic-b)"/>
+        <path fill-rule="evenodd" d="M12 2.6a6.6 6.6 0 1 1 0 13.2 6.6 6.6 0 0 1 0-13.2zm0 2.6-1.5 2.8-3.1.5 2.3 2.2-.6 3.1 2.9-1.5 2.9 1.5-.6-3.1 2.3-2.2-3.1-.5z" fill="var(--ic-a)"/>`,
+  },
+  collection: {
+    a: '#c48fff', b: '#402266',
+    p: `<path d="M3.4 4.6h4.4v15.8H3.4zM9 4.6h4.2v15.8H9z" fill="var(--ic-a)"/>
+        <path d="m14.8 5.8 4.2 1.1-3.6 13.4-4.2-1.1z" fill="var(--ic-b)"/>
+        <path d="M3.4 8.6h4.4M9 8.6h4.2" stroke="var(--ic-b)" stroke-width="1.6"/>`,
+  },
+  money: {
+    a: '#5ee86e', b: '#12401f',
+    p: `<path d="M9.4 2.6h5.2l-1.4 3.4h-2.4z" fill="var(--ic-b)"/>
+        <path d="M12 5.4c5.2 2.2 7.6 6 7.6 10.2 0 3.4-2.6 5.8-7.6 5.8s-7.6-2.4-7.6-5.8c0-4.2 2.4-8 7.6-10.2z" fill="var(--ic-a)"/>
+        <path d="M12 9.6v8M9.8 11.4h3.4a1.6 1.6 0 0 1 0 3.2H9.8h3.6a1.6 1.6 0 0 1 0 3.2H9.8" fill="none" stroke="var(--ic-b)" stroke-width="1.5" stroke-linecap="round"/>`,
+  },
+  potion: {
+    a: '#7ce8c8', b: '#0f5b48',
+    p: `<path d="M9.6 2.6h4.8v2h-4.8z" fill="var(--ic-b)"/>
+        <path d="M10.4 4.6v4.2L5.8 17.4c-1 1.8.2 3.6 2.2 3.6h8c2 0 3.2-1.8 2.2-3.6L13.6 8.8V4.6z" fill="var(--ic-a)"/>
+        <path d="M7.4 14.4h9.2l1.6 3c1 1.8-.2 3.6-2.2 3.6H8c-2 0-3.2-1.8-2.2-3.6z" fill="var(--ic-b)"/>`,
+  },
+  clover: {
+    a: '#5ee86e', b: '#12401f',
+    p: `<path d="M11.2 11.2A3.3 3.3 0 1 1 8.6 5.6a3.3 3.3 0 0 1 2.6 5.6zM12.8 11.2a3.3 3.3 0 1 0 2.6-5.6 3.3 3.3 0 0 0-2.6 5.6zM11.2 12.8a3.3 3.3 0 1 0-2.6 5.6 3.3 3.3 0 0 0 2.6-5.6zM12.8 12.8a3.3 3.3 0 1 1 2.6 5.6 3.3 3.3 0 0 1-2.6-5.6z" fill="var(--ic-a)"/>
+        <path d="M12 12.4c1.4 2.4 2 5.2 2 8.2" fill="none" stroke="var(--ic-b)" stroke-width="1.7" stroke-linecap="round"/>`,
+  },
+
+  // ===== 心・評価 ==========================================================
+  // 残機（❤️）と工房のいいねで共用。押していない状態だけ heart_outline。
+  heart: {
+    a: '#ff5d7d', b: '#7a0f27',
+    p: `<path d="M12 20.8 3.9 12.9a5 5 0 0 1 8.1-5.4 5 5 0 0 1 8.1 5.4z" fill="var(--ic-a)"/>
+        <path d="M7.4 8.6a3.4 3.4 0 0 0-1.5 2.6" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" opacity=".55"/>`,
+  },
+  heart_outline: {
+    a: '#ff9db1', b: '#7a0f27',
+    p: `<path d="M12 20.8 3.9 12.9a5 5 0 0 1 8.1-5.4 5 5 0 0 1 8.1 5.4z" fill="none" stroke="var(--ic-a)" stroke-width="2.1" stroke-linejoin="round"/>`,
+  },
+  // 📈 レート変動。段位アイコンとは別に「上がった/下がった」の折れ線。
+  rating: {
+    a: '#5ee86e', b: '#2a3450',
+    p: `<path d="M3.4 20.4h17.2" stroke="var(--ic-b)" stroke-width="2" stroke-linecap="round"/>
+        <path d="M4.4 16.2 9 11.4l3.4 3 6.2-7" fill="none" stroke="var(--ic-a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M14.6 7.4h5v5" fill="none" stroke="var(--ic-a)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  thumbup: {
+    a: '#8fb6ff', b: '#28345c',
+    p: `<path d="M8.6 10.2 12.4 3c1.8 0 2.8 1.2 2.8 2.8v3h4.2c1.4 0 2.4 1.2 2.1 2.6l-1.4 6.4a2.6 2.6 0 0 1-2.6 2h-8.5z" fill="var(--ic-a)"/>
+        <rect x="2.2" y="10.2" width="4.6" height="9.6" rx="1.4" fill="var(--ic-b)"/>`,
+  },
+  // 🗳️ 投票。receipt（伝票）と紛れないよう、箱＋投入口＋票を明確に。
+  poll: {
+    a: '#8fb6ff', b: '#28345c',
+    p: `<path d="M3 12.6h18v8.2H3z" fill="var(--ic-a)"/>
+        <path d="M8.2 12.6 9.6 9h4.8l1.4 3.6z" fill="var(--ic-b)"/>
+        <rect x="8.4" y="2.6" width="7.2" height="6" rx="1" fill="var(--ic-b)"/>
+        <path d="m10.2 5.6 1.4 1.4 2.4-2.6" fill="none" stroke="var(--ic-a)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+
+  // ===== 操作・管理 ========================================================
+  trash: {
+    a: '#ff7b7b', b: '#5c1414',
+    p: `<path d="M4.4 6.4h15.2l-1.2 13.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8z" fill="var(--ic-a)"/>
+        <path d="M3 5.2h18v2.4H3zM9 2.4h6v2.8H9z" fill="var(--ic-b)"/>
+        <path d="M9.6 10v7.6M14.4 10v7.6" stroke="var(--ic-b)" stroke-width="1.7" stroke-linecap="round"/>`,
+  },
+  edit: {
+    a: '#ffd75e', b: '#6b4a00',
+    p: `<path d="m14.6 3.4 6 6-9.8 9.8-6-6z" fill="var(--ic-a)"/>
+        <path d="M2.6 21.4 4.8 13.2l6 6z" fill="var(--ic-b)"/>
+        <path d="m17 1 6 6-2.4 2.4-6-6z" fill="var(--ic-b)"/>`,
+  },
+  key: {
+    a: '#ffd75e', b: '#6b4a00',
+    p: `<circle cx="7.4" cy="7.4" r="4.8" fill="none" stroke="var(--ic-a)" stroke-width="2.4"/>
+        <path d="m10.8 10.8 9.6 9.6" stroke="var(--ic-a)" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="m15.4 15.4 2.2-2.2M18 18l2.2-2.2" stroke="var(--ic-b)" stroke-width="2.2" stroke-linecap="round"/>`,
+  },
+  unlock: {
+    a: '#5ee86e', b: '#12401f',
+    p: `<rect x="4.2" y="10.6" width="15.6" height="10.4" rx="2.4" fill="var(--ic-a)"/>
+        <path d="M8 10.6V7.4a4 4 0 0 1 7.8-1.3" fill="none" stroke="var(--ic-a)" stroke-width="2.2" stroke-linecap="round"/>
+        <circle cx="12" cy="15.4" r="2" fill="var(--ic-b)"/>`,
+  },
+  pin: {
+    a: '#ff7b7b', b: '#5c1414',
+    p: `<path d="M9.4 2.6h5.2v6.2l3.4 3.4v2.2H6v-2.2l3.4-3.4z" fill="var(--ic-a)"/>
+        <path d="M12 14.4v7" stroke="var(--ic-b)" stroke-width="2" stroke-linecap="round"/>
+        <path d="M9.4 2.6h5.2v2.6H9.4z" fill="var(--ic-b)"/>`,
+  },
+  flag: {
+    a: '#ff7b7b', b: '#4a4f66',
+    p: `<path d="M5.6 2.6v18.8" stroke="var(--ic-b)" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M7 3.6h11.6l-2.6 4.2 2.6 4.2H7z" fill="var(--ic-a)"/>`,
+  },
+  send: {
+    a: '#57e0ff', b: '#0e4f66',
+    p: `<path d="M21.4 3 2.6 10.6l7 2.6z" fill="var(--ic-a)"/>
+        <path d="M21.4 3 11.4 21l-1.8-7.8z" fill="var(--ic-b)"/>`,
+  },
+  reply: {
+    a: '#8fb6ff', b: '#28345c',
+    p: `<path d="M9.4 5.4 3 11.2l6.4 5.8v-3.4c5 0 8 1.6 9.6 5 .2-6.4-3-9.8-9.6-9.8z" fill="var(--ic-a)"/>
+        <path d="M3 11.2h6.4" stroke="var(--ic-b)" stroke-width="1.5"/>`,
+  },
+  search: {
+    a: '#9fb0d4', b: '#38425c',
+    p: `<circle cx="10.4" cy="10.4" r="6.4" fill="none" stroke="var(--ic-a)" stroke-width="2.3"/>
+        <path d="m15.2 15.2 5.4 5.4" stroke="var(--ic-b)" stroke-width="2.6" stroke-linecap="round"/>`,
+  },
+  camera: {
+    a: '#9fb0d4', b: '#28345c',
+    p: `<path fill-rule="evenodd" d="M2.6 7.6h4.2l1.6-2.4h7.2l1.6 2.4h4.2v12.2H2.6zM12 9.2a4.2 4.2 0 1 0 0 8.4 4.2 4.2 0 0 0 0-8.4zm0 2.4a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6z" fill="var(--ic-a)"/>`,
+  },
+  folder: {
+    a: '#ffd75e', b: '#8a5a00',
+    p: `<path d="M2.6 5h7l2 2.6h9.8v13H2.6z" fill="var(--ic-b)"/>
+        <path d="M2.6 9.4h18.8v11.2H2.6z" fill="var(--ic-a)"/>`,
+  },
+  clipboard: {
+    a: '#c9d3ee', b: '#3c4665',
+    p: `<rect x="4.4" y="4.6" width="15.2" height="16" rx="2.2" fill="none" stroke="var(--ic-a)" stroke-width="2"/>
+        <rect x="8.6" y="2.4" width="6.8" height="3.6" rx="1.4" fill="var(--ic-b)"/>
+        <path d="M8 10.6h8M8 13.6h8M8 16.6h5" stroke="var(--ic-b)" stroke-width="1.8" stroke-linecap="round"/>`,
+  },
+  receipt: {
+    a: '#e6ecff', b: '#3c4665',
+    p: `<path d="M4.6 2.6h14.8v18.8l-2.5-1.6-2.4 1.6-2.5-1.6-2.4 1.6-2.5-1.6-2.5 1.6z" fill="var(--ic-a)"/>
+        <path d="M8 7.4h8M8 11h8M8 14.6h5.4" stroke="var(--ic-b)" stroke-width="1.7" stroke-linecap="round"/>`,
+  },
+  broom: {
+    a: '#ffd75e', b: '#6b4a00',
+    p: `<path d="m13.4 2.6 2.6 2.6-7 7-2.6-2.6z" fill="var(--ic-b)"/>
+        <path d="m5.6 11.6 2.6 2.6-4.8 7.2h13.4l-4-7.2-2.6-2.6z" fill="var(--ic-a)"/>
+        <path d="M4.6 18.4h11.4" stroke="var(--ic-b)" stroke-width="1.7"/>`,
+  },
+  // 🛠 メンテナンス。mod（1本のスパナ）と混ざらないよう、交差した2本。
+  maintenance: {
+    a: '#ffb35c', b: '#6b3a00',
+    p: `<path d="M4.2 3.6 20 19.4l-2.4 2.4L1.8 6z" fill="var(--ic-b)"/>
+        <path d="M3.4 3.2 8 4.4l1.2 4.6-2.6 2.6L2 10.4.8 5.8z" fill="var(--ic-a)"/>
+        <path d="M20.6 3.2a4.6 4.6 0 0 0-6 6l-9 9 3 3 9-9a4.6 4.6 0 0 0 6-6l-3 3-3-3z" fill="var(--ic-a)"/>`,
+  },
+  backup: {
+    a: '#9fb0d4', b: '#2a3450',
+    // シャッターとラベルは「抜き」。重ねる描き方だと、色を落とすとただの
+    // 白い四角になり checkbox_off / clipboard と見分けが付かなかった。
+    p: `<path fill-rule="evenodd" d="M3.4 3.4h14.4L20.6 6.2v14.4H3.4zM7.4 5.2h6v4.2h-6zM6.4 13h11.2v6.4H6.4z" fill="var(--ic-a)"/>`,
+  },
+  bug: {
+    a: '#8fd67a', b: '#1e4a16',
+    p: `<ellipse cx="12" cy="13.4" rx="5" ry="6.4" fill="var(--ic-a)"/>
+        <path d="M12 7v12.8" stroke="var(--ic-b)" stroke-width="1.6"/>
+        <path d="M7 8.6 3.6 6M7 13.4H3M7 18.2l-3.4 2.4M17 8.6 20.4 6M17 13.4h4M17 18.2l3.4 2.4" stroke="var(--ic-b)" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M9.4 6.6a2.6 2.6 0 0 1 5.2 0z" fill="var(--ic-b)"/>`,
+  },
+  festival: {
+    a: '#ff7b7b', b: '#f4f7ff',
+    // 縞は「柱を離す」ことで出す。塗り分けだと色を落としたとき無地になった。
+    p: `<path d="M12 2.2 21.6 9H2.4z" fill="var(--ic-a)"/>
+        <path d="M2.6 10.2h3.8v11H2.6zM7.8 10.2h3.6v11H7.8zM12.8 10.2h3.6v11h-3.6zM17.8 10.2h3.6v11h-3.6z" fill="var(--ic-b)"/>`,
+  },
+  // 🎭 にぎわい（住人の設定）。演劇の仮面。
+  mask: {
+    a: '#c48fff', b: '#402266',
+    p: `<path fill-rule="evenodd" d="M2.4 6.4h9.2v6.4a4.6 4.6 0 0 1-9.2 0zM5.6 8.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2zM9 8.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2z" fill="var(--ic-a)"/>
+        <path fill-rule="evenodd" d="M12.4 6.4h9.2v6.4a4.6 4.6 0 0 1-9.2 0zM15.6 8.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2zM19 8.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2z" fill="var(--ic-b)"/>`,
+  },
+  // ⬜ トグルOFF。check（✓）の対で、空の四角。
+  checkbox_off: {
+    a: '#6b7594', b: '#2a3450',
+    // 地を塗ると backup / clipboard と同じ「白い四角」になる。OFF は
+    // 「空の枠」そのものなので、枠だけで描くのが意味にも合っている。
+    p: `<rect x="3.4" y="3.4" width="17.2" height="17.2" rx="3.4" fill="none" stroke="var(--ic-a)" stroke-width="2.3"/>`,
+  },
+
+  // ===== 情報・伝達 ========================================================
+  // 📣 シェア。トップバーの chat（吹き出し）とは別系統。
+  share: {
+    a: '#ffb35c', b: '#6b3a00',
+    p: `<path d="M13.4 3.4 6.6 8H3.4v8h3.2l6.8 4.6z" fill="var(--ic-a)"/>
+        <path d="M17 8.2a5.4 5.4 0 0 1 0 7.6M19.6 5.6a9 9 0 0 1 0 12.8" fill="none" stroke="var(--ic-b)" stroke-width="1.9" stroke-linecap="round"/>`,
+  },
+  // 📡 ライブフィード。share（拡声器）と違い、受け取る側のパラボラ。
+  feed: {
+    a: '#57e0ff', b: '#0e4f66',
+    p: `<path d="M4.4 19.6 12.6 6.4a6.8 6.8 0 0 1 5 8.6z" fill="var(--ic-a)"/>
+        <circle cx="17.4" cy="6.6" r="2.4" fill="var(--ic-b)"/>
+        <path d="M2.6 21.4h8.2" stroke="var(--ic-b)" stroke-width="2" stroke-linecap="round"/>`,
+  },
+  translate: {
+    a: '#8fd8ff', b: '#1b5f80',
+    p: `<circle cx="12" cy="12" r="9" fill="none" stroke="var(--ic-a)" stroke-width="2"/>
+        <path d="M3 12h18" stroke="var(--ic-a)" stroke-width="2"/>
+        <path d="M12 3c3 3.6 3 14.4 0 18M12 3c-3 3.6-3 14.4 0 18" fill="none" stroke="var(--ic-b)" stroke-width="1.8"/>`,
+  },
+  hint: {
+    a: '#ffd75e', b: '#6b4a00',
+    p: `<path d="M12 2.6a6.6 6.6 0 0 1 4 11.9v2.1H8v-2.1a6.6 6.6 0 0 1 4-11.9z" fill="var(--ic-a)"/>
+        <path d="M8.6 17.8h6.8M9.6 20.4h4.8" stroke="var(--ic-b)" stroke-width="2" stroke-linecap="round"/>`,
+  },
+  brain: {
+    a: '#ff9db1', b: '#7a2340',
+    p: `<path d="M11.2 3.4c-3 0-4.6 1.8-4.6 3.6-1.8.5-2.8 2-2.8 3.6 0 1.2.5 2.2 1.4 2.9-.3 2.4 1.4 4.5 3.8 4.5.6 1.4 1.4 2.2 2.2 2.2z" fill="var(--ic-a)"/>
+        <path d="M12.8 3.4c3 0 4.6 1.8 4.6 3.6 1.8.5 2.8 2 2.8 3.6 0 1.2-.5 2.2-1.4 2.9.3 2.4-1.4 4.5-3.8 4.5-.6 1.4-1.4 2.2-2.2 2.2z" fill="var(--ic-b)"/>`,
+  },
+  // 🚑 オートレスキュー。十字の救護。
+  rescue: {
+    a: '#ff7b7b', b: '#f4f7ff',
+    // 十字は「抜き」。上に重ねるだけだと、色を落としたとき丸に飲まれた。
+    p: `<path fill-rule="evenodd" d="M12 2.8a9.2 9.2 0 1 1 0 18.4 9.2 9.2 0 0 1 0-18.4zM9.8 5.8v4h-4v4.4h4v4h4.4v-4h4V9.8h-4v-4z" fill="var(--ic-a)"/>`,
+  },
+  infinity: {
+    a: '#c48fff', b: '#402266',
+    p: `<path d="M12 12c-1.6-2.6-3-3.9-4.6-3.9a3.9 3.9 0 0 0 0 7.8c1.6 0 3-1.3 4.6-3.9z" fill="none" stroke="var(--ic-a)" stroke-width="2.4"/>
+        <path d="M12 12c1.6 2.6 3 3.9 4.6 3.9a3.9 3.9 0 0 0 0-7.8c-1.6 0-3 1.3-4.6 3.9z" fill="none" stroke="var(--ic-b)" stroke-width="2.4"/>`,
+  },
+  upload: {
+    a: '#57e0ff', b: '#0e4f66',
+    p: `<path d="M12 3 18 9.4h-3.6v6.2H9.6V9.4H6z" fill="var(--ic-a)"/>
+        <path d="M3.6 17.4v2.2c0 .8.7 1.4 1.5 1.4h13.8c.8 0 1.5-.6 1.5-1.4v-2.2" fill="none" stroke="var(--ic-b)" stroke-width="2.2" stroke-linecap="round"/>`,
+  },
+
+  // ===== 戦闘まわり ========================================================
+  // ✂️ 攻撃カット。
+  cut: {
+    a: '#c9d3ee', b: '#ff7b7b',
+    p: `<path d="m6.6 5 11 12M17.4 5l-11 12" stroke="var(--ic-a)" stroke-width="2.1" stroke-linecap="round"/>
+        <circle cx="6.4" cy="18.8" r="2.6" fill="none" stroke="var(--ic-b)" stroke-width="2"/>
+        <circle cx="17.6" cy="18.8" r="2.6" fill="none" stroke="var(--ic-b)" stroke-width="2"/>`,
+  },
+  // 🌩️ ロイヤルのストーム。warn（三角）で代用していたぶん。
+  storm: {
+    a: '#9fb0d4', b: '#ffd75e',
+    p: `<path d="M6.6 14.4a4.4 4.4 0 0 1 .6-8.8 5.6 5.6 0 0 1 10.6 1.6 3.6 3.6 0 0 1-.6 7.2z" fill="var(--ic-a)"/>
+        <path d="m12.6 13.4-4 5.6h3l-1.2 4 5.2-6.2h-3.2z" fill="var(--ic-b)"/>`,
+  },
+  skull: {
+    a: '#e6ecff', b: '#2a3450',
+    p: `<path fill-rule="evenodd" d="M12 2.6c5 0 8.4 3.4 8.4 8 0 2.8-1.2 4.6-2.8 5.6v3.4H6.4v-3.4c-1.6-1-2.8-2.8-2.8-5.6 0-4.6 3.4-8 8.4-8zM8.8 8.7a2.3 2.3 0 1 0 0 4.6 2.3 2.3 0 0 0 0-4.6zM15.2 8.7a2.3 2.3 0 1 0 0 4.6 2.3 2.3 0 0 0 0-4.6zM10.6 15.6l1.4 2.6 1.4-2.6z" fill="var(--ic-a)"/>`,
+  },
+  // 💥 コンボ／衝撃。ult_blast（奥義の波動）とは別に、素朴な破裂。
+  combo: {
+    a: '#ff8a5c', b: '#ffd75e',
+    p: `<path fill-rule="evenodd" d="m12 1.8 2.6 5.1 5.2-2.3-2.3 5.2 5.1 2.6-5.1 2.6 2.3 5.2-5.2-2.3-2.6 5.1-2.6-5.1-5.2 2.3 2.3-5.2L1.4 12l5.1-2.6-2.3-5.2 5.2 2.3zm0 6.8a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z" fill="var(--ic-a)"/>`,
+  },
+  // 👁️ ゼロの眼。spectate（丸い目＝観戦）とは別に、縦長の瞳＋光条。
+  eye_zero: {
+    a: '#e03546', b: '#2a0a0e',
+    p: `<path fill-rule="evenodd" d="M2.6 12S6.4 6.2 12 6.2 21.4 12 21.4 12 17.6 17.8 12 17.8 2.6 12 2.6 12zM12 7.4a2.2 4.6 0 1 0 0 9.2 2.2 4.6 0 0 0 0-9.2z" fill="var(--ic-a)"/>
+        <path d="M12 1.6v3M12 19.4v3M3.4 3.4l2 2M18.6 18.6l2 2" stroke="var(--ic-a)" stroke-width="1.8" stroke-linecap="round"/>`,
+  },
+  // 🪧 陣取りの杭。
+  stake: {
+    a: '#ffb35c', b: '#6b3a00',
+    p: `<path d="M11 8.6h2v12.8h-2z" fill="var(--ic-b)"/>
+        <path d="M4 2.6h16v7H4z" fill="var(--ic-a)"/>
+        <path d="M11 21.4 12 23l1-1.6z" fill="var(--ic-b)"/>
+        <path d="M7 5.6h10" stroke="var(--ic-b)" stroke-width="1.7" stroke-linecap="round"/>`,
+  },
+  // 🌈 虹（ラッキー／レインボー系）。ore_rainbow（鉱石）とは別。
+  rainbow: {
+    a: '#ff6bd4', b: '#4dd0ff',
+    p: `<path d="M2.6 20.4a9.4 9.4 0 0 1 18.8 0" fill="none" stroke="var(--ic-a)" stroke-width="2.6"/>
+        <path d="M6.2 20.4a5.8 5.8 0 0 1 11.6 0" fill="none" stroke="var(--ic-b)" stroke-width="2.6"/>
+        <path d="M9.8 20.4a2.2 2.2 0 0 1 4.4 0" fill="none" stroke="var(--ic-a)" stroke-width="2.6"/>`,
+  },
+  // ⭐ 一般的な星（スコア系の実績）。fx_star（エフェクト商品）とは別枠。
+  star: {
+    a: '#ffd75e', b: '#8a5a00',
+    p: `<path d="m12 2.4 3 6.2 6.8.9-4.9 4.7 1.2 6.8L12 17.8 5.9 21l1.2-6.8L2.2 9.5l6.8-.9z" fill="var(--ic-a)"/>
+        <path d="m12 2.4 3 6.2 6.8.9-4.9 4.7 1.2 6.8L12 17.8z" fill="var(--ic-b)" opacity=".4"/>`,
+  },
+  // 📏 消したライン数。
+  lines: {
+    a: '#8fb6ff', b: '#28345c',
+    p: `<path d="M2.6 5.4h18.8v3.4H2.6zM2.6 10.6h18.8V14H2.6zM2.6 15.8h18.8v3.4H2.6z" fill="var(--ic-a)"/>
+        <path d="M7.4 5.4v3.4M14.6 10.6V14M9.8 15.8v3.4" stroke="var(--ic-b)" stroke-width="1.8"/>`,
+  },
+  // ⬆️ レベルアップ。
+  level_up: {
+    a: '#5ee86e', b: '#12401f',
+    p: `<path d="M12 2.4 20.6 11H15.4v6H8.6v-6H3.4z" fill="var(--ic-a)"/>
+        <path d="M8.6 19h6.8v2.6H8.6z" fill="var(--ic-b)"/>`,
+  },
+  // 🧱 置いたピース数。
+  block: {
+    a: '#ff9d6b', b: '#7a3208',
+    p: `<path d="M2.6 4h8.6v6H2.6zM12.8 4h8.6v6h-8.6zM2.6 11.6h8.6v6H2.6zM12.8 11.6h8.6v6h-8.6z" fill="var(--ic-a)"/>
+        <path d="M2.6 19.2h18.8v2.2H2.6z" fill="var(--ic-b)"/>`,
+  },
+  // ===== 設計図の図柄・日替わりお題 =======================================
+  // 設計図（🏗️）で組む8つの図柄のうち、他で流用できない2つ。
+  // 残りは heart / relic_atk(剣) / throne(王冠) / star / gems / ultimate(稲妻)。
+  tree: {
+    a: '#5ee86e', b: '#6b4a00',
+    p: `<path d="M12 2.4 19 11h-3.6l3.6 5.4H5L8.6 11H5z" fill="var(--ic-a)"/>
+        <path d="M10.4 16.4h3.2v5.2h-3.2z" fill="var(--ic-b)"/>`,
+  },
+  house: {
+    a: '#ffb35c', b: '#6b3a00',
+    p: `<path d="M12 2.6 22 11h-3v10H5V11H2z" fill="var(--ic-a)"/>
+        <path d="M9.6 13.4h4.8v7.6H9.6z" fill="var(--ic-b)"/>`,
+  },
+  // 🐜 極小の日。block（4つの大ブロック）の対で、小さい粒が散っている形。
+  mini: {
+    a: '#8fd8ff', b: '#1b5f80',
+    p: `<rect x="3" y="3" width="4.2" height="4.2" rx="1" fill="var(--ic-a)"/>
+        <rect x="10" y="6.4" width="4.2" height="4.2" rx="1" fill="var(--ic-b)"/>
+        <rect x="16.8" y="3" width="4.2" height="4.2" rx="1" fill="var(--ic-a)"/>
+        <rect x="5.6" y="13.4" width="4.2" height="4.2" rx="1" fill="var(--ic-b)"/>
+        <rect x="13.4" y="16" width="4.2" height="4.2" rx="1" fill="var(--ic-a)"/>`,
+  },
+  // 🧊 瓦礫の日。積もったガレキ。ore_* とは違い、割れた不定形を重ねる。
+  rubble: {
+    a: '#8390b4', b: '#39415c',
+    p: `<path d="M2.6 21.4 6.2 14l4.4 3.2-1.4 4.2z" fill="var(--ic-a)"/>
+        <path d="M9.2 21.4 12 12.6l5.6 4-1.2 4.8z" fill="var(--ic-b)"/>
+        <path d="M16.4 21.4 19 15.4l2.4 6z" fill="var(--ic-a)"/>
+        <path d="M6.6 9.4 10.4 6l2.6 4.4-3.4 2.6z" fill="var(--ic-b)"/>`,
+  },
+
+  // 👹 鬼の入場演出（110px）。badge_oni は「討伐バッジ」の絵なので、
+  // 主役として大きく出すための専用の顔をここに置く。
+  foe_oni: {
+    a: '#ff5d5d', b: '#3d0a0a',
+    p: `<path d="M4.6 6.6 3 2.2l4.6 2.4a8.6 8.6 0 0 1 8.8 0L21 2.2l-1.6 4.4a8.4 8.4 0 0 1 1 4c0 5-3.8 9-8.4 9s-8.4-4-8.4-9c0-1.4.4-2.8 1-4z" fill="var(--ic-a)"/>
+        <path fill-rule="evenodd" d="M7.4 10.8 11 12.6l-3.6 1.8zM16.6 10.8 13 12.6l3.6 1.8zM8.2 16.6h7.6l-1.4 2.2h-4.8z" fill="var(--ic-b)"/>`,
+  },
+});
+
+// ---------------------------------------------------------------------------
 // 描画
 // ---------------------------------------------------------------------------
 

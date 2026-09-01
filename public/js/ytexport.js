@@ -10,6 +10,7 @@ import { audio, TRACK_INFO } from './audio.js';
 import { showModal, closeModal, toast } from './dom.js';
 import { t } from './i18n.js';
 import { ghostUnlocked } from './modes.js';
+import { icon } from './icons.js';
 
 // 📐 出力の形。横型は普通のYouTube、縦型は YouTube ショート／TikTok／Reels。
 // ショート系はどこも 9:16 が正で、これを外すと上下に黒帯が入るか、
@@ -208,34 +209,34 @@ export function showYouTubeStudio() {
   setFormat('wide');          // 開いたときは必ず横型から
   let dur = 120;
   const m = showModal(`
-    <h2>🎬 ${t('YouTube スタジオ', 'YouTube Studio')}</h2>
+    <h2>${icon('clip', { size: 24 })} ${t('YouTube スタジオ', 'YouTube Studio')}</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:8px">
       ${t('サントラを<b>そのままYouTubeにアップできる動画</b>（映像＋音声・最高音質320kbps）として書き出します。録画は実時間です。',
           'Export the soundtrack as a <b>ready-to-upload YouTube video</b> (visuals + audio, top-quality 320kbps). Recording runs in real time.')}
     </p>
     <div class="yt-stage"><canvas id="ytCanvas" width="${W}" height="${H}"></canvas></div>
     <div class="settings-row" style="margin-top:8px">
-      <label>📐 ${t('形', 'Format')}</label>
+      <label>${t('形', 'Format')}</label>
       <span class="seg" id="ytFmt">
-        <button data-f="wide" class="active">🖥️ ${t('横型', 'Wide')} 16:9</button>
-        <button data-f="short">📱 ${t('縦型', 'Vertical')} 9:16</button>
+        <button data-f="wide" class="active">${t('横型', 'Wide')} 16:9</button>
+        <button data-f="short">${t('縦型', 'Vertical')} 9:16</button>
       </span>
     </div>
     <p id="ytFmtNote" class="muted center" style="font-size:11px;margin:-2px 0 6px">1280×720 ・ YouTube</p>
     <div class="settings-row">
-      <label>🎵 ${t('曲', 'Track')}</label>
+      <label>${t('曲', 'Track')}</label>
       <select id="ytTrack" style="max-width:210px">${tracks.map(x => `<option value="${x.id}">${x.icon} ${t(x.name, x.nameEn)}</option>`).join('')}</select>
     </div>
     <div class="settings-row">
-      <label>⏱️ ${t('長さ', 'Length')}</label>
+      <label>${t('長さ', 'Length')}</label>
       <span class="seg" id="ytDur"></span>
     </div>
     <p id="ytStatus" class="muted center" style="font-size:12px;min-height:16px"></p>
     <div class="modal-buttons" style="flex-wrap:wrap">
       <button class="btn btn-ghost" id="ytClose">${t('閉じる', 'Close')}</button>
-      <button class="btn btn-ghost" id="ytThumb">🖼️ ${t('サムネ保存', 'Thumbnail')}</button>
-      <button class="btn btn-ghost" id="ytCopy">📋 ${t('タイトル&説明', 'Title & desc')}</button>
-      <button class="btn btn-primary" id="ytRec" ${canRecord ? '' : 'disabled'}>🔴 ${t('録画開始', 'Record')}</button>
+      <button class="btn btn-ghost" id="ytThumb">${t('サムネ保存', 'Thumbnail')}</button>
+      <button class="btn btn-ghost" id="ytCopy">${t('タイトル&説明', 'Title & desc')}</button>
+      <button class="btn btn-primary" id="ytRec" ${canRecord ? '' : 'disabled'}>${t('録画開始', 'Record')}</button>
     </div>
     ${canRecord ? '' : `<p class="muted center" style="font-size:11px">${t('このブラウザは録画非対応です（Chrome推奨）', 'This browser cannot record (use Chrome)')}</p>`}
   `, { dismissable: false });
@@ -338,7 +339,7 @@ export function showYouTubeStudio() {
     const off = document.createElement('canvas');
     off.width = W; off.height = H;
     drawFrame(off.getContext('2d'), tracks.find(x => x.id === sel) || tracks[0], analyser, freqBuf, 0, 0, false);
-    off.toBlob(b => { if (b) { download(b, `bba-ost-${sel}-${W}x${H}-thumbnail.png`); toast(t('🖼️ サムネイルを保存しました', '🖼️ Thumbnail saved'), 'ok', 2000); } }, 'image/png');
+    off.toBlob(b => { if (b) { download(b, `bba-ost-${sel}-${W}x${H}-thumbnail.png`); toast(t('サムネイルを保存しました', 'Thumbnail saved'), 'ok', 2000); } }, 'image/png');
   };
 
   m.querySelector('#ytCopy').onclick = async () => {
@@ -346,8 +347,8 @@ export function showYouTubeStudio() {
     const text = `【Block Blitz Arena OST】${info.name} (${info.nameEn})\n\n` +
       `ブロックパズルゲーム「Block Blitz Arena」のオリジナルサウンドトラックです。\n` +
       `The original soundtrack of the puzzle game "Block Blitz Arena".\n\n` +
-      `🎮 いますぐ遊ぶ / Play free: ${GAME_URL}\n` +
-      `🎵 ${info.bpm} BPM ・ WebAudioによる完全合成（音声素材なし）\n\n` +
+      `いますぐ遊ぶ / Play free: ${GAME_URL}\n` +
+      `${info.bpm} BPM ・ WebAudioによる完全合成（音声素材なし）\n\n` +
       // 縦型のときは #Shorts を先頭に付ける。YouTube はこのタグを
       // ショート判定の手がかりにするので、付け忘れると9:16でも
       // 普通の動画として扱われることがある。
@@ -356,12 +357,12 @@ export function showYouTubeStudio() {
         : `#BlockBlitzArena #ゲーム音楽 #GameMusic #chiptune #OST`);
     try {
       await navigator.clipboard.writeText(text);
-      toast(t('📋 タイトルと説明文をコピーしました', '📋 Title & description copied'), 'ok', 2200);
+      toast(t('タイトルと説明文をコピーしました', 'Title & description copied'), 'ok', 2200);
     } catch {
       const ta = document.createElement('textarea');
       ta.value = text; document.body.appendChild(ta); ta.select();
       document.execCommand('copy'); ta.remove();
-      toast(t('📋 コピーしました', '📋 Copied'), 'ok', 2000);
+      toast(t('コピーしました', 'Copied'), 'ok', 2000);
     }
   };
 
@@ -471,7 +472,7 @@ export function showYouTubeStudio() {
       const blob = new Blob(chunks, { type: OUT_TYPE });
       if (blob.size > 0) {
         download(blob, `bba-ost-${sel}-${FMT === FORMATS.short ? 'short-' : ''}${dur}s.${EXT}`);
-        toast(t('🎬 動画を保存しました！このままYouTubeにアップできます', '🎬 Video saved — upload it to YouTube as-is!'), 'ok', 4500);
+        toast(t('動画を保存しました！このままYouTubeにアップできます', 'Video saved — upload it to YouTube as-is!'), 'ok', 4500);
       } else {
         // 空だったことを伝える。黙って終わると「保存できたのに
         // ファイルが無い」に見えて、原因を探しようがない。
@@ -495,7 +496,7 @@ export function showYouTubeStudio() {
       recording = false;
       currentRec = null;
       fadeArmed = false;
-      btnRec.textContent = `🔴 ${t('録画開始', 'Record')}`;
+      btnRec.textContent = t('録画開始', 'Record');
       m.querySelector('#ytClose').disabled = false;
       status('');
     };
@@ -551,7 +552,7 @@ export function showYouTubeStudio() {
     document.addEventListener('visibilitychange', onVis);
     studioState.onVis = onVis;
     onVis();
-    btnRec.textContent = `⏹ ${t('停止して保存', 'Stop & save')}`;
+    btnRec.textContent = t('停止して保存', 'Stop & save');
     m.querySelector('#ytClose').disabled = true;
     // 録画中の描画・フレーム送出・進行管理はWorkerタイマーが駆動
     // （タブを切り替えても止まらない）。Worker不可の環境はintervalに退避。
@@ -566,8 +567,8 @@ export function showYouTubeStudio() {
       // requestFrame が無い環境（Firefox）では rAF 任せなので、
       // タブを隠すと映像が凍った動画になる。嘘をつかない。
       status(manualFrames
-        ? t(`🔴 録画中… ${Math.floor(el)} / ${dur}秒（別の画面に切り替えてもOK）`, `🔴 Recording… ${Math.floor(el)} / ${dur}s (switching tabs is fine)`)
-        : t(`🔴 録画中… ${Math.floor(el)} / ${dur}秒（この画面を開いたままにしてください）`, `🔴 Recording… ${Math.floor(el)} / ${dur}s (keep this tab visible)`));
+        ? t(`録画中… ${Math.floor(el)} / ${dur}秒（別の画面に切り替えてもOK）`, `Recording… ${Math.floor(el)} / ${dur}s (switching tabs is fine)`)
+        : t(`録画中… ${Math.floor(el)} / ${dur}秒（この画面を開いたままにしてください）`, `Recording… ${Math.floor(el)} / ${dur}s (keep this tab visible)`));
       // 最後の1.5秒はフェードアウト（動画の終わりがブツ切りにならない）
       if (!fadeArmed && el >= dur - 1.5) {
         fadeArmed = true;
@@ -621,8 +622,8 @@ export function showYouTubeStudio() {
     const wasRecording = recording;
     stopStudio();       // 録画中ならここまでのぶんが保存される
     if (wasRecording) {
-      toast(t('🎬 画面が切り替わったので録画を終了しました（ここまでのぶんは保存されます）',
-        '🎬 Recording stopped because the screen changed — what was captured is saved'), 'err', 5000);
+      toast(t('画面が切り替わったので録画を終了しました（ここまでのぶんは保存されます）',
+        'Recording stopped because the screen changed — what was captured is saved'), 'err', 5000);
     }
   });
   gone.observe(document.getElementById('modal-root'), { childList: true, subtree: true });

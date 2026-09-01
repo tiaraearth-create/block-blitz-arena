@@ -41,12 +41,12 @@ export const DAILYC_ATTEMPT_MS = 2 * 60 * 60 * 1000;
 //   ghost:  住人のその日のスコア係数。お題を無視すると「極小の日に2万点」
 //           という人間には不可能な数字がボードに並んでしまう。
 export const DAILY_MODIFIERS = [
-  { id: 'giant',   icon: '🧱', ja: '巨大の日',  en: 'Giant Day',   descJa: '大きいピースしか来ない',            descEn: 'Only big pieces drop',                 target: 1,    ghost: 1.1 },
-  { id: 'mini',    icon: '🐜', ja: '極小の日',  en: 'Tiny Day',    descJa: '小さいピースしか来ない',            descEn: 'Only tiny pieces drop',                target: 0.5,  ghost: 0.3 },
-  { id: 'combo',   icon: '🔥', ja: '連鎖の日',  en: 'Combo Day',   descJa: 'コンボボーナス2倍',                 descEn: 'Combo bonuses are doubled',            target: 1.2,  ghost: 1.5 },
-  { id: 'rainbow', icon: '🌈', ja: '虹の日',    en: 'Rainbow Day', descJa: 'リロールが3回使える',               descEn: 'You get 3 rerolls',                    target: 1,    ghost: 1.05 },
-  { id: 'rubble',  icon: '🧊', ja: '瓦礫の日',  en: 'Rubble Day',  descJa: '開幕から瓦礫が積もっている',        descEn: 'The board starts littered with rubble', target: 0.9,  ghost: 0.85 },
-  { id: 'gold',    icon: '💰', ja: '黄金の日',  en: 'Golden Day',  descJa: 'クリア報酬のコイン2倍',             descEn: 'Clear rewards pay double coins',       target: 1,    ghost: 1 },
+  { id: 'giant',   iconName: 'block', ja: '巨大の日',  en: 'Giant Day',   descJa: '大きいピースしか来ない',            descEn: 'Only big pieces drop',                 target: 1,    ghost: 1.1 },
+  { id: 'mini',    iconName: 'mini', ja: '極小の日',  en: 'Tiny Day',    descJa: '小さいピースしか来ない',            descEn: 'Only tiny pieces drop',                target: 0.5,  ghost: 0.3 },
+  { id: 'combo',   iconName: 'fire', ja: '連鎖の日',  en: 'Combo Day',   descJa: 'コンボボーナス2倍',                 descEn: 'Combo bonuses are doubled',            target: 1.2,  ghost: 1.5 },
+  { id: 'rainbow', iconName: 'rainbow', ja: '虹の日',    en: 'Rainbow Day', descJa: 'リロールが3回使える',               descEn: 'You get 3 rerolls',                    target: 1,    ghost: 1.05 },
+  { id: 'rubble',  iconName: 'rubble', ja: '瓦礫の日',  en: 'Rubble Day',  descJa: '開幕から瓦礫が積もっている',        descEn: 'The board starts littered with rubble', target: 0.9,  ghost: 0.85 },
+  { id: 'gold',    iconName: 'money', ja: '黄金の日',  en: 'Golden Day',  descJa: 'クリア報酬のコイン2倍',             descEn: 'Clear rewards pay double coins',       target: 1,    ghost: 1 },
 ];
 
 export function dailySeed(dayKey) {
@@ -95,7 +95,7 @@ export function nextJstMidnight(now = Date.now()) {
 // 破っていても下の BLUEPRINT_FIGURES で弾かれるだけで落ちはしないが、
 // その図柄は永久に出番が無くなる。
 const BLUEPRINT_ART = [
-  { id: 'heart', icon: '💗', ja: 'ハート', en: 'Heart', rows: [
+  { id: 'heart', iconName: 'heart', ja: 'ハート', en: 'Heart', rows: [
     '........',
     '.##.##..',
     '#######.',
@@ -105,7 +105,7 @@ const BLUEPRINT_ART = [
     '...#....',
     '........',
   ] },
-  { id: 'sword', icon: '🗡️', ja: '剣', en: 'Sword', rows: [
+  { id: 'sword', iconName: 'relic_atk', ja: '剣', en: 'Sword', rows: [
     '........',
     '...##...',
     '...##...',
@@ -115,7 +115,7 @@ const BLUEPRINT_ART = [
     '...##...',
     '..####..',
   ] },
-  { id: 'crown', icon: '👑', ja: '王冠', en: 'Crown', rows: [
+  { id: 'crown', iconName: 'throne', ja: '王冠', en: 'Crown', rows: [
     '........',
     '#..#..#.',
     '#.###.#.',
@@ -125,7 +125,7 @@ const BLUEPRINT_ART = [
     '........',
     '........',
   ] },
-  { id: 'star', icon: '⭐', ja: '星', en: 'Star', rows: [
+  { id: 'star', iconName: 'star', ja: '星', en: 'Star', rows: [
     '........',
     '...#....',
     '..###...',
@@ -135,7 +135,7 @@ const BLUEPRINT_ART = [
     '.##.##..',
     '........',
   ] },
-  { id: 'tree', icon: '🌲', ja: '木', en: 'Tree', rows: [
+  { id: 'tree', iconName: 'tree', ja: '木', en: 'Tree', rows: [
     '........',
     '...#....',
     '..###...',
@@ -145,7 +145,7 @@ const BLUEPRINT_ART = [
     '...#....',
     '...#....',
   ] },
-  { id: 'house', icon: '🏠', ja: '家', en: 'House', rows: [
+  { id: 'house', iconName: 'house', ja: '家', en: 'House', rows: [
     '........',
     '...##...',
     '..####..',
@@ -155,7 +155,7 @@ const BLUEPRINT_ART = [
     '.##..##.',
     '........',
   ] },
-  { id: 'gem', icon: '💎', ja: '宝石', en: 'Gem', rows: [
+  { id: 'gem', iconName: 'gems', ja: '宝石', en: 'Gem', rows: [
     '........',
     '..###...',
     '.#####..',
@@ -165,7 +165,7 @@ const BLUEPRINT_ART = [
     '..###...',
     '........',
   ] },
-  { id: 'bolt', icon: '⚡', ja: '稲妻', en: 'Bolt', rows: [
+  { id: 'bolt', iconName: 'ultimate', ja: '稲妻', en: 'Bolt', rows: [
     '....###.',
     '...###..',
     '..###...',
@@ -197,7 +197,7 @@ export function blueprintHasFullLine(cells) {
 // 出題に使える図柄だけを残す。掟を破った図柄（＝完成させるとラインが揃う）は
 // ここで落ちるので、blueprintFor() が崩れる設計図を返すことはない。
 export const BLUEPRINT_FIGURES = BLUEPRINT_ART
-  .map(f => ({ id: f.id, icon: f.icon, ja: f.ja, en: f.en, cells: cellsOfArt(f.rows) }))
+  .map(f => ({ id: f.id, iconName: f.iconName, ja: f.ja, en: f.en, cells: cellsOfArt(f.rows) }))
   .filter(f => f.cells.length > 0 && !blueprintHasFullLine(f.cells));
 
 // 設計図の種。お題（dailySeed）と同じ流儀の文字列ハッシュだが、図柄が
@@ -280,7 +280,7 @@ export function blueprintFor(dayKey) {
       dayKey,
       seed,
       id: fig.id,
-      icon: fig.icon,
+      iconName: fig.iconName,
       name: fig.ja,
       nameEn: fig.en,
       cells: fig.cells.slice(),

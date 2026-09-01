@@ -13,6 +13,8 @@ import fs from 'fs';
 import path from 'path';
 import { DATA_DIR } from './db.js';
 import { GUILD_ICONS } from './guilds.js';
+// 🗒 住人の戦績の差分表の上限。写経すると実装とズレるので実体から読む。
+import { pruneResidentRecords } from './residents.js';
 
 const SNAP_DIR = path.join(DATA_DIR, 'snapshots');
 // 保持は「全体で12件」だけだった。ところが自動で撮られるのは起動時の1件で、
@@ -232,6 +234,45 @@ function mergeDailyReplays(live, inc) {
       .slice(0, DAILY_REPLAY_KEEP);
   }
   for (const d of Object.keys(live).sort().reverse().slice(DAILY_REPLAY_DAYS)) delete live[d];
+  return live;
+}
+
+// db.meta.residentRecords（🗒 住人の戦績の差分）の合流。
+//
+// これも「片方だけを採る」では守れない。db.meta の既定の規則は
+// 『live 側がまだ値を持っていないキーだけ採用する』なので、ディスクが飛んで
+// から復元するまでの窓で **誰か1人がレート戦を1回終えるだけ** で live 側に
+// この欄ができ、バックアップに入っていた住人の戦績が丸ごと落ちる。
+// 落ちると「昨日1敗つけた相手が、今日は無敗に戻っている」が起きる ──
+// この機構が守ろうとしている「住人が人間に見えること」そのものを壊す。
+//
+// 突き合わせの規則（キーは住人の**名前**。理由は residents.js の台帳の節）:
+//   ・勝敗と自己ベストは増える一方の数なので、両側の大きいほう。
+//     足し算にすると、同じ試合が両側に入っているぶんだけ復元のたびに
+//     戦績が水増しされる（＝復元を2回やった住人だけ倍の敗戦を背負う）。
+//   ・レートの差分(rd)と当日の連戦カウンタ(d/dn)は、新しい側（at が大きいほう）。
+//     こちらは「合計」ではなく「今の状態」なので、混ぜずに片方を採る。
+//   ・上限は residents.js の RESIDENT_RECORD_MAX。細工したファイルで
+//     db.json を膨らませられないよう、合流のあとに必ず切る。
+function mergeResidentRecords(live, inc) {
+  if (!isPlainObj(inc)) return isPlainObj(live) ? live : undefined;
+  if (!isPlainObj(live)) live = {};
+  const n = v => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  for (const [name, row] of Object.entries(inc)) {
+    if (unsafeKey(name) || !isPlainObj(row)) continue;
+    const cur = live[name];
+    if (!isPlainObj(cur)) { live[name] = row; continue; }
+    const newer = n(row.at) > n(cur.at) ? row : cur;
+    live[name] = {
+      w: Math.max(n(cur.w), n(row.w)),
+      l: Math.max(n(cur.l), n(row.l)),
+      bs: Math.max(n(cur.bs), n(row.bs)),
+      rd: n(newer.rd),
+      at: Math.max(n(cur.at), n(row.at)),
+      d: n(newer.d), dn: n(newer.dn),
+    };
+  }
+  pruneResidentRecords(live);
   return live;
 }
 
@@ -962,9 +1003,14 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
     // 既定の規則は『live 側がまだ値を持っていないキーだけ採用する』なので、
     // 復元までの窓で誰か1人がステージを投稿しただけで、バックアップ側の
     // 全ステージ（＝プレイヤーの作品）が丸ごと落ちる。中身を突き合わせる。
+    // 🗒 residentRecords（住人の戦績の差分）も同じ理由で突き合わせる ──
+    // 復元までの窓でレート戦が1回終わるだけで、live 側にこの欄ができて
+    // バックアップ側の住人の戦績が丸ごと落ちる（＝つけたはずの1敗が
+    // 復元のたびに無かったことになる）。
     const META_MERGED = new Map([
       ['workshop', mergeWorkshop],
       ['dailyReplays', mergeDailyReplays],
+      ['residentRecords', mergeResidentRecords],
     ]);
     for (const k of Object.keys(data.meta)) {
       if (META_NOT_RESTORED.has(k)) continue;

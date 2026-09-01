@@ -22,6 +22,7 @@ import { $, showModal, closeModal, toast, fmt } from './dom.js';
 import { audio } from './audio.js';
 import { t } from './i18n.js';
 import { session } from './net.js';
+import { icon } from './icons.js';
 
 // 出力プロファイル。ゲーム画面は色数が多くパーティクルで動きも激しいので、
 // 低スペック端末では素直に解像度とビットレートを落とす
@@ -238,7 +239,7 @@ function showBar(state) {
   const bar = document.createElement('div');
   bar.id = 'clipBar';
   bar.innerHTML = `<span id="clipLeft">●REC</span>
-    <button class="btn btn-sm btn-ghost" id="clipStop">${t('⏹ 停止して保存', '⏹ Stop &amp; save')}</button>`;
+    <button class="btn btn-sm btn-ghost" id="clipStop">${t('停止して保存', 'Stop &amp; save')}</button>`;
   document.body.appendChild(bar);
   bar.querySelector('#clipStop').onclick = () => stopClip(state);
 }
@@ -370,7 +371,7 @@ export function startClip(seconds) {
     if (left) left.textContent = `●REC ${Math.max(0, Math.ceil(dur - el))}`;
     if (el >= dur) stopClip(state);
   });
-  toast(t(`🎬 ${dur}秒 録画中`, `🎬 Recording ${dur}s`), 'ok', 1800);
+  toast(t(`${dur}秒 録画中`, `Recording ${dur}s`), 'ok', 1800);
   // 横持ち（PC・タブレット）だと盤面が横長の帯になり、縦型の枠に対して
   // 上下が大きく余る。同じ操作でも縦画面のほうが見栄えが段違いなので、
   // 1回だけ教える（毎回言うとうるさいので、この端末で一度きり）。
@@ -380,8 +381,8 @@ export function startClip(seconds) {
     // ときにはもう出ない。タイマーも録画終了で必ず畳む。
     state.hintTimer = setTimeout(() => {
       try { localStorage.setItem('bba_clip_hint', '1'); } catch { /* ignore */ }
-      toast(t('💡 スマホの縦画面で録ると、盤面が画面いっぱいに映ります',
-        '💡 Recording on a portrait phone fills the frame much better'), '', 4200);
+      toast(t('スマホの縦画面で録ると、盤面が画面いっぱいに映ります',
+        'Recording on a portrait phone fills the frame much better'), '', 4200);
     }, 2200);
   }
 }
@@ -410,7 +411,7 @@ function readyBar(blob, mode) {
   removeBar();
   const bar = document.createElement('div');
   bar.id = 'clipBar';
-  const label = t('🎬 クリップができました', '🎬 Clip ready');
+  const label = t('クリップができました', 'Clip ready');
   const view = t('見る', 'View');
   bar.innerHTML = '<span id="clipLeft">' + label + '</span>'
     + '<button class="btn btn-sm btn-primary" id="clipOpen">' + view + '</button>';
@@ -448,7 +449,7 @@ function showClipResult(blob, mode) {
   const mb = (blob.size / 1048576).toFixed(1);
   // dismissable:false ── 背景タップで閉じられると Blob URL を解放できない。
   const m = showModal(`
-    <h2>${t('🎬 クリップができました', '🎬 Clip ready')}</h2>
+    <h2>${icon('clip', { size: 24 })} ${t('クリップができました', 'Clip ready')}</h2>
     <video src="${url}" controls playsinline autoplay muted loop
       style="width:100%;max-height:50vh;border-radius:12px;background:#000"></video>
     <p class="muted center" style="font-size:12px;margin:8px 0">
@@ -457,8 +458,8 @@ function showClipResult(blob, mode) {
     </p>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="clipClose">${t('閉じる', 'Close')}</button>
-      <button class="btn btn-share" id="clipShare">${t('📣 共有', '📣 Share')}</button>
-      <button class="btn btn-primary" id="clipSave">${t('⬇ 保存', '⬇ Save')}</button>
+      <button class="btn btn-share" id="clipShare">${t('共有', 'Share')}</button>
+      <button class="btn btn-primary" id="clipSave">${t('保存', 'Save')}</button>
     </div>`, { dismissable: false });
 
   // 解放を「閉じるボタン」だけに頼らない。showModal は先頭で closeModal を
@@ -482,8 +483,8 @@ function showClipResult(blob, mode) {
   };
   m.querySelector('#clipShare').onclick = async () => {
     const text = t(
-      `Block Blitz Arena の${mode}！\n無料・登録なしでブラウザで遊べます 👇\n${location.origin}/?ref=clip\n#BlockBlitzArena`,
-      `${mode} on Block Blitz Arena!\nFree in your browser, no signup 👇\n${location.origin}/?ref=clip\n#BlockBlitzArena`);
+      `Block Blitz Arena の${mode}！\n無料・登録なしでブラウザで遊べます\n${location.origin}/?ref=clip\n#BlockBlitzArena`,
+      `${mode} on Block Blitz Arena!\nFree in your browser, no signup\n${location.origin}/?ref=clip\n#BlockBlitzArena`);
     try {
       const file = new File([blob], `block-blitz-clip.${CLIP_EXT}`, { type: CLIP_TYPE });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -495,11 +496,11 @@ function showClipResult(blob, mode) {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(text);
-        toast(t('📋 文面をコピーしました。動画は「⬇ 保存」から', '📋 Text copied — save the video with ⬇'), 'ok', 3400);
+        toast(t('文面をコピーしました。動画は「保存」から', 'Text copied — save the video with Save'), 'ok', 3400);
         return;
       }
     } catch { /* 下へ */ }
-    toast(t('この端末では共有できません。「⬇ 保存」をお使いください', 'Sharing is unavailable — use ⬇ Save'), '', 3400);
+    toast(t('この端末では共有できません。「保存」をお使いください', 'Sharing is unavailable — use Save'), '', 3400);
   };
 }
 
@@ -523,7 +524,7 @@ export function initClipHud() {
     ev.preventDefault();
     if (clip) return;
     const m = showModal(`
-      <h2>${t('🎬 クリップの長さ', '🎬 Clip length')}</h2>
+      <h2>${icon('clip', { size: 22 })} ${t('クリップの長さ', 'Clip length')}</h2>
       <p class="muted center" style="font-size:12px">${t('SNS向けの縦型動画で書き出します', 'Exports a vertical video for social')}</p>
       <div class="modal-buttons">
         ${LENGTHS.map(n => `<button class="btn btn-primary" data-len="${n}">${n}${t('秒', 's')}</button>`).join('')}

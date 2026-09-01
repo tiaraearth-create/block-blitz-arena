@@ -5,6 +5,11 @@
 // ので、英語面も一緒に返せるようにする。
 import { enName } from '../public/js/catalog-en.js';
 
+// ※ 商品に icon（絵文字）の欄は置かない。絵は public/js/icons.js の
+//   itemIconName(id) が id から引くのが唯一の正解。以前はここにも絵文字を
+//   持っていたが、🛡️ が奧義「不落の城塞」とブースター「絶対防御」の両方、
+//   ☄️ が「メテオストライク」と「天変地異」の両方に付いていて、棚で見分けが
+//   付かなかった。id なら重複した瞬間にそれ自体が不具合になる。
 export const SHOP_ITEMS = [
   // ---- Block skins ----
   { id: 'skin_default',  cat: 'skin', name: 'クラシック',       desc: 'スタンダードなブロック', price: 0,    currency: 'coins', default: true },
@@ -59,17 +64,17 @@ export const SHOP_ITEMS = [
   { id: 'fx_foam',  cat: 'fx', name: 'フォーム',   desc: '泡がふわりと立ちのぼる',           price: 190,  currency: 'gems' },
   // ---- Ultimate skills (装備スロット: ult) ----
   // ゲージが満タンになると発動できる必殺技。1つだけ装備できる。
-  { id: 'ult_blast',     cat: 'ult', icon: '💥', name: '破壊の衝撃波',   desc: 'いちばん埋まった2行2列を強制消去', price: 0,    currency: 'coins', default: true },
-  { id: 'ult_purify',    cat: 'ult', icon: '🌊', name: '浄化の波動',     desc: 'お邪魔ブロック全消し＋下2行を消去', price: 2500, currency: 'coins' },
+  { id: 'ult_blast',     cat: 'ult', name: '破壊の衝撃波',   desc: 'いちばん埋まった2行2列を強制消去', price: 0,    currency: 'coins', default: true },
+  { id: 'ult_purify',    cat: 'ult', name: '浄化の波動',     desc: 'お邪魔ブロック全消し＋下2行を消去', price: 2500, currency: 'coins' },
   // 2,500 と 3,500 のあいだが空いていた中価格帯。派手に消す奥義ではなく
   // 「散らかった盤面を整える」性格なので、この位置がちょうどいい。
-  { id: 'ult_gravity',   cat: 'ult', icon: '🧲', name: '重力圧縮',       desc: '盤面を下へ圧縮し、そろった行を消す。散らかった盤面を片づけるのは自分の腕', price: 3000, currency: 'coins' },
-  { id: 'ult_overdrive', cat: 'ult', icon: '🔥', name: 'オーバードライブ', desc: '15秒間スコア3倍！',              price: 3500, currency: 'coins' },
-  { id: 'ult_meteor',    cat: 'ult', icon: '☄️', name: 'メテオストライク', desc: 'ランダムな14マスを大爆発で粉砕',  price: 4200, currency: 'coins' },
-  { id: 'ult_rainbow',   cat: 'ult', icon: '🌈', name: 'レインボーハンド', desc: '手持ちが必ず置ける最適ピースに変化', price: 150, currency: 'gems' },
-  { id: 'ult_fortress',  cat: 'ult', icon: '🛡️', name: '不落の城塞',     desc: '30秒間コンボが途切れず妨害も無効',   price: 200, currency: 'gems' },
-  { id: 'ult_timestop',  cat: 'ult', icon: '⏳', name: '時間停止',        desc: '制限時間+12秒／ボスの攻撃を20秒封印', price: 260, currency: 'gems' },
-  { id: 'ult_judgement', cat: 'ult', icon: '⚡', name: '神の裁き',        desc: '盤面を完全消滅させ超特大スコア',     price: 400, currency: 'gems' },
+  { id: 'ult_gravity',   cat: 'ult', name: '重力圧縮',       desc: '盤面を下へ圧縮し、そろった行を消す。散らかった盤面を片づけるのは自分の腕', price: 3000, currency: 'coins' },
+  { id: 'ult_overdrive', cat: 'ult', name: 'オーバードライブ', desc: '15秒間スコア3倍！',              price: 3500, currency: 'coins' },
+  { id: 'ult_meteor',    cat: 'ult', name: 'メテオストライク', desc: 'ランダムな14マスを大爆発で粉砕',  price: 4200, currency: 'coins' },
+  { id: 'ult_rainbow',   cat: 'ult', name: 'レインボーハンド', desc: '手持ちが必ず置ける最適ピースに変化', price: 150, currency: 'gems' },
+  { id: 'ult_fortress',  cat: 'ult', name: '不落の城塞',     desc: '30秒間コンボが途切れず妨害も無効',   price: 200, currency: 'gems' },
+  { id: 'ult_timestop',  cat: 'ult', name: '時間停止',        desc: '制限時間+12秒／ボスの攻撃を20秒封印', price: 260, currency: 'gems' },
+  { id: 'ult_judgement', cat: 'ult', name: '神の裁き',        desc: '盤面を完全消滅させ超特大スコア',     price: 400, currency: 'gems' },
   // ---- Gacha-exclusive gear (gachaOnly: never sold — SSR pull is the only way) ----
   { id: 'skin_prism',   cat: 'skin',  name: 'プリズム【ガチャ限定】',   desc: '光を分解する虹の結晶ブロック', price: 0, currency: 'gems', gachaOnly: true },
   { id: 'board_aurora', cat: 'board', name: 'オーロラ【ガチャ限定】',   desc: '極光が揺らめく夜のステージ',   price: 0, currency: 'gems', gachaOnly: true },
@@ -82,14 +87,14 @@ export const SHOP_ITEMS = [
   { id: 'board_throne',    cat: 'board', name: '七つの王座',   desc: '奪還した数だけ玉座が灯るステージ', price: 0, currency: 'coins', throneOnly: true, dan: 2, shards: 180 },
   { id: 'fx_seal',         cat: 'fx',    name: '封印砕き',     desc: '紫の封印が砕け散る消去エフェクト', price: 0, currency: 'coins', throneOnly: true, dan: 3, shards: 220 },
   { id: 'skin_zero',       cat: 'skin',  name: 'ゼロの眼',     desc: '見返してくる眼が埋まったブロック', price: 0, currency: 'coins', throneOnly: true, dan: 4, shards: 300 },
-  { id: 'ult_condemn',     cat: 'ult',   icon: '👁️', name: '断罪の一撃', desc: '縦横1列ずつを問答無用で消し飛ばす', price: 0, currency: 'coins', throneOnly: true, dan: 5, shards: 400 },
+  { id: 'ult_condemn',     cat: 'ult',   name: '断罪の一撃', desc: '縦横1列ずつを問答無用で消し飛ばす', price: 0, currency: 'coins', throneOnly: true, dan: 5, shards: 400 },
   { id: 'board_chronicle', cat: 'board', name: '断罪録の間',   desc: '壁に名前が流れ続ける記録の間',     price: 0, currency: 'coins', throneOnly: true, dan: 6, shards: 500 },
   { id: 'fx_crown',        cat: 'fx',    name: '王冠還る',     desc: '砕けた王冠が組み上がる消去エフェクト', price: 0, currency: 'coins', throneOnly: true, dan: 7, shards: 700 },
   // ---- Admin-exclusive gear (adminOnly: hidden from everyone else, unbuyable) ----
   { id: 'skin_admin',    cat: 'skin',  name: 'レインボー【管理者】', desc: '虹色に輝く運営専用ブロック', price: 0, currency: 'coins', adminOnly: true },
   { id: 'board_admin',   cat: 'board', name: '王の間【管理者】',     desc: '黄金に輝く運営専用ステージ', price: 0, currency: 'coins', adminOnly: true },
   { id: 'fx_admin',      cat: 'fx',    name: '虹の祝福【管理者】',   desc: '虹の粒子が舞う運営専用エフェクト', price: 0, currency: 'coins', adminOnly: true },
-  { id: 'ult_admin',     cat: 'ult',   icon: '👑', name: '全能【管理者】', desc: '盤面消滅＋ゲージ即再充填の運営専用奥義', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'ult_admin',     cat: 'ult',   name: '全能【管理者】', desc: '盤面消滅＋ゲージ即再充填の運営専用奥義', price: 0, currency: 'coins', adminOnly: true },
 ];
 
 // 装備スロット一覧（/api/equip が受け付けるスロット）
@@ -104,17 +109,17 @@ export const DEFAULT_EQUIPPED = { skin: 'skin_default', board: 'board_default', 
 
 // ---- Booster items (consumables) — usable in solo / boss / dungeon / chaos ----
 export const BOOST_ITEMS = [
-  { id: 'item_bomb',    icon: '💣', name: 'スマートボム', desc: 'いちばん埋まっている3×3を爆破', price: 300, currency: 'coins' },
-  { id: 'item_cleaner', icon: '🧹', name: 'クリーナー',   desc: 'お邪魔ブロック全部＋最下行を掃除', price: 250, currency: 'coins' },
-  { id: 'item_fever',   icon: '⭐', name: 'フィーバー',   desc: '15秒間スコア2倍', price: 400, currency: 'coins' },
-  { id: 'item_mini',    icon: '🧩', name: 'ミニブロック', desc: '手持ち3つが極小ピースに変化', price: 350, currency: 'coins' },
+  { id: 'item_bomb',    name: 'スマートボム', desc: 'いちばん埋まっている3×3を爆破', price: 300, currency: 'coins' },
+  { id: 'item_cleaner', name: 'クリーナー',   desc: 'お邪魔ブロック全部＋最下行を掃除', price: 250, currency: 'coins' },
+  { id: 'item_fever',   name: 'フィーバー',   desc: '15秒間スコア2倍', price: 400, currency: 'coins' },
+  { id: 'item_mini',    name: 'ミニブロック', desc: '手持ち3つが極小ピースに変化', price: 350, currency: 'coins' },
   // ---- Staff-only gear (adminOnly: never sold, never shown to players, infinite for admins) ----
-  { id: 'item_god_wipe',   icon: '💥', name: '神の一撃【管理者】',   desc: '盤面を消滅させ +50,000点（倍率適用）',        price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_time',   icon: '⌛', name: '時の支配【管理者】',   desc: '制限時間+120秒／敵の攻撃を60秒封印',          price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_hand',   icon: '🎴', name: '創造の手札【管理者】', desc: '最適な3ピース＋次の12手がライン消し向けの大型ピース', price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_mult',   icon: '🔱', name: '神威【管理者】',       desc: '30秒間スコア10倍',                            price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_shield', icon: '🛡️', name: '絶対防御【管理者】',   desc: '60秒間ゲームオーバー無効・お邪魔無効・コンボ永続', price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_nuke',   icon: '☄️', name: '天変地異【管理者】',   desc: '敵のHPを99%削る（敵がいなければ +100,000点）',   price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_wipe',   name: '神の一撃【管理者】',   desc: '盤面を消滅させ +50,000点（倍率適用）',        price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_time',   name: '時の支配【管理者】',   desc: '制限時間+120秒／敵の攻撃を60秒封印',          price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_hand',   name: '創造の手札【管理者】', desc: '最適な3ピース＋次の12手がライン消し向けの大型ピース', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_mult',   name: '神威【管理者】',       desc: '30秒間スコア10倍',                            price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_shield', name: '絶対防御【管理者】',   desc: '60秒間ゲームオーバー無効・お邪魔無効・コンボ永続', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_nuke',   name: '天変地異【管理者】',   desc: '敵のHPを99%削る（敵がいなければ +100,000点）',   price: 0, currency: 'coins', adminOnly: true },
 ];
 
 // ---- Boss battles ----
@@ -161,31 +166,35 @@ export const BOSS_TECHNIQUES = {
                               // （専用スロットを足すなら public/js/themes.js が必要 — 担当外）
     shake: 16,                // view.shake に渡す推奨値
     flash: 0.35,              // view.screenFlash に渡す推奨値
-    telegraphMsg:   '⚠️ 絶対零度の予告！赤マスをラインで切れ！',
-    telegraphMsgEn: '⚠️ Absolute Zero incoming! Cut the red cells with a line!',
-    hitMsg:         '🧊 絶対零度！盤面が凍りついた',
-    hitMsgEn:       '🧊 Absolute Zero! The board freezes over',
-    cutMsg:         '🧊 絶対零度を斬った！',
-    cutMsgEn:       '🧊 You cut through Absolute Zero!',
+    telegraphMsg:   '絶対零度の予告！赤マスをラインで切れ！',
+    telegraphMsgEn: 'Absolute Zero incoming! Cut the red cells with a line!',
+    hitMsg:         '絶対零度！盤面が凍りついた',
+    hitMsgEn:       'Absolute Zero! The board freezes over',
+    cutMsg:         '絶対零度を斬った！',
+    cutMsgEn:       'You cut through Absolute Zero!',
   },
 };
 
+// ※ ボスに emoji の欄は置かない。戦闘中の #bossEmoji は画面でいちばん大きい
+//   絵なので、端末ごとに顔が変わる絵文字にはできない。
+//   public/js/icons.js の bossIconName(id) → boss_<id> が唯一の正解で、
+//   test/icons.test.mjs が「全ボスに boss_<id> があること」を見張っている。
 export const BOSSES = [
-  { id: 'slime',  name: 'スライムキング',   nameEn: 'Slime King',       emoji: '🟢', hp: 3000,  atkSec: 12, atkCells: 3, gemsFirst: 50,
+  { id: 'slime',  name: 'スライムキング',   nameEn: 'Slime King',       hp: 3000,  atkSec: 12, atkCells: 3, gemsFirst: 50,
     moves: ['garbage'], moves2: ['garbage'], atk2: 0.75 },
-  { id: 'golem',  name: 'アイアンゴーレム', nameEn: 'Iron Golem',       emoji: '🗿', hp: 8000,  atkSec: 10, atkCells: 4, gemsFirst: 80,
+  { id: 'golem',  name: 'アイアンゴーレム', nameEn: 'Iron Golem',       hp: 8000,  atkSec: 10, atkCells: 4, gemsFirst: 80,
     moves: ['garbage', 'quake'], moves2: ['garbage', 'quake'], atk2: 0.75 },
-  { id: 'dragon', name: 'ドラゴン',         nameEn: 'Dragon',           emoji: '🐉', hp: 15000, atkSec: 9,  atkCells: 5, gemsFirst: 120,
+  { id: 'dragon', name: 'ドラゴン',         nameEn: 'Dragon',           hp: 15000, atkSec: 9,  atkCells: 5, gemsFirst: 120,
     moves: ['garbage', 'breath_row'], moves2: ['breath_row', 'garbage'], atk2: 0.75 },
-  { id: 'maou',   name: 'まおう',           nameEn: 'Demon Lord',       emoji: '😈', hp: 25000, atkSec: 8,  atkCells: 6, gemsFirst: 200,
+  { id: 'maou',   name: 'まおう',           nameEn: 'Demon Lord',       hp: 25000, atkSec: 8,  atkCells: 6, gemsFirst: 200,
     moves: ['garbage', 'curse_hand'], moves2: ['garbage', 'curse_hand', 'breath_row'], atk2: 0.7 },
-  { id: 'mecha',  name: '機械神エクスマキナ', nameEn: 'Deus Ex Machina', emoji: '⚙️', hp: 40000, atkSec: 8, atkCells: 6, gemsFirst: 300,
+  { id: 'mecha',  name: '機械神エクスマキナ', nameEn: 'Deus Ex Machina', hp: 40000, atkSec: 8, atkCells: 6, gemsFirst: 300,
     moves: ['garbage', 'laser_col', 'quake'], moves2: ['laser_col', 'laser_col2', 'quake'], atk2: 0.72 },
   // 看板ボスなので専用技 freeze（絶対零度）持ち。techs は BOSS_TECHNIQUES の
   // 同じオブジェクトを指しているだけ（/api/bosses でそのままクライアントへ）。
   // modes.js が freeze を未対応の間は BOSS_MOVES のフォールバックで
   // お邪魔弾扱いになるだけなので、既存プレイは壊れない。
-  { id: 'frost',  name: '氷雪女王フリオーネ', nameEn: 'Frost Queen Frione', emoji: '🧊', hp: 60000, atkSec: 8, atkCells: 7, gemsFirst: 500,
+  { id: 'frost',  name: '氷雪女王フリオーネ', nameEn: 'Frost Queen Frione', hp: 60000, atkSec: 8, atkCells: 7, gemsFirst: 500,
     moves: ['garbage', 'curse_hand', 'freeze'], moves2: ['garbage', 'curse_hand2', 'breath_row', 'freeze'], atk2: 0.7,
     techs: { freeze: BOSS_TECHNIQUES.freeze } },
 ];
@@ -217,9 +226,9 @@ export const BOSSES = [
 // 撒いていて、入口のボスがいちばん妨害の密度が高いモードの1つになっていた。
 // 難度の順（お邪魔の総量）が強さの順と揃うように、入口ほど緩くする。
 export const RAID_BOSSES = [
-  { id: 'kraken',  name: '深海のクラーケン', nameEn: 'Abyssal Kraken',            emoji: '🐙', hp: 4500, atkSec: 9, atkCells: 5 },
-  { id: 'tiamat',  name: '魔竜ティアマト',   nameEn: 'Tiamat the Dread Dragon',   emoji: '🐲', hp: 6200, atkSec: 8, atkCells: 6 },
-  { id: 'hades',   name: '冥王ハデス',       nameEn: 'Hades, Lord of the Dead',   emoji: '💀', hp: 7800, atkSec: 7, atkCells: 7 },
+  { id: 'kraken',  name: '深海のクラーケン', nameEn: 'Abyssal Kraken',            hp: 4500, atkSec: 9, atkCells: 5 },
+  { id: 'tiamat',  name: '魔竜ティアマト',   nameEn: 'Tiamat the Dread Dragon',   hp: 6200, atkSec: 8, atkCells: 6 },
+  { id: 'hades',   name: '冥王ハデス',       nameEn: 'Hades, Lord of the Dead',   hp: 7800, atkSec: 7, atkCells: 7 },
 ];
 
 // ---- Titles (称号) — earned from stats, one equippable ----
@@ -296,7 +305,7 @@ export const TITLES = [
   // 📕 コレクション図鑑のセットコンプ報酬（COLLECTION_SETS 参照）
   { id: 'ultcollector', name: '奥義蒐集家',   color: '#43d9e8', desc: '奥義をすべて集める' },
   { id: 'rainbowtrio',  name: '虹の三種',     color: '#ff6bd4', desc: 'ガチャ限定の装備をすべて集める' },
-  { id: 'thronekeeper', name: '宝物庫の主',   color: '#ffd75e', desc: '👑王座の宝物庫の品をすべて集める' },
+  { id: 'thronekeeper', name: '宝物庫の主',   color: '#ffd75e', desc: '王座の宝物庫の品をすべて集める' },
   { id: 'curator',      name: '図鑑の完成者', color: '#fff3b0', desc: '図鑑をすべて埋める' },
 ];
 
@@ -316,37 +325,39 @@ const normalGear = cat => SHOP_ITEMS
   .filter(i => i.cat === cat && !i.adminOnly && !i.gachaOnly && !i.throneOnly)
   .map(i => i.id);
 
-const cset = (id, icon, kind, ids, name, nameEn, desc, descEn, coins, gems, title = null) =>
-  ({ id, icon, kind, ids, name, nameEn, desc, descEn, coins, gems, title });
+// 第2引数は public/js/icons.js のアイコン名。以前は 🎨 のような絵文字で、
+// 図鑑の見出しに escapeHtml を通して出ていた（＝端末ごとに絵が変わる）。
+const cset = (id, iconName, kind, ids, name, nameEn, desc, descEn, coins, gems, title = null) =>
+  ({ id, iconName, kind, ids, name, nameEn, desc, descEn, coins, gems, title });
 
 export const COLLECTION_SETS = [
-  cset('set_skin',  '🎨', 'item', normalGear('skin'),
+  cset('set_skin',  'cat_skin', 'item', normalGear('skin'),
     'スキン全種', 'Skin Collection', 'ブロックスキンをすべて集める', 'Own every block skin', 6000, 50),
-  cset('set_board', '🖼️', 'item', normalGear('board'),
+  cset('set_board', 'cat_board', 'item', normalGear('board'),
     'ボード全種', 'Board Collection', 'ボードテーマをすべて集める', 'Own every board theme', 6000, 50),
-  cset('set_fx',    '✨', 'item', normalGear('fx'),
+  cset('set_fx',    'cat_fx', 'item', normalGear('fx'),
     'エフェクト全種', 'Effect Collection', '消去エフェクトをすべて集める', 'Own every clear effect', 5000, 40),
-  cset('set_ult',   '⚡', 'item', normalGear('ult'),
+  cset('set_ult',   'cat_ult', 'item', normalGear('ult'),
     '奥義全種', 'Arts Collection', 'アルティメットをすべて集める', 'Own every ultimate skill', 8000, 70, 'ultcollector'),
   // ⚠️ set_boost は kind:'boost' ＝ 在庫>0 で達成扱い。引き継ぎ由来や配布分の
   // 在庫だけでも解錠できてしまうので、報酬はコインのみにして💎を外す（0）。
   // 他セット（item/badge/title）は「減らない実績」なので💎付きのままでよい。
-  cset('set_boost', '🎒', 'boost', BOOST_ITEMS.filter(i => !i.adminOnly).map(i => i.id),
+  cset('set_boost', 'cat_boost', 'boost', BOOST_ITEMS.filter(i => !i.adminOnly).map(i => i.id),
     '道具棚コンプ', 'Booster Shelf', 'ブースターを1個以上ずつ持つ', 'Hold at least one of every booster', 1500, 0),
   // 💎の額はセットによって重みが違う。「通貨を1円も払わずに達成済みになる」
   // 4セット（gacha / throne / trial / slayer）は、図鑑が増えた日に古参が
   // 全部まとめて解錠する ── ここに大きな💎を置くと、更新当日に最大の課金パック
   // より多い💎が無条件で配られてしまう。コインは据え置き、💎だけ絞ってある。
-  cset('set_gacha', '🎰', 'item', SHOP_ITEMS.filter(i => i.gachaOnly).map(i => i.id),
+  cset('set_gacha', 'gacha', 'item', SHOP_ITEMS.filter(i => i.gachaOnly).map(i => i.id),
     'ガチャ限定コンプ', 'Gacha Exclusives', 'ガチャ限定の装備をすべて集める', 'Own all gacha-exclusive gear', 10000, 30, 'rainbowtrio'),
-  cset('set_throne', '👑', 'item', THRONE_ITEMS.map(i => i.id),
-    '王座の宝物庫コンプ', 'The Throne Vault', '👑王座の欠片で交換できる品をすべて集める', 'Own every item from the 👑 vault', 15000, 50, 'thronekeeper'),
-  cset('set_trial', '⚔️', 'badge', ['oni', 'kami', 'souzou'],
+  cset('set_throne', 'shards', 'item', THRONE_ITEMS.map(i => i.id),
+    '王座の宝物庫コンプ', 'The Throne Vault', '王座の欠片で交換できる品をすべて集める', 'Own every item from the Throne Vault', 15000, 50, 'thronekeeper'),
+  cset('set_trial', 'mode_ai', 'badge', ['oni', 'kami', 'souzou'],
     '三難関の証', 'Marks of the Three Trials', '鬼・神・創造神のバッジを集める', 'Earn the Oni, Kami and Creator God badges', 5000, 12),
-  cset('set_slayer', '🗡️', 'title', ['bosshunt', 'maoslayer', 'rushhero'],
+  cset('set_slayer', 'relic_atk', 'title', ['bosshunt', 'maoslayer', 'rushhero'],
     '討伐者の称号', 'Slayer Titles', 'ボス討伐の称号をすべて得る', 'Earn every boss-slaying title', 4000, 10),
   // 図鑑そのもの。管理者専用だけを除いた全装備（ガチャ限定・王座限定も含む）。
-  cset('set_master', '📕', 'item', SHOP_ITEMS.filter(i => !i.adminOnly).map(i => i.id),
+  cset('set_master', 'collection', 'item', SHOP_ITEMS.filter(i => !i.adminOnly).map(i => i.id),
     '図鑑コンプリート', 'Full Catalog', 'カタログの装備をすべて集める', 'Own every item in the catalog', 30000, 300, 'curator'),
 ];
 
@@ -412,7 +423,7 @@ export function collectionProgress(user) {
     const ownedIds = collectionOwnedIds(user, set);
     const title = set.title ? TITLES.find(t => t.id === set.title) : null;
     return {
-      id: set.id, icon: set.icon, kind: set.kind,
+      id: set.id, iconName: set.iconName, kind: set.kind,
       name: set.name, nameEn: set.nameEn, desc: set.desc, descEn: set.descEn,
       ids: set.ids, ownedIds,
       missing: set.ids.filter(id => !ownedIds.includes(id)),

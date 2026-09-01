@@ -133,6 +133,15 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 
+// 文章の頭に置くアイコン（HTML 文字列に差し込む用の短縮形）。
+// 絵文字1文字が座っていた場所と同じ「文字ぐらいの大きさ」を既定にしてある。
+//
+// ⚠️ 使ってよいのは innerHTML / showModal / toast 以外の HTML を組む所だけ。
+//    textContent・addFloatText（canvas）・toast() の文言に混ぜると、
+//    そのまま「<svg …>」という文字列が画面に出る。そこは絵文字を
+//    落として言葉だけにする（この波の取り決め）。
+const ic = (name, size = 16) => icon(name, { size });
+
 // ---------------------------------------------------------------------------
 // 絵文字の枠に独自SVGアイコンを入れる／戻す
 //
@@ -212,8 +221,8 @@ async function submitResult(payload) {
       // 何も案内しないと「1戦終わった → 何も起きない」で終わってしまう。
       setTimeout(() => {
         audio.coin();
-        toast(t('🏅 実績を達成！メニューの「📋 ミッション」→「🏅 実績」から報酬を受け取ろう',
-          '🏅 Achievement unlocked! Claim it from 📋 Missions → 🏅 Achievements'), 'announce', 5000);
+        toast(t('実績を達成！メニューの「ミッション」→「実績」から報酬を受け取ろう',
+          'Achievement unlocked! Claim it from Missions → Achievements'), 'announce', 5000);
       }, 1400);
     }
     return data.rewards;
@@ -226,8 +235,8 @@ async function submitResult(payload) {
     // ここで区別して返し、結果画面には本当のことを出す。
     // ※ 自動再送はしない。/api/game/result は同じ回を2回受けると2回ぶん
     //   加算するので、応答だけ落ちたときに二重取りになる。
-    toast(t('⚠️ 結果を送信できませんでした。この回の報酬は付いていません',
-      '⚠️ Could not submit your result — no rewards were granted for this run'), 'err', 4500);
+    toast(t('結果を送信できませんでした。この回の報酬は付いていません',
+      'Could not submit your result — no rewards were granted for this run'), 'err', 4500);
     return { failed: true };
   }
 }
@@ -235,8 +244,8 @@ async function submitResult(payload) {
 function announceMissions(n) {
   setTimeout(() => {
     audio.coin();
-    toast(t(`📋 ミッションを${n}個達成！メニューの「ミッション」から報酬を受け取ろう`,
-      `📋 ${n} mission(s) complete! Claim the rewards from the Missions menu`), 'announce', 4500);
+    toast(t(`ミッションを${n}個達成！メニューの「ミッション」から報酬を受け取ろう`,
+      `${n} mission(s) complete! Claim the rewards from the Missions menu`), 'announce', 4500);
     if (window.__bbaRefreshMissionDot) window.__bbaRefreshMissionDot();
   }, 1400);
 }
@@ -245,7 +254,7 @@ function rewardsRows(rewards) {
   // 送信に失敗した回。ログインしているのに「ログインしてください」と出すと、
   // 直せる問題（通信・メンテ）を直しようのない問題に見せてしまう。
   if (rewards && rewards.failed) {
-    return `<div class="rs-row"><span>${t('⚠️ 送信に失敗しました — この回の報酬は付いていません', '⚠️ Submission failed — no rewards for this run')}</span></div>${shareRow()}`;
+    return `<div class="rs-row"><span>${ic('warn')} ${t('送信に失敗しました — この回の報酬は付いていません', 'Submission failed — no rewards for this run')}</span></div>${shareRow()}`;
   }
   if (!rewards) {
     // ゲストの結果はサーバーへ送られない＝コイン・ジェム・パスXP・ミッション
@@ -253,23 +262,23 @@ function rewardsRows(rewards) {
     // 「何回やっても数字が増えない」に気づいた人の行き先が無かった。
     // 金額は書かない（登録特典の額はサーバーが決めるので、写すと必ずズレる）。
     return `
-      <div class="rs-row"><span>${t('🎁 この回の報酬は受け取れませんでした', '🎁 No rewards were earned for this run')}</span></div>
+      <div class="rs-row"><span>${t('この回の報酬は受け取れませんでした', 'No rewards were earned for this run')}</span></div>
       <button class="btn btn-gold" data-bba-signup style="width:100%;margin-top:8px">
-        ${t('🎁 アカウントを作って報酬を受け取る', '🎁 Create an account to earn rewards')}
+        ${t('アカウントを作って報酬を受け取る', 'Create an account to earn rewards')}
       </button>
       ${shareRow()}`;
   }
   return `
-    <div class="rs-row"><span>${t('🪙 コイン', '🪙 Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
-    ${rewards.streakBonus ? `<div class="rs-row"><span>${t(`🔥 ${rewards.streak}連勝ボーナス`, `🔥 ${rewards.streak}-win streak bonus`)}</span><b>+${fmt(rewards.streakBonus)}🪙</b></div>` : ''}
+    <div class="rs-row"><span>${ic('coins')} ${t('コイン', 'Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
+    ${rewards.streakBonus ? `<div class="rs-row"><span>${ic('fire')} ${t(`${rewards.streak}連勝ボーナス`, `${rewards.streak}-win streak bonus`)}</span><b>+${fmt(rewards.streakBonus)} ${ic('coins', 14)}</b></div>` : ''}
     ${/* サーバーの gems は「初回討伐」だけではない ── イベントの💎ドロップも
           バッジ報酬（デイリー7日・ダンジョン制覇・ロイヤル初1位…）も同じ欄に
           合算されて来る。討伐が存在しないソロやデイリーでも「初回討伐ボーナス」
           と出ていたので、中立の表記にする。内訳を出すにはサーバーが
           eventGems / badge の内訳を返す必要がある。 */''}
-    ${rewards.gems ? `<div class="rs-row"><span>${t('💎 ジェム', '💎 Gems')}</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
-    <div class="rs-row"><span>${t('🎫 パスXP', '🎫 Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
-    <div class="rs-row"><span>${t('⭐ アカウントXP', '⭐ Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>
+    ${rewards.gems ? `<div class="rs-row"><span>${ic('gems')} ${t('ジェム', 'Gems')}</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
+    <div class="rs-row"><span>${ic('battlepass')} ${t('パスXP', 'Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
+    <div class="rs-row"><span>${ic('xp')} ${t('アカウントXP', 'Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>
     ${shareRow()}`;
 }
 
@@ -355,7 +364,7 @@ function shareSnapshot() {
 function shareRow() {
   if (!shareSnapshot()) return '';
   return `<button class="btn btn-share" data-bba-share style="width:100%;margin-top:8px">
-    ${t('📣 スコアをシェアする', '📣 Share your score')}
+    ${t('スコアをシェアする', 'Share your score')}
   </button>`;
 }
 
@@ -469,7 +478,7 @@ async function doShare() {
   if (w) { try { w.opener = null; } catch { /* クロスオリジンでは触れないが害は無い */ } }
   if (!w) {
     toast(copied
-      ? t('📋 シェア文をコピーしました。好きな場所に貼り付けてください', '📋 Copied — paste it anywhere')
+      ? t('シェア文をコピーしました。好きな場所に貼り付けてください', 'Copied — paste it anywhere')
       : t('シェアできませんでした', 'Could not share'), copied ? 'ok' : 'err', 3200);
   }
 }
@@ -540,7 +549,7 @@ function celebratePerfect(result) {
       v.particles.ring(cx, cy, v.boardSize * 0.95, '#ffe14d');
       v.particles.ring(cx, cy, v.boardSize * 0.7, '#ffffff');
     }
-    v.addFloatText(cx, cy - v.cell, t('✨ 昇華！', '✨ ASCENSION!'), '#ffe14d', 2.2);
+    v.addFloatText(cx, cy - v.cell, t('昇華！', 'ASCENSION!'), '#ffe14d', 2.2);
     if (bonus) v.addFloatText(cx, cy + v.cell * 0.9, `+${fmt(bonus)}`, '#ffffff', 1.5);
   }
   confettiBurst(70);
@@ -551,7 +560,7 @@ function celebratePerfect(result) {
   else if (typeof audio.ascension === 'function') audio.ascension();
   else { audio.victory(); audio.combo(9); }
 
-  toast(t('✨ 昇華！', '✨ ASCENSION!'), 'announce', 2200);
+  toast(t('昇華！', 'ASCENSION!'), 'announce', 2200);
   updateUltHud();
 }
 
@@ -605,7 +614,7 @@ export function rerollCurrent() {
     return;
   }
   audio.coin();
-  toast(t('🔄 ピースを引き直しました！', '🔄 New pieces drawn!'), 'ok', 1400);
+  toast(t('ピースを引き直しました！', 'New pieces drawn!'), 'ok', 1400);
   updateRerollHud(e);
   if (e.over) handleEngineOver();
 }
@@ -675,8 +684,8 @@ export function fireUltCurrent() {
   const e = m.engine;
   if (e.ult < 100) {
     audio.error();
-    toast(t(`⚡ ゲージが足りません（${Math.round(e.ult)}%）ラインを消して溜めよう！`,
-      `⚡ Gauge not full yet (${Math.round(e.ult)}%) — clear lines to charge it!`), 'err', 1800);
+    toast(t(`ゲージが足りません（${Math.round(e.ult)}%）ラインを消して溜めよう！`,
+      `Gauge not full yet (${Math.round(e.ult)}%) — clear lines to charge it!`), 'err', 1800);
     return;
   }
   const id = equippedUlt();
@@ -723,18 +732,22 @@ const N_MULT = enItemName('item_god_mult', 'Divine Might');
 const N_SHIELD = enItemName('item_god_shield', 'Absolute Guard');
 const N_NUKE = enItemName('item_god_nuke', 'Cataclysm');
 
+// 絵は持たせない ── バーの絵は icons.js の item_* を id で引く
+// （renderItemBar / itemIconName）。ここに絵文字を控えると「ショップの絵」と
+// 「バーの絵」が二重管理になり、実際 💥 が神の一撃と奥義 ult_blast の
+// 両方に出ていた。名前と説明だけを持つ表にする。
 const ITEM_DEFS = {
-  item_bomb:    { icon: '💣', name: 'スマートボム', nameEn: N_BOMB, tip: 'スマートボム：いちばん埋まった3×3を爆破', tipEn: `${N_BOMB}: blows up the densest 3×3` },
-  item_cleaner: { icon: '🧹', name: 'クリーナー', nameEn: N_CLEANER, tip: 'クリーナー：お邪魔＋最下行を掃除', tipEn: `${N_CLEANER}: clears garbage + the bottom row` },
-  item_fever:   { icon: '⭐', name: 'フィーバー', nameEn: N_FEVER, tip: 'フィーバー：15秒間スコア2倍', tipEn: `${N_FEVER}: 2× score for 15 seconds` },
-  item_mini:    { icon: '🧩', name: 'ミニブロック', nameEn: N_MINI, tip: 'ミニブロック：手持ちが極小ピースに変化', tipEn: `${N_MINI}: turns your hand into tiny pieces` },
+  item_bomb:    { name: 'スマートボム', nameEn: N_BOMB, tip: 'スマートボム：いちばん埋まった3×3を爆破', tipEn: `${N_BOMB}: blows up the densest 3×3` },
+  item_cleaner: { name: 'クリーナー', nameEn: N_CLEANER, tip: 'クリーナー：お邪魔＋最下行を掃除', tipEn: `${N_CLEANER}: clears garbage + the bottom row` },
+  item_fever:   { name: 'フィーバー', nameEn: N_FEVER, tip: 'フィーバー：15秒間スコア2倍', tipEn: `${N_FEVER}: 2× score for 15 seconds` },
+  item_mini:    { name: 'ミニブロック', nameEn: N_MINI, tip: 'ミニブロック：手持ちが極小ピースに変化', tipEn: `${N_MINI}: turns your hand into tiny pieces` },
   // ---- staff only (infinite, every mode) ----
-  item_god_wipe:   { icon: '💥', name: '神の一撃', nameEn: N_WIPE, admin: true, tip: '神の一撃：盤面消滅＋50,000点', tipEn: `${N_WIPE}: wipe the board, +50,000` },
-  item_god_time:   { icon: '⌛', name: '時の支配', nameEn: N_TIME, admin: true, tip: '時の支配：+120秒／敵の攻撃を60秒封印', tipEn: `${N_TIME}: +120s / freeze enemies 60s` },
-  item_god_hand:   { icon: '🎴', name: '創造の手札', nameEn: N_HAND, admin: true, tip: '創造の手札：最適手札＋12手は大型ピース', tipEn: `${N_HAND}: perfect hand + 12 big draws` },
-  item_god_mult:   { icon: '🔱', name: '神威', nameEn: N_MULT, admin: true, tip: '神威：30秒間スコア10倍', tipEn: `${N_MULT}: 10× score for 30s` },
-  item_god_shield: { icon: '🛡️', name: '絶対防御', nameEn: N_SHIELD, admin: true, tip: '絶対防御：60秒間 無敵・お邪魔無効・コンボ永続', tipEn: `${N_SHIELD}: 60s invincible, no garbage, combo lock` },
-  item_god_nuke:   { icon: '☄️', name: '天変地異', nameEn: N_NUKE, admin: true, tip: '天変地異：敵HPを99%削る（敵なしなら+100,000点）', tipEn: `${N_NUKE}: 99% enemy HP (or +100,000)` },
+  item_god_wipe:   { name: '神の一撃', nameEn: N_WIPE, admin: true, tip: '神の一撃：盤面消滅＋50,000点', tipEn: `${N_WIPE}: wipe the board, +50,000` },
+  item_god_time:   { name: '時の支配', nameEn: N_TIME, admin: true, tip: '時の支配：+120秒／敵の攻撃を60秒封印', tipEn: `${N_TIME}: +120s / freeze enemies 60s` },
+  item_god_hand:   { name: '創造の手札', nameEn: N_HAND, admin: true, tip: '創造の手札：最適手札＋12手は大型ピース', tipEn: `${N_HAND}: perfect hand + 12 big draws` },
+  item_god_mult:   { name: '神威', nameEn: N_MULT, admin: true, tip: '神威：30秒間スコア10倍', tipEn: `${N_MULT}: 10× score for 30s` },
+  item_god_shield: { name: '絶対防御', nameEn: N_SHIELD, admin: true, tip: '絶対防御：60秒間 無敵・お邪魔無効・コンボ永続', tipEn: `${N_SHIELD}: 60s invincible, no garbage, combo lock` },
+  item_god_nuke:   { name: '天変地異', nameEn: N_NUKE, admin: true, tip: '天変地異：敵HPを99%削る（敵なしなら+100,000点）', tipEn: `${N_NUKE}: 99% enemy HP (or +100,000)` },
 };
 
 // Build the HUD item buttons for the current player (staff see their gear).
@@ -750,9 +763,7 @@ function renderItemBar() {
     // title のツールチップはスマホでは絶対に読めない（指を乗せ続けられない）。
     // 何のボタンなのか分からないまま、買ったアイテムが使われずに終わっていた。
     // 短い名前を下に常時出す。
-    // 絵は独自アイコン（icons.js）から id で引く。ITEM_DEFS.icon の絵文字は
-    // 残してあるが、それは端末で絵が変わるうえ 💥 が「神の一撃」と奥義
-    // ult_blast の両方に出ていた ── ショップと同じ絵にそろえる。
+    // 絵は独自アイコン（icons.js）から id で引く ── ショップの棚と同じ絵。
     return `<button class="chip icon-btn item-btn ${d.admin ? 'admin-item' : ''}" data-item="${id}" title="${t(d.tip, d.tipEn)}">`
       + `<span class="ib-icon">${icon(itemIconName(id), { size: 18 })}<b>0</b></span>`
       + `<span class="ib-label">${t(d.name, d.nameEn)}</span>`
@@ -861,7 +872,7 @@ export function useGameItem(id) {
     }
     audio.bossAttack();
     view.shake = 14;
-    toast(t('💣 ドカーン！', '💣 KABOOM!'), 'ok', 1400);
+    toast(t('ドカーン！', 'KABOOM!'), 'ok', 1400);
   } else if (id === 'item_cleaner') {
     let n = 0;
     for (let i = 0; i < 64; i++) if (e.grid[i] === 9) { e.grid[i] = 0; n++; }
@@ -869,7 +880,7 @@ export function useGameItem(id) {
     if (n === 0) { audio.error(); toast(t('掃除するものがありません！', 'Nothing to clean up!'), 'err', 1500); return; }
     view.reviveFlash();
     audio.coin();
-    toast(t(`🧹 ${n}マスを掃除しました！`, `🧹 Cleaned up ${n} cells!`), 'ok', 1500);
+    toast(t(`${n}マスを掃除しました！`, `Cleaned up ${n} cells!`), 'ok', 1500);
   } else if (id === 'item_fever') {
     // すでに強い倍率がかかっているなら下げない。以前は上書きしていたので、
     // 🔥オーバードライブ(×3)の最中に⭐フィーバー(400🪙)を使うと ×2 に
@@ -886,7 +897,7 @@ export function useGameItem(id) {
     view.screenFlash = 0.35;
     $('#hudScore').classList.add('fever');
     audio.combo(6);
-    toast(t('⭐ フィーバー！15秒間スコア2倍！！', '⭐ FEVER! 2x score for 15 seconds!!'), 'announce', 2400);
+    toast(t('フィーバー！15秒間スコア2倍！！', 'FEVER! 2x score for 15 seconds!!'), 'announce', 2400);
     setTimeout(() => {
       $('#hudScore').classList.remove('fever');
       if (currentMode === m && !m.ended) toast(t('フィーバー終了', 'Fever over'), '', 1200);
@@ -899,7 +910,7 @@ export function useGameItem(id) {
     e.chaosMini = prevMini;
     view.reviveFlash();
     audio.coin();
-    toast(t('🧩 手持ちがミニピースに変化した！', '🧩 Your hand turned into mini pieces!'), 'ok', 1800);
+    toast(t('手持ちがミニピースに変化した！', 'Your hand turned into mini pieces!'), 'ok', 1800);
   } else if (id === 'item_god_wipe') {
     const filled = [];
     for (let i = 0; i < 64; i++) if (e.grid[i]) { filled.push(i); e.grid[i] = 0; }
@@ -908,32 +919,32 @@ export function useGameItem(id) {
     e.score += gained;
     if (m.onPlace) m.onPlace({ placedCells: [[0, 0]], color: 1, fullRows: [], fullCols: [], clearedCells: [], lineCount: 0, gained, streak: e.streak, over: false });
     view.shake = 22; view.screenFlash = 0.7; audio.bossDefeated();
-    toast(t(`💥 神の一撃！ +${fmt(gained)}`, `💥 ${N_WIPE}! +${fmt(gained)}`), 'announce', 2000);
+    toast(t(`神の一撃！ +${fmt(gained)}`, `${N_WIPE}! +${fmt(gained)}`), 'announce', 2000);
   } else if (id === 'item_god_time') {
     if (m.endAt !== undefined && m.timerInt) { m.endAt += 120000; m.timeLeft += 120; if (m.updateTimerHud) m.updateTimerHud(); }
     if (m.nextAtk) m.nextAtk += 60000;
     if (m.nextAt) m.nextAt += 60000;
     if (m.endAt === undefined && !m.nextAtk && !m.nextAt) e.rerolls += 10;
     view.screenFlash = 0.4; audio.combo(7);
-    toast(t('⌛ 時の支配！時間+120秒／敵を60秒封印', `⌛ ${N_TIME}! +120s / enemies frozen 60s`), 'announce', 2000);
+    toast(t('時の支配！時間+120秒／敵を60秒封印', `${N_TIME}! +120s / enemies frozen 60s`), 'announce', 2000);
   } else if (id === 'item_god_hand') {
     const out = fireUlt('ult_rainbow', { engine: e, view, mode: m });
     e.godDraws = 12;
     if (out.error) toast(out.error, 'err', 1500);
-    else toast(t('🎴 創造の手札！次の12手は大型ピース', `🎴 ${N_HAND}! 12 big draws incoming`), 'announce', 2000);
+    else toast(t('創造の手札！次の12手は大型ピース', `${N_HAND}! 12 big draws incoming`), 'announce', 2000);
   } else if (id === 'item_god_mult') {
     e.feverUntil = Date.now() + 30000;
     e.feverMult = 10;
     $('#hudScore').classList.add('fever');
     view.screenFlash = 0.5; audio.combo(9);
-    toast(t('🔱 神威！30秒間スコア10倍！！', `🔱 ${N_MULT}! 10× score for 30s!!`), 'announce', 2400);
+    toast(t('神威！30秒間スコア10倍！！', `${N_MULT}! 10× score for 30s!!`), 'announce', 2400);
     setTimeout(() => { if (e.feverMult === 10) { e.feverMult = 2; $('#hudScore').classList.remove('fever'); } }, 30000);
   } else if (id === 'item_god_shield') {
     view.godInvincibleUntil = Date.now() + 60000;
     e.fortressUntil = Math.max(e.fortressUntil || 0, Date.now() + 60000);
     e.streakShield = true;
     view.reviveFlash(); view.screenFlash = 0.4; audio.combo(6);
-    toast(t('🛡️ 絶対防御！60秒間 無敵・お邪魔無効・コンボ永続', `🛡️ ${N_SHIELD}! 60s invincible, no garbage, combo lock`), 'announce', 2400);
+    toast(t('絶対防御！60秒間 無敵・お邪魔無効・コンボ永続', `${N_SHIELD}! 60s invincible, no garbage, combo lock`), 'announce', 2400);
   } else if (id === 'item_god_nuke') {
     if (typeof m.hp === 'number' && (m.mode === 'boss' || m.mode === 'dungeon' || m.raidBoss)) {
       const dmg = Math.max(0, m.hp - Math.ceil(m.hp * 0.01));
@@ -943,12 +954,12 @@ export function useGameItem(id) {
       if (m.updateRaidHp) m.updateRaidHp();
       if (m.damageFloat) m.damageFloat(dmg, true);
       view.shake = 24; view.screenFlash = 0.8; audio.bossAttack();
-      toast(t(`☄️ 天変地異！ -${fmt(dmg)}`, `☄️ ${N_NUKE}! -${fmt(dmg)}`), 'announce', 2000);
+      toast(t(`天変地異！ -${fmt(dmg)}`, `${N_NUKE}! -${fmt(dmg)}`), 'announce', 2000);
     } else {
       e.score += 100000;
       if (m.updateHud) m.updateHud(); else if (m.updateMyHud) m.updateMyHud(e);
       view.shake = 24; view.screenFlash = 0.8; audio.bossDefeated();
-      toast(t('☄️ 天変地異！ +100,000', `☄️ ${N_NUKE}! +100,000`), 'announce', 2000);
+      toast(t('天変地異！ +100,000', `${N_NUKE}! +100,000`), 'announce', 2000);
     }
   }
 
@@ -999,10 +1010,10 @@ export function toggleAutopilot() {
   audio.click();
   if (!autopilot.on) {
     autopilot.on = true;
-    toast(t('🤖 オートパイロット起動（長押しで設定）', '🤖 Autopilot on (hold for settings)'), 'ok', 2000);
+    toast(t('オートパイロット起動（長押しで設定）', 'Autopilot on (hold for settings)'), 'ok', 2000);
   } else if (autopilot.speed < 32) {
     autopilot.speed *= 2;
-    toast(`🤖 x${autopilot.speed}`, '', 1000);
+    toast(`x${autopilot.speed}`, '', 1000);
   } else {
     stopAutopilot();
     return;
@@ -1108,7 +1119,7 @@ function autoRescue() {
     autopilot.stats.rescues = (autopilot.stats.rescues || 0) + 1;
     updateRerollHud(e);
     if (view.reviveFlash) view.reviveFlash();
-    toast(t('🚑 オートレスキュー！', '🚑 Auto-rescue!'), 'ok', 1200);
+    toast(t('オートレスキュー！', 'Auto-rescue!'), 'ok', 1200);
     return true;
   } finally {
     rescueBusy = false;
@@ -1175,7 +1186,7 @@ export function runAutopilot() {
     if (m && m.engine && view && view.running && !view.inputLocked && !m.engine.over && !m.ended) {
       if (autopilot.targetScore && m.engine.score >= autopilot.targetScore) {
         stopAutopilot();
-        toast(t(`🤖 目標スコア ${fmt(autopilot.targetScore)} に到達したので停止`, `🤖 Target score ${fmt(autopilot.targetScore)} reached — stopped`), 'ok', 2600);
+        toast(t(`目標スコア ${fmt(autopilot.targetScore)} に到達したので停止`, `Target score ${fmt(autopilot.targetScore)} reached — stopped`), 'ok', 2600);
         return;
       }
       autoUseItems(m);
@@ -1348,7 +1359,8 @@ class MeltdownMode {
     v.start();
     audio.playTrack('oni');
     this.alarmInt = setInterval(() => this.alarmTick(), 600);
-    toast(t('☢️ 消すほど熱く、熱いほど稼げる。100%で爆発！❄️で冷やせ！', '☢️ Clears heat the core — heat multiplies your score. 100% = boom! Cool it with ❄️!'), 'announce', 3200);
+    // トーストは textContent に入るので、盤面の冷却セルは絵ではなく言葉で指す。
+    toast(t('消すほど熱く、熱いほど稼げる。100%で爆発！青い冷却セルごと消せば冷える！', 'Clears heat the core — heat multiplies your score. 100% = boom! Clear the blue coolant cells to cool it down!'), 'announce', 3200);
   }
 
   mult() {
@@ -1384,7 +1396,8 @@ class MeltdownMode {
     }
     v.applyResult(result);
     if (cooled) {
-      v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.3, `❄️ -${cooled * 35}%`, '#4dd0ff', 1.6);
+      // canvas に描く文字なので SVG は置けない。言葉だけにする。
+      v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.3, t(`冷却 -${cooled * 35}%`, `COOLED -${cooled * 35}%`), '#4dd0ff', 1.6);
       audio.coin();
     }
     this.maxHeat = Math.max(this.maxHeat, this.heat);
@@ -1424,7 +1437,7 @@ class MeltdownMode {
     v.shake = 22;
     audio.bossAttack();
     confettiBurst(60);
-    toast(t('☢️ 炉心爆発！！', '☢️ CORE MELTDOWN!!'), 'err', 2500);
+    toast(t('炉心爆発！！', 'CORE MELTDOWN!!'), 'err', 2500);
     this.finish(true);
   }
 
@@ -1435,7 +1448,9 @@ class MeltdownMode {
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = `×${this.mult().toFixed(1)} ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`;
     const timer = $('#hudTimer');
-    timer.textContent = `🔥${Math.round(this.heat)}%`;
+    // 炉心温度。🔥 は「熱」を表す絵なので独自アイコン（fire）に差し替える。
+    // textContent では SVG が文字列のまま出てしまうため innerHTML にする。
+    timer.innerHTML = `${ic('fire', 15)} ${Math.round(this.heat)}%`;
     timer.classList.toggle('urgent', this.heat >= 85);
     const fill = $('#chaosBarFill');
     fill.style.width = `${Math.round(this.heat)}%`;
@@ -1464,10 +1479,10 @@ class MeltdownMode {
     if (currentMode !== this) return;
     if (isBest) confettiBurst();
     const m = showModal(`
-      <div class="result-banner ${isBest ? 'win' : exploded ? 'lose' : 'draw'}">${isBest ? 'NEW RECORD!' : exploded ? t('☢️ 炉心爆発…', '☢️ MELTDOWN…') : 'GAME OVER'}</div>
+      <div class="result-banner ${isBest ? 'win' : exploded ? 'lose' : 'draw'}">${isBest ? 'NEW RECORD!' : exploded ? `${ic('mode_meltdown', 26)} ${t('炉心爆発…', 'MELTDOWN…')}` : 'GAME OVER'}</div>
       <div class="result-stats">
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
-        <div class="rs-row"><span>${t('🔥 最高熱', '🔥 Peak heat')}</span><b>${Math.round(this.maxHeat)}%</b></div>
+        <div class="rs-row"><span>${ic('fire')} ${t('最高熱', 'Peak heat')}</span><b>${Math.round(this.maxHeat)}%</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
         ${rewardsRows(rewards)}
@@ -1560,7 +1575,7 @@ class ChimeraMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('solo');
-    toast(t('🧬 ピースをピースにドラッグで溶接！大きいほど高倍率！', '🧬 Drag a piece onto another to weld them — bigger means bigger multipliers!'), 'announce', 3200);
+    toast(t('ピースをピースにドラッグで溶接！大きいほど高倍率！', 'Drag a piece onto another to weld them — bigger means bigger multipliers!'), 'announce', 3200);
   }
 
   intent(index, row, col) {
@@ -1576,7 +1591,7 @@ class ChimeraMode {
     if (!result) return true;
     v.applyResult(result);
     if (weld > 1 && result.lineCount) {
-      v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.3, t(`🧬 キメラ ×${weld}！`, `🧬 CHIMERA ×${weld}!`), '#b06bff', 1.8);
+      v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.3, t(`キメラ ×${weld}！`, `CHIMERA ×${weld}!`), '#b06bff', 1.8);
       audio.combo(6 + weld);
     }
     this.updateHud();
@@ -1596,17 +1611,17 @@ class ChimeraMode {
     ].map(([how, label]) => ({ how, label, cells: chimeraMerge(base.cells, add.cells, how) }))
       .filter(o => o.cells);
     if (!opts.length) {
-      toast(t('🧬 大きすぎて溶接できない！', '🧬 Too big to weld!'), 'err', 1500);
+      toast(t('大きすぎて溶接できない！', 'Too big to weld!'), 'err', 1500);
       return true;
     }
     const v = getView();
     v.inputLocked = true;
     const m = showModal(`
-      <h2>🧬 ${t('溶接する？', 'Weld them?')}</h2>
+      <h2>${ic('mode_chimera', 22)} ${t('溶接する？', 'Weld them?')}</h2>
       <div class="form-col">
         ${opts.map((o, i) => `
           <button class="btn btn-ghost perk-btn" data-perk="${i}">
-            <span class="perk-icon">🧬</span>
+            <span class="perk-icon">${ic('mode_chimera', 26)}</span>
             <span class="perk-body"><b>${o.label} ${chimeraCellsHtml(o.cells)}</b><small>${t(`${o.cells.length}マスの怪物ピース ・ 倍率×${(base.weld || 1) + (add.weld || 1)}`, `${o.cells.length}-cell monster ・ ×${(base.weld || 1) + (add.weld || 1)} multiplier`)}</small></span>
           </button>`).join('')}
       </div>
@@ -1638,7 +1653,7 @@ class ChimeraMode {
     el.textContent = fmt(this.engine.score);
     applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = t(`🧬 合体${this.welds}回 ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`, `🧬 ${this.welds} welds ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`);
+    $('#hudSub').innerHTML = ic('mode_chimera', 13) + ' ' + t(`合体${this.welds}回 ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`, `${this.welds} welds ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`);
   }
 
   best() {
@@ -1665,8 +1680,8 @@ class ChimeraMode {
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : 'GAME OVER'}</div>
       <div class="result-stats">
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
-        <div class="rs-row"><span>${t('🧬 溶接回数', '🧬 Welds')}</span><b>${fmt(this.welds)}</b></div>
-        <div class="rs-row"><span>${t('🧬 最大キメラ', '🧬 Biggest chimera')}</span><b>×${fmt(this.maxWeld)}</b></div>
+        <div class="rs-row"><span>${ic('mode_chimera')} ${t('溶接回数', 'Welds')}</span><b>${fmt(this.welds)}</b></div>
+        <div class="rs-row"><span>${ic('mode_chimera')} ${t('最大キメラ', 'Biggest chimera')}</span><b>×${fmt(this.maxWeld)}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         ${rewardsRows(rewards)}
       </div>
@@ -1797,8 +1812,8 @@ class PuzzleMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('ruins');
-    toast(t(`🧩 ステージ${this.stage}：光るブロックをすべて消そう！ピースは使い切り！`,
-      `🧩 Stage ${this.stage}: clear every glowing block — no piece refills!`), 'announce', 3200);
+    toast(t(`ステージ${this.stage}：光るブロックをすべて消そう！ピースは使い切り！`,
+      `Stage ${this.stage}: clear every glowing block — no piece refills!`), 'announce', 3200);
   }
 
   remaining() { return this.queue.length + this.engine.hand.filter(Boolean).length; }
@@ -1832,7 +1847,7 @@ class PuzzleMode {
     applyScoreFit(el, fmt(this.engine.score));
     bumpScore(el);
     $('#hudSub').textContent = t(`ステージ${this.stage} ・ 残り${this.targets.size}マス`, `Stage ${this.stage} — ${this.targets.size} left`);
-    $('#hudTimer').textContent = `🧩${this.remaining()}`;
+    $('#hudTimer').innerHTML = `${ic('mode_puzzle', 15)} ${this.remaining()}`;
   }
 
   async finish(won) {
@@ -1865,7 +1880,7 @@ class PuzzleMode {
     if (currentMode !== this) return;
     const starStr = won ? '★'.repeat(stars) + '☆'.repeat(3 - stars) : '';
     const m = showModal(`
-      <div class="result-banner ${won ? 'win' : 'lose'}">${won ? `${t('遺跡クリア！', 'ROOM CLEARED!')} ${starStr}` : t('❌ 失敗…', '❌ FAILED…')}</div>
+      <div class="result-banner ${won ? 'win' : 'lose'}">${won ? `${t('遺跡クリア！', 'ROOM CLEARED!')} ${starStr}` : `${ic('close', 24)} ${t('失敗…', 'FAILED…')}`}</div>
       <div class="result-stats">
         <div class="rs-row"><span>${t('ステージ', 'Stage')}</span><b>${this.stage}</b></div>
         <div class="rs-row"><span>${t('タイム', 'Time')}</span><b>${secs.toFixed(1)}s</b></div>
@@ -1875,7 +1890,7 @@ class PuzzleMode {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        <button class="btn btn-primary" id="rAgain">${won ? t('▶ 次のステージ', '▶ Next stage') : t('リトライ', 'Retry')}</button>
+        <button class="btn btn-primary" id="rAgain">${won ? t('次のステージ', 'Next stage') : t('リトライ', 'Retry')}</button>
       </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => {
@@ -1913,10 +1928,15 @@ export function startPuzzle(stage = 1) {
 // for score. Anything touching the ceiling when the ground moves = crushed.
 // ---------------------------------------------------------------------------
 
+// 鉱石の3種。icon（絵文字）はやめて iconName（icons.js）と名前に分けた:
+//   ・HUD・結果の内訳は innerHTML なので iconName を SVG で出せる
+//   ・盤面に浮かぶ数字（addFloatText）は **canvas** なので SVG を置けない。
+//     そこは名前（言葉）を出す。盤面の粒自体は
+//     public/js/game.js の drawOreMark() が形（丸/菱/弧）で描き分けている。
 const DIG_ORES = {
-  gold:    { icon: '🪙', tint: '#ffd75e', base: 150 },
-  crystal: { icon: '💠', tint: '#4dd0ff', base: 400 },
-  rainbow: { icon: '🌈', tint: '#ff6bd4', base: 1200 },
+  gold:    { iconName: 'ore_gold',    ja: '金',       en: 'Gold',    tint: '#ffd75e', base: 150 },
+  crystal: { iconName: 'ore_crystal', ja: 'クリスタル', en: 'Crystal', tint: '#4dd0ff', base: 400 },
+  rainbow: { iconName: 'ore_rainbow', ja: '虹',       en: 'Rainbow', tint: '#ff6bd4', base: 1200 },
 };
 const DIG_STEP = 4;   // placements per layer rise
 
@@ -1955,8 +1975,8 @@ class DigMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('mine');
-    toast(t('⛏️ 地層がせり上がる！ラインを消して鉱石を回収しろ！天井に触れたら終わり！',
-      '⛏️ The ground is rising! Clear lines to mine ore — touch the ceiling and it\'s over!'), 'announce', 3400);
+    toast(t('地層がせり上がる！ラインを消して鉱石を回収しろ！天井に触れたら終わり！',
+      'The ground is rising! Clear lines to mine ore — touch the ceiling and it\'s over!'), 'announce', 3400);
   }
 
   oreValue(type) {
@@ -2011,7 +2031,7 @@ class DigMode {
     v.shake = Math.max(v.shake, 6);
     audio.countdown(false);
     if (this.depth % 10 === 0) {
-      toast(t(`⛏️ 深度${this.depth}m 到達！鉱石が濃くなってきた…`, `⛏️ Depth ${this.depth}m! The veins are getting richer…`), 'announce', 2200);
+      toast(t(`深度${this.depth}m 到達！鉱石が濃くなってきた…`, `Depth ${this.depth}m! The veins are getting richer…`), 'announce', 2200);
       confettiBurst(20);
     }
     // 新しい地層は grid の直書き（copyWithin + fillLayerRow）なので、engine が
@@ -2040,7 +2060,7 @@ class DigMode {
       const val = this.oreValue(type);
       bonus += val;
       v.addFloatText(v.boardX + (c + 0.5) * v.cell, v.boardY + (r + 0.5) * v.cell,
-        `${DIG_ORES[type].icon} +${fmt(val)}`, DIG_ORES[type].tint, type === 'rainbow' ? 1.8 : 1.3);
+        `${t(DIG_ORES[type].ja, DIG_ORES[type].en)} +${fmt(val)}`, DIG_ORES[type].tint, type === 'rainbow' ? 1.8 : 1.3);
     }
     if (bonus) {
       e.score += bonus;
@@ -2057,7 +2077,7 @@ class DigMode {
     v.shake = 20;
     v.screenFlash = 0.5;
     audio.bossAttack();
-    toast(t('⛏️ 天井に押しつぶされた…', '⛏️ Crushed against the ceiling…'), 'err', 2400);
+    toast(t('天井に押しつぶされた…', 'Crushed against the ceiling…'), 'err', 2400);
     this.finish();
   }
 
@@ -2086,8 +2106,11 @@ class DigMode {
     applyScoreFit(el, fmt(this.engine.score));
     bumpScore(el);
     // BEST は深度が単位。走行中に自己ベストを追い越したら一緒に伸ばす。
-    $('#hudSub').textContent = `🪙${this.mined.gold} 💠${this.mined.crystal} 🌈${this.mined.rainbow} ・ BEST ${Math.max(this.best(), this.depth)}m`;
-    $('#hudTimer').textContent = `⛏️${this.depth}m`;
+    // HUD は textContent なので SVG を置けない ── 鉱石の種類は言葉で出す。
+    $('#hudSub').textContent = t(
+      `金${this.mined.gold} クリ${this.mined.crystal} 虹${this.mined.rainbow} ・ BEST ${Math.max(this.best(), this.depth)}m`,
+      `Gold ${this.mined.gold} Cry ${this.mined.crystal} Rbw ${this.mined.rainbow} ・ BEST ${Math.max(this.best(), this.depth)}m`);
+    $('#hudTimer').innerHTML = `${ic('mode_dig', 15)} ${this.depth}m`;
     const fill = $('#chaosBarFill');
     const pct = Math.round((this.placedSince / DIG_STEP) * 100);
     fill.style.width = `${pct}%`;
@@ -2113,10 +2136,10 @@ class DigMode {
     const m = showModal(`
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : 'GAME OVER'}</div>
       <div class="result-stats">
-        <div class="rs-row"><span>${t('⛏️ 到達深度', '⛏️ Depth reached')}</span><b>${this.depth}m</b></div>
-        <div class="rs-row"><span>${t('🪙 金鉱石', '🪙 Gold ore')}</span><b>${this.mined.gold}</b></div>
-        <div class="rs-row"><span>${t('💠 クリスタル', '💠 Crystal')}</span><b>${this.mined.crystal}</b></div>
-        ${this.mined.rainbow ? `<div class="rs-row"><span>${t('🌈 虹鉱石', '🌈 Rainbow ore')}</span><b>${this.mined.rainbow}</b></div>` : ''}
+        <div class="rs-row"><span>${ic('mode_dig')} ${t('到達深度', 'Depth reached')}</span><b>${this.depth}m</b></div>
+        <div class="rs-row"><span>${ic('ore_gold')} ${t('金鉱石', 'Gold ore')}</span><b>${this.mined.gold}</b></div>
+        <div class="rs-row"><span>${ic('ore_crystal')} ${t('クリスタル', 'Crystal')}</span><b>${this.mined.crystal}</b></div>
+        ${this.mined.rainbow ? `<div class="rs-row"><span>${ic('ore_rainbow')} ${t('虹鉱石', 'Rainbow ore')}</span><b>${this.mined.rainbow}</b></div>` : ''}
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
         ${rewardsRows(rewards)}
       </div>
@@ -2198,8 +2221,8 @@ class GhostMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('ghost');
-    toast(t('👻 置いたブロックは消えていく…記憶だけが頼り。ラインを消せば一瞬だけ見える！',
-      '👻 Placed blocks fade away… memory is all you have. Clears reveal the board for a moment!'), 'announce', 3600);
+    toast(t('置いたブロックは消えていく…記憶だけが頼り。ラインを消せば一瞬だけ見える！',
+      'Placed blocks fade away… memory is all you have. Clears reveal the board for a moment!'), 'announce', 3600);
   }
 
   onPlace(result) {
@@ -2227,8 +2250,8 @@ class GhostMode {
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     // 走行中に自己ベストを追い越したら BEST も一緒に伸ばす（ソロと同じ扱い）。
     const b = fmt(Math.max(this.best(), this.engine.score));
-    $('#hudSub').textContent = t(`👻 見えないブロック ${this.ghostFx.hideAt.size}個 ・ BEST ${b}`,
-      `👻 ${this.ghostFx.hideAt.size} hidden blocks — BEST ${b}`);
+    $('#hudSub').innerHTML = ic('mode_ghost', 13) + ' ' + t(`見えないブロック ${this.ghostFx.hideAt.size}個 ・ BEST ${b}`,
+      `${this.ghostFx.hideAt.size} hidden blocks — BEST ${b}`);
   }
 
   async finish() {
@@ -2247,7 +2270,7 @@ class GhostMode {
     if (currentMode !== this) return;
     if (isBest) confettiBurst();
     const m = showModal(`
-      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : t('👻 屋敷に呑まれた…', '👻 The house claims you…')}</div>
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : `${ic('mode_ghost', 26)} ${t('屋敷に呑まれた…', 'The house claims you…')}`}</div>
       <div class="result-stats">
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
@@ -2323,7 +2346,7 @@ class VersusBase {
       card.dataset.slot = o.slot;
       card.innerHTML = `
         <canvas></canvas>
-        <div class="opp-name">${o.isAlly ? '🤝 ' : ''}${escapeHtml(o.name)}</div>
+        <div class="opp-name">${o.isAlly ? ic('mode_coop', 13) + ' ' : ''}${escapeHtml(o.name)}</div>
         <div class="opp-score" data-slot-score="${o.slot}">0</div>
         <div class="opp-combo" data-slot-combo="${o.slot}"></div>`;
       cards.appendChild(card);
@@ -2479,7 +2502,8 @@ class AiMode extends VersusBase {
     this.cfg = AI_LEVELS[level];
   }
 
-  aiLabel() { return `${this.cfg.avatar} AI (${t(this.cfg.name, this.cfg.nameEn)})`; }
+  // 名前は対戦パネルに textContent で入るので絵は入れられない。言葉だけにする。
+  aiLabel() { return `AI (${t(this.cfg.name, this.cfg.nameEn)})`; }
 
   start() {
     const seed = (Math.random() * 2 ** 31) | 0;
@@ -2520,7 +2544,7 @@ class AiMode extends VersusBase {
     el.className = 'kami-intro souzou';
     el.innerHTML = `
       <div class="kami-rays"></div>
-      <div class="kami-face">🌌</div>
+      <div class="kami-face">${ic('badge_souzou', 110)}</div>
       <div class="kami-text">${t('創造神が 目覚めた————', 'The Creator God has awakened————')}</div>`;
     document.body.appendChild(el);
     audio.kamiDescend();
@@ -2536,7 +2560,7 @@ class AiMode extends VersusBase {
   oniIntro(next) {
     const el = document.createElement('div');
     el.className = 'oni-intro';
-    el.innerHTML = `<div class="oni-face">👹</div><div class="oni-text">${t('おにが あらわれた！', 'The Oni appears!')}</div>`;
+    el.innerHTML = `<div class="oni-face">${ic('badge_oni', 110)}</div><div class="oni-text">${t('おにが あらわれた！', 'The Oni appears!')}</div>`;
     document.body.appendChild(el);
     audio.gameOver();
     if (view) view.shake = 14;
@@ -2549,7 +2573,7 @@ class AiMode extends VersusBase {
     el.className = 'kami-intro';
     el.innerHTML = `
       <div class="kami-rays"></div>
-      <div class="kami-face">🔱</div>
+      <div class="kami-face">${ic('badge_kami', 110)}</div>
       <div class="kami-text">${t('神が 降臨した——', 'A God descends——')}</div>`;
     document.body.appendChild(el);
     audio.kamiDescend();
@@ -2617,16 +2641,16 @@ class AiMode extends VersusBase {
     // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
     if (currentMode !== this) return;
     if (rewards && rewards.badge === 'oni') {
-      setTimeout(() => toast(t('👹 バッジ「おに退治」を獲得！', '👹 Badge earned: Oni Slayer!'), 'announce', 4000), 1200);
+      setTimeout(() => toast(t('バッジ「おに退治」を獲得！', 'Badge earned: Oni Slayer!'), 'announce', 4000), 1200);
     }
     if (rewards && rewards.badge === 'kami') {
-      setTimeout(() => toast(t('🔱 バッジ「神殺し」を獲得！！', '🔱 Badge earned: God Slayer!!'), 'announce', 5000), 1200);
+      setTimeout(() => toast(t('バッジ「神殺し」を獲得！！', 'Badge earned: God Slayer!!'), 'announce', 5000), 1200);
     }
     if (rewards && rewards.badge === 'souzou') {
-      setTimeout(() => { toast(t('🌌 バッジ「創造を超えし者」を獲得！！！', '🌌 Badge earned: Beyond Creation!!!'), 'announce', 6000); confettiBurst(80); }, 1200);
+      setTimeout(() => { toast(t('バッジ「創造を超えし者」を獲得！！！', 'Badge earned: Beyond Creation!!!'), 'announce', 6000); confettiBurst(80); }, 1200);
     }
 
-    const banners = { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: this.aborted ? t('🤝 引き分け（中断）', '🤝 Draw (aborted)') : 'DRAW' };
+    const banners = { win: 'YOU WIN!', lose: 'YOU LOSE…', draw: this.aborted ? t('引き分け（中断）', 'Draw (aborted)') : 'DRAW' };
     const m = showModal(`
       <div class="result-banner ${outcome}">${banners[outcome]}</div>
       ${this.aborted ? `<p class="muted center">${t('途中終了は引き分け扱いです。敗北にはなりません', 'Quitting early counts as a draw, not a loss')}</p>` : ''}
@@ -2763,9 +2787,9 @@ function bossBeginMove(m) {
   // 呼び出し側で付けるのはボスの顔だけ ── 仕様書の取り決めどおり）。
   const tech = bossTech(m, moveId);
   if (tech && tech.telegraphMsg) {
-    toast(t(`${m.boss.emoji} ${tech.telegraphMsg}`, `${m.boss.emoji} ${tech.telegraphMsgEn || tech.telegraphMsg}`), 'err', 1700);
+    toast(t(tech.telegraphMsg, tech.telegraphMsgEn || tech.telegraphMsg), 'err', 1700);
   } else {
-    toast(t(`⚠️ ${m.boss.emoji} ${def.name}の予告！赤マスをラインで切れ！`, `⚠️ ${def.nameEn} incoming! Cut the red cells with a line!`), 'err', 1700);
+    toast(t(`${def.name}の予告！赤マスをラインで切れ！`, `${def.nameEn} incoming! Cut the red cells with a line!`), 'err', 1700);
   }
 }
 
@@ -2773,7 +2797,7 @@ function bossInstantMove(m, moveId) {
   const e = m.engine;
   // 絶対防御/フォートレスは予告技と同様に即時技も完全無効化する。
   if (e.fortressActive && e.fortressActive()) {
-    toast(t('🛡️ 絶対防御が攻撃を無効化！', '🛡️ Absolute Guard nullified the attack!'), 'ok', 1500);
+    toast(t('絶対防御が攻撃を無効化！', 'Absolute Guard nullified the attack!'), 'ok', 1500);
     m.afterAttack();
     return;
   }
@@ -2794,7 +2818,7 @@ function bossInstantMove(m, moveId) {
     const cells = e.addGarbage(2);
     m.garbageTaken = (m.garbageTaken || 0) + cells.length;
     view.shake = 14;
-    toast(t(`${m.boss.emoji} 大地震！ブロックが崩落！`, `${m.boss.emoji} Quake! The board collapses!`), 'err', 1500);
+    toast(t('大地震！ブロックが崩落！', 'Quake! The board collapses!'), 'err', 1500);
   } else if (moveId === 'curse_hand' || moveId === 'curse_hand2') {
     const n = moveId === 'curse_hand2' ? 2 : 1;
     const idxs = e.hand.map((p, i) => (p ? i : -1)).filter(i => i >= 0);
@@ -2807,7 +2831,7 @@ function bossInstantMove(m, moveId) {
     }
     if (frozen) {
       view.screenFlash = 0.25;
-      toast(t(`${m.boss.emoji} 呪縛！ピース${frozen}個が凍結（8秒）`, `${m.boss.emoji} Curse! ${frozen} piece(s) frozen (8s)`), 'err', 1800);
+      toast(t(`呪縛！ピース${frozen}個が凍結（8秒）`, `Curse! ${frozen} piece(s) frozen (8s)`), 'err', 1800);
     }
   }
   m.afterAttack();
@@ -2822,7 +2846,7 @@ function bossImpact(m) {
   // 旧仕様より下がらないように。
   m.nextAtk = Date.now() + Math.max(2500, bossAtkMs(m) - bossTelegraphMs(m));
   if (e.fortressActive && e.fortressActive()) {
-    toast(t('🛡️ 絶対防御が攻撃を無効化！', '🛡️ Absolute Guard nullified the attack!'), 'ok', 1500);
+    toast(t('絶対防御が攻撃を無効化！', 'Absolute Guard nullified the attack!'), 'ok', 1500);
     return;
   }
   // 🧊 絶対零度だけは、お邪魔(9)ではなく氷結ブロックを書き込む。
@@ -2853,9 +2877,9 @@ function bossImpact(m) {
   if (isFreeze) view.screenFlash = Math.max(view.screenFlash || 0, (tech && tech.flash) || 0.35);
   const def = BOSS_MOVES[pa.moveId] || BOSS_MOVES.garbage;
   if (isFreeze && tech && tech.hitMsg) {
-    toast(t(`${m.boss.emoji} ${tech.hitMsg}`, `${m.boss.emoji} ${tech.hitMsgEn || tech.hitMsg}`), 'err', 1800);
+    toast(t(tech.hitMsg, tech.hitMsgEn || tech.hitMsg), 'err', 1800);
   } else {
-    toast(t(`${m.boss.emoji} ${def.name}が直撃！`, `${m.boss.emoji} ${def.nameEn} hits!`), 'err', 1300);
+    toast(t(`${def.name}が直撃！`, `${def.nameEn} hits!`), 'err', 1300);
   }
   // 直書きで埋まった行・列はここで消す。addGarbage() と違って engine を
   // 通らないので、これが無いと満杯の行が居座ったままになる ──
@@ -2885,7 +2909,7 @@ function bossTryCut(m, result) {
   // 専用技を切ったときは、その技の「切った」文言を出す。
   const cutTech = bossTech(m, pa.moveId);
   if (cutTech && cutTech.cutMsg) {
-    toast(t(`${m.boss.emoji} ${cutTech.cutMsg}`, `${m.boss.emoji} ${cutTech.cutMsgEn || cutTech.cutMsg}`), 'ok', 1800);
+    toast(t(cutTech.cutMsg, cutTech.cutMsgEn || cutTech.cutMsg), 'ok', 1800);
   }
   m.nextAtk = Date.now() + Math.max(2500, bossAtkMs(m) - bossTelegraphMs(m));
   const dmg = Math.round((200 + m.maxHp * 0.018) * (m.counterMult || 1));
@@ -2905,7 +2929,7 @@ function bossCheckPhase(m) {
   view.screenFlash = 0.45;
   view.shake = 16;
   audio.kamiDescend();
-  toast(t(`😡 ${m.boss.name} 第二形態！攻撃が激化する！`, `😡 ${catName(m.boss)} enters phase 2! Attacks intensify!`), 'announce', 2600);
+  toast(t(`${m.boss.name} 第二形態！攻撃が激化する！`, `${catName(m.boss)} enters phase 2! Attacks intensify!`), 'announce', 2600);
 }
 
 // 討伐ランク: 速さ・カット数・被弾数・コンボから S/A/B/C。
@@ -2981,7 +3005,7 @@ class BossMode {
     el.textContent = fmt(this.engine.score);
     applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = t('⚔️ 与ダメージ', '⚔️ Damage dealt');
+    $('#hudSub').textContent = t('与ダメージ', 'Damage dealt');
   }
 
   updateHpBar() {
@@ -3056,11 +3080,13 @@ class BossMode {
     // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
     if (currentMode !== this) return;
     if (rewards && rewards.badge === 'maou') {
-      setTimeout(() => toast(t('😈 バッジ「魔王討伐」を獲得！', '😈 Badge earned: Demon Lord Slain!'), 'announce', 4000), 1200);
+      setTimeout(() => toast(t('バッジ「魔王討伐」を獲得！', 'Badge earned: Demon Lord Slain!'), 'announce', 4000), 1200);
     }
 
     const hasNext = won && this.bossIndex + 1 < this.bossCount;
-    const banner = won ? t(`${this.boss.emoji} 討伐成功！`, `${this.boss.emoji} Boss defeated!`) : this.aborted ? t('🤝 中断（引き分け）', '🤝 Aborted (draw)') : t('やられた…', 'Defeated…');
+    // 帯は innerHTML なので、ボスの絵はここだけ独自アイコンに置き換えられる。
+    const bossIc = icon(bossIconName(this.boss.id), { size: 26 });
+    const banner = won ? `${bossIc} ${t('討伐成功！', 'Boss defeated!')}` : this.aborted ? t('中断（引き分け）', 'Aborted (draw)') : t('やられた…', 'Defeated…');
     const m = showModal(`
       <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
       ${won ? bossRankHtml(rank) : ''}
@@ -3068,9 +3094,9 @@ class BossMode {
       <div class="result-stats">
         <div class="rs-row"><span>${t('与えたダメージ', 'Damage dealt')}</span><b>${fmt(this.engine.score)}</b></div>
         ${won ? '' : `<div class="rs-row"><span>${t(`${this.boss.name}の残りHP`, `${catName(this.boss)}'s HP left`)}</span><b>${fmt(Math.max(0, this.hp))}</b></div>`}
-        <div class="rs-row"><span>${t('⏱️ 討伐タイム', '⏱️ Clear time')}</span><b>${Math.round(dur)}${t('秒', 's')}</b></div>
-        <div class="rs-row"><span>${t('✂️ 攻撃カット', '✂️ Attacks cut')}</span><b>${fmt(this.cuts)}</b></div>
-        <div class="rs-row"><span>${t('💢 被弾お邪魔', '💢 Garbage taken')}</span><b>${fmt(this.garbageTaken)}</b></div>
+        <div class="rs-row"><span>${t('討伐タイム', 'Clear time')}</span><b>${Math.round(dur)}${t('秒', 's')}</b></div>
+        <div class="rs-row"><span>${t('攻撃カット', 'Attacks cut')}</span><b>${fmt(this.cuts)}</b></div>
+        <div class="rs-row"><span>${t('被弾お邪魔', 'Garbage taken')}</span><b>${fmt(this.garbageTaken)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(this.engine.maxCombo)}</b></div>
         ${rewardsRows(rewards)}
       </div>
@@ -3129,15 +3155,25 @@ export function startBoss(boss, bossIndex, bossCount) {
 // ---------------------------------------------------------------------------
 
 const RUSH_RELICS = [
-  { id: 'atk',     icon: '🗡️', name: '剛力の遺物',   nameEn: 'Relic of Might',   desc: '与ダメージ+40%（累積可）',        descEn: 'Damage +40% (stacks)', w: 10 },
-  { id: 'counter', icon: '🧨', name: '火薬の遺物',   nameEn: 'Relic of Powder',  desc: 'カット反撃ダメージ2倍（累積可）', descEn: 'Counter damage ×2 (stacks)', w: 8 },
-  { id: 'reroll',  icon: '🔄', name: '風の遺物',     nameEn: 'Relic of Wind',    desc: 'リロール+2',                      descEn: '+2 rerolls', w: 9 },
-  { id: 'ult',     icon: '⚡', name: '雷の遺物',     nameEn: 'Relic of Thunder', desc: '奥義ゲージの溜まり1.5倍（累積可）', descEn: 'Ult charge ×1.5 (stacks)', w: 8 },
-  { id: 'heal',    icon: '💚', name: '慈悲の遺物',   nameEn: 'Relic of Mercy',   desc: '下2行とお邪魔を全消去',           descEn: 'Clear bottom rows + garbage', w: 9 },
-  { id: 'calm',    icon: '🎯', name: '静寂の遺物',   nameEn: 'Relic of Calm',    desc: 'ボスの攻撃セル-1（最低1）',       descEn: 'Boss attack cells -1 (min 1)', w: 7 },
-  { id: 'shield',  icon: '🛡️', name: '城壁の遺物',   nameEn: 'Relic of Walls',   desc: 'コンボが途切れなくなる',          descEn: 'Your combo never breaks', w: 6, unique: true },
-  { id: 'phoenix', icon: '🐦', name: '不死鳥の羽',   nameEn: 'Phoenix Feather',  desc: '一度だけ窒息から復活する',        descEn: 'Revive once from a top-out', w: 5, unique: true },
+  { id: 'atk',     iconName: 'relic_atk', name: '剛力の遺物',   nameEn: 'Relic of Might',   desc: '与ダメージ+40%（累積可）',        descEn: 'Damage +40% (stacks)', w: 10 },
+  { id: 'counter', iconName: 'relic_counter', name: '火薬の遺物',   nameEn: 'Relic of Powder',  desc: 'カット反撃ダメージ2倍（累積可）', descEn: 'Counter damage ×2 (stacks)', w: 8 },
+  { id: 'reroll',  iconName: 'relic_reroll', name: '風の遺物',     nameEn: 'Relic of Wind',    desc: 'リロール+2',                      descEn: '+2 rerolls', w: 9 },
+  { id: 'ult',     iconName: 'relic_ult', name: '雷の遺物',     nameEn: 'Relic of Thunder', desc: '奥義ゲージの溜まり1.5倍（累積可）', descEn: 'Ult charge ×1.5 (stacks)', w: 8 },
+  { id: 'heal',    iconName: 'relic_heal', name: '慈悲の遺物',   nameEn: 'Relic of Mercy',   desc: '下2行とお邪魔を全消去',           descEn: 'Clear bottom rows + garbage', w: 9 },
+  { id: 'calm',    iconName: 'relic_calm', name: '静寂の遺物',   nameEn: 'Relic of Calm',    desc: 'ボスの攻撃セル-1（最低1）',       descEn: 'Boss attack cells -1 (min 1)', w: 7 },
+  { id: 'shield',  iconName: 'relic_shield', name: '城壁の遺物',   nameEn: 'Relic of Walls',   desc: 'コンボが途切れなくなる',          descEn: 'Your combo never breaks', w: 6, unique: true },
+  { id: 'phoenix', iconName: 'relic_phoenix', name: '不死鳥の羽',   nameEn: 'Phoenix Feather',  desc: '一度だけ窒息から復活する',        descEn: 'Revive once from a top-out', w: 5, unique: true },
 ];
+
+// 所持している遺物を横一列で見せる帯。同じ遺物を複数持てる（累積可）ので、
+// 拾った順にそのまま並べる ── 「何を何個積んだか」がビルドの説明そのもの。
+// ⚠ 返すのは SVG 文字列なので innerHTML に入る場所だけで使うこと。
+function relicStrip(ids, size = 18) {
+  return ids.map(id => {
+    const r = RUSH_RELICS.find(x => x.id === id);
+    return r ? ic(r.iconName, size) : '';
+  }).join('');
+}
 
 class BossRushMode {
   constructor(bosses) {
@@ -3193,7 +3229,7 @@ class BossRushMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('boss');
-    toast(t('⚔️ 無限地獄ラッシュ！倒すほど深く、敵は強く。遺物でビルドを組め！', '⚔️ Infinite Hell Rush! The deeper you go, the stronger they get. Build with relics!'), 'announce', 3200);
+    toast(t('無限地獄ラッシュ！倒すほど深く、敵は強く。遺物でビルドを組め！', 'Infinite Hell Rush! The deeper you go, the stronger they get. Build with relics!'), 'announce', 3200);
 
     countdownOverlay(3, afterCountdown(this, () => {
       v.inputLocked = false;
@@ -3245,7 +3281,7 @@ class BossRushMode {
     el.textContent = fmt(this.engine.score);
     applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = t(`⚔️ 深度${this.kills + 1} ・ 遺物${this.relics.length}`, `⚔️ Depth ${this.kills + 1} ・ ${this.relics.length} relics`);
+    $('#hudSub').innerHTML = ic('mode_bossrush', 13) + ' ' + t(`深度${this.kills + 1} ・ 遺物${this.relics.length}`, `Depth ${this.kills + 1} ・ ${this.relics.length} relics`);
   }
 
   updateHpBar() {
@@ -3286,8 +3322,8 @@ class BossRushMode {
       this.nextAtk = Date.now() + bossAtkMs(this);
       const lapUp = this.kills % this.bosses.length === 0;
       toast(lapUp
-        ? t(`🔥 ${this.lap() + 1}周目突入！ボスが強化された！`, `🔥 Lap ${this.lap() + 1}! The bosses grow stronger!`)
-        : t(`つぎは ${this.boss.emoji} ${this.boss.name}！`, `Next up: ${this.boss.emoji} ${catName(this.boss)}!`), 'announce', 2400);
+        ? t(`${this.lap() + 1}周目突入！ボスが強化された！`, `Lap ${this.lap() + 1}! The bosses grow stronger!`)
+        : t(`つぎは ${this.boss.name}！`, `Next up: ${catName(this.boss)}!`), 'announce', 2400);
       // とどめの一手が同時に手詰まりだった場合、bossDown 中は relicOpen ガードで
       // 保留していたトップアウト判定をここで再評価する。heal 遺物は盤面を開けても
       // e.over を下ろさないため、useGameItem 末尾と同じ over 解除を先に行う。
@@ -3316,16 +3352,16 @@ class BossRushMode {
   offerRelic(next) {
     const choices = this.relicChoices();
     const m = showModal(`
-      <h2>${this.boss.emoji} ${t('撃破！', 'Down!')} <small class="muted">${t(`深度${this.kills}`, `depth ${this.kills}`)}</small></h2>
+      <h2>${icon(bossIconName(this.boss.id), { size: 22 })} ${t('撃破！', 'Down!')} <small class="muted">${t(`深度${this.kills}`, `depth ${this.kills}`)}</small></h2>
       <p class="muted center" style="margin-bottom:10px">${t('遺物を1つ選べ', 'Choose a relic')}</p>
       <div class="form-col">
         ${choices.map(r => `
           <button class="btn btn-ghost perk-btn" data-perk="${r.id}">
-            <span class="perk-icon">${r.icon}</span>
+            <span class="perk-icon">${ic(r.iconName, 26)}</span>
             <span class="perk-body"><b>${t(r.name, r.nameEn)}</b><small>${t(r.desc, r.descEn)}</small></span>
           </button>`).join('')}
       </div>
-      <p class="muted center deck-strip">${this.relics.length ? `${t('所持遺物', 'Relics')}: ${this.relics.map(id => (RUSH_RELICS.find(r => r.id === id) || {}).icon || '').join(' ')}` : ''}</p>`,
+      <p class="muted center deck-strip">${this.relics.length ? `${t('所持遺物', 'Relics')}: ${relicStrip(this.relics, 18)}` : ''}</p>`,
       { dismissable: false });
     m.querySelectorAll('[data-perk]').forEach(b => {
       b.onclick = () => { this.applyRelic(b.dataset.perk); closeModal(); next(); };
@@ -3370,7 +3406,7 @@ class BossRushMode {
       view.reviveFlash();
       confettiBurst(40);
       audio.levelUp();
-      toast(t('🐦 不死鳥の羽が燃え尽きた！盤面リセットで復活！', '🐦 The Phoenix Feather burns out — board reset, you live!'), 'announce', 3000);
+      toast(t('不死鳥の羽が燃え尽きた！盤面リセットで復活！', 'The Phoenix Feather burns out — board reset, you live!'), 'announce', 3000);
       this.updateHud();
       updateRerollHud(this.engine);
       return;
@@ -3402,17 +3438,20 @@ class BossRushMode {
     // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
     if (currentMode !== this) return;
     if (rewards && rewards.badge === 'rush') {
-      setTimeout(() => toast(t('⚔️ バッジ「ボスラッシュ制覇」を獲得！+300💎', '⚔️ Badge earned: Boss Rush Conqueror! +300💎'), 'announce', 5000), 1200);
+      setTimeout(() => toast(t('バッジ「ボスラッシュ制覇」を獲得！ ジェム+300', 'Badge earned: Boss Rush Conqueror! +300 gems'), 'announce', 5000), 1200);
     }
     if (isBest) confettiBurst(50);
-    const banner = isBest ? t('⚔️ 最深記録更新！', '⚔️ New depth record!') : this.aborted ? t('🤝 中断', '🤝 Aborted') : t(`${this.boss.emoji} に敗北…`, `Defeated by ${this.boss.emoji}…`);
+    const bossIc = icon(bossIconName(this.boss.id), { size: 26 });
+    const banner = isBest ? `${ic('mode_bossrush', 26)} ${t('最深記録更新！', 'New depth record!')}`
+      : this.aborted ? t('中断', 'Aborted')
+      : `${bossIc} ${t('に敗北…', 'defeated you…')}`;
     const m = showModal(`
       <div class="result-banner ${isBest ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
       <div class="result-stats">
-        <div class="rs-row"><span>${t('⚔️ 深度', '⚔️ Depth')}</span><b>${fmt(this.kills)}${t('体', '')} ${this.lap() > 0 || conquered ? t(`（${this.lap() + 1}周目）`, ` (lap ${this.lap() + 1})`) : ''}</b></div>
-        <div class="rs-row"><span>${t('🏺 集めた遺物', '🏺 Relics collected')}</span><b>${this.relics.map(id => (RUSH_RELICS.find(r => r.id === id) || {}).icon || '').join('') || t('なし', 'none')}</b></div>
+        <div class="rs-row"><span>${ic('mode_bossrush')} ${t('深度', 'Depth')}</span><b>${fmt(this.kills)}${t('体', '')} ${this.lap() > 0 || conquered ? t(`（${this.lap() + 1}周目）`, ` (lap ${this.lap() + 1})`) : ''}</b></div>
+        <div class="rs-row"><span>${t('集めた遺物', 'Relics collected')}</span><b>${relicStrip(this.relics, 20) || t('なし', 'none')}</b></div>
         <div class="rs-row"><span>${t('総ダメージ', 'Total damage')}</span><b>${fmt(this.engine.score)}</b></div>
-        <div class="rs-row"><span>${t('✂️ 攻撃カット', '✂️ Attacks cut')}</span><b>${fmt(this.cuts)}</b></div>
+        <div class="rs-row"><span>${t('攻撃カット', 'Attacks cut')}</span><b>${fmt(this.cuts)}</b></div>
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
@@ -3480,7 +3519,7 @@ class WeeklyMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('battle');
-    toast(t(`🎯 ウィークリーチャレンジ！${this.info.pieces}個のピースで限界に挑め！`, `🎯 Weekly Challenge! Push your limit with ${this.info.pieces} pieces!`), 'announce', 2800);
+    toast(t(`ウィークリーチャレンジ！${this.info.pieces}個のピースで限界に挑め！`, `Weekly Challenge! Push your limit with ${this.info.pieces} pieces!`), 'announce', 2800);
   }
 
   piecesLeft() { return Math.max(0, this.info.pieces - this.engine.piecesPlaced); }
@@ -3494,7 +3533,8 @@ class WeeklyMode {
     // だけだと、自己ベストを超えたあとも現在スコアより小さい数字が「ベスト」として
     // 並び続ける。
     const shownBest = fmt(Math.max(this.best(), this.engine.score));
-    $('#hudSub').textContent = t(`🎯 ${this.info.week} ・ ベスト ${shownBest}`, `🎯 ${this.info.week} ・ Best ${shownBest}`);
+    // innerHTML にしたので、サーバー由来の週 id もそのまま流さず必ず通す。
+    $('#hudSub').innerHTML = ic('mode_weekly', 13) + ' ' + escapeHtml(t(`${this.info.week} ・ ベスト ${shownBest}`, `${this.info.week} ・ Best ${shownBest}`));
     const tm = $('#hudTimer');
     tm.textContent = t(`残り${this.piecesLeft()}個`, `${this.piecesLeft()} left`);
     tm.classList.toggle('urgent', this.piecesLeft() <= 5);
@@ -3537,19 +3577,19 @@ class WeeklyMode {
     if (currentMode !== this) return;
     const usedAll = e.piecesPlaced >= this.info.pieces;
     const m = showModal(`
-      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? t('🎯 今週のベスト更新！', '🎯 New weekly best!') : t('🎯 チャレンジ終了', '🎯 Challenge complete')}</div>
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${ic('mode_weekly', 26)} ${isBest ? t('今週のベスト更新！', 'New weekly best!') : t('チャレンジ終了', 'Challenge complete')}</div>
       ${usedAll ? '' : `<p class="muted center">${t('ピースを置く場所がなくなりました', 'No room left to place a piece')}</p>`}
       <div class="result-stats">
-        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}${isBest ? ' 👑' : ''}</b></div>
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}${isBest ? ' ' + ic('medal_1', 14) : ''}</b></div>
         <div class="rs-row"><span>${t('今週のベスト', "This week's best")}</span><b>${fmt(Math.max(prevBest, e.score))}</b></div>
         <div class="rs-row"><span>${t('使ったピース', 'Pieces used')}</span><b>${fmt(e.piecesPlaced)} / ${this.info.pieces}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
         ${rewardsRows(rewards)}
-        ${session.user ? '' : `<div class="rs-row"><span>${t('💡 ランキング掲載にはログイン', '💡 Log in to appear on the ranking')}</span></div>`}
+        ${session.user ? '' : `<div class="rs-row"><span>${t('ランキング掲載にはログイン', 'Log in to appear on the ranking')}</span></div>`}
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        <button class="btn btn-ghost" id="rRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
+        <button class="btn btn-ghost" id="rRank">${ic('leaderboard', 15)} ${t('順位を見る', 'Standings')}</button>
         <button class="btn btn-weekly" id="rAgain">${t('もう一度', 'Play again')}</button>
       </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
@@ -3659,8 +3699,8 @@ class DailyMode {
     audio.playTrack('battle');
     const mod = this.info.modifier || {};
     toast(t(
-      `📅 ${mod.icon || ''}${mod.ja || ''}！${this.info.pieces}個で${fmt(this.info.target)}点を狙え！${this.practice ? '（練習）' : ''}`,
-      `📅 ${mod.icon || ''}${mod.en || ''}! Chase ${fmt(this.info.target)} with ${this.info.pieces} pieces!${this.practice ? ' (practice)' : ''}`,
+      `${mod.ja || ''}！${this.info.pieces}個で${fmt(this.info.target)}点を狙え！${this.practice ? '（練習）' : ''}`,
+      `${mod.en || ''}! Chase ${fmt(this.info.target)} with ${this.info.pieces} pieces!${this.practice ? ' (practice)' : ''}`,
     ), 'announce', 3200);
   }
 
@@ -3672,10 +3712,10 @@ class DailyMode {
     applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     const mod = this.info.modifier || {};
-    $('#hudSub').textContent = t(
-      `📅 ${mod.icon || ''}${mod.ja || ''} ・ 目標 ${fmt(this.info.target)}${this.practice ? ' ・ 練習' : ''}`,
-      `📅 ${mod.icon || ''}${mod.en || ''} ・ Target ${fmt(this.info.target)}${this.practice ? ' ・ practice' : ''}`,
-    );
+    $('#hudSub').innerHTML = ic('mode_daily', 13) + ' ' + escapeHtml(t(
+      `${mod.ja || ''} ・ 目標 ${fmt(this.info.target)}${this.practice ? ' ・ 練習' : ''}`,
+      `${mod.en || ''} ・ Target ${fmt(this.info.target)}${this.practice ? ' ・ practice' : ''}`,
+    ));
     const tm = $('#hudTimer');
     tm.textContent = t(`残り${this.piecesLeft()}個`, `${this.piecesLeft()} left`);
     tm.classList.toggle('urgent', this.piecesLeft() <= 5);
@@ -3723,8 +3763,8 @@ class DailyMode {
     // 記録されなかった理由はサーバーが返す。まとめて「練習」と言ってしまうと、
     // 日付を跨いだ回や予約の取れていない回に嘘の説明をすることになる。
     const notRecordedNote = sendFailed
-      ? t('⚠️ 結果を送信できませんでした。この回は記録もランキングにも残りません',
-          '⚠️ Your result could not be submitted — this run is not recorded or ranked')
+      ? t('結果を送信できませんでした。この回は記録もランキングにも残りません',
+          'Your result could not be submitted — this run is not recorded or ranked')
       : {
         stale: t('日付が変わったため、この回は記録されません', 'The day rolled over — this run was not recorded'),
         unreserved: t('挑戦の登録ができていないため記録されません。メニューから開き直してください',
@@ -3732,29 +3772,29 @@ class DailyMode {
         expired: t('開始から時間が経ちすぎたため記録されません', 'Too long since you started — this run was not recorded'),
       }[d && d.reason] || t('この回は練習 — 今日の記録はすでに確定しています', 'Practice run — today\'s record is already locked in');
     const m = showModal(`
-      <div class="result-banner ${cleared ? 'win' : 'draw'}">${cleared ? t('📅 デイリークリア！', '📅 Daily cleared!') : t('📅 挑戦終了', '📅 Challenge over')}</div>
+      <div class="result-banner ${cleared ? 'win' : 'draw'}">${ic('mode_daily', 26)} ${cleared ? t('デイリークリア！', 'Daily cleared!') : t('挑戦終了', 'Challenge over')}</div>
       ${usedAll ? '' : `<p class="muted center">${t('ピースを置く場所がなくなりました', 'No room left to place a piece')}</p>`}
       ${recorded ? '' : `<p class="muted center">${notRecordedNote}</p>`}
       <div class="result-stats">
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)} / ${fmt(this.info.target)}</b></div>
-        ${recorded && d ? `<div class="rs-row"><span>${t('🔥 連続クリア', '🔥 Clear streak')}</span><b>${d.cleared ? t(`${streak}日目`, `Day ${streak}`) : t('リセット…', 'Reset…')}</b></div>` : ''}
-        ${d && d.bonusCoins ? `<div class="rs-row"><span>${t('📅 デイリーボーナス', '📅 Daily bonus')}</span><b>+${fmt(d.bonusCoins)}🪙${d.bonusGems ? ` +${fmt(d.bonusGems)}💎` : ''}</b></div>` : ''}
+        ${recorded && d ? `<div class="rs-row"><span>${ic('fire')} ${t('連続クリア', 'Clear streak')}</span><b>${d.cleared ? t(`${streak}日目`, `Day ${streak}`) : t('リセット…', 'Reset…')}</b></div>` : ''}
+        ${d && d.bonusCoins ? `<div class="rs-row"><span>${ic('mode_daily')} ${t('デイリーボーナス', 'Daily bonus')}</span><b>+${fmt(d.bonusCoins)} ${ic('coins', 14)}${d.bonusGems ? ` +${fmt(d.bonusGems)} ${ic('gems', 14)}` : ''}</b></div>` : ''}
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
         ${sendFailed
-          ? `<div class="rs-row"><span>${t('⚠️ 送信に失敗しました — この回の報酬は付いていません', '⚠️ Submission failed — no rewards for this run')}</span></div>`
+          ? `<div class="rs-row"><span>${ic('warn')} ${t('送信に失敗しました — この回の報酬は付いていません', 'Submission failed — no rewards for this run')}</span></div>`
           : rewards ? `
-        <div class="rs-row"><span>${t('🪙 コイン', '🪙 Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
-        <div class="rs-row"><span>${t('🎫 パスXP', '🎫 Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
-        <div class="rs-row"><span>${t('⭐ アカウントXP', '⭐ Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>`
-        : `<div class="rs-row"><span>${t('💡 記録とランキングにはログイン', '💡 Log in for records & the ranking')}</span></div>`}
+        <div class="rs-row"><span>${ic('coins')} ${t('コイン', 'Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
+        <div class="rs-row"><span>${ic('battlepass')} ${t('パスXP', 'Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
+        <div class="rs-row"><span>${ic('xp')} ${t('アカウントXP', 'Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>`
+        : `<div class="rs-row"><span>${t('記録とランキングにはログイン', 'Log in for records & the ranking')}</span></div>`}
         ${/* デイリーだけ報酬欄を自前で組んでいるので、rewardsRows() を通らず
              シェアが出ていなかった。毎日みんなが同じ盤面で競う回こそ
              見せ合いたいのに、ここだけ導線が無いのは惜しい。 */ shareRow()}
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        <button class="btn btn-ghost" id="rGhosts">${t('👻 みんなの走り', '👻 Ghosts')}</button>
-        <button class="btn btn-ghost" id="rRank">${t('🏆 順位を見る', '🏆 Standings')}</button>
+        <button class="btn btn-ghost" id="rGhosts">${ic('clip', 15)} ${t('みんなの走り', 'Ghosts')}</button>
+        <button class="btn btn-ghost" id="rRank">${ic('leaderboard', 15)} ${t('順位を見る', 'Standings')}</button>
         <button class="btn btn-daily" id="rAgain">${t('もう一度（練習）', 'Again (practice)')}</button>
       </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
@@ -3808,7 +3848,7 @@ class DailyMode {
     cards.innerHTML = `
       <div class="opp-card" data-slot="ghost">
         <canvas></canvas>
-        <div class="opp-name">👻 ${escapeHtml(g.username || t('残像', 'Ghost'))}</div>
+        <div class="opp-name">${ic('clip', 13)} ${escapeHtml(g.username || t('残像', 'Ghost'))}</div>
         <div class="opp-score" id="ghostScore">0</div>
         <div class="opp-combo" id="ghostDiff"></div>
       </div>`;
@@ -3818,7 +3858,7 @@ class DailyMode {
     this.ghostBoard.setGrid(this.ghostEngine.snapshot());
     getView().resize();
     this.ghostTimer = setTimeout(() => this.ghostStep(), Math.max(200, rep.moves[0].t || 600));
-    toast(t(`📼 ${g.username || '残像'} の走りと同時対走！`, `📼 Racing ${g.username || 'the ghost'}'s replay!`), 'announce', 2600);
+    toast(t(`${g.username || '残像'} の走りと同時対走！`, `Racing ${g.username || 'the ghost'}'s replay!`), 'announce', 2600);
   }
 
   ghostStep() {
@@ -4017,7 +4057,7 @@ function abyssCurse(f, isBoss) {
 // Realm definitions: the tower is the classic; the others remix the rules.
 const DUNGEON_REALMS = {
   tower: {
-    id: 'tower', icon: '🏰', name: 'ダンジョン塔', nameEn: 'Dungeon Tower',
+    id: 'tower', iconName: 'badge_dungeon', name: 'ダンジョン塔', nameEn: 'Dungeon Tower',
     prefix: 'F', floors: 100, bands: DUNGEON_BANDS,
     hpMult: 1, atkSecMult: 1, extraAtkCells: 0,
     // statKey = サーバー側の到達階の欄（server/index.js の realm 表と同じもの）。
@@ -4027,7 +4067,7 @@ const DUNGEON_REALMS = {
     descEn: 'The classic 100-floor climb. Boss + checkpoint every 10 floors',
   },
   under: {
-    id: 'under', icon: '🕳️', name: '地下ダンジョン', nameEn: 'Underground Depths',
+    id: 'under', iconName: 'badge_under', name: '地下ダンジョン', nameEn: 'Underground Depths',
     prefix: 'B', floors: 100, bands: UNDER_BANDS,
     hpMult: 1.25, atkSecMult: 0.85, extraAtkCells: 0, startGarbage: true,
     bestKey: 'bba_dungeon_under_max', statKey: 'underMax', resultMode: 'dungeon_under',
@@ -4035,7 +4075,7 @@ const DUNGEON_REALMS = {
     descEn: 'For veterans: tougher foes, faster attacks, and rubble litters every floor…',
   },
   heaven: {
-    id: 'heaven', icon: '☁️', name: '天国ダンジョン', nameEn: 'Heavenly Ascent',
+    id: 'heaven', iconName: 'badge_heaven', name: '天国ダンジョン', nameEn: 'Heavenly Ascent',
     prefix: 'H', floors: 100, bands: HEAVEN_BANDS,
     hpMult: 0.9, atkSecMult: 1.15, extraAtkCells: 1, blessing: true,
     bestKey: 'bba_dungeon_heaven_max', statKey: 'heavenMax', resultMode: 'dungeon_heaven',
@@ -4043,7 +4083,7 @@ const DUNGEON_REALMS = {
     descEn: "Slow but heavy attacks. Every boss grants an angel's blessing: +1 life",
   },
   abyss: {
-    id: 'abyss', icon: '🌑', name: '深淵ダンジョン', nameEn: 'The Abyss',
+    id: 'abyss', iconName: 'badge_abyss', name: '深淵ダンジョン', nameEn: 'The Abyss',
     prefix: 'A', floors: 100, bands: ABYSS_BANDS,
     hpMult: 1.7, atkSecMult: 0.6, extraAtkCells: 2, startGarbage: true, garbageBase: 5, garbageDiv: 15,
     bossEvery: 5, finalMult: 4, curses: true, phases: true, unlock: 'tower100',
@@ -4072,12 +4112,12 @@ function dungeonFloor(f, realm = DUNGEON_REALMS.tower) {
 }
 
 const DUNGEON_PERKS = [
-  { id: 'atk',    icon: '💪', name: '攻撃力アップ',     nameEn: 'Attack Up',     desc: '与ダメージ +60%（重ねがけOK）', descEn: '+60% damage (stacks)', w: 5 },
-  { id: 'reroll', icon: '🔄', name: 'リロール補充',     nameEn: 'Reroll Refill', desc: 'リロール +3回', descEn: '+3 rerolls', w: 4 },
-  { id: 'heal',   icon: '💊', name: '応急修理',         nameEn: 'Field Repair',  desc: '下2行とお邪魔ブロックを消す', descEn: 'Clears the bottom 2 rows + all garbage', w: 4 },
-  { id: 'slow',   icon: '⏳', name: 'スロウの呪文',     nameEn: 'Slow Spell',    desc: '敵の攻撃間隔 +25%（重ねがけOK）', descEn: 'Enemy attacks 25% slower (stacks)', w: 3 },
-  { id: 'life',   icon: '❤️', name: '追加ライフ',       nameEn: 'Extra Life',    desc: '残機 +1（ボードが埋まっても復活）', descEn: '+1 life (revive when the board fills)', w: 2 },
-  { id: 'shield', icon: '🛡️', name: 'コンボプロテクト', nameEn: 'Combo Protect', desc: 'コンボが途切れなくなる（永続）', descEn: 'Your combo never breaks (permanent)', w: 2 },
+  { id: 'atk',    iconName: 'perk_atk', name: '攻撃力アップ',     nameEn: 'Attack Up',     desc: '与ダメージ +60%（重ねがけOK）', descEn: '+60% damage (stacks)', w: 5 },
+  { id: 'reroll', iconName: 'perk_reroll', name: 'リロール補充',     nameEn: 'Reroll Refill', desc: 'リロール +3回', descEn: '+3 rerolls', w: 4 },
+  { id: 'heal',   iconName: 'perk_heal', name: '応急修理',         nameEn: 'Field Repair',  desc: '下2行とお邪魔ブロックを消す', descEn: 'Clears the bottom 2 rows + all garbage', w: 4 },
+  { id: 'slow',   iconName: 'perk_slow', name: 'スロウの呪文',     nameEn: 'Slow Spell',    desc: '敵の攻撃間隔 +25%（重ねがけOK）', descEn: 'Enemy attacks 25% slower (stacks)', w: 3 },
+  { id: 'life',   iconName: 'perk_life', name: '追加ライフ',       nameEn: 'Extra Life',    desc: '残機 +1（ボードが埋まっても復活）', descEn: '+1 life (revive when the board fills)', w: 2 },
+  { id: 'shield', iconName: 'perk_shield', name: 'コンボプロテクト', nameEn: 'Combo Protect', desc: 'コンボが途切れなくなる（永続）', descEn: 'Your combo never breaks (permanent)', w: 2 },
 ];
 
 function pickPerks(mode) {
@@ -4159,8 +4199,8 @@ class DungeonMode {
     v.start();
     const R = this.realm;
     toast(k > 0
-      ? t(`${R.icon} ${R.prefix}${this.startFloor} から再開！（強化ボーナス付き）`, `${R.icon} Resuming from ${R.prefix}${this.startFloor}! (bonus perks included)`)
-      : t(`${R.icon} ${R.name}に挑戦開始！${R.prefix}${R.floors}を目指せ！`, `${R.icon} ${R.nameEn} begins! Reach ${R.prefix}${R.floors}!`), 'announce', 2600);
+      ? t(`${R.prefix}${this.startFloor} から再開！（強化ボーナス付き）`, `Resuming from ${R.prefix}${this.startFloor}! (bonus perks included)`)
+      : t(`${R.name}に挑戦開始！${R.prefix}${R.floors}を目指せ！`, `${R.nameEn} begins! Reach ${R.prefix}${R.floors}!`), 'announce', 2600);
     countdownOverlay(3, afterCountdown(this, () => {
       v.inputLocked = false;
       this.armAttack();
@@ -4182,15 +4222,15 @@ class DungeonMode {
     this.updateHud();
     if (silent) return;
     if (this.info.isFinal) {
-      toast(t(`${this.info.emoji} 最深部——${this.info.name}が待ち受ける！！`, `${this.info.emoji} The last floor — ${this.info.nameEn} awaits!!`), 'announce', 3000);
+      toast(t(`最深部——${this.info.name}が待ち受ける！！`, `The last floor — ${this.info.nameEn} awaits!!`), 'announce', 3000);
       audio.bossAttack();
       v.shake = 16;
     } else if (this.info.isBoss) {
-      toast(t(`⚠️ ボス階！${this.info.emoji} ${this.info.name}が立ちはだかる！`, `⚠️ Boss floor! ${this.info.emoji} ${this.info.nameEn} blocks your path!`), 'announce', 2400);
+      toast(t(`ボス階！${this.info.name}が立ちはだかる！`, `Boss floor! ${this.info.nameEn} blocks your path!`), 'announce', 2400);
       audio.bossAttack();
       v.shake = 12;
     } else {
-      toast(t(`${this.info.emoji} ${this.info.name}が あらわれた！`, `${this.info.emoji} ${this.info.nameEn} appears!`), '', 1400);
+      toast(t(`${this.info.name}が あらわれた！`, `${this.info.nameEn} appears!`), '', 1400);
     }
   }
 
@@ -4199,7 +4239,11 @@ class DungeonMode {
     el.textContent = fmt(this.engine.score);
     applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
-    $('#hudSub').textContent = `${this.realm.icon} ${this.realm.prefix}${this.floor}/${this.realm.floors} ・ ❤️×${this.lives}${this.engine.scoreMult > 1 ? ` ・ 💪×${this.engine.scoreMult.toFixed(1)}` : ''}${this.curse ? ' ・ ☠️' + (cu => cu ? t(cu.name, cu.nameEn || cu.name) : '')(ABYSS_CURSES.find(c => c.id === this.curse)) : ''}`;
+    const curse = this.curse ? ABYSS_CURSES.find(c => c.id === this.curse) : null;
+    $('#hudSub').textContent = `${this.realm.prefix}${this.floor}/${this.realm.floors}`
+      + t(` ・ 残機×${this.lives}`, ` ・ Lives×${this.lives}`)
+      + (this.engine.scoreMult > 1 ? t(` ・ 攻×${this.engine.scoreMult.toFixed(1)}`, ` ・ Atk×${this.engine.scoreMult.toFixed(1)}`) : '')
+      + (curse ? t(` ・ 呪い：${curse.name}`, ` ・ Curse: ${curse.nameEn || curse.name}`) : '');
   }
 
   updateHpBar() {
@@ -4305,7 +4349,7 @@ class DungeonMode {
         break;
       default: break;
     }
-    toast(t(`☠️ ${pick.name}：${pick.desc}`, `☠️ ${pick.nameEn}: ${pick.descEn}`), 'err', 2400);
+    toast(t(`呪い ── ${pick.name}：${pick.desc}`, `Curse — ${pick.nameEn}: ${pick.descEn}`), 'err', 2400);
     this.updateHpBar();
   }
 
@@ -4344,10 +4388,10 @@ class DungeonMode {
     if (this.floor >= this.realm.floors) { this.finish(true); return; }
     confettiBurst(this.info.isBoss ? 45 : 12);
     if (this.info.isBoss) {
-      toast(t(`🎉 ボス撃破！チェックポイント到達（次回から${this.realm.prefix}${this.floor + 1}で再開可能）`, `🎉 Boss down! Checkpoint reached (you can restart from ${this.realm.prefix}${this.floor + 1})`), 'announce', 3000);
+      toast(t(`ボス撃破！チェックポイント到達（次回から${this.realm.prefix}${this.floor + 1}で再開可能）`, `Boss down! Checkpoint reached (you can restart from ${this.realm.prefix}${this.floor + 1})`), 'announce', 3000);
       if (this.realm.blessing) {
         this.lives++;
-        setTimeout(() => toast(t('👼 天使の祝福！残機 +1', "👼 An angel's blessing! +1 life"), 'announce', 2400), 1200);
+        setTimeout(() => toast(t('天使の祝福！残機 +1', "An angel's blessing! +1 life"), 'announce', 2400), 1200);
       }
     }
     view.inputLocked = true;
@@ -4370,12 +4414,12 @@ class DungeonMode {
   offerPerk(next) {
     const choices = pickPerks(this);
     const m = showModal(`
-      <h2>${this.info.isBoss ? t('👑 ボス撃破！', '👑 Boss defeated!') : t(`✅ F${this.floor} クリア！`, `✅ Floor ${this.floor} cleared!`)}</h2>
+      <h2>${ic('check', 20)} ${this.info.isBoss ? t('ボス撃破！', 'Boss defeated!') : t(`F${this.floor} クリア！`, `Floor ${this.floor} cleared!`)}</h2>
       <p class="muted center" style="margin-bottom:10px">${t('ごほうびを1つ選ぼう', 'Pick one reward')}</p>
       <div class="form-col">
         ${choices.map(p => `
           <button class="btn btn-ghost perk-btn" data-perk="${p.id}">
-            <span class="perk-icon">${p.icon}</span>
+            <span class="perk-icon">${ic(p.iconName, 26)}</span>
             <span class="perk-body"><b>${t(p.name, p.nameEn)}</b><small>${t(p.desc, p.descEn)}</small></span>
           </button>`).join('')}
       </div>`, { dismissable: false });
@@ -4428,7 +4472,7 @@ class DungeonMode {
       this.lives--;
       this.engine.reviveBoard();
       getView().reviveFlash();
-      toast(t(`❤️ 残機を使って復活！のこり×${this.lives}`, `❤️ Life used — revived! ×${this.lives} left`), 'announce', 2200);
+      toast(t(`残機を使って復活！のこり×${this.lives}`, `Life used — revived! ×${this.lives} left`), 'announce', 2200);
       this.updateHud();
     } else {
       this.finish(false);
@@ -4463,16 +4507,16 @@ class DungeonMode {
     // 以前は 'dungeon' 決め打ちだったので、深淵・地下・天国を制覇しても
     // 専用の祝いが出なかった。世界ごとの名前とジェム額をそのまま出す。
     const CLEAR_BADGE = {
-      dungeon: { icon: '🏰', ja: '百塔踏破', en: 'Hundred-Floor Conqueror', gems: 500 },
-      under:   { icon: '🕳️', ja: '地底踏破', en: 'Depths Conqueror',        gems: 750 },
-      heaven:  { icon: '☁️', ja: '天界踏破', en: 'Ascent Conqueror',        gems: 500 },
-      abyss:   { icon: '🌑', ja: '深淵踏破', en: 'Abyss Conqueror',         gems: 1000 },
+      dungeon: { ja: '百塔踏破', en: 'Hundred-Floor Conqueror', gems: 500 },
+      under:   { ja: '地底踏破', en: 'Depths Conqueror',        gems: 750 },
+      heaven:  { ja: '天界踏破', en: 'Ascent Conqueror',        gems: 500 },
+      abyss:   { ja: '深淵踏破', en: 'Abyss Conqueror',         gems: 1000 },
     };
     const cb = rewards && CLEAR_BADGE[rewards.badge];
     if (cb) {
       setTimeout(() => {
-        toast(t(`${cb.icon} バッジ「${cb.ja}」を獲得！+${cb.gems}💎`,
-                `${cb.icon} Badge earned: ${cb.en}! +${cb.gems}💎`), 'announce', 6000);
+        toast(t(`バッジ「${cb.ja}」を獲得！ ジェム+${cb.gems}`,
+                `Badge earned: ${cb.en}! +${cb.gems} gems`), 'announce', 6000);
         confettiBurst(80);
       }, 1200);
     }
@@ -4484,7 +4528,9 @@ class DungeonMode {
     const step = R.bossEvery || 10;
     const cp = Math.floor(cleared / step) * step + 1;
     const P = R.prefix;
-    const banner = won ? t(`🏆 ${R.name} 完全制覇！！`, `🏆 ${R.nameEn} conquered!!`) : this.aborted ? t(`🚪 リタイア（${P}${this.floor}）`, `🚪 Retired (${P}${this.floor})`) : t(`${P}${this.floor} で力尽きた…`, `Fell on ${P}${this.floor}…`);
+    const banner = won ? `${ic('leaderboard', 26)} ${t(`${R.name} 完全制覇！！`, `${R.nameEn} conquered!!`)}`
+      : this.aborted ? `${ic('quit', 24)} ${t(`リタイア（${P}${this.floor}）`, `Retired (${P}${this.floor})`)}`
+      : t(`${P}${this.floor} で力尽きた…`, `Fell on ${P}${this.floor}…`);
     const m = showModal(`
       <div class="result-banner ${won ? 'win' : this.aborted ? 'draw' : 'lose'}">${banner}</div>
       <div class="result-stats">
@@ -4509,7 +4555,7 @@ class DungeonMode {
     // 同じ退避（結果モーダルを閉じてメニューへ）にする。
     if (this.ended) { closeModal(); endToMenu(); return; }
     const m = showModal(`
-      <h2>${t('🏰 ダンジョンから撤退しますか？', '🏰 Retreat from the dungeon?')}</h2>
+      <h2>${ic('mode_dungeon', 20)} ${t('ダンジョンから撤退しますか？', 'Retreat from the dungeon?')}</h2>
       <p class="muted center" style="margin-bottom:10px">${t('ここまでにクリアした階は記録されます', 'Floors cleared so far will be saved')}</p>
       <div class="modal-buttons">
         <button class="btn btn-primary" id="dqResume">${t('続ける', 'Keep going')}</button>
@@ -4550,18 +4596,19 @@ export { DUNGEON_REALMS };
 
 const CHAOS_BOARDS = ['board_default', 'board_ocean', 'board_sunset', 'board_forest', 'board_galaxy', 'board_oni', 'board_kami', 'board_sakura', 'board_volcano'];
 const CHAOS_MODS = {
-  fever:   t('🔥 フィーバー！スコア3倍！', '🔥 Fever! 3x score!'),
-  rain:    t('☔ お邪魔ブロックの雨！', '☔ Garbage rain!'),
-  giant:   t('🧱 巨大ブロック時代！', '🧱 Age of giant blocks!'),
-  mini:    t('🐜 ミニブロック時代！', '🐜 Age of mini blocks!'),
-  heaven:  t('✨ 天の恵み！全消し！', '✨ Divine gift! Board cleared!'),
-  shuffle: t('🌀 大シャッフル！', '🌀 Grand shuffle!'),
-  reroll:  t('🔄 リロール無限！', '🔄 Infinite rerolls!'),
-  bomb:    t('💣 爆撃！ボードに大穴！', '💣 Bombing run! Holes everywhere!'),
-  freeze:  t('⏱️ 時間停止！残り+10秒！', '⏱️ Time freeze! +10 seconds!'),
-  gravity: t('🧲 重力発生！ブロック落下！', '🧲 Gravity! Blocks fall!'),
-  cleanse: t('🧹 お邪魔ブロック浄化！', '🧹 Garbage purged!'),
-  shield:  t('🛡️ コンボプロテクト！', '🛡️ Combo protect!'),
+  // ここはすべて toast() へ渡る文言（textContent）なので、絵は混ぜず言葉だけ。
+  fever:   t('フィーバー！スコア3倍！', 'Fever! 3x score!'),
+  rain:    t('お邪魔ブロックの雨！', 'Garbage rain!'),
+  giant:   t('巨大ブロック時代！', 'Age of giant blocks!'),
+  mini:    t('ミニブロック時代！', 'Age of mini blocks!'),
+  heaven:  t('天の恵み！全消し！', 'Divine gift! Board cleared!'),
+  shuffle: t('大シャッフル！', 'Grand shuffle!'),
+  reroll:  t('リロール無限！', 'Infinite rerolls!'),
+  bomb:    t('爆撃！ボードに大穴！', 'Bombing run! Holes everywhere!'),
+  freeze:  t('時間停止！残り+10秒！', 'Time freeze! +10 seconds!'),
+  gravity: t('重力発生！ブロック落下！', 'Gravity! Blocks fall!'),
+  cleanse: t('お邪魔ブロック浄化！', 'Garbage purged!'),
+  shield:  t('コンボプロテクト！', 'Combo protect!'),
 };
 
 class ChaosMode extends VersusBase {
@@ -4590,7 +4637,7 @@ class ChaosMode extends VersusBase {
     updateAutoBtn();
     v.start();
     audio.playTrack('boss');
-    toast(t(`🌪️ カオスモード！${this.interval}秒ごとにルールが変わるぞ！`, `🌪️ Chaos Mode! The rules change every ${this.interval} seconds!`), 'announce', 3000);
+    toast(t(`カオスモード！${this.interval}秒ごとにルールが変わるぞ！`, `Chaos Mode! The rules change every ${this.interval} seconds!`), 'announce', 3000);
 
     countdownOverlay(3, afterCountdown(this, () => {
       v.inputLocked = false;
@@ -4783,14 +4830,14 @@ class ChaosMode extends VersusBase {
     // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
     if (currentMode !== this) return;
     const m = showModal(`
-      <div class="result-banner win">${isBest ? t('🌪️ カオス新記録！！', '🌪️ New chaos record!!') : t('🌪️ カオス終了！', '🌪️ Chaos over!')}</div>
+      <div class="result-banner win">${ic('mode_chaos', 26)} ${isBest ? t('カオス新記録！！', 'New chaos record!!') : t('カオス終了！', 'Chaos over!')}</div>
       <div class="result-stats">
-        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}${isBest ? ' 👑' : ''}</b></div>
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}${isBest ? ' ' + ic('medal_1', 14) : ''}</b></div>
         <div class="rs-row"><span>${t('自己ベスト', 'Personal best')}</span><b>${fmt(Math.max(prevBest, e.score))}</b></div>
         <div class="rs-row"><span>${t('発動したルール', 'Rules triggered')}</span><b>${t(`${fmt(this.modCount)}回`, `${fmt(this.modCount)}`)}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
-        ${rewards ? `<div class="rs-row"><span>${t('🎉 イベントボーナス', '🎉 Event bonus')}</span><b>${t('コイン1.5倍！', '1.5x coins!')}</b></div>` : ''}
+        ${rewards ? `<div class="rs-row"><span>${t('イベントボーナス', 'Event bonus')}</span><b>${t('コイン1.5倍！', '1.5x coins!')}</b></div>` : ''}
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
@@ -4807,7 +4854,7 @@ class ChaosMode extends VersusBase {
     if (this.ended) { closeModal(); endToMenu(); return; }
     // Mid-run cancel: let the player abort (no record), cash out early, or resume.
     const m = showModal(`
-      <h2>${t('🌪️ カオスモードを中断しますか？', '🌪️ Stop the chaos run?')}</h2>
+      <h2>${ic('mode_chaos', 20)} ${t('カオスモードを中断しますか？', 'Stop the chaos run?')}</h2>
       <p class="muted center" style="margin-bottom:10px">${t('「中断する」は記録なしでメニューに戻ります。<br>「終了して集計」はここまでのスコアで報酬を受け取ります。', '"Abort" returns to the menu with no record.<br>"Finish &amp; score" collects rewards for your score so far.')}</p>
       <div class="modal-buttons">
         <button class="btn btn-primary" id="cqResume">${t('続ける', 'Keep playing')}</button>
@@ -4820,7 +4867,7 @@ class ChaosMode extends VersusBase {
       closeModal();
       this.ended = true;
       this.destroy();
-      toast(t('🌪️ カオスモードを中断しました（記録なし）', '🌪️ Chaos run aborted (no record)'), '', 2200);
+      toast(t('カオスモードを中断しました（記録なし）', 'Chaos run aborted (no record)'), '', 2200);
       endToMenu();
     };
     m.querySelector('#cqFinish').onclick = () => { audio.click(); closeModal(); this.finish(); };
@@ -4873,7 +4920,8 @@ class OnlineMode extends VersusBase {
       // 万一この要素が無くても、オンライン対戦ごと死なせない。
       const onlineEl = $('#mmOnline');
       if (onlineEl) onlineEl.textContent = hello.online;
-      this.showQueueCount(hello.queueing);
+      // hello.queueing（このモードの待ち人数）は受け取るが画面には出さない。
+      // 理由は onQueued() のコメント参照。
       if (!session.user) localStorage.setItem('bba_guest_name', hello.name);
     } catch (err) {
       toast(err.message, 'err');
@@ -4887,19 +4935,19 @@ class OnlineMode extends VersusBase {
       .on('result', msg => this.onResult(msg))
       // The chat drawer already picks messageEn; the in-match toast did not,
       // so English players got Japanese announcements mid-game.
-      .on('announce', msg => toast(`📢 ${t(msg.message, msg.messageEn || msg.message)}`, 'announce', 5000))
+      .on('announce', msg => toast(t(msg.message, msg.messageEn || msg.message), 'announce', 5000))
       .on('room_update', msg => this.onRoomUpdate(msg))
       .on('room_error', msg => { audio.error(); toast(trServer(msg.error), 'err'); })
       .on('raid_state', msg => this.onRaidState(msg))
       .on('raid_attack', msg => this.onRaidAttack(msg))
       .on('garbage', msg => this.onGarbage(msg))
-      .on('rematch_offer', msg => toast(t(`🔁 ${msg.from} が再戦を希望しています！`, `🔁 ${msg.from} wants a rematch!`), 'announce', 4000))
+      .on('rematch_offer', msg => toast(t(`${msg.from} が再戦を希望しています！`, `${msg.from} wants a rematch!`), 'announce', 4000))
       .on('rematch_gone', () => {
         if (this.inMatch) return;   // 進行中の試合には古いオファー失効を触らせない
         this.ended = true;          // 再戦不成立 — 結果画面の待機状態に戻す
         toast(t('再戦の相手はもういません', 'Your opponent has left — no rematch'), 'err', 2500);
         const b = document.querySelector('#rRematch');
-        if (b) { b.disabled = true; b.textContent = t('🔁 相手が離脱', '🔁 Opponent left'); }
+        if (b) { b.disabled = true; b.textContent = t('相手が離脱', 'Opponent left'); }
       })
       // OnlineMode には error の受け口が無く、サーバーが送っても無反応だった。
       .on('error', m => { if (m.error) toast(trServer(m.error), 'err', 3000); })
@@ -4928,9 +4976,9 @@ class OnlineMode extends VersusBase {
         this.queueInfo = null;
         // 自分でキャンセルしたぶんは quit() が後始末済み（leftOnPurpose）。
         // 拾いたいのはサーバー都合で待ち行列が解散されたとき
-        //（endAllForShutdown / prepare-update）── 検索画面の
-        //「🎯 レート … あと N 秒で対戦相手が見つかります」は server push でしか
-        // 更新されないので、放っておくと二度と進まない画面の前で待ち続けることになる。
+        //（endAllForShutdown / prepare-update）── 検索画面の経過時間は
+        // server push（queued）でしか更新されないので、放っておくと
+        // 止まった時計の前で待ち続けることになる。
         // このあとサーバーは error も送ってくるが、こちらが socket を閉じると
         // 届かないことがあるので、理由はここでも出す。
         if (this.ended || this.leftOnPurpose || this.inMatch) return;
@@ -4944,7 +4992,7 @@ class OnlineMode extends VersusBase {
         this.onlineCount = msg.online;
         const el = $('#mmOnline');
         if (el) el.textContent = msg.online;
-        this.showQueueCount(msg.queueing);
+        // msg.queueing（モード別の待ち人数）は表示しない ── onQueued() 参照。
       })
       .on('close', () => {
         if (this.ended) return;
@@ -4956,8 +5004,8 @@ class OnlineMode extends VersusBase {
         // 以前は inMatch / custom / tourney のときしか後始末をしていなかった。
         // duel・attack・team・raid・coop・royale はマッチング画面で
         // inMatch=false のまま待つので、そこで切れると何も起きず ── 毎秒の
-        // queued も止まり「あと N 秒で対戦相手が見つかります」を表示した
-        // まま凍った検索画面に置き去りになっていた。BattleClient に再接続は
+        // queued も止まり、経過時間が凍ったままの検索画面に
+        // 置き去りになっていた。BattleClient に再接続は
         // 無く、サーバー側のキューも切断で消えるので待っても永久にマッチしない。
         // 切れたら kind に関係なくメニューへ戻す。
         closeModal();
@@ -4979,51 +5027,47 @@ class OnlineMode extends VersusBase {
         : this.kind === 'coop'
         ? t('いっしょに遊ぶ相棒を探しています…', 'Looking for a co-op partner…')
         : this.kind === 'attack'
-        ? t('💥 アタック戦の相手を探しています…', '💥 Looking for an attack-duel opponent…')
+        ? t('アタック戦の相手を探しています…', 'Looking for an attack-duel opponent…')
         : t('対戦相手を探しています…', 'Looking for an opponent…');
       // 接続人数は #mmOnlineLine が持っている。ここで作り直すと id が重複する。
       $('#mmSub').textContent = t('対戦相手を検索中…', 'Searching…');
       const oe = $('#mmOnline');
       if (oe) oe.textContent = this.onlineCount ?? '-';
+      // #mmQueue は「あと N 秒」「このモードで待っている人」を出していた枠。
+      // どちらも出さなくなったので、前の検索の残りが見えないよう空にする。
+      const q = $('#mmQueue');
+      if (q) q.textContent = '';
       this.client.queue(this.kind);
     }
   }
 
-  // People waiting in matchmaking right now (crowd simulation + real queues).
-  showQueueCount(n) {
-    const el = $('#mmQueue');
-    if (!el) return;
-    if (typeof n !== 'number') { el.textContent = ''; return; }
-    el.textContent = t(`🧑‍🤝‍🧑 いま ${n} 人がマッチング待ち`, `🧑‍🤝‍🧑 ${n} players queueing right now`);
-  }
-
-  // The search screen used to say one frozen sentence and then drop you into a
-  // bot match with no explanation. This is the truth, once a second: how long
-  // you have waited, how wide the rating search has opened, how many real
-  // people are in this queue, and roughly when a match will be found.
+  // 検索画面に出してよいのは「本物のマッチングでも出せること」だけ。
+  //
+  // 以前はここで
+  //   ・あと <N> 秒で対戦相手が見つかります
+  //   ・このモードで待っている人: <N>人
+  // を出していた。この2つは並ぶと住人の正体を割ってしまう ── 本物の
+  // マッチングは相手が来る時刻を予告できない（予告できるのは、その秒数後に
+  // 出すと先に決まっているから）。しかも「待っている人 0人」と同時に出るので、
+  // 「0人待ちなのに 12 秒後に相手が来る」と読めてしまう。
+  //
+  // 残すのは経過時間だけ。これは本物の待ち行列でも出るので手がかりにならない。
+  // 画面上部の「オンライン: N人」(#mmOnlineLine) は**ゲーム全体の接続人数**で、
+  // このモードの待ち人数ではないのでそのまま出す（ユーザーの明示要求）。
+  //
+  // ⚠️ msg.matchInSec / msg.humans / msg.rating / msg.band は消さない。
+  //    サーバーは今も送っていて、管理画面がそれを見る（別担当）。
+  //    ここは「受け取るが画面には出さない」だけにする。
   onQueued(msg) {
     const st = $('#mmStatus');
     const sub = $('#mmSub');
     if (!st || !sub) return;
-    this.queueInfo = msg;
+    this.queueInfo = msg;   // 中身は保持（管理画面・デバッグ用）。表示はしない。
     const mins = Math.floor((msg.waited || 0) / 60);
     const secs = (msg.waited || 0) % 60;
     const clock = mins ? `${mins}:${String(secs).padStart(2, '0')}` : `${secs}${t('秒', 's')}`;
-    const others = Math.max(0, (msg.humans || 1) - 1);
-    sub.innerHTML = t(
-      `⏱️ ${clock} 経過 ・ このモードで待っている人: <b>${others}</b>人`,
-      `⏱️ ${clock} elapsed ・ others waiting in this mode: <b>${others}</b>`);
-    const q = $('#mmQueue');
-    if (!q) return;
-    // サーバーが botInSec → matchInSec に改名した（フィールド名そのものが
-    // 「この先に来るのはボットだ」と白状していたため）。読む側もそろえる。
-    if (msg.matchInSec > 0) {
-      q.innerHTML = t(
-        `🎯 レート ${msg.rating} ±${msg.band} で検索中<br>あと <b>${msg.matchInSec}</b> 秒で対戦相手が見つかります`,
-        `🎯 Searching rating ${msg.rating} ±${msg.band}<br>a match will be found in <b>${msg.matchInSec}</b>s`);
-    } else {
-      q.textContent = t('🎯 対戦相手を探しています…', '🎯 Finding an opponent…');
-    }
+    // ⏱️ は時計のアイコンが icons.js に無いので、絵を足さず言葉だけにする。
+    sub.textContent = t(`${clock} 経過`, `${clock} elapsed`);
   }
 
   // ---- custom room lobby ----
@@ -5079,36 +5123,34 @@ class OnlineMode extends VersusBase {
   renderRoomSeats(msg) {
     const { mode, playSeats, play, watch, max } = this.roomSeatPlan(msg);
     const host = !!msg.youAreHost;
-    const teamMark = n => {
-      if (mode === 'coop') return '🤝';
-      if (mode === 'land') return '🚩';
-      return mode === 'team' ? (n < 2 ? '🟦' : '🟥') : '⚔️';
-    };
+    const teamMark = n => (mode === 'team'
+      ? `<i class="rp-chip ${n < 2 ? 'a' : 'b'}"></i>`
+      : ic('seat_play', 18));
     const full = play.length >= playSeats;
     const row = (p, n, seat) => `
       <div class="room-player${p.isYou ? ' me' : ''}${seat === 'watch' ? ' watcher' : ''}">
-        <span class="rp-team">${seat === 'play' ? teamMark(n) : '👀'}</span>
+        <span class="rp-team">${seat === 'play' ? teamMark(n) : ic('seat_watch', 18)}</span>
         <span class="rp-name">${escapeHtml(p.name)}${p.isYou ? t('（あなた）', ' (you)') : ''}</span>
-        ${p.isHost ? `<span class="rp-host">${t('👑 ホスト', '👑 Host')}</span>` : ''}
+        ${p.isHost ? `<span class="rp-host">${ic('host_crown', 14)} ${t('ホスト', 'Host')}</span>` : ''}
         ${host ? `<button class="rp-seat" data-seat-name="${escapeHtml(p.name)}"
             data-seat-to="${seat === 'play' ? 'watch' : 'play'}"
             ${seat === 'watch' && full ? 'disabled' : ''}
             title="${seat === 'play' ? t('観戦席へ移す', 'Move to the spectator seats') : t('対戦席へ移す', 'Move to a player seat')}"
-          >${seat === 'play' ? t('👀 観戦席へ', '👀 Watch') : t('⚔️ 対戦席へ', '⚔️ Play')}</button>` : ''}
+          >${seat === 'play' ? `${ic('seat_watch', 14)} ${t('観戦席へ', 'Watch')}` : `${ic('seat_play', 14)} ${t('対戦席へ', 'Play')}`}</button>` : ''}
       </div>`;
     const openSeat = `
       <div class="room-player open">
-        <span class="rp-team">＋</span>
+        <span class="rp-team">${ic('seat_open', 18)}</span>
         <span class="rp-name">${t('空き席', 'Open seat')}</span>
       </div>`;
     $('#roomPlayers').innerHTML = `
       <div class="room-seat-group">
-        <div class="room-seat-title">${t('⚔️ 対戦席', '⚔️ Player seats')}<b>${play.length}/${playSeats}</b></div>
+        <div class="room-seat-title">${ic('seat_play', 14)} ${t('対戦席', 'Player seats')}<b>${play.length}/${playSeats}</b></div>
         ${play.map((p, n) => row(p, n, 'play')).join('')}
         ${openSeat.repeat(Math.max(0, playSeats - play.length))}
       </div>
       <div class="room-seat-group">
-        <div class="room-seat-title">${t('👀 観戦席', '👀 Spectator seats')}<b>${watch.length}</b>
+        <div class="room-seat-title">${ic('seat_watch', 14)} ${t('観戦席', 'Spectator seats')}<b>${watch.length}</b>
           <span class="rs-cap">${t(`この部屋は ${play.length + watch.length}/${max} 人`, `${play.length + watch.length}/${max} in this room`)}</span>
         </div>
         ${watch.length ? watch.map(p => row(p, 0, 'watch')).join('')
@@ -5150,8 +5192,8 @@ class OnlineMode extends VersusBase {
       const v = getView();
       v.inputLocked = true;
       $('#hudScore').textContent = '-';
-      $('#hudSub').textContent = t('👀 観戦席', '👀 SPECTATING');
-      toast(t('👀 観戦席から試合を見ています', '👀 Watching from the spectator seats'), 'announce', 2600);
+      $('#hudSub').innerHTML = ic('spectate', 13) + ' ' + t('観戦席', 'SPECTATING');
+      toast(t('観戦席から試合を見ています', 'Watching from the spectator seats'), 'announce', 2600);
     }
     const w = msg.watch || null;
     const parts = [];
@@ -5182,7 +5224,7 @@ class OnlineMode extends VersusBase {
     $('#btnReroll').classList.remove('hidden');
     $('#hudSub').textContent = 'SCORE';
     showScreen('room');
-    toast(t('👀 観戦が終わりました。ルームに戻ります', '👀 The match is over — back to the room'), 'ok', 2600);
+    toast(t('観戦が終わりました。ルームに戻ります', 'The match is over — back to the room'), 'ok', 2600);
   }
 
   onRoomUpdate(msg) {
@@ -5212,18 +5254,18 @@ class OnlineMode extends VersusBase {
     const mode = s.mode || (s.team ? 'team' : 'duel');
     const dis = host ? '' : 'disabled';
     $('#roomSettings').innerHTML = `
-      <div class="settings-row ${mode === 'coop' ? 'hidden' : ''}"><label>${t('⏱️ 試合時間', '⏱️ Match time')}</label><div class="seg" data-rs="duration">
+      <div class="settings-row ${mode === 'coop' ? 'hidden' : ''}"><label>${t('試合時間', 'Match time')}</label><div class="seg" data-rs="duration">
         ${[60, 120, 180].map(d => `<button data-v="${d}" ${s.duration === d ? 'class="active"' : ''} ${dis}>${d / 60}${t('分', 'min')}</button>`).join('')}
       </div></div>
-      <div class="settings-row"><label>${t('👥 モード', '👥 Mode')}</label><div class="seg" data-rs="mode">
-        ${[['duel', '1v1'], ['team', t('2v2チーム', '2v2 Team')], ['coop', t('🤝 協力', '🤝 Co-op')], ['land', t('🚩 陣取り', '🚩 Land Grab')]].map(([v, l]) =>
+      <div class="settings-row"><label>${t('モード', 'Mode')}</label><div class="seg" data-rs="mode">
+        ${[['duel', '1v1'], ['team', t('2v2チーム', '2v2 Team')], ['coop', t('協力', 'Co-op')], ['land', t('陣取り', 'Land Grab')]].map(([v, l]) =>
           `<button data-v="${v}" ${mode === v ? 'class="active"' : ''} ${dis}>${l}</button>`).join('')}
       </div></div>
-      ${mode === 'coop' ? `<p class="muted center" style="font-size:11px">${t('🤝 2人で1つの盤面を交互に操作。ボット補充ONなら1人でも遊べます', '🤝 Two players share one board, taking turns. Bot fill lets you play solo')}</p>` : ''}
-      ${mode === 'land' ? `<p class="muted center" style="font-size:11px">${t('🚩 2人で1つの盤面を交互に操作。消したライン8マスが自分の色になり、領土が広いほうが勝ち（合言葉ルーム専用）', '🚩 Two players share one board, taking turns. Every line you clear paints 8 squares your colour — most territory wins (code rooms only)')}</p>` : ''}
-      <div class="settings-row"><label>${t('🤖 ボット補充', '🤖 Fill with bots')}</label><input type="checkbox" id="rsBotFill" ${s.botFill ? 'checked' : ''} ${dis}></div>
-      <div class="settings-row"><label>${t('💪 ボットの強さ', '💪 Bot strength')}</label><div class="seg" data-rs="botLevel">
-        ${[['random', '🎲'], ['easy', t('弱', 'Easy')], ['normal', t('中', 'Mid')], ['hard', t('強', 'Hard')], ['oni', t('鬼', 'Oni')]].map(([v, l]) =>
+      ${mode === 'coop' ? `<p class="muted center" style="font-size:11px">${t('2人で1つの盤面を交互に操作。ボット補充ONなら1人でも遊べます', 'Two players share one board, taking turns. Bot fill lets you play solo')}</p>` : ''}
+      ${mode === 'land' ? `<p class="muted center" style="font-size:11px">${t('2人で1つの盤面を交互に操作。消したライン8マスが自分の色になり、領土が広いほうが勝ち（合言葉ルーム専用）', 'Two players share one board, taking turns. Every line you clear paints 8 squares your colour — most territory wins (code rooms only)')}</p>` : ''}
+      <div class="settings-row"><label>${ic('mode_ai', 14)} ${t('ボット補充', 'Fill with bots')}</label><input type="checkbox" id="rsBotFill" ${s.botFill ? 'checked' : ''} ${dis}></div>
+      <div class="settings-row"><label>${t('ボットの強さ', 'Bot strength')}</label><div class="seg" data-rs="botLevel">
+        ${[['random', t('おまかせ', 'Any')], ['easy', t('弱', 'Easy')], ['normal', t('中', 'Mid')], ['hard', t('強', 'Hard')], ['oni', t('鬼', 'Oni')]].map(([v, l]) =>
           `<button data-v="${v}" ${s.botLevel === v ? 'class="active"' : ''} ${dis}>${l}</button>`).join('')}
       </div></div>`;
     $('#btnStartRoom').classList.toggle('hidden', !host);
@@ -5278,7 +5320,7 @@ class OnlineMode extends VersusBase {
     v.start();
     audio.playTrack('pixel');
     this.showRoyaleBar();
-    toast(t('💯 バトルロイヤル開始！2ライン以上消して相手を潰せ！', '💯 Battle Royale! Clear 2+ lines to bury your rivals!'), 'announce', 3000);
+    toast(t('バトルロイヤル開始！2ライン以上消して相手を潰せ！', 'Battle Royale! Clear 2+ lines to bury your rivals!'), 'announce', 3000);
     countdownOverlay(msg.countdown || 3, afterCountdown(this, () => {
       // The mode may have been quit during the 3-2-1 — re-arming timers here
       // would leak them past destroy().
@@ -5302,10 +5344,10 @@ class OnlineMode extends VersusBase {
     $('#oppCards').innerHTML = `
       <div class="rl-bar">
         <div class="rl-row">
-          <span class="rl-alive">💯 <b id="rlAlive">100</b></span>
+          <span class="rl-alive">${ic('mode_royale', 14)} <b id="rlAlive">100</b></span>
           <span class="rl-rank">#<b id="rlRank">-</b></span>
-          <span class="rl-kills">💀 <b id="rlKills">0</b></span>
-          <span class="rl-storm hidden" id="rlStorm">🌩️</span>
+          <span class="rl-kills">KO <b id="rlKills">0</b></span>
+          <span class="rl-storm hidden" id="rlStorm">${ic('warn', 14)} ${t('嵐', 'STORM')}</span>
         </div>
         <div class="rl-danger" id="rlDanger"></div>
         <div class="rl-feed" id="rlFeed"></div>
@@ -5334,7 +5376,7 @@ class OnlineMode extends VersusBase {
       // 通知」を自分の攻撃で押し出していた。盤面のフロートテキストへ移す。
       const v = getView();
       v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.18,
-        t('💥 攻撃！', '💥 ATTACK!'), '#ff8a5c', 1.5);
+        t('攻撃！', 'ATTACK!'), '#ff8a5c', 1.5);
       v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.18 + v.cell,
         t(`お邪魔 +${cells}`, `+${cells} garbage`), '#ffd75e', 1.05);
       attackLesson('sent', { lines: r.lineCount, cells });
@@ -5358,8 +5400,8 @@ class OnlineMode extends VersusBase {
     audio.levelUp();
     this.updateRoyaleHud();
     updateRerollHud(this.engine);
-    toast(t('🔥 復活！ただし次に潰れたら脱落です（スコア-10%）',
-      '🔥 Revived! Next top-out eliminates you (−10% score)'), 'announce', 3200);
+    toast(t('復活！ただし次に潰れたら脱落です（スコア-10%）',
+      'Revived! Next top-out eliminates you (−10% score)'), 'announce', 3200);
   }
 
   onRoyaleGarbage(msg) {
@@ -5372,7 +5414,7 @@ class OnlineMode extends VersusBase {
     }
     v.shake = 9;
     audio.bossAttack();
-    if (msg.from) toast(t(`💥 ${msg.from} の攻撃！ お邪魔${cells.length}個`, `💥 Hit by ${msg.from}! ${cells.length} garbage`), 'err', 1500);
+    if (msg.from) toast(t(`${msg.from} の攻撃！ お邪魔${cells.length}個`, `Hit by ${msg.from}! ${cells.length} garbage`), 'err', 1500);
     // ⚡ストームは from が null で降ってくる。誰かの攻撃ではないので、
     // 「相手がラインを消した」と教えると嘘になる（レッスンの回数も無駄に減る）。
     if (msg.from) attackLesson('taken', { lines: Number(msg.lines) || 0, cells: cells.length });
@@ -5384,7 +5426,7 @@ class OnlineMode extends VersusBase {
     const k = $('#rlKills');
     if (k) k.textContent = msg.kills;
     audio.victory();
-    toast(t(`💀 ${msg.victim} を脱落させた！（${msg.kills}KO）`, `💀 You knocked out ${msg.victim}! (${msg.kills} KOs)`), 'announce', 2200);
+    toast(t(`${msg.victim} を脱落させた！（${msg.kills}KO）`, `You knocked out ${msg.victim}! (${msg.kills} KOs)`), 'announce', 2200);
   }
 
   royaleFeedLine(html) {
@@ -5401,21 +5443,21 @@ class OnlineMode extends VersusBase {
 
   onRoyaleFeed(msg) {
     if (msg.kind === 'ko') {
-      this.royaleFeedLine(msg.by
-        ? t(`💀 <b>${escapeHtml(msg.by)}</b> → ${escapeHtml(msg.victim)}`, `💀 <b>${escapeHtml(msg.by)}</b> → ${escapeHtml(msg.victim)}`)
-        : t(`💀 ${escapeHtml(msg.victim)} 脱落`, `💀 ${escapeHtml(msg.victim)} is out`));
+      this.royaleFeedLine(ic('quit', 13) + ' ' + (msg.by
+        ? `<b>${escapeHtml(msg.by)}</b> → ${escapeHtml(msg.victim)}`
+        : t(`${escapeHtml(msg.victim)} 脱落`, `${escapeHtml(msg.victim)} is out`)));
     } else if (msg.kind === 'left') {
-      this.royaleFeedLine(t(`🚪 ${escapeHtml(msg.victim)} が離脱`, `🚪 ${escapeHtml(msg.victim)} left`));
+      this.royaleFeedLine(ic('close', 13) + ' ' + t(`${escapeHtml(msg.victim)} が離脱`, `${escapeHtml(msg.victim)} left`));
     } else if (msg.kind === 'storm') {
       audio.bossAttack();
       if (view) view.screenFlash = 0.35;
-      toast(t(`🌩️ ストームが来る！ 全員にお邪魔${msg.cells}個が定期的に降ります`,
-        `🌩️ The storm closes in — ${msg.cells} garbage on everyone, on a timer`), 'err', 3200);
+      toast(t(`ストームが来る！ 全員にお邪魔${msg.cells}個が定期的に降ります`,
+        `The storm closes in — ${msg.cells} garbage on everyone, on a timer`), 'err', 3200);
     } else if (msg.kind === 'cut') {
-      this.royaleFeedLine(t(`⚔️ 足切り ${msg.eliminated}人 — 残り${msg.alive}`, `⚔️ Cut: ${msg.eliminated} out — ${msg.alive} left`));
+      this.royaleFeedLine(ic('warn', 13) + ' ' + t(`足切り ${msg.eliminated}人 — 残り${msg.alive}`, `Cut: ${msg.eliminated} out — ${msg.alive} left`));
     } else if (msg.kind === 'finale') {
       audio.victory();
-      toast(t('🔥 ファイナル！ 残り3人の盤面が見えます', '🔥 FINALE! You can see the last three boards'), 'announce', 3000);
+      toast(t('ファイナル！ 残り3人の盤面が見えます', 'FINALE! You can see the last three boards'), 'announce', 3000);
     }
   }
 
@@ -5444,12 +5486,12 @@ class OnlineMode extends VersusBase {
         d.textContent = '';
       } else if (msg.safeBy >= 0) {
         d.className = 'rl-danger safe';
-        d.textContent = t(`✅ 安全圏まで +${fmt(msg.safeBy)} の余裕（上位${msg.nextKeep}人が残る・あと${msg.nextCutIn}秒）`,
-          `✅ ${fmt(msg.safeBy)} clear of the cut (top ${msg.nextKeep} survive, ${msg.nextCutIn}s)`);
+        d.innerHTML = ic('check', 13) + ' ' + escapeHtml(t(`安全圏まで +${fmt(msg.safeBy)} の余裕（上位${msg.nextKeep}人が残る・あと${msg.nextCutIn}秒）`,
+          `${fmt(msg.safeBy)} clear of the cut (top ${msg.nextKeep} survive, ${msg.nextCutIn}s)`));
       } else {
         d.className = 'rl-danger risk';
-        d.textContent = t(`⚠️ 脱落圏！ あと ${fmt(-msg.safeBy)} 点で生き残れる（あと${msg.nextCutIn}秒）`,
-          `⚠️ IN THE CUT! ${fmt(-msg.safeBy)} points from safety (${msg.nextCutIn}s)`);
+        d.innerHTML = ic('warn', 13) + ' ' + escapeHtml(t(`脱落圏！ あと ${fmt(-msg.safeBy)} 点で生き残れる（あと${msg.nextCutIn}秒）`,
+          `IN THE CUT! ${fmt(-msg.safeBy)} points from safety (${msg.nextCutIn}s)`));
       }
     }
 
@@ -5583,9 +5625,9 @@ class OnlineMode extends VersusBase {
       this.watchWait = 0;
     }
     box.classList.toggle('waiting', !!this.watchTarget && this.watchTarget !== name);
-    box.querySelector('.rl-spec-head').innerHTML = name
-      ? t(`👀 観戦中: <b>${escapeHtml(name)}</b>`, `👀 Spectating <b>${escapeHtml(name)}</b>`)
-      : t('👀 観戦できる相手を探しています…', '👀 Looking for someone to watch…');
+    box.querySelector('.rl-spec-head').innerHTML = ic('spectate', 15) + ' ' + (name
+      ? t(`観戦中: <b>${escapeHtml(name)}</b>`, `Spectating <b>${escapeHtml(name)}</b>`)
+      : t('観戦できる相手を探しています…', 'Looking for someone to watch…'));
     box.querySelector('.rl-spec-sub').textContent = info.sub || '';
     box.querySelector('.rl-spec-stage').classList.toggle('empty', !name);
     this.sizeSpectateBoard();
@@ -5697,7 +5739,7 @@ class OnlineMode extends VersusBase {
       grid: shown ? shown.grid : null,
       sub: parts.join(' ・ '),
       watchable: rows,
-      note: msg.finale && msg.finale.length ? t('🔥 ファイナル', '🔥 FINALE') : '',
+      note: msg.finale && msg.finale.length ? ic('fire', 13) + ' ' + t('ファイナル', 'FINALE') : '',
     });
   }
 
@@ -5725,11 +5767,11 @@ class OnlineMode extends VersusBase {
   onRoyaleCut(msg) {
     audio.bossAttack();
     if (view) view.shake = 8;
-    toast(t(`⚔️ 足切り！${msg.eliminated}人脱落 — 残り${msg.alive}人`, `⚔️ The cut! ${msg.eliminated} eliminated — ${msg.alive} remain`), 'announce', 2400);
+    toast(t(`足切り！${msg.eliminated}人脱落 — 残り${msg.alive}人`, `The cut! ${msg.eliminated} eliminated — ${msg.alive} remain`), 'announce', 2400);
   }
 
   onRoyaleFinaleStart(msg) {
-    toast(t(`🔥 ファイナル！ 残り${msg.players.length}人`, `🔥 FINALE — ${msg.players.length} left`), 'announce', 3000);
+    toast(t(`ファイナル！ 残り${msg.players.length}人`, `FINALE — ${msg.players.length} left`), 'announce', 3000);
   }
 
   // Everyone learns who actually won — including the people cut at 30 seconds.
@@ -5747,14 +5789,14 @@ class OnlineMode extends VersusBase {
     if (open && this.sawRoyaleResult) {
       const row = document.createElement('div');
       row.className = 'rs-row';
-      row.innerHTML = `<span>🏆 ${t('優勝', 'Champion')}</span><b>${escapeHtml(msg.winner.name)} — ${fmt(msg.winner.score)}${msg.winner.kills ? ` ・ 💀${msg.winner.kills}` : ''}</b>`;
+      row.innerHTML = `<span>${ic('medal_1')} ${t('優勝', 'Champion')}</span><b>${escapeHtml(msg.winner.name)} — ${fmt(msg.winner.score)}${msg.winner.kills ? ` ・ ${msg.winner.kills}KO` : ''}</b>`;
       open.appendChild(row);
       return;
     }
     const rows = (msg.top || []).map((x, i) => `
-      <div class="rs-row"><span>${medalIconName(i + 1) ? icon(medalIconName(i + 1), { size: 18 }) : `#${i + 1}`} ${escapeHtml(x.name)}</span><b>${fmt(x.score)}${x.kills ? ` ・ 💀${x.kills}` : ''}</b></div>`).join('');
+      <div class="rs-row"><span>${medalIconName(i + 1) ? icon(medalIconName(i + 1), { size: 18 }) : `#${i + 1}`} ${escapeHtml(x.name)}</span><b>${fmt(x.score)}${x.kills ? ` ・ ${x.kills}KO` : ''}</b></div>`).join('');
     const m = showModal(`
-      <div class="result-banner win">👑 ${escapeHtml(msg.winner.name)}</div>
+      <div class="result-banner win">${ic('medal_1', 26)} ${escapeHtml(msg.winner.name)}</div>
       <p class="muted center">${t('100人の頂点', 'Last one standing of 100')}</p>
       <div class="result-stats">${rows}</div>
       <div class="modal-buttons">
@@ -5788,9 +5830,9 @@ class OnlineMode extends VersusBase {
     else if (msg.placement <= 10) audio.victory();
     else audio.gameOver();
     if (msg.rewards && msg.rewards.badge === 'royale') {
-      setTimeout(() => toast(t('💯 バッジ「百人の頂点」を獲得！+150💎', '💯 Badge earned: Apex of 100! +150💎'), 'announce', 5000), 1200);
+      setTimeout(() => toast(t('バッジ「百人の頂点」を獲得！ ジェム+150', 'Badge earned: Apex of 100! +150 gems'), 'announce', 5000), 1200);
     }
-    const banner = win ? t('👑 1位！VICTORY!', '👑 #1 VICTORY!') : `#${msg.placement} / ${msg.players}`;
+    const banner = win ? `${ic('medal_1', 26)} ${t('1位！VICTORY!', '#1 VICTORY!')}` : `#${msg.placement} / ${msg.players}`;
     const tierName = {
       champion: t('優勝', 'Champion'), podium: t('表彰台', 'Podium'),
       top10: t('TOP10', 'Top 10'), top25: t('TOP25', 'Top 25'),
@@ -5802,12 +5844,12 @@ class OnlineMode extends VersusBase {
       <div class="result-stats">
         <div class="rs-row"><span>${t('最終順位', 'Final placement')}</span><b>#${msg.placement} / ${msg.players}</b></div>
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(msg.score)}</b></div>
-        <div class="rs-row"><span>${t('KO数', 'Knockouts')}</span><b>💀 ${msg.kills || 0}</b></div>
-        ${msg.payout ? `<div class="rs-row"><span>🏅 ${t('順位報酬', 'Placement reward')}（${tierName}）</span><b>+${fmt(msg.payout.coins)}🪙${msg.payout.gems ? ` +${fmt(msg.payout.gems)}💎` : ''}</b></div>` : ''}
+        <div class="rs-row"><span>${t('KO数', 'Knockouts')}</span><b>${msg.kills || 0}</b></div>
+        ${msg.payout ? `<div class="rs-row"><span>${ic('leaderboard')} ${t('順位報酬', 'Placement reward')}（${tierName}）</span><b>+${fmt(msg.payout.coins)} ${ic('coins', 14)}${msg.payout.gems ? ` +${fmt(msg.payout.gems)} ${ic('gems', 14)}` : ''}</b></div>` : ''}
         ${rewardsRows(msg.rewards)}
       </div>
       ${spectate ? `<div class="modal-buttons">
-        <button class="btn btn-online" id="rWatch">${t('👀 決着を見届ける', '👀 Watch the finish')}</button>
+        <button class="btn btn-online" id="rWatch">${ic('spectate', 15)} ${t('決着を見届ける', 'Watch the finish')}</button>
       </div>` : ''}
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
@@ -5818,7 +5860,7 @@ class OnlineMode extends VersusBase {
     const w = m.querySelector('#rWatch');
     if (w) w.onclick = () => {
       closeModal();
-      toast(t('👀 観戦モード — 決着がついたら結果が出ます', '👀 Spectating — the result appears when it is over'), 'announce', 3000);
+      toast(t('観戦モード — 決着がついたら結果が出ます', 'Spectating — the result appears when it is over'), 'announce', 3000);
     };
   }
 
@@ -5834,11 +5876,11 @@ class OnlineMode extends VersusBase {
   onTourneyState(msg) {
     if (this.ended) return;
     this.inMatch = false;   // between rounds — ready for the next match_found
-    const mark = e => `${e.you ? '⭐<b>' : ''}${escapeHtml(e.name)}${e.you ? '</b>' : ''}${e.rating != null ? ` <small class="muted">R${e.rating}</small>` : ''}`;
+    const mark = e => `${e.you ? ic('user', 13) + '<b>' : ''}${escapeHtml(e.name)}${e.you ? '</b>' : ''}${e.rating != null ? ` <small class="muted">R${e.rating}</small>` : ''}`;
     const rows = msg.pairs.map(p =>
-      `<div class="rs-row"><span>${mark(p[0])}</span><span style="opacity:.6">⚔️</span><span>${mark(p[1])}</span></div>`).join('');
+      `<div class="rs-row"><span>${mark(p[0])}</span><span style="opacity:.6">${ic('seat_play', 14)}</span><span>${mark(p[1])}</span></div>`).join('');
     showModal(`
-      <h2>🏆 ${t('トーナメント', 'Tournament')} — ${this.tourneyRoundName(msg.pairs.length)}</h2>
+      <h2>${ic('mode_tourney', 22)} ${t('トーナメント', 'Tournament')} — ${this.tourneyRoundName(msg.pairs.length)}</h2>
       <div class="result-stats">${rows}</div>
       <p class="muted center" style="margin-top:8px">${t('まもなく対戦開始…', 'Match starting soon…')}</p>`, { dismissable: false });
     audio.click();
@@ -5902,8 +5944,8 @@ class OnlineMode extends VersusBase {
     emoteBtn.classList.remove('hidden');
     emoteBtn.onclick = () => this.toggleEmotePicker();
 
-    toast(t(`🤝 ${this.partnerName}さんと協力プレイ！交互にピースを置いて高得点を狙おう`,
-      `🤝 Co-op with ${this.partnerName}! Take turns placing pieces for a shared high score`), 'announce', 4000);
+    toast(t(`${this.partnerName}さんと協力プレイ！交互にピースを置いて高得点を狙おう`,
+      `Co-op with ${this.partnerName}! Take turns placing pieces for a shared high score`), 'announce', 4000);
 
     countdownOverlay(msg.countdown || 3, afterCountdown(this, () => {
       if (this.ended) return;
@@ -5927,7 +5969,7 @@ class OnlineMode extends VersusBase {
           // 自分の手番が時間切れでサーバーに置かれた。今まで何の断りも
           // 無く石が置かれていて、何が起きたのか分からなかった。
           audio.error();
-          toast(t('⏰ 時間切れ ── かわりに置きました', '⏰ Out of time — the server placed it for you'), 'err', 2600);
+          toast(t('時間切れ ── かわりに置きました', 'Out of time — the server placed it for you'), 'err', 2600);
         }
       }
     }
@@ -6004,13 +6046,15 @@ class OnlineMode extends VersusBase {
     applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     const mine = this.coopTurn === this.mySlot;
-    $('#hudSub').textContent = this.engine.streak >= 2
-      ? t(`${this.engine.streak} コンボ！`, `${this.engine.streak} COMBO!`)
-      : t('🤝 きょうりょくスコア', '🤝 SHARED SCORE');
+    if (this.engine.streak >= 2) {
+      $('#hudSub').textContent = t(`${this.engine.streak} コンボ！`, `${this.engine.streak} COMBO!`);
+    } else {
+      $('#hudSub').innerHTML = ic('mode_coop', 13) + ' ' + t('きょうりょくスコア', 'SHARED SCORE');
+    }
     const label = $('#coopTurnLabel');
     label.textContent = mine
-      ? t('🎯 あなたの番！', '🎯 Your turn!')
-      : t(`⏳ ${this.partnerName}さんの番…`, `⏳ ${this.partnerName} is thinking…`);
+      ? t('あなたの番！', 'Your turn!')
+      : t(`${this.partnerName}さんの番…`, `${this.partnerName} is thinking…`);
     label.classList.toggle('mine', mine);
   }
 
@@ -6085,8 +6129,8 @@ class OnlineMode extends VersusBase {
     emoteBtn.classList.remove('hidden');
     emoteBtn.onclick = () => this.toggleEmotePicker();
 
-    toast(t(`🚩 ${this.oppName}さんと陣取り！ ラインを消したマスがあなたの色になる ── 広いほうが勝ち！`,
-      `🚩 Land Grab vs ${this.oppName}! Every square you clear turns your colour — most territory wins!`), 'announce', 4200);
+    toast(t(`${this.oppName}さんと陣取り！ ラインを消したマスがあなたの色になる ── 広いほうが勝ち！`,
+      `Land Grab vs ${this.oppName}! Every square you clear turns your colour — most territory wins!`), 'announce', 4200);
 
     countdownOverlay(msg.countdown || 3, afterCountdown(this, () => {
       if (this.ended || currentMode !== this) return;
@@ -6105,13 +6149,13 @@ class OnlineMode extends VersusBase {
         getView().applyResult(result);
         if (msg.move.slot === this.mySlot && msg.move.auto) {
           audio.error();
-          toast(t('⏰ 時間切れ ── かわりに置きました', '⏰ Out of time — the server placed it for you'), 'err', 2600);
+          toast(t('時間切れ ── かわりに置きました', 'Out of time — the server placed it for you'), 'err', 2600);
         }
         if (msg.move.took) {
           const mine = msg.move.slot === this.mySlot;
           const v = getView();
           v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.24,
-            t(`🚩 ${msg.move.took}マス獲得`, `🚩 +${msg.move.took} squares`),
+            t(`${msg.move.took}マス獲得`, `+${msg.move.took} squares`),
             mine ? '#6bd97b' : '#ff6b6b', 1.5);
           if (mine) audio.coin();
         }
@@ -6184,8 +6228,8 @@ class OnlineMode extends VersusBase {
     bumpScore(el);
     const mineCount = this.landCounts[this.mySlot] || 0;
     const foeCount = this.landCounts[1 - this.mySlot] || 0;
-    $('#hudSub').textContent = t(`🚩 あなた ${mineCount} ・ ${this.oppName} ${foeCount}`,
-      `🚩 You ${mineCount} ・ ${this.oppName} ${foeCount}`);
+    $('#hudSub').textContent = t(`あなた ${mineCount} ・ ${this.oppName} ${foeCount}`,
+      `You ${mineCount} ・ ${this.oppName} ${foeCount}`);
     const tm = $('#hudTimer');
     const left = Math.max(0, Math.ceil((this.landEndsAt ? this.landEndsAt - Date.now() : this.landEndsIn) / 1000));
     tm.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
@@ -6193,8 +6237,8 @@ class OnlineMode extends VersusBase {
     const mine = this.landTurn === this.mySlot;
     const label = $('#coopTurnLabel');
     label.textContent = mine
-      ? t('🎯 あなたの番！', '🎯 Your turn!')
-      : t(`⏳ ${this.oppName}さんの番…`, `⏳ ${this.oppName} is thinking…`);
+      ? t('あなたの番！', 'Your turn!')
+      : t(`${this.oppName}さんの番…`, `${this.oppName} is thinking…`);
     label.classList.toggle('mine', mine);
   }
 
@@ -6280,8 +6324,8 @@ class OnlineMode extends VersusBase {
     updateAutoBtn();
     v.start();
     audio.playTrack(this.isRaid ? 'boss' : 'battle');
-    toast(this.isRaid ? t(`🐲 レイド開始！${this.raidBoss ? this.raidBoss.name : ''}を倒せ！`, `🐲 Raid start! Take down ${this.raidBoss ? catName(this.raidBoss) : 'the boss'}!`)
-      : this.isTeam ? t('👥 チーム戦スタート！', '👥 Team battle start!') : t('⚔️ マッチしました！', '⚔️ Match found!'), 'ok');
+    toast(this.isRaid ? t(`レイド開始！${this.raidBoss ? this.raidBoss.name : ''}を倒せ！`, `Raid start! Take down ${this.raidBoss ? catName(this.raidBoss) : 'the boss'}!`)
+      : this.isTeam ? t('チーム戦スタート！', 'Team battle start!') : t('マッチしました！', 'Match found!'), 'ok');
 
     // Emotes: quick reactions relayed to everyone in the match.
     const emoteBtn = $('#btnEmote');
@@ -6396,7 +6440,7 @@ class OnlineMode extends VersusBase {
       const cells = attackCellsFor(result.lineCount, result.streak);
       const v = getView();
       v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.18,
-        t('💥 攻撃！', '💥 ATTACK!'), '#ff8a5c', 1.5);
+        t('攻撃！', 'ATTACK!'), '#ff8a5c', 1.5);
       // 「何個送ったか」を2行目に。1行に混ぜると盤面の幅（8マス）を超える。
       v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.18 + v.cell,
         t(`お邪魔 +${cells}`, `+${cells} garbage`), '#ffd75e', 1.05);
@@ -6439,7 +6483,7 @@ class OnlineMode extends VersusBase {
       view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 9, 'fx_default');
     }
     view.shake = 12;
-    toast(t(`${this.raidBoss.emoji} ${this.raidBoss.name}の攻撃！`, `${this.raidBoss.emoji} ${catName(this.raidBoss)} attacks!`), 'err', 1300);
+    toast(t(`${this.raidBoss.name}の攻撃！`, `${catName(this.raidBoss)} attacks!`), 'err', 1300);
     if (this.engine.over) this.onTopOut();
   }
 
@@ -6454,7 +6498,7 @@ class OnlineMode extends VersusBase {
     }
     view.shake = 10;
     view.addFloatText(view.boardX + view.boardSize / 2, view.boardY + view.boardSize * 0.3,
-      t(`💥 妨害 +${cells.length}！`, `💥 +${cells.length} garbage!`), '#ff5d5d', 1.5);
+      t(`妨害 +${cells.length}！`, `+${cells.length} garbage!`), '#ff5d5d', 1.5);
     // 何をされたのか（相手が何ラインまとめて消したのか）を最初の数回だけ教える。
     // 個数からの逆算は原理的にできない（3ライン＋コンボ6 と 4ライン はどちらも
     // 6個）ので、サーバーの 'garbage' が lines を載せている。載っていない古い
@@ -6480,7 +6524,7 @@ class OnlineMode extends VersusBase {
     clearInterval(this.stateInt);
     this.client.finish(this.engine.score, this.engine.linesCleared, this.engine.maxCombo);
     showModal(`
-      <h2>${t('⌛ 集計中…', '⌛ Tallying…')}</h2>
+      <h2>${t('集計中…', 'Tallying…')}</h2>
       <p class="muted center">${t('全員の結果を待っています', 'Waiting for all results')}</p>`, { dismissable: false });
     this.resultTimeout = setTimeout(() => {
       if (!this.ended) {
@@ -6510,7 +6554,7 @@ class OnlineMode extends VersusBase {
     const mine = msg.players.find(p => p.slot === msg.you.slot);
     const partner = msg.players.find(p => p.slot !== msg.you.slot);
     const m = showModal(`
-      <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? t('🤝 新記録！', '🤝 NEW RECORD!') : t('🤝 おつかれさま！', '🤝 GOOD GAME!')}</div>
+      <div class="result-banner ${isBest ? 'win' : 'draw'}">${ic('mode_coop', 26)} ${isBest ? t('新記録！', 'NEW RECORD!') : t('おつかれさま！', 'GOOD GAME!')}</div>
       <div class="result-stats">
         <div class="rs-row"><span>${t('きょうりょくスコア', 'Shared score')}</span><b>${fmt(c.score)}</b></div>
         <div class="rs-row"><span>${t('自己ベスト', 'Personal best')}</span><b>${fmt(Math.max(c.best || 0, localBest, c.score))}</b></div>
@@ -6522,7 +6566,7 @@ class OnlineMode extends VersusBase {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        <button class="btn btn-online" id="rAgain">${this.kind === 'custom' ? t('🤝 ルームでもう一度', '🤝 Team up in room') : t('🤝 もう一度組む', '🤝 Team up again')}</button>
+        <button class="btn btn-online" id="rAgain">${ic('mode_coop', 15)} ${this.kind === 'custom' ? t('ルームでもう一度', 'Team up in room') : t('もう一度組む', 'Team up again')}</button>
       </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
     // カスタムルーム（4文字コード）で組んだ場合はルームへ戻す。公開キューに
@@ -6550,7 +6594,7 @@ class OnlineMode extends VersusBase {
           <div class="rs-row"><span>${t('あなた', 'You')}</span><b>${fmt(msg.players.find(p => p.slot === msg.you.slot).score)}</b></div>
           ${opp ? `<div class="rs-row"><span>${escapeHtml(opp.name)}</span><b>${fmt(opp.score)}</b></div>` : ''}
         </div>
-        <p class="muted center" style="margin-top:8px">${t('🏆 勝ち上がり！次のラウンドを待っています…', '🏆 Advancing! Waiting for the next round…')}</p>`, { dismissable: false });
+        <p class="muted center" style="margin-top:8px">${ic('mode_tourney', 15)} ${t('勝ち上がり！次のラウンドを待っています…', 'Advancing! Waiting for the next round…')}</p>`, { dismissable: false });
       return;
     }
 
@@ -6575,10 +6619,10 @@ class OnlineMode extends VersusBase {
       setTimeout(() => {
         confettiBurst(80);
         audio.levelUp();
-        toast(t(`${msg.tierChange.to.icon} ${msg.tierChange.to.name}に昇格！！`, `${msg.tierChange.to.icon} Promoted to ${msg.tierChange.to.nameEn}!!`), 'announce', 5000);
+        toast(t(`${msg.tierChange.to.name}に昇格！！`, `Promoted to ${msg.tierChange.to.nameEn}!!`), 'announce', 5000);
       }, 700);
     } else if (msg.tierChange) {
-      setTimeout(() => toast(t(`${msg.tierChange.to.icon} ${msg.tierChange.to.name}に降格…`, `${msg.tierChange.to.icon} Demoted to ${msg.tierChange.to.nameEn}…`), 'err', 3500), 700);
+      setTimeout(() => toast(t(`${msg.tierChange.to.name}に降格…`, `Demoted to ${msg.tierChange.to.nameEn}…`), 'err', 3500), 700);
     }
     // 👑 王者撃破のお祝い。段位の昇格と重なっても潰し合わないよう、
     // 少し後ろにずらす（toast は同時3〜4件で頭打ちになる）。
@@ -6586,15 +6630,15 @@ class OnlineMode extends VersusBase {
       setTimeout(() => {
         confettiBurst(120);
         audio.levelUp();
-        toast(t('👑 アリーナ最強を破った！', '👑 You beat the strongest in the arena!'), 'announce', 5000);
+        toast(t('アリーナ最強を破った！', 'You beat the strongest in the arena!'), 'announce', 5000);
       }, 1200);
     }
 
     const banners = msg.tourney
-      ? { win: t('👑 トーナメント優勝！！', '👑 TOURNAMENT CHAMPION!!'), lose: t('敗退…', 'Eliminated…'), draw: 'DRAW' }
+      ? { win: `${ic('mode_tourney', 26)} ${t('トーナメント優勝！！', 'TOURNAMENT CHAMPION!!')}`, lose: t('敗退…', 'Eliminated…'), draw: 'DRAW' }
       : msg.mode === 'raid'
-      ? { win: t(`${msg.boss ? msg.boss.emoji : '🐲'} レイドボス討伐！`, `${msg.boss ? msg.boss.emoji : '🐲'} Raid boss down!`), lose: t('討伐失敗…', 'Raid failed…'), draw: 'DRAW' }
-      : { win: '🏆 YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
+      ? { win: `${icon(msg.boss ? bossIconName(msg.boss.id) : 'mode_raid', { size: 26 })} ${t('レイドボス討伐！', 'Raid boss down!')}`, lose: t('討伐失敗…', 'Raid failed…'), draw: 'DRAW' }
+      : { win: 'YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
     const roundNames = [t('準々決勝', 'the quarterfinal'), t('準決勝', 'the semifinal'), t('決勝', 'the final')];
     const tourneyNote = msg.tourney && msg.outcome !== 'win'
       ? `<p class="muted center">${t(`${roundNames[msg.tourney.round] || ''}で敗退しました`, `Knocked out in ${roundNames[msg.tourney.round] || 'the bracket'}`)}</p>`
@@ -6609,11 +6653,11 @@ class OnlineMode extends VersusBase {
       scoreRows = `
         <div class="rs-row"><span>${msg.boss ? escapeHtml(catName(msg.boss)) : t('ボス', 'Boss')} HP</span><b>${fmt(msg.boss ? msg.boss.hp : 0)}</b></div>
         <div class="rs-row"><span>${t('パーティ総ダメージ', 'Party total damage')}</span><b>${fmt(total)}</b></div>
-        ${msg.players.map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? t('⭐あなた', '⭐You') : '👤' + escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`).join('')}`;
+        ${msg.players.map(p => `<div class="rs-row"><span>${p.slot === msg.you.slot ? `<b>${t('あなた', 'You')}</b>` : escapeHtml(p.name)}</span><b>${fmt(p.score)}</b></div>`).join('')}`;
     } else if (msg.mode === 'team') {
       const teamRow = tm => {
         const members = msg.players.filter(p => p.team === tm);
-        const names = members.map(p => `${p.slot === msg.you.slot ? '⭐' : '👤'}${escapeHtml(p.name)} ${fmt(p.score)}`).join('<br>');
+        const names = members.map(p => (p.slot === msg.you.slot ? `<b>${escapeHtml(p.name)}</b>` : escapeHtml(p.name)) + ` ${fmt(p.score)}`).join('<br>');
         const label = tm === msg.you.team ? t('あなたのチーム', 'Your team') : t('相手チーム', 'Enemy team');
         return `<div class="rs-row team-row"><span>${label}<br><small class="muted">${names}</small></span><b>${fmt(msg.teamScores[tm])}</b></div>`;
       };
@@ -6630,8 +6674,8 @@ class OnlineMode extends VersusBase {
       const mineN = msg.land.counts[msg.you.slot] || 0;
       const foeN = msg.land.counts[1 - msg.you.slot] || 0;
       scoreRows = `
-        <div class="rs-row"><span>${t('🚩 あなたの領土', '🚩 Your territory')}</span><b>${mineN}</b></div>
-        <div class="rs-row"><span>${t('🚩 相手の領土', '🚩 Their territory')}</span><b>${foeN}</b></div>
+        <div class="rs-row"><span>${t('あなたの領土', 'Your territory')}</span><b>${mineN}</b></div>
+        <div class="rs-row"><span>${t('相手の領土', 'Their territory')}</span><b>${foeN}</b></div>
         <div class="rs-row"><span>${t('置いたピース', 'Pieces placed')}</span><b>${fmt(msg.land.moves || 0)}</b></div>
         ${scoreRows}`;
     }
@@ -6643,7 +6687,7 @@ class OnlineMode extends VersusBase {
     // 文面は「相手が誰か」ではなく「何を成し遂げたか」で書く ── 住人の正体は
     // 管理者以外に明かさないので、相手が人間でもそのまま成立する言い回しだけ。
     const championNote = msg.beatChampion
-      ? `<p class="center champion-fell">${t('👑 頂に土をつけた！', '👑 You toppled the summit!')}`
+      ? `<p class="center champion-fell">${ic('throne', 18)} ${t('頂に土をつけた！', 'You toppled the summit!')}`
         + ((msg.championWins || 0) > 1
           ? `<br><small class="muted">${t(`通算 ${fmt(msg.championWins)} 回目`, `${fmt(msg.championWins)} times total`)}</small>` : '')
         + '</p>'
@@ -6652,7 +6696,7 @@ class OnlineMode extends VersusBase {
     const myRating = msg.user && msg.user.stats ? msg.user.stats.rating : null;
     const tier = myRating != null ? rankOf(myRating) : null;
     const ratingRow = msg.ratingDelta
-      ? `<div class="rs-row"><span>${t('📈 レート変動', '📈 Rating')}</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}${tier ? ` ${rankBadge(myRating)}` : ''}</b></div>`
+      ? `<div class="rs-row"><span>${t('レート変動', 'Rating')}</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}${tier ? ` ${rankBadge(myRating)}` : ''}</b></div>`
       : '';
 
     const m = showModal(`
@@ -6666,7 +6710,7 @@ class OnlineMode extends VersusBase {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        ${msg.rematchId && (msg.mode === 'duel' || msg.mode === 'attack') ? `<button class="btn btn-gold" id="rRematch">${t('🔁 再戦', '🔁 Rematch')}</button>` : ''}
+        ${msg.rematchId && (msg.mode === 'duel' || msg.mode === 'attack') ? `<button class="btn btn-gold" id="rRematch">${t('再戦', 'Rematch')}</button>` : ''}
         <button class="btn btn-primary" id="rAgain">${this.kind === 'custom' ? t('ルームへ', 'To room') : t('もう一戦', 'Play again')}</button>
       </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
@@ -6675,7 +6719,7 @@ class OnlineMode extends VersusBase {
     if (rBtn) rBtn.onclick = () => {
       // 🔁 接続を保ったまま同じ相手に再挑戦（destroyするとWSが切れる）
       rBtn.disabled = true;
-      rBtn.textContent = t('🔁 相手を待っています…', '🔁 Waiting for opponent…');
+      rBtn.textContent = t('相手を待っています…', 'Waiting for opponent…');
       this.ended = false;
       this.inMatch = false;
       this.client.send({ type: 'rematch', rematchId: msg.rematchId });
@@ -6710,17 +6754,17 @@ class OnlineMode extends VersusBase {
       this.ended = true;
       this.destroy();
       toast(this.isCoop
-        ? t('🤝 協力プレイから離脱しました（敗北にはなりません）', '🤝 You left the co-op run (no loss recorded)')
+        ? t('協力プレイから離脱しました（敗北にはなりません）', 'You left the co-op run (no loss recorded)')
         : this.isRoyale
         // ロイヤルには「相手」がいないので、敗北でも不戦勝でもない。
         // すでに脱落・順位確定して観戦中（royaleDead）なら順位は動かないので、
         // 「最下位扱い」ではなく観戦終了として伝える。生存中の離脱だけが最下位扱い。
         ? (this.royaleDead
-            ? t('👀 観戦を終了しました（順位は確定済みです）',
-                '👀 Stopped spectating (your placement is already final)')
-            : t('🏳️ バトルロイヤルから離脱しました（そのときの生存者の中で最下位扱い）',
-                '🏳️ You left the royale (recorded as last among the survivors at that moment)'))
-        : t('🏳️ 対戦から離脱しました（敗北扱い・相手の不戦勝）', '🏳️ You left the match (counts as a loss)'), 'err', 2600);
+            ? t('観戦を終了しました（順位は確定済みです）',
+                'Stopped spectating (your placement is already final)')
+            : t('バトルロイヤルから離脱しました（そのときの生存者の中で最下位扱い）',
+                'You left the royale (recorded as last among the survivors at that moment)'))
+        : t('対戦から離脱しました（敗北扱い・相手の不戦勝）', 'You left the match (counts as a loss)'), 'err', 2600);
       endToMenu();
     } else {
       this.client.cancelQueue();
@@ -6788,7 +6832,7 @@ class SurvivalMode {
     audio.playTrack('hard');
     this.nextAt = Date.now() + 15000;
     this.int = setInterval(() => this.tick(), 200);
-    toast(t('💀 15秒ごとにお邪魔ブロックが降ってくる！生き延びろ！', '💀 Garbage drops every 15s — survive!'), 'announce', 3000);
+    toast(t('15秒ごとにお邪魔ブロックが降ってくる！生き延びろ！', 'Garbage drops every 15s — survive!'), 'announce', 3000);
   }
 
   // スコアのベストはサーバーに欄が無い（stats に survivalBest 相当が無い）ので
@@ -6815,7 +6859,8 @@ class SurvivalMode {
     if (this.ended) return;
     const remain = Math.max(0, this.nextAt - Date.now());
     const el = $('#hudTimer');
-    el.textContent = `☠ ${Math.ceil(remain / 1000)}`;
+    // 次の波までの秒読み。☠ は独自アイコン（mode_survival）に置き換える。
+    el.innerHTML = `${ic('mode_survival', 15)} ${Math.ceil(remain / 1000)}`;
     el.classList.toggle('urgent', remain <= 3000);
     if (remain <= 0) this.dropWave();
   }
@@ -6832,7 +6877,7 @@ class SurvivalMode {
         view.particles.burstCell(view.boardX + (c + 0.5) * view.cell, view.boardY + (r + 0.5) * view.cell, view.cell, 8, 'fx_default');
       }
     }
-    toast(t(`💀 WAVE ${this.wave}！お邪魔${cells}個`, `💀 WAVE ${this.wave}! ${cells} garbage blocks`), 'err', 1300);
+    toast(t(`WAVE ${this.wave}！お邪魔${cells}個`, `WAVE ${this.wave}! ${cells} garbage blocks`), 'err', 1300);
     const interval = Math.max(5, 15 - this.wave * 0.6);
     this.nextAt = Date.now() + interval * 1000;
     this.updateHud();
@@ -6998,7 +7043,7 @@ class SprintMode {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        <button class="btn btn-ghost" id="rRank">${t('🏆 順位', '🏆 Ranking')}</button>
+        <button class="btn btn-ghost" id="rRank">${ic('leaderboard', 15)} ${t('順位', 'Ranking')}</button>
         <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
       </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
@@ -7036,6 +7081,20 @@ export function startSprint(duration = 60) {
 // ---------------------------------------------------------------------------
 
 const AE_RUN_SECONDS = 120;
+
+// 3種のイベントの絵。サーバーは ae.mode.icon に絵文字（👑 / 🎰 / 🏛️）を
+// 載せてくるが、端末ごとに絵が変わるうえ 👑 は段位マスター・管理者奥義・
+// バッジと重複していた。id から icons.js を引く形にそろえる。
+//   invasion（管理者襲来）→ admin（盾＋王冠）
+//   roulette（運営ルーレット）→ gacha（回して当てる機械）
+//   communal（共同作業）→ hall（列柱＝みんなで建てるもの）
+//   zero（👁️断罪）→ badge_zero。ここが抜けていて、断罪の回だけ
+//   共同作業（hall）の絵が出ていた。public/js/adminevent.js の
+//   AE_MODE_ICONS と同じ対応にそろえてある。
+const AE_ICON_BY_MODE = { invasion: 'admin', roulette: 'gacha', communal: 'hall', zero: 'badge_zero' };
+function aeIconName(modeId) {
+  return AE_ICON_BY_MODE[modeId] || 'mode_adminevent';
+}
 
 // ---- board surgery used by 管理者襲来 / 運営ルーレット ----
 
@@ -7080,29 +7139,29 @@ function aeShuffleHand(engine) {
 // ---- the interference the admin (or their avatar) throws at you ----
 
 const AE_STRIKES = [
-  { id: 'rain',    icon: '💥', ja: 'お邪魔の雨', en: 'Garbage rain',      run: m => m.engine.addGarbage(4) },
-  { id: 'seal',    icon: '🔒', ja: '封印',       en: 'Seal',              run: m => m.engine.addGarbage(3) },
-  { id: 'shuffle', icon: '🎴', ja: '手札シャッフル', en: 'Hand shuffle',  run: m => aeShuffleHand(m.engine) },
-  { id: 'spin',    icon: '🌀', ja: '盤面回転',   en: 'Board spin',        run: m => aeRotateGrid(m.engine) },
-  { id: 'gravity', icon: '🧲', ja: '重力',       en: 'Gravity',           run: m => aeGravity(m.engine) },
-  { id: 'rise',    icon: '⏫', ja: 'せり上がり', en: 'Rising floor',      run: m => aeRiseRow(m.engine) },
-  { id: 'blind',   icon: '👁️', ja: '目隠し',     en: 'Blindfold',         run: m => m.blindFor(3200) },
+  { id: 'rain',    ja: 'お邪魔の雨',     en: 'Garbage rain',   run: m => m.engine.addGarbage(4) },
+  { id: 'seal',    ja: '封印',           en: 'Seal',           run: m => m.engine.addGarbage(3) },
+  { id: 'shuffle', ja: '手札シャッフル', en: 'Hand shuffle',   run: m => aeShuffleHand(m.engine) },
+  { id: 'spin',    ja: '盤面回転',       en: 'Board spin',     run: m => aeRotateGrid(m.engine) },
+  { id: 'gravity', ja: '重力',           en: 'Gravity',        run: m => aeGravity(m.engine) },
+  { id: 'rise',    ja: 'せり上がり',     en: 'Rising floor',   run: m => aeRiseRow(m.engine) },
+  { id: 'blind',   ja: '目隠し',         en: 'Blindfold',      run: m => m.blindFor(3200) },
   // 管理者は気まぐれ — たまに褒美をくれる。
-  { id: 'gift',    icon: '🎁', ja: '気まぐれの褒美', en: 'A fickle gift',  run: m => { m.engine.grid.fill(0); m.engine.score += 500; }, good: true },
+  { id: 'gift',    ja: '気まぐれの褒美', en: 'A fickle gift',  run: m => { m.engine.grid.fill(0); m.engine.score += 500; }, good: true },
 ];
 
 // ---- 運営ルーレット: the wheel ----
 
 const AE_WHEEL = [
-  { id: 'jackpot', icon: '💰', ja: '一攫千金（スコア5倍・お邪魔つき）', en: 'Jackpot (5× score, with garbage)' },
-  { id: 'mini',    icon: '🐜', ja: '極小ブロックのみ',                 en: 'Tiny blocks only' },
-  { id: 'giant',   icon: '🗿', ja: '極大ブロックのみ',                 en: 'Giant blocks only' },
-  { id: 'spin',    icon: '🌀', ja: '回転盤（10秒ごとに回る）',         en: 'Spin cycle (rotates every 10s)' },
-  { id: 'treasure',icon: '🎁', ja: '大盤振る舞い（消すたびボーナス）', en: 'Treasure run (bonus on every clear)' },
-  { id: 'blind',   icon: '🕶️', ja: '目隠し（ゴースト消灯）',           en: 'Blindfold (no ghost preview)' },
-  { id: 'rise',    icon: '⏫', ja: 'せり上がり（8秒ごと）',            en: 'Rising floor (every 8s)' },
-  { id: 'lucky7',  icon: '🍀', ja: 'ラッキーセブン（7手ごとに大当たり）', en: 'Lucky 7 (jackpot every 7th piece)' },
-  { id: 'blessing',icon: '✨', ja: '天の恵み（全消し＋フィーバー）',    en: 'Blessing (clear board + fever)' },
+  { id: 'jackpot', ja: '一攫千金（スコア5倍・お邪魔つき）',   en: 'Jackpot (5× score, with garbage)' },
+  { id: 'mini',    ja: '極小ブロックのみ',                   en: 'Tiny blocks only' },
+  { id: 'giant',   ja: '極大ブロックのみ',                   en: 'Giant blocks only' },
+  { id: 'spin',    ja: '回転盤（10秒ごとに回る）',           en: 'Spin cycle (rotates every 10s)' },
+  { id: 'treasure',ja: '大盤振る舞い（消すたびボーナス）',   en: 'Treasure run (bonus on every clear)' },
+  { id: 'blind',   ja: '目隠し（ゴースト消灯）',             en: 'Blindfold (no ghost preview)' },
+  { id: 'rise',    ja: 'せり上がり（8秒ごと）',              en: 'Rising floor (every 8s)' },
+  { id: 'lucky7',  ja: 'ラッキーセブン（7手ごとに大当たり）', en: 'Lucky 7 (jackpot every 7th piece)' },
+  { id: 'blessing',ja: '天の恵み（全消し＋フィーバー）',      en: 'Blessing (clear board + fever)' },
 ];
 
 class AdminEventMode extends VersusBase {
@@ -7152,7 +7211,8 @@ class AdminEventMode extends VersusBase {
     audio.playTrack(this.modeId === 'invasion' ? 'oni' : this.modeId === 'roulette' ? 'boss' : 'solo');
 
     this.setupWorldPanel();
-    toast(`${this.ae.mode.icon} ${t(this.ae.mode.name, this.ae.mode.nameEn)} — ${t(this.ae.mode.tagline, this.ae.mode.taglineEn)}`, 'announce', 3200);
+    // ae.mode.icon（サーバーが送る絵文字）は出さない ── トーストは textContent。
+    toast(`${t(this.ae.mode.name, this.ae.mode.nameEn)} — ${t(this.ae.mode.tagline, this.ae.mode.taglineEn)}`, 'announce', 3200);
 
     countdownOverlay(3, afterCountdown(this, () => {
       if (this.ended || currentMode !== this) return;   // 開始前に抜けた
@@ -7175,7 +7235,7 @@ class AdminEventMode extends VersusBase {
     document.querySelector('.boss-atkbar').classList.add('hidden');
     // 👑＝管理者、🏛️＝共同作業。どちらも「絵として意味を持つ」ので独自アイコンへ。
     // 👑 は段位マスター・管理者奥義・複数のバッジと重複していた絵文字でもある。
-    setBossFace($('#bossEmoji'), this.modeId === 'invasion' ? 'admin' : 'hall', BOSS_FACE_SLIM);
+    setBossFace($('#bossEmoji'), aeIconName(this.modeId), BOSS_FACE_SLIM);
     $('#bossName').textContent = this.modeId === 'invasion'
       ? t('管理者', 'The Admin') : t('共同作業', 'Great Work');
     this.updateWorldPanel();
@@ -7251,7 +7311,7 @@ class AdminEventMode extends VersusBase {
     // （所有格 The Admin's … は 'A fickle gift' に付くと英語として壊れるので採らない。
     //   ASCII のアポストロフィはテンプレート内で modes-structure テストの
     //   クラス切り出しも壊す ── catalog-en.js と同じく曲線 ’ を使うこと。）
-    toast(`${s.icon} ${t(`管理者の${s.ja}！`, `From the Admin: ${s.en}!`)}`, s.good ? 'ok' : 'err', 1800);
+    toast(t(`管理者の${s.ja}！`, `From the Admin: ${s.en}!`), s.good ? 'ok' : 'err', 1800);
     if (this.engine.over) this.finish();
   }
 
@@ -7342,8 +7402,8 @@ class AdminEventMode extends VersusBase {
 
     if (view) { view.screenFlash = 0.45; view.shake = 12; }
     audio.combo(8);
-    toast(`${pick.icon} ${t(pick.ja, pick.en)}`, 'announce', 2600);
-    this.spinLabel = `${pick.icon} ${t(pick.ja, pick.en).split('（')[0].split(' (')[0]}`;
+    toast(t(pick.ja, pick.en), 'announce', 2600);
+    this.spinLabel = t(pick.ja, pick.en).split('（')[0].split(' (')[0];
     $('#hudSub').textContent = this.spinLabel;
   }
 
@@ -7351,7 +7411,7 @@ class AdminEventMode extends VersusBase {
     const e = this.engine;
     if (this.treasure && r && r.lineCount > 0) {
       e.score += 300 * r.lineCount;
-      toast(t(`🎁 +${300 * r.lineCount}`, `🎁 +${300 * r.lineCount}`), 'ok', 900);
+      toast(`+${300 * r.lineCount}`, 'ok', 900);
     }
     if (this.lucky7) {
       this.luckyCount = (this.luckyCount || 0) + 1;
@@ -7359,7 +7419,7 @@ class AdminEventMode extends VersusBase {
         e.score += 3000;
         if (view) view.screenFlash = 0.5;
         audio.victory();
-        toast(t('🍀 ラッキーセブン！ +3,000', '🍀 Lucky 7! +3,000'), 'announce', 1800);
+        toast(t('ラッキーセブン！ +3,000', 'Lucky 7! +3,000'), 'announce', 1800);
       }
     }
   }
@@ -7407,7 +7467,7 @@ class AdminEventMode extends VersusBase {
     if (hit) {
       this.engine.score += 400 * hit;
       audio.coin();
-      toast(t(`🧱 建材 ×${hit} 回収！ +${fmt(400 * hit)}`, `🧱 ${hit} material(s)! +${fmt(400 * hit)}`), 'ok', 1200);
+      toast(t(`建材 ×${hit} 回収！ +${fmt(400 * hit)}`, `${hit} material(s)! +${fmt(400 * hit)}`), 'ok', 1200);
       this.updateMyHud(this.engine);
       this.updateWorldPanel();
     }
@@ -7458,7 +7518,7 @@ class AdminEventMode extends VersusBase {
         : '';
 
     const m = showModal(`
-      <div class="result-banner ${killed ? 'win' : 'draw'}">${killed ? t('👑 討伐！', '👑 DEFEATED!') : `${this.ae.mode.icon} ${t('おつかれさま', 'Nice run')}`}</div>
+      <div class="result-banner ${killed ? 'win' : 'draw'}">${ic(aeIconName(this.modeId), 26)} ${killed ? t('討伐！', 'DEFEATED!') : t('おつかれさま', 'Nice run')}</div>
       <div class="result-stats">
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
         ${this.modeId === 'invasion' ? `<div class="rs-row"><span>${t('与ダメージ', 'Damage dealt')}</span><b>${fmt(d ? d.damage : 0)}</b></div>` : ''}
@@ -7466,7 +7526,7 @@ class AdminEventMode extends VersusBase {
         ${this.modeId === 'communal' ? `<div class="rs-row"><span>${t('ゲージへの貢献', 'Added to the gauge')}</span><b>${fmt(d ? d.gained : 0)}</b></div>` : ''}
         ${worldRow}
         ${rewardsRows(res ? res.rewards : null)}
-        ${chest && (chest.coins || chest.gems) ? `<div class="rs-row"><span>🎁 ${t(`お宝ラッシュ（${chest.mult}倍）`, `Treasure Rush (${chest.mult}×)`)}</span><b>+${fmt(chest.coins)}🪙 +${fmt(chest.gems)}💎</b></div>` : ''}
+        ${chest && (chest.coins || chest.gems) ? `<div class="rs-row"><span>${t(`お宝ラッシュ（${chest.mult}倍）`, `Treasure Rush (${chest.mult}×)`)}</span><b>+${fmt(chest.coins)} ${ic('coins', 14)} +${fmt(chest.gems)} ${ic('gems', 14)}</b></div>` : ''}
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
@@ -7687,8 +7747,8 @@ class ZeroMode extends VersusBase {
     // 立てておく（zero_dan を取りこぼしても伝言を書けるように）。真のときだけ立てる。
     if (m.canWill || (m.you && m.you.canWill)) this.canWill = true;
     this.renderState(m);
-    toast(t(`👁️ 席につきました（${m.seats.length}席）── 段${m.dan}`,
-      `👁️ Seated (${m.seats.length}) — Stage ${m.dan}`), 'announce', 3000);
+    toast(t(`席につきました（${m.seats.length}席）── 段${m.dan}`,
+      `Seated (${m.seats.length}) — Stage ${m.dan}`), 'announce', 3000);
   }
 
   onState(m) {
@@ -7718,8 +7778,8 @@ class ZeroMode extends VersusBase {
     }
     if (el('zeroTarget') && m.stakes) {
       el('zeroTarget').textContent = t(
-        '今夜の的：第' + (m.targetCol + 1) + '列　🪧' + m.stakes.have + '/' + m.stakes.need,
-        'Mark: col ' + (m.targetCol + 1) + '  🪧' + m.stakes.have + '/' + m.stakes.need);
+        '今夜の的：第' + (m.targetCol + 1) + '列　杭' + m.stakes.have + '/' + m.stakes.need,
+        'Mark: col ' + (m.targetCol + 1) + '  stakes ' + m.stakes.have + '/' + m.stakes.need);
     }
     if (el('zeroCuts')) {
       el('zeroCuts').textContent = t(`斬 ${this.myCuts} ／ 落 ${this.myMissed}`,
@@ -7755,8 +7815,8 @@ class ZeroMode extends VersusBase {
     v.screenFlash = 0.45;
     audio.countdown(false);
     const name = (session.user && session.user.username) || t('あなた', 'you');
-    toast(t(`👁️ 断罪 ── ${name}　赤マスをラインで斬れ！`,
-      `👁️ CONDEMNED ── ${name}. Cut the red cells!`), 'err', m.warnMs);
+    toast(t(`断罪 ── ${name}　赤マスをラインで斬れ！`,
+      `CONDEMNED ── ${name}. Cut the red cells!`), 'err', m.warnMs);
     // 予告時間で自動的に消える（サーバー側も同じ時刻で締める）
     this.after(m.warnMs + 200, () => {
       if (this.verdict && this.verdict.id === m.id) {
@@ -7829,7 +7889,7 @@ class ZeroMode extends VersusBase {
     wrap.className = 'zero-deal';
     wrap.id = 'zeroDeal';
     wrap.innerHTML = [
-      '<div class="zd-q">👁️ ' + escapeHtml(t(deal.q, deal.qEn)) + '</div>',
+      '<div class="zd-q">' + escapeHtml(t(deal.q, deal.qEn)) + '</div>',
       '<div class="zd-bar"><div class="zd-yes" id="zdYes"></div><div class="zd-no" id="zdNo"></div></div>',
       '<div class="zd-tally" id="zdTally"></div>',
       '<div class="zd-btns">',
@@ -7887,17 +7947,17 @@ class ZeroMode extends VersusBase {
     const yes = m.win === 'yes';
     audio[yes ? 'victory' : 'putback']();
     toast(yes
-      ? t('🤝 取引成立 ── ' + m.tally.yes + ' 対 ' + m.tally.no, '🤝 Deal struck — ' + m.tally.yes + ' to ' + m.tally.no)
-      : t('🤝 取引は断られた ── ' + m.tally.no + ' 対 ' + m.tally.yes, '🤝 Refused — ' + m.tally.no + ' to ' + m.tally.yes),
+      ? t('取引成立 ── ' + m.tally.yes + ' 対 ' + m.tally.no, 'Deal struck — ' + m.tally.yes + ' to ' + m.tally.no)
+      : t('取引は断られた ── ' + m.tally.no + ' 対 ' + m.tally.yes, 'Refused — ' + m.tally.no + ' to ' + m.tally.yes),
       'announce', 4000);
   }
 
   onStake(m) {
     if (m.ready) {
       audio.victory();
-      toast(t('🪧 杭 ' + m.need + '本！ 次の断罪は予告が長くなる', '🪧 ' + m.need + ' stakes! Longer warning next time'), 'ok', 2400);
+      toast(t('杭 ' + m.need + '本！ 次の断罪は予告が長くなる', m.need + ' stakes! Longer warning next time'), 'ok', 2400);
     } else {
-      toast(t('🪧 杭 ' + m.have + '/' + m.need, '🪧 stake ' + m.have + '/' + m.need), 'ok', 1100);
+      toast(t('杭 ' + m.have + '/' + m.need, 'stakes ' + m.have + '/' + m.need), 'ok', 1100);
     }
   }
 
@@ -7912,16 +7972,16 @@ class ZeroMode extends VersusBase {
       this.engine.chargeUlt(12);
     }
     toast(m.keystone
-      ? t(`⚔️ ${m.by} が急所を斬った！ 封印 −${fmt(m.damage)}`, `⚔️ ${m.by} hit the keystone! seal −${fmt(m.damage)}`)
-      : t(`⚔️ ${m.by} が斬った ── 封印 −${fmt(m.damage)}`, `⚔️ ${m.by} cut — seal −${fmt(m.damage)}`),
+      ? t(`${m.by} が急所を斬った！ 封印 −${fmt(m.damage)}`, `${m.by} hit the keystone! seal −${fmt(m.damage)}`)
+      : t(`${m.by} が斬った ── 封印 −${fmt(m.damage)}`, `${m.by} cut — seal −${fmt(m.damage)}`),
       'ok', 1600);
   }
 
   onSomeoneMissed(m) {
     if (!m.victim) return;
     audio.bossAttack();
-    toast(t(`💀 ${m.victim} が処刑された（${m.target} が落とした）`,
-      `💀 ${m.victim} was executed (${m.target} let it slip)`), 'err', 2600);
+    toast(t(`${m.victim} が処刑された（${m.target} が落とした）`,
+      `${m.victim} was executed (${m.target} let it slip)`), 'err', 2600);
     // 👁️ 自分が時間内に斬れなかった赤マスは、自分の盤面へお邪魔として返ってくる。
     // engine には座標指定でお邪魔を置く口が無いので、onGarbage と同じ経路
     // （addGarbage は resolveLines と over 判定も内部で行う）で個数だけ再現する。
@@ -7936,8 +7996,8 @@ class ZeroMode extends VersusBase {
   onDanBroken(m) {
     audio.victory();
     confettiBurst(90);
-    toast(t(`👁️ 第${m.dan}段 陥落！ 王座がひとつ返ってきた${m.by ? `（とどめ：${m.by}）` : ''}`,
-      `👁️ Stage ${m.dan} has fallen — one throne returns${m.by ? ` (by ${m.by})` : ''}`), 'announce', 5000);
+    toast(t(`第${m.dan}段 陥落！ 王座がひとつ返ってきた${m.by ? `（とどめ：${m.by}）` : ''}`,
+      `Stage ${m.dan} has fallen — one throne returns${m.by ? ` (by ${m.by})` : ''}`), 'announce', 5000);
     // とどめを刺した本人だけが、次の枠へ40字残せる（サーバーの submitWill と
     // 同じ条件）。ここで覚えておかないと、席を外す前に聞く機会が無くなる。
     if (m.by && session.user && m.by === session.user.username) this.canWill = true;
@@ -7948,8 +8008,8 @@ class ZeroMode extends VersusBase {
     const n = (m && m.dan) || 7;
     audio.victory();
     confettiBurst(150);
-    toast(t(`👁️ ${n}段すべて陥落 ── 王座はすべて還った`,
-      `👁️ All ${n} stages have fallen — every throne is reclaimed`), 'announce', 8000);
+    toast(t(`${n}段すべて陥落 ── 王座はすべて還った`,
+      `All ${n} stages have fallen — every throne is reclaimed`), 'announce', 8000);
   }
 
   // 👑 王座の欠片が増えた（斬った／急所／段に居合わせた／とどめ）。
@@ -7961,13 +8021,13 @@ class ZeroMode extends VersusBase {
     this.shardsGained += n;
     if (session.user && typeof m.total === 'number') session.user.shards = m.total;
     audio.coin();
-    toast(t(`👑 王座の欠片 +${fmt(n)}`, `👑 Throne Shards +${fmt(n)}`), 'ok', 1400);
+    toast(t(`王座の欠片 +${fmt(n)}`, `Throne Shards +${fmt(n)}`), 'ok', 1400);
   }
 
   // 📝 伝言が保存された。
   onWillOk() {
-    toast(t('📝 伝言を残しました ── 次の枠の開幕でゼロが読み上げます',
-      '📝 Message saved — Zero will read it out when the next slot opens'), 'ok', 3200);
+    toast(t('伝言を残しました ── 次の枠の開幕でゼロが読み上げます',
+      'Message saved — Zero will read it out when the next slot opens'), 'ok', 3200);
     if (this._willResolve) this._willResolve();
   }
 
@@ -7991,7 +8051,7 @@ class ZeroMode extends VersusBase {
       };
       this._willResolve = end;
       const m = showModal(`
-        <h2>📝 ${t('次の枠へ伝言を残す', 'Leave a message for the next slot')}</h2>
+        <h2>${t('次の枠へ伝言を残す', 'Leave a message for the next slot')}</h2>
         <p class="muted center" style="margin-bottom:10px">${t(
           'とどめを刺したあなただけが書けます。40字まで ── 次の枠の開幕でゼロが読み上げます。',
           'Only the one who landed the final blow may write. Up to 40 characters — Zero reads it out when the next slot opens.')}</p>
@@ -8031,7 +8091,7 @@ class ZeroMode extends VersusBase {
     this.engine.addGarbage(n);
     audio.bossAttack();
     getView().screenFlash = 0.25;
-    toast(t(`👁️ ゼロの一手 ── お邪魔 ${n}個`, `👁️ Zero's move — ${n} garbage`), 'err', 1500);
+    toast(t(`ゼロの一手 ── お邪魔 ${n}個`, `Zero's move — ${n} garbage`), 'err', 1500);
   }
 
   onTopOut() {
@@ -8046,7 +8106,7 @@ class ZeroMode extends VersusBase {
     this.engine.reviveBoard();
     getView().inputLocked = false;
     audio.victory();
-    toast(t('▶ 復帰しました', '▶ You are back'), 'ok', 2000);
+    toast(t('復帰しました', 'You are back'), 'ok', 2000);
   }
 
   // ---- 終わり ----
@@ -8090,7 +8150,7 @@ class ZeroMode extends VersusBase {
     const shards = (res && res.shards ? res.shards : 0) + (this.shardsGained || 0);
     const st = this.state;
     showModal([
-      `<h2>👁️ ${t('断罪 ── 記録', 'Condemned — record')}</h2>`,
+      `<h2>${t('断罪 ── 記録', 'Condemned — record')}</h2>`,
       '<div class="zero-result">',
       `  <div><b>${this.myCuts}</b><span>${t('斬った', 'cut')}</span></div>`,
       `  <div><b>${this.myMissed}</b><span>${t('落とした', 'missed')}</span></div>`,
@@ -8100,9 +8160,9 @@ class ZeroMode extends VersusBase {
       // 画面の見た目が変わらず「やっても意味がない」ように見える。
       '<div class="result-stats">',
       rewardsRows(res ? res.rewards : null),
-      shards ? `<div class="rs-row"><span>👑 ${t('王座の欠片', 'Throne Shards')}</span><b>+${fmt(shards)}</b></div>` : '',
+      shards ? `<div class="rs-row"><span>${ic('shards')} ${t('王座の欠片', 'Throne Shards')}</span><b>+${fmt(shards)}</b></div>` : '',
       res && res.chest && (res.chest.coins || res.chest.gems)
-        ? `<div class="rs-row"><span>🎁 ${t(`お宝ラッシュ（${res.chest.mult}倍）`, `Treasure Rush (${res.chest.mult}×)`)}</span><b>+${fmt(res.chest.coins)}🪙 +${fmt(res.chest.gems)}💎</b></div>`
+        ? `<div class="rs-row"><span>${t(`お宝ラッシュ（${res.chest.mult}倍）`, `Treasure Rush (${res.chest.mult}×)`)}</span><b>+${fmt(res.chest.coins)} ${ic('coins', 14)} +${fmt(res.chest.gems)} ${ic('gems', 14)}</b></div>`
         : '',
       '</div>',
       st ? `<p class="muted">${t(`段 ${st.dan}/${st.danMax} ／ 封印の残り ${fmt(st.sealLeft)}`,
@@ -8110,7 +8170,7 @@ class ZeroMode extends VersusBase {
       st && st.fallen && st.fallen.length
         ? `<p class="zero-fallen">${t('今日、消えた住人', 'Lost today')}: ${st.fallen.map(escapeHtml).join('、')}</p>` : '',
       '<div class="modal-buttons">',
-      `  <button class="btn btn-ghost" id="zeroChron">${t('📜 断罪録', '📜 Chronicle')}</button>`,
+      `  <button class="btn btn-ghost" id="zeroChron">${t('断罪録', 'Chronicle')}</button>`,
       `  <button class="btn btn-primary" id="zeroClose">${t('メニュー', 'Menu')}</button>`,
       `  <button class="btn btn-gold" id="zeroAgain">${t('もう一度', 'Again')}</button>`,
       '</div>',
@@ -8463,14 +8523,14 @@ class Tutorial {
   skip() {
     audio.click();
     this.teardown(true);
-    toast(t('🎓 チュートリアルを閉じました', '🎓 Tutorial closed'), 'info', 1800);
+    toast(t('チュートリアルを閉じました', 'Tutorial closed'), 'info', 1800);
   }
 
   finishAll() {
     audio.coin();
     this.teardown(true);
-    toast(t('🎓 準備完了！たくさん消して自己ベストを狙おう！',
-      '🎓 You are ready — clear lines and chase your best score!'), 'ok', 3000);
+    toast(t('準備完了！たくさん消して自己ベストを狙おう！',
+      'You are ready — clear lines and chase your best score!'), 'ok', 3000);
   }
 
   // ---- ハイライト --------------------------------------------------------
@@ -8550,7 +8610,7 @@ class Tutorial {
     if (n === 0) {
       return {
         top: true,
-        title: t('🎓 ① まずは1手おいてみよう（1/4）', '🎓 1. Place your first block (1/4)'),
+        title: t('① まずは1手おいてみよう（1/4）', '1. Place your first block (1/4)'),
         body: t('下の3つが「手札」。指でつかんで盤面へドラッグ！',
           'Those three pieces are your hand — drag one onto the board!'),
         hint: null,
@@ -8560,11 +8620,11 @@ class Tutorial {
     if (n === 1) {
       return {
         top: true,
-        title: t('🎓 ② 1列そろえて消す（2/4）', '🎓 2. Fill a line to clear it (2/4)'),
+        title: t('② 1列そろえて消す（2/4）', '2. Fill a line to clear it (2/4)'),
         body: t('たて or よこの8マスが埋まると、その列がまるごと消えて大量得点！',
           'Fill all 8 squares of a row or column and it clears for big points!'),
         hint: this.hintKey
-          ? t('✨ 光っている列を完成させよう！', '✨ Complete the glowing line!')
+          ? t('光っている列を完成させよう！', 'Complete the glowing line!')
           : null,
         next: t('わかった', 'Got it'),
       };
@@ -8572,11 +8632,11 @@ class Tutorial {
     if (n === 2) {
       return {
         top: false,
-        title: t('🎓 ③ ゴーストとコンボ', '🎓 3. Ghost preview & combos'),
+        title: t('③ ゴーストとコンボ', '3. Ghost preview & combos'),
         body: t('ドラッグ中は落ちる位置が半透明の「ゴースト」で見える。消える列は白く光って予告されるので、置く前に確かめよう。',
           'While dragging, a translucent ghost shows the landing spot. Lines that will clear glow white before you drop.'),
-        hint: t('🔥 続けて消すと「コンボ」！ 連続するほど倍率が上がってスコアが跳ね上がる。',
-          '🔥 Clear on consecutive placements for a COMBO — the multiplier climbs fast.'),
+        hint: t('続けて消すと「コンボ」！ 連続するほど倍率が上がってスコアが跳ね上がる。',
+          'Clear on consecutive placements for a COMBO — the multiplier climbs fast.'),
         next: t('次へ', 'Next'),
       };
     }
@@ -8586,13 +8646,13 @@ class Tutorial {
     const hasUlt = !!ultBtn && !ultBtn.classList.contains('hidden');
     return {
       top: false,
-      title: hasUlt ? t('🎓 ④ 2つの切り札', '🎓 4. Your two lifelines')
-        : t('🎓 ④ 切り札', '🎓 4. Your lifeline'),
-      body: t('🔄 リロール：置く場所が無くなりそうなとき、手札を丸ごと引き直せる（1ゲーム1回）。',
-        '🔄 Reroll: swap your whole hand when you are running out of room (once per game).'),
+      title: hasUlt ? t('④ 2つの切り札', '4. Your two lifelines')
+        : t('④ 切り札', '4. Your lifeline'),
+      body: t('リロール：置く場所が無くなりそうなとき、手札を丸ごと引き直せる（1ゲーム1回）。',
+        'Reroll: swap your whole hand when you are running out of room (once per game).'),
       hint: hasUlt
-        ? t('⚡ 奥義：ラインを消すとゲージが溜まり、100%で必殺技が撃てる。',
-          '⚡ Ultimate: clearing lines charges the gauge — fire it at 100%.')
+        ? t('奥義：ラインを消すとゲージが溜まり、100%で必殺技が撃てる。',
+          'Ultimate: clearing lines charges the gauge — fire it at 100%.')
         : null,
       next: t('はじめる！', 'Start playing!'),
     };
@@ -8824,11 +8884,11 @@ function attackLesson(dir, info) {
 
   let title, body;
   if (dir === 'sent') {
-    title = t(`💥 ${lines}ライン同時消し！`, `💥 ${lines} lines at once!`);
+    title = t(`${lines}ライン同時消し！`, `${lines} lines at once!`);
     body = t(`相手の盤面にお邪魔を ${cells}個 送り込んだ`,
       `You dumped ${cells} garbage blocks on your opponent`);
   } else {
-    title = t(`💥 お邪魔を ${cells}個 受けた`, `💥 You took ${cells} garbage blocks`);
+    title = t(`お邪魔を ${cells}個 受けた`, `You took ${cells} garbage blocks`);
     // 受けた側は、サーバーが lines を載せてくれる場合だけライン数まで言う。
     // 個数から逆算はできない（3ライン＋コンボと4ラインが同じ個数になる）。
     body = lines >= 2
@@ -8848,9 +8908,9 @@ function attackLesson(dir, info) {
   // トーストはいちばん最初の1回だけ（同時3件の枠を攻撃で埋めない）。
   if (seen === 0) {
     toast(dir === 'sent'
-      ? t('💥 まとめて消すと相手を攻撃できる！', '💥 Clearing lines together attacks your opponent!')
-      : t('💥 攻撃された！ 2ライン以上まとめて消すと撃ち返せる',
-        '💥 You were attacked! Clear 2+ lines at once to strike back'), 'announce', 3000);
+      ? t('まとめて消すと相手を攻撃できる！', 'Clearing lines together attacks your opponent!')
+      : t('攻撃された！ 2ライン以上まとめて消すと撃ち返せる',
+        'You were attacked! Clear 2+ lines at once to strike back'), 'announce', 3000);
   }
 }
 
@@ -8940,7 +9000,7 @@ class VersusTutorial {
     const steps = [
       {
         pulse: '#oppPanel',
-        title: t('🎓 相手のようす', '🎓 Watch your opponent'),
+        title: t('相手のようす', 'Watch your opponent'),
         // 2v2 では味方の盤面もここに並ぶので「相手の」と言い切らない。
         body: t('ほかのプレイヤーの盤面と得点はここに出ます。上のバーが、どちらが勝っているかの目安。',
           "The other players' boards and scores appear here. The bar above shows who is ahead."),
@@ -8950,7 +9010,7 @@ class VersusTutorial {
     if (this.hasAttack) {
       steps.push({
         pulse: '',
-        title: t('🎓 まとめて消すと攻撃になる', '🎓 Clear together to attack'),
+        title: t('まとめて消すと攻撃になる', 'Clear together to attack'),
         body: t('2ライン以上を同時に消すと、相手の盤面にお邪魔ブロックが飛びます。1ラインでは飛びません。',
           'Clearing 2 or more lines at once dumps garbage blocks on your opponent. A single line does nothing.'),
         hint: t(`2ライン→${attackCellsFor(2)}個 / 3ライン→${attackCellsFor(3)}個 / 4ライン→${attackCellsFor(4)}個。コンボ3回ごとに+1個。`,
@@ -8959,20 +9019,20 @@ class VersusTutorial {
     }
     steps.push({
       pulse: '#hudTimer',
-      title: t('🎓 勝ち方', '🎓 How you win'),
+      title: t('勝ち方', 'How you win'),
       body: t('制限時間内にスコアが高いほうが勝ちです。盤面が埋まっても終わりではなく、スコアを持ったまま盤面だけリセットされます。',
         'The higher score when time runs out wins. Filling your board does not end the run — it resets the board and keeps your score.'),
       hint: '',
     });
     steps.push(this.quitIsDraw ? {
       pulse: '#btnQuit',
-      title: t('🎓 途中でやめても負けにならない', '🎓 Leaving early is not a loss'),
+      title: t('途中でやめても負けにならない', 'Leaving early is not a loss'),
       body: t('AI戦は ✕ で抜けても引き分け扱いです。気軽に試して大丈夫。',
         'In a match against the AI, quitting with ✕ counts as a draw. Feel free to experiment.'),
       hint: '',
     } : {
       pulse: '#btnQuit',
-      title: t('🎓 最後まで粘ろう', '🎓 See it through'),
+      title: t('最後まで粘ろう', 'See it through'),
       body: t('✕ で抜けると敗北扱い（相手の不戦勝）になります。盤面が埋まっても終わりではないので、時間いっぱい粘るのが得です。',
         'Quitting with ✕ counts as a loss — your opponent takes the win. Filling your board is not the end, so play out the clock.'),
       hint: '',
@@ -9004,15 +9064,15 @@ class VersusTutorial {
   skip() {
     audio.click();
     this.teardown(true);
-    toast(t('🎓 チュートリアルを閉じました', '🎓 Tutorial closed'), 'info', 1800);
+    toast(t('チュートリアルを閉じました', 'Tutorial closed'), 'info', 1800);
   }
 
   finishAll() {
     audio.coin();
     this.teardown(true);
     toast(this.hasAttack
-      ? t('🎓 まとめて消して殴り合おう！', '🎓 Clear them together and fight!')
-      : t('🎓 準備完了！スコアで勝とう！', '🎓 You are ready — outscore them!'), 'ok', 2600);
+      ? t('まとめて消して殴り合おう！', 'Clear them together and fight!')
+      : t('準備完了！スコアで勝とう！', 'You are ready — outscore them!'), 'ok', 2600);
   }
 
   // ---- ハイライト --------------------------------------------------------
@@ -9270,8 +9330,8 @@ class ChainMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('battle');
-    toast(t('⛓️ ブロックは必ず下へ落ちる！ 揃った列は1本ずつ消えるので、まとめて揃えるほど連鎖が伸びる！',
-      '⛓️ Everything falls! Full lines clear one at a time — set up several at once and the chain keeps going!'), 'announce', 3600);
+    toast(t('ブロックは必ず下へ落ちる！ 揃った列は1本ずつ消えるので、まとめて揃えるほど連鎖が伸びる！',
+      'Everything falls! Full lines clear one at a time — set up several at once and the chain keeps going!'), 'announce', 3600);
   }
 
   best() {
@@ -9288,10 +9348,10 @@ class ChainMode {
     applyScoreFit(el, fmt(this.engine.score));
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     $('#hudSub').textContent = t(
-      `⛓️ 最大${this.maxChain}連鎖 ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`,
-      `⛓️ Best chain ${this.maxChain} ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`);
+      `最大${this.maxChain}連鎖 ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`,
+      `Best chain ${this.maxChain} ・ BEST ${fmt(Math.max(this.best(), this.engine.score))}`);
     const tm = $('#hudTimer');
-    tm.textContent = this.cascading && this.chainNo >= 1 ? `⛓️${this.chainNo}` : `⛓️${this.maxChain}`;
+    tm.innerHTML = ic('mode_chain', 15) + ' ' + (this.cascading && this.chainNo >= 1 ? this.chainNo : this.maxChain);
     tm.classList.toggle('urgent', this.cascading && this.chainNo >= 3);
   }
 
@@ -9362,7 +9422,7 @@ class ChainMode {
     if (this.chainNo >= 2) {
       const cx = v.boardX + v.boardSize / 2;
       const cy = v.boardY + v.boardSize * 0.22;
-      v.addFloatText(cx, cy, t(`⛓️ ${this.chainNo}連鎖！ ×${mult}`, `⛓️ ${this.chainNo} CHAIN! ×${mult}`),
+      v.addFloatText(cx, cy, t(`${this.chainNo}連鎖！ ×${mult}`, `${this.chainNo} CHAIN! ×${mult}`),
         chainColor(this.chainNo), 1.6 + Math.min(1, this.chainNo * 0.12));
       v.screenFlash = Math.max(v.screenFlash || 0, Math.min(0.5, 0.12 + this.chainNo * 0.06));
       chainHit(this.chainNo);   // 連鎖が伸びるほど高く・短く畳みかける
@@ -9380,8 +9440,8 @@ class ChainMode {
     this.cascading = false;
     if (this.chainNo >= 3) {
       confettiBurst(20 + this.chainNo * 8);
-      toast(t(`⛓️ ${this.chainNo}連鎖！ ×${chainMult(this.chainNo)}`,
-        `⛓️ ${this.chainNo}-chain! ×${chainMult(this.chainNo)}`), 'announce', 2000);
+      toast(t(`${this.chainNo}連鎖！ ×${chainMult(this.chainNo)}`,
+        `${this.chainNo}-chain! ×${chainMult(this.chainNo)}`), 'announce', 2000);
     }
     this.chainNo = 0;
     // 落下で空きが増えることがあるので、判定はここで1回だけ。
@@ -9426,7 +9486,7 @@ class ChainMode {
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${isBest ? 'NEW RECORD!' : 'GAME OVER'}</div>
       <div class="result-stats">
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
-        <div class="rs-row"><span>${t('⛓️ 最大連鎖', '⛓️ Longest chain')}</span><b>${this.maxChain}</b></div>
+        <div class="rs-row"><span>${ic('mode_chain')} ${t('最大連鎖', 'Longest chain')}</span><b>${this.maxChain}</b></div>
         <div class="rs-row"><span>${t('連鎖で稼いだ点', 'Points from chains')}</span><b>${fmt(this.chainScore)}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         ${rewardsRows(rewards)}
@@ -9522,7 +9582,9 @@ function normalizeBlueprint(raw) {
   return {
     dayKey: String(bp.dayKey || jstDayKeyClient()),
     id: String(bp.id || 'figure'),
-    icon: String(bp.icon || '🏗️'),
+    // icon（サーバーが送る絵文字）は取り込まない ── 画面には出さないので
+    // 控えておくと「使われない2つ目の絵」になる。設計図の絵は
+    // icons.js の mode_blueprint が受け持つ。
     name: String(bp.name || '設計図'),
     nameEn: String(bp.nameEn || bp.name || 'Blueprint'),
     cells,
@@ -9569,9 +9631,8 @@ function localBlueprint(dayKey) {
       const tmp = pieces[i]; pieces[i] = pieces[j]; pieces[j] = tmp;
     }
     return {
-      // アイコンは 📐。HUD の見出しが「🏗️ …」で始まるので、ここを 🏗️ に
-      // すると「🏗️ 🏗️今日の設計図」と二重になる。
-      dayKey, id: 'local', icon: '📐',
+      // icon は持たない（HUD の絵は mode_blueprint 一本にそろえた）。
+      dayKey, id: 'local',
       name: '今日の設計図', nameEn: "Today's Blueprint",
       cells: list, pieces, local: true,
     };
@@ -9765,8 +9826,8 @@ class BlueprintMode {
     updateAutoBtn();
     v.start();
     audio.playTrack('ruins');
-    toast(t(`🏗️ ${this.bp.icon}「${this.bp.name}」を組み立てよう！ 光る形どおりに置く ── 列を揃えると崩れるぞ！`,
-      `🏗️ Build ${this.bp.icon} "${this.bp.nameEn}"! Fill the glowing shape — completing a line makes it crumble!`), 'announce', 4000);
+    toast(t(`「${this.bp.name}」を組み立てよう！ 光る形どおりに置く ── 列を揃えると崩れるぞ！`,
+      `Build "${this.bp.nameEn}"! Fill the glowing shape — completing a line makes it crumble!`), 'announce', 4000);
   }
 
   remaining() { return this.queue.length + this.engine.hand.filter(Boolean).length; }
@@ -9821,7 +9882,7 @@ class BlueprintMode {
     for (const k of placed) if (!this.want.has(k)) { this.strayCells.add(k); stray++; }
     if (stray) {
       audio.error();
-      toast(t(`⚠️ 設計図の外に${stray}マスはみ出した`, `⚠️ ${stray} square(s) outside the blueprint`), 'err', 1600);
+      toast(t(`設計図の外に${stray}マスはみ出した`, `${stray} square(s) outside the blueprint`), 'err', 1600);
     }
     // ラインが揃った ＝ 作品が崩れた。設計図には満杯の行・列が無いので、
     // これは必ず「設計図の外に置いた」結果として起きる。
@@ -9832,8 +9893,8 @@ class BlueprintMode {
       v.screenFlash = Math.max(v.screenFlash || 0, 0.5);
       v.shake = Math.max(v.shake || 0, 18);
       audio.bossAttack();
-      toast(t(`🏗️ 作品が崩れた！ −${fmt(penalty)}点（列を揃えてはいけない）`,
-        `🏗️ The build crumbled! −${fmt(penalty)} (never complete a line)`), 'err', 2600);
+      toast(t(`作品が崩れた！ −${fmt(penalty)}点（列を揃えてはいけない）`,
+        `The build crumbled! −${fmt(penalty)} (never complete a line)`), 'err', 2600);
       // 消えたマスは設計図の控えからも外れる ── 埋め直せるように印を戻す。
       for (const [r, c] of result.clearedCells) this.strayCells.delete(r * 8 + c);
     }
@@ -9920,8 +9981,8 @@ class BlueprintMode {
     this.doomed = true;
     if (!quiet) audio.error();
     this.updateHud();
-    toast(t('🏗️ 残りのピースでは、この設計図はもう埋めきれません ── やり直すと同じ図柄・同じ順で挑戦できます',
-      '🏗️ The remaining pieces can no longer fill this blueprint — a retry gives you the same shape and the same order'),
+    toast(t('残りのピースでは、この設計図はもう埋めきれません ── やり直すと同じ図柄・同じ順で挑戦できます',
+      'The remaining pieces can no longer fill this blueprint — a retry gives you the same shape and the same order'),
     'err', 4200);
   }
 
@@ -9931,10 +9992,10 @@ class BlueprintMode {
     applyScoreFit(el, fmt(this.engine.score));
     bumpScore(el);
     const name = t(this.bp.name, this.bp.nameEn);
-    $('#hudSub').textContent = t(`🏗️ ${this.bp.icon}${name} ・ 残り${this.missing()}マス${this.crumbles ? ` ・ 崩壊${this.crumbles}` : ''}`,
-      `🏗️ ${this.bp.icon}${name} — ${this.missing()} left${this.crumbles ? ` ・ ${this.crumbles} crumble(s)` : ''}`);
+    $('#hudSub').innerHTML = ic('mode_blueprint', 13) + ' ' + escapeHtml(t(`${name} ・ 残り${this.missing()}マス${this.crumbles ? ` ・ 崩壊${this.crumbles}` : ''}`,
+      `${name} — ${this.missing()} left${this.crumbles ? ` ・ ${this.crumbles} crumble(s)` : ''}`));
     const tm = $('#hudTimer');
-    tm.textContent = `🏗️${this.remaining()}`;
+    tm.innerHTML = `${ic('mode_blueprint', 15)} ${this.remaining()}`;
     tm.classList.toggle('urgent', this.doomed || this.missing() > this.cellsLeft());
   }
 
@@ -9990,13 +10051,13 @@ class BlueprintMode {
         ? t('ピースを使い切りました', 'You ran out of pieces')
         : t('もう置ける場所がありません', 'No legal moves left')));
     const m = showModal(`
-      <div class="result-banner ${won ? 'win' : 'lose'}">${won ? `${t('🏗️ 完成！', '🏗️ BUILT!')} ${starStr}` : t('🏗️ 未完成…', '🏗️ UNFINISHED…')}</div>
-      <p class="muted center">${escapeHtml(`${this.bp.icon} ${t(this.bp.name, this.bp.nameEn)}`)}</p>
+      <div class="result-banner ${won ? 'win' : 'lose'}">${ic('mode_blueprint', 26)} ${won ? `${t('完成！', 'BUILT!')} ${starStr}` : t('未完成…', 'UNFINISHED…')}</div>
+      <p class="muted center">${escapeHtml(t(this.bp.name, this.bp.nameEn))}</p>
       ${why ? `<p class="muted center" style="font-size:13px">${escapeHtml(why)}</p>` : ''}
       <div class="result-stats">
         <div class="rs-row"><span>${t('タイム', 'Time')}</span><b>${secs.toFixed(1)}s</b></div>
         ${won ? '' : `<div class="rs-row"><span>${t('残りマス', 'Squares left')}</span><b>${this.missing()}</b></div>`}
-        <div class="rs-row"><span>${t('🏗️ 崩壊', '🏗️ Crumbles')}</span><b>${this.crumbles}</b></div>
+        <div class="rs-row"><span>${t('崩壊', 'Crumbles')}</span><b>${this.crumbles}</b></div>
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
         ${rewardsRows(rewards)}
       </div>
@@ -10107,7 +10168,7 @@ export async function fetchDailyReplays(day) {
 // 👻 その日の走りの一覧。TOP3 ＋（あれば）自分の回。
 export async function openDailyReplays(day) {
   audio.click();
-  const m = showModal(`<h2>👻 ${t('みんなの走り', 'Ghost replays')}</h2><p class="muted center">${t('読み込み中…', 'Loading…')}</p>`);
+  const m = showModal(`<h2>${ic('clip', 22)} ${t('みんなの走り', 'Ghost replays')}</h2><p class="muted center">${t('読み込み中…', 'Loading…')}</p>`);
   const data = await fetchDailyReplays(day);
   if (!m.isConnected) return;   // 閉じられた後に描き込まない
   const rows = (data && Array.isArray(data.rows)) ? data.rows.slice() : [];
@@ -10115,7 +10176,7 @@ export async function openDailyReplays(day) {
   const meta = data ? { day: data.day, seed: data.seed, modifier: data.modifier } : null;
   if (!rows.length) {
     m.innerHTML = `
-      <h2>👻 ${t('みんなの走り', 'Ghost replays')}</h2>
+      <h2>${ic('clip', 22)} ${t('みんなの走り', 'Ghost replays')}</h2>
       <p class="ms-empty">${t('まだ今日の記録がありません。いちばん乗りになろう！', 'No runs recorded today yet — be the first!')}</p>
       <div class="modal-buttons"><button class="btn btn-primary" id="grClose">${t('閉じる', 'Close')}</button></div>`;
     const b = m.querySelector('#grClose');
@@ -10125,10 +10186,10 @@ export async function openDailyReplays(day) {
   const mod = (data && data.modifier) || {};
   const playable = replayReproducible(mod);
   m.innerHTML = `
-    <h2>👻 ${t('みんなの走り', 'Ghost replays')}</h2>
-    <p class="muted center">${escapeHtml(`${data.day} ${mod.icon || ''}${t(mod.ja || '', mod.en || '')}`)}</p>
-    ${playable ? '' : `<p class="muted center">${t('🪨 この日のお題は瓦礫の位置がひとりずつ違うため、走りを再生できません',
-      '🪨 On rubble day the debris layout differs per player, so runs cannot be replayed')}</p>`}
+    <h2>${ic('clip', 22)} ${t('みんなの走り', 'Ghost replays')}</h2>
+    <p class="muted center">${escapeHtml(`${data.day} ${t(mod.ja || '', mod.en || '')}`)}</p>
+    ${playable ? '' : `<p class="muted center">${t('この日のお題は瓦礫の位置がひとりずつ違うため、走りを再生できません',
+      'On rubble day the debris layout differs per player, so runs cannot be replayed')}</p>`}
     <div class="ms-list" id="grList"></div>
     <div class="modal-buttons"><button class="btn btn-primary" id="grClose">${t('閉じる', 'Close')}</button></div>`;
   const list = m.querySelector('#grList');
@@ -10142,8 +10203,8 @@ export async function openDailyReplays(day) {
         <div class="ms-name">${medal} ${escapeHtml(row.username || '???')}${row.you ? ` <small>(${t('あなた', 'you')})</small>` : ''}</div>
         <div class="ms-prog">${fmt(row.score)}${t('点', ' pts')}</div>
       </div>
-      ${playable ? `<button class="btn btn-ghost" data-watch="${i}">${t('👻 観る', '👻 Watch')}</button>
-      <button class="btn btn-primary" data-race="${i}">${t('📼 対走', '📼 Race')}</button>` : ''}`;
+      ${playable ? `<button class="btn btn-ghost" data-watch="${i}">${ic('spectate', 14)} ${t('観る', 'Watch')}</button>
+      <button class="btn btn-primary" data-race="${i}">${ic('clip', 14)} ${t('対走', 'Race')}</button>` : ''}`;
     list.appendChild(el);
   });
   list.querySelectorAll('[data-watch]').forEach(b => {
@@ -10183,8 +10244,8 @@ export async function startDailyRace(row) {
   // （デイリーの回数を消費するのは startDaily の予約なので、その手前で止める）
   if (modeStartStale(tk)) return;
   if (!replayReproducible(info && info.modifier)) {
-    toast(t('🪨 今日のお題では残像レースができません（瓦礫の位置がひとりずつ違うため）',
-      '🪨 No ghost racing today — the rubble layout differs per player'), 'err', 3600);
+    toast(t('今日のお題では残像レースができません（瓦礫の位置がひとりずつ違うため）',
+      'No ghost racing today — the rubble layout differs per player'), 'err', 3600);
     return;
   }
   startDaily(info, { ghost: { username: row.username, score: row.score, replay: rep } });
@@ -10232,7 +10293,7 @@ class ReplayMode {
     v.start();
     audio.playTrack('battle');
     this.buildBar();
-    toast(t(`👻 ${this.meta.username || ''}さんの走りを再生中`, `👻 Replaying ${this.meta.username || 'this run'}`), 'announce', 2600);
+    toast(t(`${this.meta.username || ''}さんの走りを再生中`, `Replaying ${this.meta.username || 'this run'}`), 'announce', 2600);
     this.timer = setTimeout(() => this.step(), 700);
   }
 
@@ -10242,7 +10303,7 @@ class ReplayMode {
     wrap.id = 'replayBar';
     wrap.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:60;display:flex;gap:8px;align-items:center';
     wrap.innerHTML = `
-      <button class="btn btn-ghost" id="rpSpeed">${t('⏩ 等速', '⏩ 1×')}</button>
+      <button class="btn btn-ghost" id="rpSpeed">${t('等速', '1×')}</button>
       <button class="btn btn-primary" id="rpClose">${t('閉じる', 'Close')}</button>`;
     document.body.appendChild(wrap);
     this.bar = wrap;
@@ -10250,7 +10311,7 @@ class ReplayMode {
     sp.onclick = () => {
       audio.click();
       this.speed = this.speed === 1 ? 2 : this.speed === 2 ? 4 : 1;
-      sp.textContent = this.speed === 1 ? t('⏩ 等速', '⏩ 1×') : `⏩ ${this.speed}×`;
+      sp.textContent = this.speed === 1 ? t('等速', '1×') : `${this.speed}×`;
     };
     wrap.querySelector('#rpClose').onclick = () => { audio.click(); this.quit(); };
   }
@@ -10278,7 +10339,7 @@ class ReplayMode {
     const el = $('#hudScore');
     el.textContent = fmt(this.engine.score);
     applyScoreFit(el, fmt(this.engine.score));
-    $('#hudSub').textContent = t(`👻 ${this.meta.username || '記録'} の走り`, `👻 ${this.meta.username || 'Recorded'} run`);
+    $('#hudSub').innerHTML = ic('clip', 13) + ' ' + escapeHtml(t(`${this.meta.username || '記録'} の走り`, `${this.meta.username || 'Recorded'} run`));
     $('#hudTimer').textContent = `${this.idx}/${this.replay.moves.length}`;
   }
 
@@ -10291,7 +10352,7 @@ class ReplayMode {
     if (this.bar) { this.bar.remove(); this.bar = null; }
     const e = this.engine;
     const m = showModal(`
-      <div class="result-banner draw">👻 ${t('再生おわり', 'Replay finished')}</div>
+      <div class="result-banner draw">${ic('clip', 26)} ${t('再生おわり', 'Replay finished')}</div>
       <div class="result-stats">
         <div class="rs-row"><span>${t('走った人', 'Runner')}</span><b>${escapeHtml(this.meta.username || '???')}</b></div>
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
@@ -10299,8 +10360,8 @@ class ReplayMode {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        <button class="btn btn-ghost" id="rList">${t('👻 ほかの走り', '👻 Other runs')}</button>
-        <button class="btn btn-primary" id="rRace">${t('📼 この人と対走', '📼 Race this run')}</button>
+        <button class="btn btn-ghost" id="rList">${ic('clip', 15)} ${t('ほかの走り', 'Other runs')}</button>
+        <button class="btn btn-primary" id="rRace">${ic('spectate', 15)} ${t('この人と対走', 'Race this run')}</button>
       </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
     m.querySelector('#rList').onclick = () => { closeModal(); this.destroy(); endToMenu(); openDailyReplays(this.meta.day); };
@@ -10332,7 +10393,7 @@ export function startDailyReplay(row, meta) {
   const rep = sanitizeReplayClient(row && row.replay);
   if (!rep) { toast(t('この走りは再生できません', 'This run cannot be replayed'), 'err', 2600); return; }
   if (!replayReproducible(meta && meta.modifier)) {
-    toast(t('🪨 この日のお題は再生に対応していません', '🪨 Runs from this day cannot be replayed'), 'err', 3000);
+    toast(t('この日のお題は再生に対応していません', 'Runs from this day cannot be replayed'), 'err', 3000);
     return;
   }
   if (currentMode) currentMode.destroy();
@@ -10471,9 +10532,9 @@ class WorkshopMode {
         .catch(() => { /* 数えられなくても遊びは続く */ });
     }
     toast(this.authoring
-      ? t('🛠️ 自分でクリアしてみよう！ この手順がそのまま投稿の「解けます」の証明になります',
-        '🛠️ Clear it yourself — this run becomes the proof that your stage is solvable')
-      : t(`🧩「${this.stage.title}」光るブロックをすべて消そう！`, `🧩 "${this.stage.title}" — clear every glowing block!`),
+      ? t('自分でクリアしてみよう！ この手順がそのまま投稿の「解けます」の証明になります',
+        'Clear it yourself — this run becomes the proof that your stage is solvable')
+      : t(`「${this.stage.title}」光るブロックをすべて消そう！`, `"${this.stage.title}" — clear every glowing block!`),
       'announce', 3400);
   }
 
@@ -10507,9 +10568,9 @@ class WorkshopMode {
     el.textContent = fmt(this.engine.score);
     applyScoreFit(el, fmt(this.engine.score));
     bumpScore(el);
-    $('#hudSub').textContent = t(`🧩 ${this.stage.title} ・ 残り${this.targets.size}マス`,
-      `🧩 ${this.stage.title} — ${this.targets.size} left`);
-    $('#hudTimer').textContent = `🧩${this.remaining()}`;
+    $('#hudSub').innerHTML = ic('mode_workshop', 13) + ' ' + escapeHtml(t(`${this.stage.title} ・ 残り${this.targets.size}マス`,
+      `${this.stage.title} — ${this.targets.size} left`));
+    $('#hudTimer').innerHTML = `${ic('mode_workshop', 15)} ${this.remaining()}`;
   }
 
   async finish(won) {
@@ -10526,11 +10587,11 @@ class WorkshopMode {
       const score = e.score;
       if (won && cb) { cb(moves, score); return; }
       const m = showModal(`
-        <div class="result-banner lose">${t('❌ クリアできませんでした', '❌ Not solved')}</div>
+        <div class="result-banner lose">${ic('close', 24)} ${t('クリアできませんでした', 'Not solved')}</div>
         <p class="muted center">${t('投稿するには、自分で1回クリアする必要があります。', 'You must clear it once yourself before publishing.')}</p>
         <p class="muted center">${t(`残り${this.targets.size}マス`, `${this.targets.size} squares left`)}</p>
         <div class="modal-buttons">
-          <button class="btn btn-ghost" id="wsBack">${t('🛠️ 作りなおす', '🛠️ Back to editor')}</button>
+          <button class="btn btn-ghost" id="wsBack">${ic('mode_workshop', 15)} ${t('作りなおす', 'Back to editor')}</button>
           <button class="btn btn-primary" id="wsRetry">${t('もう一度挑戦', 'Try again')}</button>
         </div>`, { dismissable: false });
       m.querySelector('#wsRetry').onclick = () => { closeModal(); this.ended = false; this.start(); };
@@ -10549,7 +10610,7 @@ class WorkshopMode {
     // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
     if (currentMode !== this) return;
     const m = showModal(`
-      <div class="result-banner ${won ? 'win' : 'lose'}">${won ? t('🧩 クリア！', '🧩 SOLVED!') : t('❌ 失敗…', '❌ FAILED…')}</div>
+      <div class="result-banner ${won ? 'win' : 'lose'}">${won ? `${ic('mode_puzzle', 26)} ${t('クリア！', 'SOLVED!')}` : `${ic('close', 24)} ${t('失敗…', 'FAILED…')}`}</div>
       <p class="muted center">${escapeHtml(`${this.stage.title} — ${this.stage.author}`)}</p>
       <div class="result-stats">
         <div class="rs-row"><span>${t('タイム', 'Time')}</span><b>${secs.toFixed(1)}s</b></div>
@@ -10560,7 +10621,7 @@ class WorkshopMode {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        <button class="btn btn-ghost" id="rList">${t('🧩 工房へ', '🧩 Workshop')}</button>
+        <button class="btn btn-ghost" id="rList">${ic('mode_workshop', 15)} ${t('工房へ', 'Workshop')}</button>
         <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Retry')}</button>
       </div>`, { dismissable: false, peekable: true });
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
@@ -10660,7 +10721,7 @@ function wsEditorStep1() {
     swatches.push(`<button class="btn btn-ghost ws-sw" data-color="${v}" style="min-width:44px;min-height:34px;padding:6px 8px;background:${wsCellColor(v)}"></button>`);
   }
   const m = showModal(`
-    <h2>🛠️ ${t('ステージを作る（1/3）', 'Create a stage (1/3)')}</h2>
+    <h2>${ic('mode_workshop', 22)} ${t('ステージを作る（1/3）', 'Create a stage (1/3)')}</h2>
     <p class="muted center">${t('光らせたマスが「消すべきブロック」になります（4マス以上）。タップで塗る／もう一度で消す。なぞってまとめて塗れます。',
       'The squares you paint become the blocks to clear (4 or more). Tap to paint, tap again to erase — or drag to paint several at once.')}</p>
     <div id="wsBoardWrap">${wsBoardHtml(d.board)}</div>
@@ -10669,7 +10730,7 @@ function wsEditorStep1() {
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="wsClear">${t('全消し', 'Clear all')}</button>
       <button class="btn btn-ghost" id="wsCancel">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-primary" id="wsNext">${t('次へ ▶', 'Next ▶')}</button>
+      <button class="btn btn-primary" id="wsNext">${t('次へ', 'Next')}</button>
     </div>`, { dismissable: false });
 
   const count = () => d.board.reduce((a, v) => a + (v ? 1 : 0), 0);
@@ -10758,16 +10819,16 @@ function wsEditorStep2() {
   // 1×1 のピースでも指で押せるよう、ボタンの下限を 44px 角で切る。
   const picker = SHAPES.map((s, i) => `<button class="btn btn-ghost" data-shape="${i}" style="min-width:44px;min-height:44px;padding:6px;display:inline-flex;align-items:center;justify-content:center">${wsShapeHtml(i, 8)}</button>`).join('');
   const m = showModal(`
-    <h2>🛠️ ${t('ステージを作る（2/3）', 'Create a stage (2/3)')}</h2>
+    <h2>${ic('mode_workshop', 22)} ${t('ステージを作る（2/3）', 'Create a stage (2/3)')}</h2>
     <p class="muted center">${t(`配るピースを並べます（この順に配られます・最大${WS_MAX_PIECES}個）。`,
       `Pick the pieces in the order they will be dealt (up to ${WS_MAX_PIECES}).`)}</p>
     <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:center;max-height:150px;overflow:auto">${picker}</div>
     <p class="muted center">${t('▼ 配る順', '▼ Deal order')}</p>
     <div id="wsQueue" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;min-height:26px"></div>
     <div class="modal-buttons">
-      <button class="btn btn-ghost" id="wsBack">${t('◀ 盤面へ', '◀ Board')}</button>
+      <button class="btn btn-ghost" id="wsBack">${t('盤面へ', 'Board')}</button>
       <button class="btn btn-ghost" id="wsPop">${t('1つ戻す', 'Undo')}</button>
-      <button class="btn btn-primary" id="wsPlay">${t('自分でクリアする ▶', 'Clear it yourself ▶')}</button>
+      <button class="btn btn-primary" id="wsPlay">${t('自分でクリアする', 'Clear it yourself')}</button>
     </div>`, { dismissable: false });
 
   const drawQueue = () => {
@@ -10815,7 +10876,7 @@ function wsEditorTestRun() {
 function wsPublishPrompt(moves, score) {
   const d = wsDraft;
   const m = showModal(`
-    <div class="result-banner win">${t('🧩 クリア！ 投稿できます', '🧩 Solved — ready to publish')}</div>
+    <div class="result-banner win">${ic('mode_puzzle', 26)} ${t('クリア！ 投稿できます', 'Solved — ready to publish')}</div>
     <p class="muted center">${t(`手数 ${moves.length} ・ スコア ${fmt(score)}`, `${moves.length} moves ・ ${fmt(score)} pts`)}</p>
     <div class="settings-row">
       <label for="wsTitle">${t('ステージ名', 'Stage name')}</label>
@@ -10825,8 +10886,8 @@ function wsPublishPrompt(moves, score) {
       'The server replays your clear to confirm the stage is solvable before publishing.')}</p>
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="wsAbort">${t('やめる', 'Cancel')}</button>
-      <button class="btn btn-ghost" id="wsEdit">${t('🛠️ 直す', '🛠️ Edit')}</button>
-      <button class="btn btn-primary" id="wsPublish">${t('📤 投稿する', '📤 Publish')}</button>
+      <button class="btn btn-ghost" id="wsEdit">${ic('mode_workshop', 15)} ${t('直す', 'Edit')}</button>
+      <button class="btn btn-primary" id="wsPublish">${t('投稿する', 'Publish')}</button>
     </div>`, { dismissable: false });
   const input = m.querySelector('#wsTitle');
   m.querySelector('#wsAbort').onclick = () => { audio.click(); closeModal(); endToMenu(); };
@@ -10847,12 +10908,12 @@ function wsPublishPrompt(moves, score) {
       closeModal();
       endToMenu();
       wsDraft = null;   // 公開できた下書きは捨てる
-      toast(t(`📤 公開しました！ 共有コード: ${res.code}`, `📤 Published! Share code: ${res.code}`), 'ok', 6000);
+      toast(t(`公開しました！ 共有コード: ${res.code}`, `Published! Share code: ${res.code}`), 'ok', 6000);
       if (window.openWorkshop) window.openWorkshop('new');
     } catch (err) {
       audio.error();
       btn.disabled = false;
-      btn.textContent = t('📤 投稿する', '📤 Publish');
+      btn.textContent = t('投稿する', 'Publish');
       toast(err.message || t('投稿できませんでした', 'Could not publish'), 'err', 4000);
     }
   };

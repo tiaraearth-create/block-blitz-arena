@@ -243,7 +243,7 @@ purchaseRouter.post('/api/purchase', requireAuth, maintenanceGuard, async (req, 
   }
 
   // No payment provider configured — purchases are under construction.
-  res.status(503).json({ error: '💳 課金機能は製作中です。もうしばらくお待ちください！' });
+  res.status(503).json({ error: '課金機能は製作中です。もうしばらくお待ちください！' });
 });
 
 // Stripe webhook: the ONLY place real purchases grant gems.
@@ -437,17 +437,19 @@ shopRouter.post('/api/shop/gift', requireAuth, maintenanceGuard, (req, res) => {
   if (roll < GIFT_GEM_CHANCE) {
     const amount = GIFT_GEMS_MIN + Math.floor(Math.random() * (GIFT_GEMS_MAX - GIFT_GEMS_MIN + 1));
     user.gems += amount;
-    gift = { type: 'gems', amount, icon: '💎', name: 'ジェム', nameEn: 'Gems' };
+    // icon（絵文字）は返さない。受け取りの知らせはトースト（textContent）で、
+    // 絵文字を混ぜても端末任せの絵になるだけだった。
+    gift = { type: 'gems', amount, name: 'ジェム', nameEn: 'Gems' };
   } else if (roll < GIFT_GEM_CHANCE + GIFT_ITEM_CHANCE) {
     const pool = BOOST_ITEMS.filter(i => !i.adminOnly);
     const it = pool[Math.floor(Math.random() * pool.length)];
     user.items = user.items || {};
     user.items[it.id] = (user.items[it.id] || 0) + 1;
-    gift = { type: 'item', id: it.id, amount: 1, icon: it.icon, name: it.name, nameEn: enName(it) };
+    gift = { type: 'item', id: it.id, amount: 1, name: it.name, nameEn: enName(it) };
   } else {
     const amount = GIFT_COINS_MIN + Math.floor(Math.random() * (GIFT_COINS_MAX - GIFT_COINS_MIN + 1));
     user.coins += amount;
-    gift = { type: 'coins', amount, icon: '🪙', name: 'コイン', nameEn: 'Coins' };
+    gift = { type: 'coins', amount, name: 'コイン', nameEn: 'Coins' };
   }
   user.stats.shopGiftDay = today;
   saveDb();
@@ -520,7 +522,7 @@ function gachaPull(user, lucky = false, floor = 0, gemBudget = null) {
     const pool = BOOST_ITEMS.filter(i => !i.adminOnly);
     const it = pool[Math.floor(Math.random() * pool.length)];
     user.items[it.id] = (user.items[it.id] || 0) + 1;
-    return { type: 'item', id: it.id, name: it.name, icon: it.icon, rarity: 'R' };
+    return { type: 'item', id: it.id, name: it.name, rarity: 'R' };
   }
   if (roll < 87) {   // SR: gems
     const amount = takeGems(15 + Math.floor(Math.random() * 6) * 5);
@@ -539,7 +541,7 @@ function gachaPull(user, lucky = false, floor = 0, gemBudget = null) {
       const qty = 3;
       user.items = user.items || {};
       user.items[it.id] = (user.items[it.id] || 0) + qty;
-      return { type: 'item', id: it.id, name: it.name, icon: it.icon, amount: qty, rarity: 'SSR', complete: true };
+      return { type: 'item', id: it.id, name: it.name, amount: qty, rarity: 'SSR', complete: true };
     }
     const it = unowned[Math.floor(Math.random() * unowned.length)];
     user.owned.push(it.id);
@@ -629,8 +631,8 @@ shopRouter.post('/api/shop/buy', requireAuth, maintenanceGuard, (req, res) => {
   const item = SHOP_ITEMS.find(i => i.id === req.body.itemId);
   if (!item) return res.status(404).json({ error: 'アイテムが見つかりません' });
   if (item.adminOnly) return res.status(403).json({ error: '管理者専用の装備です（非売品）' });
-  if (item.throneOnly) return res.status(403).json({ error: '👑 管理者イベント専用ショップの品です（王座の欠片でのみ交換）' });
-  if (item.gachaOnly) return res.status(403).json({ error: '🎰 ガチャ限定の装備です（SSRで入手）' });
+  if (item.throneOnly) return res.status(403).json({ error: '管理者イベント専用ショップの品です（王座の欠片でのみ交換）' });
+  if (item.gachaOnly) return res.status(403).json({ error: 'ガチャ限定の装備です（SSRで入手）' });
   const user = req.user;
   if (user.owned.includes(item.id)) return res.status(409).json({ error: 'すでに所持しています' });
   // 🏷 セール価格は必ずここで引き直す。クライアントが送ってきた金額は見ない
@@ -654,7 +656,7 @@ throneShopRouter.get('/api/throne/shop', (req, res) => {
     throneMax: max,
     rates: AE_SHARD,
     items: THRONE_ITEMS.map(i => ({
-      id: i.id, cat: i.cat, icon: i.icon || null, name: i.name, desc: i.desc,
+      id: i.id, cat: i.cat, name: i.name, desc: i.desc,
       dan: i.dan, shards: i.shards,
       unlocked: max >= i.dan,
       owned: owned.includes(i.id),
@@ -673,7 +675,7 @@ throneShopRouter.post('/api/throne/buy', requireAuth, maintenanceGuard, (req, re
     return res.status(403).json({ error: `まだ棚に並んでいません（第${item.dan}段が割れるまで）` });
   }
   if ((user.shards || 0) < item.shards) {
-    return res.status(402).json({ error: `👑 王座の欠片が足りません（${item.shards} 必要）` });
+    return res.status(402).json({ error: `王座の欠片が足りません（${item.shards} 必要）` });
   }
   user.shards -= item.shards;
   user.owned.push(item.id);

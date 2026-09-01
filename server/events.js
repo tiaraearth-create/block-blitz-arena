@@ -10,33 +10,40 @@
 // adminevent.js は何も import していないので循環参照にはならない。
 import { jstParts, jstDayKey, JST_OFFSET_MS, WEEKDAYS_JA, WEEKDAYS_EN } from './adminevent.js';
 
+// ※ icon（絵文字）と iconName（public/js/icons.js の名前）の2本立てにしてある。
+//   ・iconName … 画面に出す絵。バナーと予告の行で SVG として描く。
+//   ・icon ……… **ライブフィード専用**。同じティッカーには
+//     server/crowd.js（編集禁止）が住人の行を絵文字で流し込んでいる。
+//     こちらだけ SVG にすると「絵がキレイな行＝本物の人間」という
+//     見分けの印になり、住人の秘匿（最優先事項）と真っ向からぶつかる。
+//     フィードを独自アイコンにするなら crowd.js と同時にやること。
 export const EVENT_TYPES = [
   {
-    id: 'chaos', icon: '🌪️', name: 'カオスタイム', nameEn: 'Chaos Time',
+    id: 'chaos', icon: '🌪️', iconName: 'mode_chaos', name: 'カオスタイム', nameEn: 'Chaos Time',
     desc: 'カオスモードが全員に開放！コイン1.5倍',
     descEn: 'Chaos Mode opens up for everyone — 1.5× coins',
     bonus: { chaos: true },
   },
   {
-    id: 'coinfes', icon: '🪙', name: 'コイン祭り', nameEn: 'Coin Festival',
+    id: 'coinfes', icon: '🪙', iconName: 'coins', name: 'コイン祭り', nameEn: 'Coin Festival',
     desc: 'すべてのモードで獲得コイン2倍！',
     descEn: 'Double coins in every mode!',
     bonus: { coin: 2 },
   },
   {
-    id: 'xpboost', icon: '⭐', name: '経験値ブースト', nameEn: 'XP Boost',
+    id: 'xpboost', icon: '⭐', iconName: 'xp', name: '経験値ブースト', nameEn: 'XP Boost',
     desc: 'パスXP・アカウントXPが2倍',
     descEn: 'Double battle-pass and account XP',
     bonus: { xp: 2 },
   },
   {
-    id: 'gemrush', icon: '💎', name: 'ジェムラッシュ', nameEn: 'Gem Rush',
+    id: 'gemrush', icon: '💎', iconName: 'gems', name: 'ジェムラッシュ', nameEn: 'Gem Rush',
     desc: '1プレイごとにジェムが3個ドロップ',
     descEn: 'Every game drops 3 gems',
     bonus: { gemDrop: 3 },
   },
   {
-    id: 'bossraid', icon: '🐲', name: 'ボス襲来', nameEn: 'Boss Invasion',
+    id: 'bossraid', icon: '🐲', iconName: 'mode_boss', name: 'ボス襲来', nameEn: 'Boss Invasion',
     // 「報酬2倍」だと初回討伐ジェム(gemsFirst)も2倍になると読めるが、2倍に
     // なるのはコインだけ。ジェムは課金通貨なので意図的に倍にしていない
     // （インフレさせない）。約束のほうを実態に合わせる。
@@ -47,19 +54,19 @@ export const EVENT_TYPES = [
     bonus: { bossCoin: 2, bossHp: 0.8 },
   },
   {
-    id: 'ultfes', icon: '⚡', name: '奥義祭', nameEn: 'Ultimate Festival',
+    id: 'ultfes', icon: '⚡', iconName: 'cat_ult', name: '奥義祭', nameEn: 'Ultimate Festival',
     desc: 'アルティメットゲージが2倍速で溜まる',
     descEn: 'The ultimate gauge charges twice as fast',
     bonus: { ultRate: 2 },
   },
   {
-    id: 'lucky', icon: '🍀', name: 'ラッキーデー', nameEn: 'Lucky Day',
+    id: 'lucky', icon: '🍀', iconName: 'clover', name: 'ラッキーデー', nameEn: 'Lucky Day',
     desc: 'ガチャが20%オフ＋レア確率アップ',
     descEn: '20% off gacha pulls and better rare odds',
     bonus: { gachaDiscount: 0.8, gachaLuck: true },
   },
   {
-    id: 'doubletrouble', icon: '🔥', name: '倍々デー', nameEn: 'Double Trouble',
+    id: 'doubletrouble', icon: '🔥', iconName: 'fire', name: '倍々デー', nameEn: 'Double Trouble',
     desc: 'コインもXPも2倍！最大級のお祭り',
     descEn: 'Double coins AND double XP — the big one',
     bonus: { coin: 2, xp: 2 },
@@ -82,6 +89,7 @@ export function makeEvent(typeId, name, minutes, username) {
     id: type.id,          // legacy field name kept for older clients
     type: type.id,
     icon: type.icon,
+    iconName: type.iconName,
     name: name || type.name,
     // 管理者が独自名を付けたときはそれを両言語で使う（誤訳よりマシ）。
     nameEn: name && name !== type.name ? name : type.nameEn,
@@ -151,6 +159,7 @@ function calendarEntry(weekday, win) {
   return {
     type: type.id,
     icon: type.icon,
+    iconName: type.iconName,
     name: type.name,
     nameEn: type.nameEn,
     desc: type.desc,
@@ -223,7 +232,7 @@ export function calendarView() {
     const type = eventType(id);
     return type ? {
       weekday: wd, weekdayJa: WEEKDAYS_JA[wd], weekdayEn: WEEKDAYS_EN[wd],
-      type: type.id, icon: type.icon, name: type.name, nameEn: type.nameEn,
+      type: type.id, icon: type.icon, iconName: type.iconName, name: type.name, nameEn: type.nameEn,
       desc: type.desc, descEn: type.descEn,
       startHour: AUTO_EVENT_START_HOUR, minutes: AUTO_EVENT_MINUTES,
     } : { weekday: wd, weekdayJa: WEEKDAYS_JA[wd], weekdayEn: WEEKDAYS_EN[wd], type: null };

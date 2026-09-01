@@ -13,6 +13,7 @@ import { audio } from './audio.js';
 import { session, api } from './net.js';
 import { sendWs, registerHandler, onWsReady } from './chat.js';
 import { getSettings } from './settings.js';
+import { icon } from './icons.js';
 
 // 全体チャット側（chat.js）と同じ判定。日本語かな/カナ/漢字があれば ja。
 const msgLang = text => (/[ぁ-んァ-ヶ一-龠ー]/.test(text) ? 'ja' : 'en');
@@ -67,7 +68,7 @@ export function renderParty() {
   const meId = session.user ? session.user.id : null;
   el.innerHTML = [
     '<button class="pt-bar" id="ptToggle">',
-    `  <span class="pt-icon">👥</span>`,
+    `  <span class="pt-icon">${icon('friends', { size: 18 })}</span>`,
     `  <span class="pt-count">${state.members.length}/${state.max}</span>`,
     `  <span class="pt-peek" id="ptPeek"></span>`,
     `  <span class="pt-caret">${openDock ? '▾' : '▴'}</span>`,
@@ -76,7 +77,7 @@ export function renderParty() {
     '  <div class="pt-roster">',
     state.members.map(m => [
       `<div class="pt-member ${m.status}">`,
-      `  <span class="pt-name">${m.id === state.leaderId ? '👑' : ''}${esc(m.username)}</span>`,
+      `  <span class="pt-name">${m.id === state.leaderId ? icon('host_crown', { size: 14 }) : ''}${esc(m.username)}</span>`,
       `  <span class="pt-status">${STATUS_LABEL[m.status] ? STATUS_LABEL[m.status]() : ''}</span>`,
       state.youAreLeader && m.id !== meId
         ? `  <button class="pt-kick" data-kick="${esc(m.id)}" title="${t('外す', 'Remove')}">✕</button>` : '',
@@ -233,9 +234,9 @@ async function openInvitePicker() {
 
 // リーダーが選ぶ。人数が足りないモードは最初から出さない。
 const PARTY_MODES = [
-  { id: 'team', seats: 4, ja: '⚔️ 2vs2', en: '⚔️ 2v2' },
-  { id: 'coop', seats: 2, ja: '🤝 協力プレイ', en: '🤝 Co-op' },
-  { id: 'custom', seats: 4, ja: '🔑 合言葉ルーム', en: '🔑 Private room' },
+  { id: 'team', seats: 4, ja: '2vs2', en: '2v2' },
+  { id: 'coop', seats: 2, ja: '協力プレイ', en: 'Co-op' },
+  { id: 'custom', seats: 4, ja: '合言葉ルーム', en: 'Private room' },
 ];
 
 function openPlayPicker() {
@@ -305,8 +306,8 @@ export function openStageReport(stage) {
     return;
   }
   const m = showModal([
-    `<h2>🚩 ${t('ステージを通報', 'Report this stage')}</h2>`,
-    `<p class="center"><b>${esc(title)}</b>${author ? ` <span class="muted">👤 ${esc(author)}</span>` : ''}</p>`,
+    `<h2>${icon('warn', { size: 22 })} ${t('ステージを通報', 'Report this stage')}</h2>`,
+    `<p class="center"><b>${esc(title)}</b>${author ? ` <span class="muted">${icon('user', { size: 13 })} ${esc(author)}</span>` : ''}</p>`,
     `<p class="muted" style="font-size:12px">${t(
       `ステージの内容とコード（${code}）が運営に届きます。`,
       `The stage and its code (${code}) are sent to staff.`)}</p>`,
@@ -512,7 +513,7 @@ export function initParty() {
     const open = () => {
       if (pendingInvite !== msg.inviteId) return;   // もう答えた／期限切れ
       modal = showModal([
-        `<h2>👥 ${t('パーティーに誘われました', 'Party invite')}</h2>`,
+        `<h2>${icon('friends', { size: 22 })} ${t('パーティーに誘われました', 'Party invite')}</h2>`,
         `<p class="center"><b>${esc(msg.from)}</b> ${t('からのお誘いです', 'invited you')}</p>`,
         `<p class="muted center" style="font-size:12px">${msg.members}/${msg.max}</p>`,
         '<div class="modal-buttons">',
@@ -526,8 +527,8 @@ export function initParty() {
     // 結果画面などが出ているあいだは割り込まない。サーバーの invite() は
     // 相手が対戦中かどうかを見ていないので、試合中でも結果表示中でも普通に届く。
     if (modalLocked()) {
-      toast(t(`👥 ${msg.from} からパーティーのお誘いが届いています`,
-        `👥 ${msg.from} invited you to a party`), 'announce', 4500);
+      toast(t(`${msg.from} からパーティーのお誘いが届いています`,
+        `${msg.from} invited you to a party`), 'announce', 4500);
       showLater(open, until);
       return;
     }
@@ -535,13 +536,13 @@ export function initParty() {
   });
 
   registerHandler('friend_request', msg => {
-    toast(t(`🤝 ${msg.from} からフレンド申請が届きました`, `🤝 Friend request from ${msg.from}`), 'announce', 5000);
+    toast(t(`${msg.from} からフレンド申請が届きました`, `Friend request from ${msg.from}`), 'announce', 5000);
     // toast は数秒で消える。見逃してもナビの🤝に気づけるよう、ドットも点ける。
     // （静的 import にすると friends.js ⇄ party.js が循環するので動的に）
     import('./friends.js').then(f => f.noteFriendRequest()).catch(() => {});
   });
   registerHandler('friend_accepted', msg => {
-    toast(t(`🤝 ${msg.by} とフレンドになりました！`, `🤝 You and ${msg.by} are now friends!`), 'ok', 4000);
+    toast(t(`${msg.by} とフレンドになりました！`, `You and ${msg.by} are now friends!`), 'ok', 4000);
   });
 
   // 部屋を作るのはリーダーの画面。作れたら合言葉をサーバーへ返し、
@@ -560,7 +561,7 @@ export function initParty() {
     audio.combo(5);
     const open = () => {
       const m = showModal([
-        `<h2>👥 ${t('部屋ができました', 'The room is open')}</h2>`,
+        `<h2>${icon('mode_room', { size: 22 })} ${t('部屋ができました', 'The room is open')}</h2>`,
         `<p class="center">${t('合言葉', 'Code')}: <b>${esc(msg.code)}</b></p>`,
         '<div class="modal-buttons">',
         `  <button class="btn btn-ghost" id="plNo">${t('あとで', 'Not now')}</button>`,
@@ -578,7 +579,7 @@ export function initParty() {
     // 合言葉は toast にも載せておく ── 順番待ちのまま見られなくても、
     // 「合言葉で入る」から自力で入れる。
     if (modalLocked()) {
-      toast(t(`👥 部屋ができました（合言葉 ${msg.code}）`, `👥 The room is open — code ${msg.code}`), 'announce', 6000);
+      toast(t(`部屋ができました（合言葉 ${msg.code}）`, `The room is open — code ${msg.code}`), 'announce', 6000);
       // 招待と同じく期限を守る。until=0 のままだと順番待ちで数分寝かせた
       // モーダルが後から湧き、既に閉じた部屋への参加を押させてしまう。
       showLater(open, Date.now() + (msg.expiresIn || 60000));

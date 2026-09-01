@@ -251,7 +251,7 @@ export function createParties(deps) {
     const u = userOf(userId);
     if (!u) return { error: 'ログインが必要です' };
     // ミュートはここでも見る。socket の入口はBANとメンテしか見ていない。
-    if (u.muted) return { error: '🔇 管理者によりチャットが制限されています' };
+    if (u.muted) return { error: '管理者によりチャットが制限されています' };
     if (rateLimit && !rateLimit('pchat:' + userId, 20, 10_000)) {
       return { error: 'すこし早すぎます' };
     }

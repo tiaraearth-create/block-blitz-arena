@@ -459,6 +459,160 @@ function ratingFor(r, s, age, mood, day) {
   return Math.min(ratingCapOf(r, day), Math.round(850 + Math.pow(s, 1.3) * 1600 * aptPvp * (0.72 + 0.28 * climb) + mood * 70));
 }
 
+// ---------------------------------------------------------------------------
+// 🗒 実際に起きたことの差分（住人の戦績台帳）
+// ---------------------------------------------------------------------------
+// ここより上の成績は全部「種＋日付」から計算している。つまり **人間が住人に
+// 勝っても相手の戦績は1ミリも動かない** ── これが「この人は計算式です」と
+// いちばんはっきり白状する場所だった（ユーザーの指摘）。
+//
+//     表示される値 ＝ 計算で作る基準値（今までどおり日々動く）
+//                   ＋ 実際に起きたことの差分（ここで保存する）
+//
+// 全部を実記録に置き換えては **いけない**。住人が対戦するのは人間と当たった
+// ときだけなので、置き換えると600人のほとんどが「何日経っても1戦も増えない」
+// になり、別の不自然さが生まれる。基準値は今までどおり日々伸び続けるので、
+// 負けて下がったレートは時間とともに戻る ── 実在のプレイヤーが負けを取り返す
+// のと同じ見え方になる。
+//
+// 置き場は db.meta.residentRecords。このファイルは db を知らない（純関数の
+// 集まりで、テストも server 抜きで読む）ので、**読み口だけを注入してもらう**。
+// 呼ぶたびに引き直すので、復元で db.meta ごと差し替わっても古い参照を掴まない。
+// 注入が無いとき（テストや部分起動）は差分ゼロ ＝ 従来どおりの計算値になる。
+//
+// ■ キーは id ではなく **名前**（実測で決めた）
+// 住人の id（r21）は「名簿の何番目か」でしかなく、名簿の大きさで指す人が変わる。
+// buildRoster は最後に「王者が引かれなかったら**いちばん強い住人**を差し替える」
+// ので、64人の名簿と600人の名簿では王者の id が別番号になる。実際、通しで
+// 確かめると /api/profile（ambient.js の名前引き＝600人で組む）と
+// 🏆ランキング（getRoster＝倍率ぶんの人数で組む）が同じ「ちゃちゃまる」に
+// 別の id を返し、id をキーにすると **ランキングには1敗が出るのにプロフィール
+// では0敗のまま** になった（受け入れ条件そのものを外す）。
+// 名前は名簿の中で一意（buildRoster の used セット）で、実プレイヤーとも
+// ぶつからない（clashingResidentIds が予約している）ので、どの経路から引いた
+// 住人でも同じ行に当たる。名簿を引き直して居なくなった名前の行は、
+// 誰も参照しないまま古い順に押し出されて消える。
+//
+// ⚠ 名前は運営が自由に付けられる（ambient.js の custom.extra）ので、
+//   "__proto__" などのキーは必ず弾くこと。
+
+// 台帳の行数の上限。db.json は保存のたびに丸ごと書き出す（同期＋fsync）ので、
+// 伸び続ける入れ物を1つ足すと、そのまま「保存でイベントループが止まる時間」に
+// なる。行ができるのは実際に人間と当たった住人だけだが、上限は必ず要る。
+// 1行 70バイト前後なので 300行で約20KB。
+export const RESIDENT_RECORD_MAX = 300;
+// レートの差分が効く下限（基準値からの最大の下げ幅）。同じ住人を狩り続けても
+// これ以上は下がらない ── 際限なく削れると、狩られた住人がランキングから
+// 消えてしまい、それはそれで不自然だから。
+const RECORD_RATING_DROP_MAX = 300;
+// 絶対の床。BOT_RATING_BANDS.easy の下限（700）を割ると、その住人はどの帯の
+// 変装候補にも入らなくなり、二度と対戦相手として出てこない。
+const RECORD_RATING_FLOOR = 700;
+// 台帳に貯める値の頭押さえ（db.json は外から差し替わりうるので読み書き両方で切る）。
+const RECORD_RD_MAX = 2000;
+const RECORD_COUNT_MAX = 100000;
+const RECORD_SCORE_MAX = 1000000;
+// レートへの効きを逓減させる刻み。同じ住人と同じ日に何度も当たると、
+// 3戦ごとに 1 → 1/2 → 1/3 … と効きが落ちる。
+const RECORD_FARM_STEP = 3;
+
+// db.json 由来の値を数として信用しない（手で書き換えたファイルの復元もある）。
+function recNum(v, lo, hi) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(lo, Math.min(hi, n));
+}
+
+let recordSource = () => null;
+// server/battle.js が起動時に呼ぶ。引数 create が true のときだけ入れ物を作る
+// （読むだけの経路 ── ランキング1行ごと ── で db.meta に空の欄を生やさない）。
+export function setResidentRecordSource(fn) {
+  recordSource = typeof fn === 'function' ? fn : () => null;
+}
+function recordTable(create = false) {
+  const t = recordSource(create);
+  return t && typeof t === 'object' && !Array.isArray(t) ? t : null;
+}
+
+// JSON.parse は "__proto__" を素の own プロパティとして作るし、住人の名前は
+// 運営が自由に付けられる。名前で引く入れ物なので、必ずここを通す。
+export function safeRecordKey(name) {
+  const k = String(name == null ? '' : name);
+  if (!k || k === '__proto__' || k === 'constructor' || k === 'prototype') return null;
+  return k;
+}
+
+// この住人の差分。無ければ null（＝従来どおりの計算値だけ）。
+export function residentRecord(r) {
+  const key = r && safeRecordKey(r.name);
+  if (!key) return null;
+  const t = recordTable(false);
+  if (!t) return null;
+  const row = Object.prototype.hasOwnProperty.call(t, key) ? t[key] : null;
+  if (!row || typeof row !== 'object') return null;
+  return row;
+}
+
+// レートに差分を乗せる。上は住人ごとの天井（＝頂は人間に残す約束）、
+// 下は上の2つの床。基準値は日々動くので、この足し算だけで「負けた翌週には
+// 戻り始める」が成り立つ。
+function ratingWithRecord(r, base, day, rec) {
+  const row = rec === undefined ? residentRecord(r) : rec;
+  if (!row) return base;
+  const rd = recNum(row.rd, -RECORD_RD_MAX, RECORD_RD_MAX);
+  if (!rd) return base;
+  const floor = Math.min(base, Math.max(RECORD_RATING_FLOOR, base - RECORD_RATING_DROP_MAX));
+  return Math.max(floor, Math.min(ratingCapOf(r, day), base + rd));
+}
+
+// 1試合ぶんを台帳に足す。呼ぶのは server/battle.js の endMatch だけ
+// （レート戦の1対1で、相手に人間が居て、住人が変装で出ていたとき）。
+//   outcome … 住人から見た結果（1 勝 / 0.5 引き分け / 0 敗）
+//   score   … その試合で住人が実際に出した点。**上がるときだけ**自己ベストに残す
+export function recordResidentMatch(r, { outcome, ratingDelta = 0, score = 0, now = Date.now() } = {}) {
+  const key = r && safeRecordKey(r.name);
+  if (!key) return null;
+  const t = recordTable(true);
+  if (!t) return null;
+  const day = jstDay(now);
+  let row = Object.prototype.hasOwnProperty.call(t, key) ? t[key] : null;
+  if (!row || typeof row !== 'object') {
+    row = t[key] = { w: 0, l: 0, rd: 0, bs: 0, at: 0, d: 0, dn: 0 };
+  }
+  // 同じ住人を1日に何度も狩ったとき、**レートへの効きだけ**を逓減させる。
+  // 勝敗の数はそのまま積む（本当にその回数だけ対戦しているので、そこを
+  // 削ると今度は「何度倒しても敗が増えない」という別の嘘になる）。
+  // レートだけ守るのは、1人の都合でランキングの並びを動かせないようにするため。
+  if (recNum(row.d, 0, 1e9) !== day) { row.d = day; row.dn = 0; }
+  const damp = 1 / (1 + Math.floor(recNum(row.dn, 0, 9999) / RECORD_FARM_STEP));
+  row.dn = Math.min(9999, recNum(row.dn, 0, 9999) + 1);
+  // 引き分け（outcome === 0.5）はどちらにも数えない ── レートだけが動く。
+  row.w = Math.min(RECORD_COUNT_MAX, recNum(row.w, 0, RECORD_COUNT_MAX) + (outcome === 1 ? 1 : 0));
+  row.l = Math.min(RECORD_COUNT_MAX, recNum(row.l, 0, RECORD_COUNT_MAX) + (outcome === 0 ? 1 : 0));
+  row.rd = recNum(recNum(row.rd, -RECORD_RD_MAX, RECORD_RD_MAX) + Math.round((Number(ratingDelta) || 0) * damp),
+    -RECORD_RD_MAX, RECORD_RD_MAX);
+  // 自己ベストは上がるときだけ。人間に勝たれても住人のベストは下がらない（当然）。
+  const sc = recNum(score, 0, RECORD_SCORE_MAX);
+  if (sc > recNum(row.bs, 0, RECORD_SCORE_MAX)) row.bs = sc;
+  row.at = now;
+  pruneResidentRecords(t);
+  return row;
+}
+
+// 上限を超えたぶんを、最後に対戦した時刻が古い順に落とす。落ちた住人は
+// 基準値だけに戻る ──「しばらく誰とも当たっていない人の記録が薄れる」なので、
+// 見え方としても不自然にならない。
+export function pruneResidentRecords(table) {
+  const t = table || recordTable(false);
+  if (!t) return 0;
+  const keys = Object.keys(t);
+  if (keys.length <= RESIDENT_RECORD_MAX) return 0;
+  keys.sort((a, b) => (Number(t[a] && t[a].at) || 0) - (Number(t[b] && t[b].at) || 0));
+  const drop = keys.length - RESIDENT_RECORD_MAX;
+  for (let i = 0; i < drop; i++) delete t[keys[i]];
+  return drop;
+}
+
 // rating だけを軽量に出す（personalBest の重いループを一切踏まない）。
 // residentsForLevel がバトロワの席数ぶん呼ぶので、ここが軽いことが効く。
 export function residentRating(r, now = Date.now()) {
@@ -466,7 +620,9 @@ export function residentRating(r, now = Date.now()) {
   const seedN = strHash(r.id) % 1000;
   const joined = r.joinedDay === null ? day - (seedN % 14) : r.joinedDay;
   const age = Math.max(1, day - joined);
-  return ratingFor(r, r.skill, age, moodFor(r, day), day);
+  // 差分は residentStats 側と**同じ関数**で乗せる。ここだけ素の値を返すと、
+  // 変装レート（対戦相手として出るときの数字）とランキング表示がズレる。
+  return ratingWithRecord(r, ratingFor(r, r.skill, age, moodFor(r, day), day), day);
 }
 
 export function residentStats(r, now = Date.now(), weekId = 'W0') {
@@ -480,6 +636,9 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   // （residentsForLevel の軽量パスと必ず同値にするため — 式が分岐すると住人の
   // 変装レートとランキング表示がズレる）。上限や根拠は ratingFor 参照。
   const mood = moodFor(r, day);
+  // 🗒 実際に起きたことの差分（人間と当たった住人にだけ行がある）。
+  // 1行ぶんの引きなので、ランキング1行ごとに呼ばれても効かない。
+  const rec = residentRecord(r);
   const aptPvp = aptitude(r, 'pvp');   // rating 以外（pvpWins）でも使う
   // v2.14: 住人は大幅強化 — ランキング上位は化け物級の記録になる。
   // それでも各ボードに絶対上限を残す。根拠は「人間の理論上限の内側」:
@@ -487,7 +646,7 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   //     100万点级に届きうる。住人は 900,000 で頭打ち。
   //   ・レートは 2600 止まり（Eloに上限は無いので、勝ち続ける人間は超えうる）
   //   ・王座は同値なら実プレイヤーが勝つ — どの王冠も理論上は奪還できる。
-  const rating = ratingFor(r, s, age, mood, day);
+  const rating = ratingWithRecord(r, ratingFor(r, s, age, mood, day), day, rec);
   const level = Math.max(1, Math.min(60, 1 + Math.floor(age * (0.10 + s * 0.45))));
   // ここから下は全部「自己ベスト」— 練習日に更新され、下がらず、住人ごとに
   // 更新日がずれる。得意ボードほど天井が高い。
@@ -496,7 +655,15 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   // 同時にきっかり上限へ張り付くのを止めるため。天井は seed だけで決まるので
   // 「同じ日なら同じ値」「自己ベストは下がらない」はどちらも保たれる。
   const scoreSpan = 5000 + Math.pow(s, 2) * 1000000;
-  const bestScore = Math.min(capOf(r, 'sc', 900000), personalBest(r, age, 'sc', 2500, scoreSpan, aptitude(r, 'solo')));
+  const scoreCap = capOf(r, 'sc', 900000);
+  // 🗒 実際の対戦で出した点も自己ベストの候補にする（**上がるときだけ**）。
+  // 実プレイヤー側も PvP のスコアが bestScore に載る（index.js の
+  // scoreboardEligible）ので、住人だけ載らないのは扱いが違うということ。
+  // 天井（capOf）は素の式と同じものを掛けるので「頂は人間に残す」は保たれ、
+  // 基準値も台帳の値もどちらも単調なので、最大値も下がらない。
+  const bestScore = Math.max(
+    Math.min(scoreCap, personalBest(r, age, 'sc', 2500, scoreSpan, aptitude(r, 'solo'))),
+    rec ? Math.min(scoreCap, recNum(rec.bs, 0, RECORD_SCORE_MAX)) : 0);
   // 99止まり: 塔100F制覇（🏰バッジ）は人間だけのものにしておく。
   const dungeonMax = Math.min(capOf(r, 'dg', 99), 1 + personalBest(r, age, 'dg', 0, Math.pow(s, 1.3) * 160, aptitude(r, 'dungeon')));
   // 👑 王者の「その週の運」は常に最良（他の住人は 0..1 の乱数）。
@@ -545,12 +712,18 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   return {
     rating, level, bestScore, dungeonMax, age,
     tier: tierOf(rating),
-    pvpWins,
+    // 🗒 勝敗は「基準値 ＋ 実際に起きたこと」。人間に勝たれた住人は、
+    // ランキングでもプロフィールでも本当に1敗増える。
+    pvpWins: pvpWins + (rec ? recNum(rec.w, 0, RECORD_COUNT_MAX) : 0),
     // 👑 王者は 0敗（ユーザーの明示要求）。skill が 0.995 なので
     // (1-s)×0.8 は切り捨てで 0 になり、素の式でも 0 に落ちる ── つまり
     // 「王者だけ別式」を足しているのではなく、**足していた例外を外した**。
-    // 実態のほうは battle.js の専用AIが担保する（CHAMP_LOSSES のコメント参照）。
-    pvpLosses: champ ? CHAMP_LOSSES : Math.floor(age * (1 - s) * 0.8),
+    // CHAMP_LOSSES は「まだ誰にも負けていない」の**初期値**であって、
+    // 不変条件ではない。実際に人間へ負けたらここに敗が付く（ユーザーの決定：
+    // 速さは人間の範囲に収め、戦績は実態に合わせる）。0敗を守っているのは
+    // 数式ではなく battle.js の専用AIの強さのほう。
+    pvpLosses: (champ ? CHAMP_LOSSES : Math.floor(age * (1 - s) * 0.8))
+      + (rec ? recNum(rec.l, 0, RECORD_COUNT_MAX) : 0),
     // ウィークリーは週ごとにリセットされる記録なので、そこだけは（他の自己ベストの
     // ような）長期の階段ではなく「その週の調子」= weeklyMix と weeklyForm で決まる。
     weeklyBest: Math.floor(Math.pow(weeklyMix, 2) * 90000 * aptitude(r, 'weekly') * (0.8 + 0.4 * weeklyForm) + 800),

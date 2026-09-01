@@ -194,7 +194,7 @@ export const ZERO_LINES = {
   // 断罪の宣告
   verdict: {
     polite: [
-      L('👁️ 断罪 ── {you}', '👁️ CONDEMNED ── {you}'),
+      L('断罪 ── {you}', 'CONDEMNED ── {you}'),
       L('{you}。あなたです', '{you}. You.'),
     ],
     annoyed: [
