@@ -305,7 +305,19 @@ body {
 .opp-name { font-size: 11px; font-weight: 700; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .opp-score { font-size: 17px; font-weight: 900; color: var(--red); }
 .opp-card.ally .opp-score { color: var(--green); }
-.opp-combo { font-size: 10px; color: var(--yellow); font-weight: 800; min-height: 12px; }
+/* ★ AI対戦の「画面がチカチカする」の主犯だった要素。
+   min-height:12px にしていたが、文字が入ったときの実際の行ボックスは 14px
+   （実測: 空 12px / '7 COMBO!' 14px）。つまり 2px 足りていなかった。
+   その2pxで #oppPanel が伸びる → 兄弟の .game-canvas-wrap が 2px 縮む →
+   ResizeObserver → GameView.resize() が canvas.width に代入 → **ビットマップが全消去**
+   → その1フレームは盤面も手札も背景も無い透明な板が描かれる、という連鎖だった。
+   AIがコンボを出すたびに起きるので、鬼で1試合32回・創造神で57回にもなる。
+   min-height を増やすだけだと端末のフォント（Hiragino / Noto Sans JP）で
+   また足りなくなるので、行高と高さを固定して文字に依存させない。 */
+.opp-combo {
+  font-size: 10px; color: var(--yellow); font-weight: 800;
+  line-height: 1.4; height: 1.4em;
+}
 
 /* ---------------------------------------------------------------------------
    Ally strip (raid / 2v2)
@@ -329,7 +341,9 @@ body {
 /* Three chips have to share ~337px, so the name yields before the score does. */
 #oppCards.strip .opp-name { font-size: 10.5px; max-width: 56px; flex: 0 1 auto; }
 #oppCards.strip .opp-score { font-size: 13px; flex: 0 0 auto; }
-#oppCards.strip .opp-combo { font-size: 10px; min-height: 0; }
+/* 横並びの帯では行を確保しない（隣に並ぶだけなので高さは要らない）。
+   height:auto に戻さないと、上の height:1.4em が効いて帯が縦に伸びる。 */
+#oppCards.strip .opp-combo { font-size: 10px; height: auto; min-height: 0; }
 #oppCards.strip .opp-card.topped { opacity: 0.45; }
 
 .opp-density {
@@ -392,6 +406,15 @@ body {
 @keyframes rowIn { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
 .lb-rank { font-size: 18px; font-weight: 900; width: 42px; text-align: center; }
 .lb-rank.top1 { font-size: 24px; }
+/* 1〜3位は icons.js の medal_1/2/3（SVG）。SVG は font-size で大きさが
+   決まらないので、枠ごとにここで寸法を持つ。CSS は icon() が書く
+   width/height 属性より強いので、置き場所ごとに上書きできる。 */
+.lb-medal { display: inline-block; vertical-align: -0.22em; }
+.lb-rank .lb-medal { width: 22px; height: 22px; vertical-align: middle; }
+.lb-rank.top1 .lb-medal { width: 27px; height: 27px; }
+.lb-you-rank .lb-medal { width: 24px; height: 24px; vertical-align: middle; }
+.guild-rank .lb-medal { width: 20px; height: 20px; vertical-align: middle; }
+.rank-reward-row .lb-medal { width: 17px; height: 17px; }
 .lb-name { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lb-name .lb-badges { font-size: 12px; margin-left: 4px; }
 .lb-lvl { font-size: 11px; color: var(--muted); }
@@ -465,8 +488,16 @@ body {
   padding: 8px 10px; text-align: center;
 }
 .profile-card .pc-stat b { display: block; font-size: 15px; }
+/* レートのマスだけ段位アイコン(SVG)が数字の前に入る。SVG は font-size で
+   大きさが決まらないので、行の中で沈まないよう flex で中央に揃える。 */
+.profile-card .pc-stat b .rank-badge { display: inline-flex; vertical-align: -0.18em; }
 .profile-card .pc-stat span { font-size: 10px; color: var(--muted); }
-.profile-card .pc-badges { font-size: 18px; margin-top: 8px; }
+/* バッジは絵文字ではなく icons.js の SVG。font-size は効かないので、
+   大きさは icon(..., {size}) 側で決めて、ここでは並べ方だけ持つ。 */
+.profile-card .pc-badges {
+  margin-top: 8px; display: flex; flex-wrap: wrap;
+  justify-content: center; align-items: center; gap: 6px;
+}
 
 /* Boss 2.0: clear rank, enrage, attack telegraph bar */
 .boss-rank-wrap { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0 10px; }
@@ -558,7 +589,11 @@ body {
   box-shadow: 0 0 12px rgba(67,217,232,0.6);
 }
 .bp-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
-.bp-tiers { display: flex; gap: 10px; overflow-x: auto; padding: 6px 2px 18px; }
+/* 横 padding は 0。2px でも入れると、左に貼り付けた見出し列（.bp-head）の
+   さらに左に 2px の窓が開き、そこから流れてくる報酬セルが覗いてしまう
+   （sticky の left:0 はスクロール領域の padding の内側を指すため）。
+   実測で 2px の隙間から2枚のセルがはみ出していた。 */
+.bp-tiers { display: flex; gap: 10px; overflow-x: auto; padding: 6px 0 18px; }
 .bp-tier {
   min-width: 108px; display: flex; flex-direction: column; gap: 6px;
   animation: rowIn .3s ease backwards;
@@ -625,6 +660,27 @@ body {
   box-shadow: 0 24px 60px rgba(0,0,0,0.6);
 }
 @keyframes modalIn { from { opacity: 0; transform: scale(0.85) translateY(20px); } }
+/* モーダル右上の ✕（親モーダルが居るときは左上の ←）。
+   dom.js の attachModalNav() が「自前の閉じ口を持たないモーダル」にだけ
+   .modal の先頭の子として差し込む。ここが無いと素の div のまま左寄せの
+   ブロックとして出てしまうので、**dom.js とセットで必要**。
+   44x44 の当たり判定は dom.js がインラインで床を張っているので、
+   ここで小さくしないこと（指で押す部品の最低ライン）。 */
+.modal-nav { display: flex; justify-content: flex-end; margin: -10px -10px 6px; }
+/* 親が居るとき（←）は左寄せ。戻る動線は左上、というのが端末の作法。 */
+.modal-nav:has(.modal-back) { justify-content: flex-start; }
+.modal-nav-btn { padding: 6px 10px; font-size: 16px; line-height: 1; }
+/* 画面の中の「← 見出し」帯（dom.js の mountBackBar が作る）。
+   既存の .sub-header と同じ見た目にそろえる ── 片方だけ違う戻り方に
+   見えると、同じ操作なのに別物だと思われる。 */
+.back-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 0 14px;
+  position: sticky; top: 0; z-index: 3;
+  background: linear-gradient(var(--bg0) 75%, transparent);
+}
+/* 見出しが空のとき mountBackBar は .hidden を付ける（45行目の共通ルールで消える）。 */
+.back-bar-title { font-size: 21px; }
 /* 退場。開くときだけアニメがあって閉じるときは一瞬で消えていたので、
    トースト(.toast.out)と同じ形をモーダルにも入れる。付くのは dom.js が
    body に置く「見た目の写し」だけで、本物はこれまでどおり即座に消える。 */
@@ -674,15 +730,39 @@ body {
 .modal-buttons .btn { flex: 1 1 96px; min-width: 96px; }
 
 /* ============ Toasts ============ */
-/* 試合中だけ下寄せにする。上に出すとスコアの真上に重なって、
-   背の低い端末では通知が消えるまで点数が読めなかった。 */
-body[data-screen="game"] #toast-root { top: auto; bottom: 96px; }
+/* 試合中の置き場所について（v2.34 で作り直し）
+   ・以前は bottom:96px で下寄せだった。理由は「上に出すとスコアに重なる」。
+     ところが下は**手札そのもの**が居る場所だった ── game.js の縦持ち計算では
+     trayY = boardY + 盤面 + 8 で、そこから canvas の下端までが全部手札の帯。
+     手札のコマは帯の中央に描かれるので、背の低い端末（375x667 で帯 234px・
+     コマ 108px）だと bottom:96px の通知がコマに丸かぶりし、
+     「何を掴もうとしているのか見えない」状態になっていた。
+   ・かといって画面の一番上はスコアの位置。
+   → 盤面の**上端**（.game-canvas-wrap の上辺）に置く。手札は完全に空き、
+     スコアも隠れない。覆うのは盤面の最上段あたりだけで、しかも数秒で消える。
+     上辺の実座標は相手パネル／ボスパネルの有無で変わるので、
+     dom.js の syncGameToastAnchor() が測って --game-toast-top に入れる。 */
+body[data-screen="game"] #toast-root {
+  top: var(--game-toast-top, 88px); bottom: auto;
+}
 #toast-root { position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
 .toast {
   background: rgba(16,20,43,0.92); border: 1px solid var(--line);
   border-radius: 999px; padding: 10px 22px; font-weight: 700; font-size: 14px;
   animation: toastIn .3s cubic-bezier(.2,1.4,.4,1); backdrop-filter: blur(8px);
   box-shadow: 0 10px 26px rgba(0,0,0,0.5); max-width: 90vw;
+}
+/* 試合中は一回り小さく・薄く。盤面の上に重なるので、読めるが邪魔にならない濃さ。 */
+body[data-screen="game"] .toast {
+  padding: 7px 16px; font-size: 13px; max-width: min(92vw, 420px);
+  background: rgba(16,20,43,0.82);
+}
+body[data-screen="game"] #toast-root { gap: 5px; }
+/* 同じ文言が続いたときの「×2」。行を増やさずに回数だけ増やす。 */
+.toast-x {
+  display: inline-block; margin-left: 8px; padding: 0 7px;
+  border-radius: 999px; background: rgba(255,255,255,0.16);
+  font-size: 11px; font-weight: 800; vertical-align: 1px;
 }
 .toast.err { border-color: var(--red); color: #ffb3b3; }
 .toast.ok { border-color: var(--green); color: #c8ffd1; }
@@ -1179,7 +1259,13 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
   background: linear-gradient(90deg, rgba(255, 215, 94, 0.12), rgba(255, 215, 94, 0.03));
   box-shadow: 0 0 14px rgba(255, 215, 94, 0.18);
 }
-.lb-crown { margin-right: 3px; filter: drop-shadow(0 0 4px rgba(255, 215, 94, 0.8)); }
+/* 👑 だった現王者の印は icons.js の throne（台座つきの冠）に置き換えた。
+   N冠バッジ（badge_crown2/3/5/7）とは別物だと形で分かるようにしてある。
+   中身が SVG になったので、行の中で沈まないよう inline-flex で行から外す。 */
+.lb-crown {
+  margin-right: 3px; filter: drop-shadow(0 0 4px rgba(255, 215, 94, 0.8));
+  display: inline-flex; align-items: center; vertical-align: -0.15em;
+}
 .pc-thrones { color: #ffd75e; font-weight: 800; font-size: 13px; margin: 6px 0 2px; }
 /* 冠の数で名前が輝く: 1冠=金 / 2冠=橙金+光 / 3冠以上=流れる虹 */
 .crowned1 { color: #ffd75e !important; }
@@ -1748,7 +1834,10 @@ body[data-screen="game"] #topbar { display: none; }
 }
 .live-feed:hover { background: var(--panel2); }
 .live-feed .lf-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex-shrink: 0; animation: pulse 1.6s ease-in-out infinite; }
-.live-feed.real .lf-dot { background: var(--gold); }
+/* v2.34: フィードの ⭐（real）は配られなくなったので、この2つは付かない
+   ── サーバーが real を落としたのは「⭐が付かない行＝住人」の一覧表に
+   なっていたため（server/sanitize.js の SECRET_KEYS）。金色の差し色を
+   復活させるなら、住人の出来事にも同じ印が付く形にすること。 */
 .live-feed #liveFeedText { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .live-feed #liveFeedText.lf-swap { animation: lfSwap .45s ease; }
 .live-feed.lf-new { animation: lfNew .9s ease; }
@@ -1762,7 +1851,6 @@ body[data-screen="game"] #topbar { display: none; }
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 10px; padding: 8px 12px; font-size: 13px;
 }
-.feed-row.real { border-color: var(--gold); background: rgba(255,215,94,0.08); }
 .feed-icon { font-size: 18px; flex-shrink: 0; }
 .feed-text { flex: 1; min-width: 0; font-weight: 700; }
 .feed-ago { font-size: 11px; color: var(--muted); white-space: nowrap; }
@@ -1824,7 +1912,10 @@ body[data-screen="game"] #topbar { display: none; }
   cursor: pointer; animation: screenIn .3s ease;
 }
 .guild-card:hover { background: var(--panel2); transform: translateY(-1px); }
-.guild-card.real { border-color: rgba(255,215,94,0.35); }
+/* v2.34: 以前は「実プレイヤーのギルドだけ金の枠」だった（.real）。
+   サーバーが g.ghost を配らなくなり、住人のギルドと見分けられなくなった
+   ので印そのものを外した。全部を金にすると一覧が金だらけになるため、
+   多数派だった素の見た目にそろえている。 */
 .guild-rank { font-weight: 900; font-size: 16px; width: 30px; text-align: center; }
 .guild-icon { font-size: 28px; }
 .guild-info { flex: 1; min-width: 0; }
@@ -2428,14 +2519,48 @@ body[data-screen="game"] .pt-peek { opacity: 1; }
 
 /* ============ 🎫 バトルパスの列見出し ============ */
 /* どちらが無料でどちらが課金かの見出しが無く、届いているのに受け取れない
-   報酬が「押せば取れそう」に見えていた。 */
-.bp-head { position: sticky; left: 0; }
+   報酬が「押せば取れそう」に見えていた。
+
+   ■ v2.34 で直した不具合（横スクロールすると見出しが読めなくなる）
+   position:sticky で左端に貼り付けてはいたが、次の3つが抜けていた:
+     1. **背景が透明**（background:none）。固定はされているのに向こう側が
+        透けるので、流れてくる報酬セルと重なって「見出しも一緒に流れている」
+        ように見えていた。
+     2. **z-index が無い**。重なり順が保証されず、セルが見出しの上に乗る。
+     3. **高さがセルと違う**（見出し 26px / セル 74px）。「無料」「プレミアム」が
+        対応する行の真横に来ず、1行目のセルに被っていた。
+   固定する列は「不透明・前面・行と同じ高さ」の3つが揃って初めて成立する。 */
+.bp-head {
+  position: sticky; left: 0; z-index: 3;
+  /* 見出し列だけは報酬セルより狭くてよい（文字しか入らない）。 */
+  min-width: 82px;
+  /* 流れてくるセルを完全に隠す。--panel は半透明（rgba）なので下が透ける。
+     不透明な地の色を敷くこと。--bg0 は body のグラデーションの外側の色で、
+     ティア一覧はページの下寄りにあるためほぼ一致する。 */
+  background: var(--bg0, #0b0e1f);
+  /* 列の切れ目を示す。ここが無いと「固定された列」だと気づけない。 */
+  box-shadow: 6px 0 10px -6px rgba(0, 0, 0, 0.65);
+}
 .bp-col-head {
   font-size: 10.5px; font-weight: 800; letter-spacing: .04em;
   color: var(--muted); background: none; border: none;
-  display: flex; align-items: center; justify-content: center; min-height: 26px;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  /* 報酬セル（.bp-cell）と同じ高さ。ここが揃っていないと、見出しが
+     どの行のものか分からなくなる。 */
+  min-height: 74px;
+  padding: 4px 6px; line-height: 1.3;
 }
 .bp-col-head.premium-cell { color: var(--gold, #f0b429); }
+/* .bp-tier の入場アニメ（rowIn: translateX(-14px)）は見出し列には掛けない。
+   transform が残っているあいだ sticky の位置がずれて、列が左へ飛び出す。 */
+.bp-head { animation: none; }
+/* 見出し列の上端（ティア番号の位置）も、番号の行と同じ高さで空けておく。
+   ここを詰めると見出し2つが1行ぶん上にずれる。 */
+.bp-head .bp-tier-num { min-height: 17px; }
+@media (max-width: 520px) {
+  .bp-head { min-width: 68px; }
+  .bp-col-head { font-size: 9.5px; }
+}
 .bp-need-premium {
   margin-top: 3px; padding: 3px 6px; border-radius: 6px; cursor: pointer;
   border: 1px solid rgba(240,180,41,.4); background: rgba(240,180,41,.10);
@@ -2886,4 +3011,171 @@ body:has(#replayBar) #partyDock { display: none; }
   max-height: 42vh; object-fit: contain;
   border-radius: 10px; margin: 2px 0 10px;
   background: rgba(255, 255, 255, 0.03);
+}
+
+/* ============ 段位（ランク）バッジ ============ */
+/* 以前は 🥉🥈🥇💠💎👑 の絵文字を文字として置いていた。💎はジェム通貨、
+   👑は管理者奥義と絵が重複していたので、独自アイコン（icons.js）へ移した。
+   SVG は文字と違って行の中で沈むので、vertical-align で高さを合わせる。 */
+.rank-badge { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.rank-badge .rank-ic { flex: 0 0 auto; }
+.bba-ic { vertical-align: -0.15em; }
+/* 一覧やタイルの中で、段位名がはみ出して行を折らないように。 */
+.rank-badge > span { font-weight: 800; }
+
+/* ============ v2.34: 独自アイコンの置き場・段位一覧・順位まわり ============ */
+
+/* --- 絵文字1文字だった場所に SVG を置くための寸法 ---------------------------
+   icon() は width/height を属性で持って来るが、同じ renderPreview を
+   84px の棚（.shop-preview）と 60px の持ち物（.inv-pv）が共用しているので、
+   置かれた枠の側で大きさを決める。属性より CSS が勝つ。 */
+.shop-preview > .bba-ic { width: 56px; height: 56px; }
+.inv-pv > .bba-ic { width: 38px; height: 38px; }
+.gc-icon > .bba-ic { width: 26px; height: 26px; }
+/* ガチャでスキン・ボードが当たったときは、アイコンではなく
+   当たったものそのもの（棚と同じ描画）を小さく出す。 */
+.gc-pv {
+  width: 34px; height: 34px; border-radius: 8px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; font-size: 20px;
+}
+.gc-pv canvas { width: 100%; height: 100%; }
+.inv-item-icon > .bba-ic { width: 26px; height: 26px; }
+.inv-badge-icon > .bba-ic { width: 24px; height: 24px; }
+.bp-cell .rw-icon > .bba-ic { width: 22px; height: 22px; }
+/* 奥義の枠は「色つきの光る箱」なので、持ち物側にも同じ見た目を効かせる
+   （以前は .shop-preview.ult-preview だけで、インベントリでは素の箱だった）。 */
+.inv-pv.ult-preview {
+  background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--ult-color) 45%, transparent), rgba(0,0,0,0.35));
+  border: 1px solid var(--ult-color);
+  box-shadow: 0 0 14px -4px var(--ult-color);
+}
+
+/* プロフィールのバッジ列。SVG は文字と違って自分で行間を作らないので、
+   inline-flex にして粒を揃える。 */
+.badge-row { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.lb-name .lb-badges { display: inline-flex; align-items: center; gap: 2px; vertical-align: -0.15em; }
+/* 運営の所持品エディタ。チェックボックスの隣に絵＋名前を並べる。 */
+.ue-badge-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.ue-badge-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- タブが2行に折れる（実測: 「ハイスコア」が1つのタブの中で2行になる） ---
+   .tab は幅が足りないと**ラベル自身が折り返して**いた。丸いボタンの中で
+   文字が2行になるので、1文字ずつ縦に割れて読めない。まず折り返しを止める。 */
+.tab { white-space: nowrap; flex: 0 0 auto; }
+/* ランキングは8タブある。折り返して2段にするより、横スクロールで1段に
+   保つほうが「何番目のボードを見ているか」が分かりやすい。
+   開いているタブは openLeaderboard が scrollIntoView で中央に寄せる。 */
+#screen-leaderboard .tabs {
+  flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
+  scroll-padding: 0 12px; -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;   /* スクロールバーがタブに重ならないぶんの逃げ */
+  /* ※ .screen は縦の flex コンテナ。overflow を visible 以外にすると
+     flex アイテムの min-height:auto が 0 になるため、この行が
+     高さ 4px までつぶれてタブが丸ごと消えた（実測）。
+     縮めない・伸ばないと明言して戻す。 */
+  flex: 0 0 auto;
+}
+#screen-leaderboard .tabs::-webkit-scrollbar { height: 4px; }
+#screen-leaderboard .tabs::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
+
+/* --- ランキングの導線と「あなたは◯位」 ------------------------------------ */
+.lb-nav { display: flex; gap: 8px; margin-bottom: 8px; }
+.lb-nav .btn { flex: 1 1 0; min-width: 0; }
+.lb-nav .btn .bba-ic { vertical-align: -0.2em; }
+
+.lb-you {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  border-radius: 14px; padding: 9px 14px; margin-bottom: 10px;
+  border: 1px solid var(--line); background: var(--panel);
+  color: var(--text); font-family: inherit; text-align: left;
+}
+.lb-you.me { border-color: var(--blue); background: rgba(91,139,255,0.16); cursor: pointer; }
+.lb-you.me:hover { border-color: var(--gold); }
+.lb-you.out { border-style: dashed; }
+.lb-you.guest { justify-content: center; color: var(--muted); font-size: 12px; }
+.lb-you-rank { font-size: 20px; font-weight: 900; width: 42px; text-align: center; flex: 0 0 auto; }
+.lb-you-body { flex: 1; display: flex; flex-direction: column; min-width: 0; font-size: 14px; font-weight: 700; }
+.lb-you-body small { font-size: 11px; font-weight: 600; color: var(--muted); }
+.lb-you-val { font-weight: 900; font-size: 16px; color: var(--gold); font-variant-numeric: tabular-nums; }
+.lb-cut { font-size: 11px; margin-top: 10px; }
+/* 「あなたは◯位」から自分の行へ飛んだとき、着地点を一瞬だけ光らせる。
+   色つきの行が真ん中に来るだけでは「今ここに来た」と伝わらない。 */
+.lb-row.lb-flash { animation: lbFlash 1.1s ease; }
+@keyframes lbFlash {
+  0%, 100% { box-shadow: none; }
+  20% { box-shadow: 0 0 0 3px rgba(255,215,94,0.75); }
+  60% { box-shadow: 0 0 0 3px rgba(255,215,94,0.35); }
+}
+
+/* --- 「読み込めませんでした」（空っぽとは別物として出す） ------------------- */
+.load-fail {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 26px 16px; text-align: center;
+  border: 1px dashed var(--red); border-radius: 14px;
+  background: rgba(255,93,93,0.07);
+}
+.load-fail p { margin: 0; font-weight: 800; }
+.load-fail p.muted { font-weight: 600; font-size: 12px; }
+
+/* ============ 🎖️ 段位一覧（ランクラダー） ============ */
+.rk-head {
+  border: 1px solid var(--rk-color, var(--line)); border-radius: 14px;
+  padding: 10px 14px; margin-bottom: 10px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--rk-color, #888) 18%, transparent), transparent);
+}
+.rk-head.guest { text-align: center; border-style: dashed; border-color: var(--line); background: none; }
+.rk-head.guest p { margin: 2px 0; font-size: 13px; }
+.rk-head.guest p.muted { font-size: 11.5px; }
+.rk-head-top { display: flex; align-items: center; gap: 12px; }
+.rk-head-body { display: flex; flex-direction: column; min-width: 0; }
+.rk-head-body b { font-size: 18px; color: var(--rk-color, var(--text)); }
+.rk-head-body small { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rk-bar {
+  height: 8px; border-radius: 999px; overflow: hidden; margin: 9px 0 6px;
+  background: rgba(255,255,255,0.09);
+}
+.rk-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--rk-color, var(--blue)); }
+.rk-next { margin: 0; font-size: 12px; color: var(--muted); text-align: center; }
+.rk-next b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* 24行あるので中でスクロールさせる。position:relative は、開いた直後に
+   自分の段までスクロールさせる計算（offsetTop）がこの枠を基準になるように。 */
+.rk-list {
+  position: relative; max-height: 48vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px; padding-right: 2px;
+}
+.rk-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 4px solid var(--rk-color, var(--line));
+  border-radius: 10px; padding: 7px 11px;
+}
+/* 段（III → II → I）を階段に見せる。帯ごとに3段ぶんの段差が付くだけなので、
+   24段ぶん字下げして横に溢れることがない（狭い画面でも 16px まで）。 */
+.rk-div-3 { margin-left: 0; }
+.rk-div-2 { margin-left: 8px; }
+.rk-div-1 { margin-left: 16px; }
+.rk-ic { flex: 0 0 auto; display: flex; }
+.rk-body { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.rk-body b { font-size: 13.5px; color: var(--rk-color, var(--text)); }
+.rk-body small { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rk-tag {
+  flex: 0 0 auto; font-size: 10.5px; font-weight: 900;
+  border-radius: 999px; padding: 3px 9px; white-space: nowrap;
+}
+.rk-tag.me { background: var(--blue); color: #fff; }
+.rk-tag.next { background: rgba(255,215,94,0.18); color: var(--gold); }
+.rk-row.me { border-color: var(--blue); background: rgba(91,139,255,0.16); box-shadow: 0 0 12px -3px var(--blue); }
+.rk-row.next { border-style: dashed; }
+
+@media (max-width: 380px) {
+  /* 320〜380px では段差ぶんの余白が惜しい。階段は半分に詰める。 */
+  .rk-div-2 { margin-left: 5px; }
+  .rk-div-1 { margin-left: 10px; }
+  .rk-tag { font-size: 10px; padding: 2px 7px; }
+  .lb-nav { flex-direction: column; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lb-row.lb-flash { animation: none; box-shadow: 0 0 0 3px rgba(255,215,94,0.6); }
 }

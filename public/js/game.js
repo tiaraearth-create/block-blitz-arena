@@ -3,7 +3,7 @@ import { SIZE, shapeSize, ICE, ICE_CRACKED } from './engine.js';
 import { PALETTE, getSkin, getBoard } from './themes.js';
 import { ParticleSystem } from './particles.js';
 import { audio } from './audio.js';
-import { getSettings, particleFactor } from './settings.js';
+import { getSettings, particleFactor, motionFactor, prefersReducedMotion, onSettingsChange, onReducedMotionChange } from './settings.js';
 import { t } from './i18n.js';
 
 // 🔥 コンボの段位 0=streak 2-4 / 1=5-9 / 2=10-19 / 3=20+ ごとの演出強度。
@@ -155,6 +155,9 @@ export class GameView {
     this._screenFlash = 0;          // 実体。読み書きは下のアクセサ経由（設定でゲート）
     this.time = 0;
     this.deco = [];                 // background decorations (stars etc.)
+    // 装飾だけの時計。本体の time に係数を掛けると、設定を変えた瞬間に位相が
+    // 飛んで背景が瞬間移動する。積分しておけば係数が変わっても連続につながる。
+    this._decoTime = 0;
 
     this.drag = null;               // {index, piece, px, py}
     // ♿ 掴んで運ぶ以外の置きかた（手札をタップ／1〜3で選び、盤面をタップ／
@@ -190,6 +193,12 @@ export class GameView {
     this.resize();
     this.initDeco();
 
+    // 設定「エフェクト量」と OS の「視差効果を減らす」に追随する。
+    // 明滅の速さは motionFactor() を毎コマ見れば済むが、粒の数だけは
+    // 作り直さないと変わらないので、変わった瞬間を購読しておく。
+    this._offSettings = onSettingsChange(() => this.syncDeco());
+    this._offMotion = onReducedMotionChange(() => this.syncDeco());
+
     if (this.interactive) this.bindInput();
   }
 
@@ -198,6 +207,9 @@ export class GameView {
     this.stopIdleSweep();
     window.removeEventListener('resize', this._resize);
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
+    // 購読を残すと、破棄された view が設定変更のたびに生き返る。
+    if (this._offSettings) { this._offSettings(); this._offSettings = null; }
+    if (this._offMotion) { this._offMotion(); this._offMotion = null; }
   }
 
   // ✨ 全画面フラッシュ（白）は設定「画面フラッシュ」で完全に切れる。
@@ -251,7 +263,10 @@ export class GameView {
     if (skinId) this.skinId = skinId;
     if (boardId) this.boardId = boardId;
     if (fxId) this.fxId = fxId;
-    this.initDeco();
+    // 装飾は「盤面テーマが変わったとき」だけ組み直す。以前は無条件に呼んでいたので、
+    // setTheme を通るたび（modes.js の getView() は毎回通る＝トップアウト・復帰・
+    // スキル発動のたび）に星や火の粉40粒が全部その場で瞬間移動していた。
+    if (this._decoBoard !== this.boardId || !this.deco.length) this.initDeco();
   }
 
   // ------------------------------------------------------------------
@@ -266,8 +281,19 @@ export class GameView {
     // dpr も見る ── 外部ディスプレイに移したときは箱の大きさが同じでも
     // 画素密度だけが変わるので、これを見ないと絵がぼやけたままになる。
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    if (rect.width === this._lastW && rect.height === this._lastH && dpr === this.dpr) return;
+    if (rect.width === this._lastW && rect.height === this._lastH && dpr === this.dpr) {
+      // 大きさは同じでも、上のアイテム帯が1行増えれば canvas は下へ「ずれる」。
+      // ResizeObserver は位置の変化では鳴らないので、下の CSS 変数（画面座標）
+      // だけが古いまま残り、それを見て置いたトーストが手札に重なる。
+      // レイアウト計算は要らないので、変数の出し直しだけをここで拾う。
+      if (rect.top !== this._lastTop || rect.left !== this._lastLeft) {
+        this._lastTop = rect.top; this._lastLeft = rect.left;
+        this.publishMetrics(rect);
+      }
+      return;
+    }
     this._lastW = rect.width; this._lastH = rect.height;
+    this._lastTop = rect.top; this._lastLeft = rect.left;
     this.canvas.width = Math.round(rect.width * dpr);
     this.canvas.height = Math.round(rect.height * dpr);
     this.dpr = dpr;
@@ -310,12 +336,74 @@ export class GameView {
       this.trayY = this.boardY + side + 8;
       this.trayH = Math.max(0, this.H - this.trayY - 4);
     }
+
+    // 📐 手札と盤面の位置を CSS 変数として公開する（画面座標の px 文字列）。
+    // トーストやクリップバーが bottom:96px のような px 直打ちで置かれていて、
+    // 端末によっては手札に丸かぶりしていた（縦持ちの手札帯は最大130px＋余白、
+    // 横持ちでは下ではなく右にいる）。CSS 側が実測値で避けられるようにする。
+    this.publishMetrics(rect);
+
+    // ★ 作り直した直後に必ず描き直す。
+    //   canvas.width への代入はビットマップを全消去する。ResizeObserver の
+    //   コールバックは同じフレームの requestAnimationFrame の**後**に走るので、
+    //   ここで描き直さないと「消去されたまま」の透明な板がそのフレームに出る
+    //   ＝画面全体が一瞬消える。AI対戦のコンボ表示で毎回起きていたのがこれ。
+    //   resize() は寸法が変わったときしか最後まで来ないので、追加の負担はない。
+    //   （画面の回転・アドレスバーの出入り・ソフトキーボードでも同じ）
+    if (this.running) {
+      try { this.render(); } catch { /* 描けない状態なら次のコマに任せる */ }
+    }
+  }
+
+  // 手札・盤面の位置を :root の CSS 変数として出す。
+  //   --bba-hand-top     手札帯の上端（縦持ち＝盤面の下の帯の上端／横持ち＝帯の上端）
+  //   --bba-hand-left    手札帯の左端（横持ち＝盤面の右の帯の左端／縦持ち＝全幅なので左端）
+  //   --bba-board-bottom 盤面の下端
+  // どれも **画面座標**（canvas.getBoundingClientRect() を足した値）の px 文字列。
+  // キャンバス内座標のまま出すと、canvas が画面の途中から始まっている
+  // （上にスコア帯がある）ぶんだけズレて、CSS からは使えない。
+  // 手札を持たないモード（観戦・リプレイ）は帯が無いので、キャンバスの
+  // 下端／右端＝「避けなくてよい」を出す。
+  publishMetrics(rect) {
+    if (typeof document === 'undefined' || !document.documentElement) return;
+    const r = rect || this.canvas.getBoundingClientRect();
+    const px = v => `${Math.round(v)}px`;
+    const handTop = this.showTray ? Math.min(r.bottom, r.top + this.trayY) : r.bottom;
+    const handLeft = this.showTray ? Math.min(r.right, r.left + this.trayX) : r.right;
+    const boardBottom = Math.min(r.bottom, r.top + this.boardY + this.boardSize);
+    try {
+      const s = document.documentElement.style;
+      s.setProperty('--bba-hand-top', px(handTop));
+      s.setProperty('--bba-hand-left', px(handLeft));
+      s.setProperty('--bba-board-bottom', px(boardBottom));
+    } catch { /* 差し替えられた document スタブなど */ }
+  }
+
+  // 背景装飾の数。設定「エフェクト量」に素直に従う。
+  // 以前は無条件に 70/40 個を撒いていたので、「低」にしても背景の星・火の粉は
+  // 1粒も減らなかった（設定で止められない騒がしさとして残っていた）。
+  // 「視差効果を減らす」ならさらに半分 ── 動きは motionFactor() 側で止まるが、
+  // 止まった粒がびっしり乗っているのも視覚的な雑音なので数も落とす。
+  decoCount() {
+    const theme = getBoard(this.boardId);
+    const base = theme.nebula ? 70 : 40;
+    // 「高」は粒子と同じ 1.9 倍だが、背景まで2倍近くにすると賑やかを通り越すので
+    // 1.4 で頭打ちにする（前景の粒子と違って背景は常時全部が見えているため）。
+    let n = Math.round(base * Math.min(1.4, Math.max(0, particleFactor())));
+    if (prefersReducedMotion()) n = Math.round(n * 0.5);
+    return Math.max(6, n);
+  }
+
+  // 数が変わるときだけ組み直す。設定変更のたびに initDeco() を呼ぶと
+  // 位置が全部引き直されて、背景がまるごと瞬間移動して見える。
+  syncDeco() {
+    if (this._decoBoard !== this.boardId || this.deco.length !== this.decoCount()) this.initDeco();
   }
 
   initDeco() {
-    const theme = getBoard(this.boardId);
+    this._decoBoard = this.boardId;
     this.deco = [];
-    const n = theme.nebula ? 70 : 40;
+    const n = this.decoCount();
     for (let i = 0; i < n; i++) {
       this.deco.push({
         x: Math.random(), y: Math.random(),
@@ -725,9 +813,22 @@ export class GameView {
       // 0.25秒以内には気づけるようにしてある。resize() は寸法が同じなら
       // 即 return するので、実質の負担は計測1回ぶん。
       if ((this._sizeTick = (this._sizeTick || 0) + 1) >= 15) { this._sizeTick = 0; this.resize(); }
-      this.update(dt);
-      this.render();
+      // ★ 次のコマの予約を「描く前」に済ませる。
+      //   以前は update()→render() のあとに requestAnimationFrame していたので、
+      //   描画のどこかで1度でも例外が飛ぶと再予約に届かず、盤面が二度と動かなく
+      //   なった（実際に起きていた: 画面が隠れている等で W/H が 0 になると
+      //   drawBackground() の createLinearGradient が
+      //   "The provided double value is non-finite" を投げ、そこで永久停止する）。
+      //   先に予約しておけば、1コマ落ちても次のコマで復帰できる。
       requestAnimationFrame(loop);
+      try {
+        this.update(dt);
+        this.render();
+      } catch (err) {
+        // 毎コマ同じ例外が出るとコンソールが埋まって本当の原因が見えなくなる。
+        // 最初の1回だけ出す。
+        if (!this._drawErrShown) { this._drawErrShown = true; console.error('[render]', err); }
+      }
     };
     requestAnimationFrame(loop);
   }
@@ -761,7 +862,13 @@ export class GameView {
   update(dt) {
     this.particles.intensity = particleFactor();
     this.particles.update(dt);
-    this.shake = Math.max(0, this.shake - dt * 40);
+    // 💥 揺れの減衰。以前は一律 40/秒だったので、ボス攻撃の 24 は 0.6秒も
+    // 揺れ続けていた（弱い揺れは 0.1秒で終わるのに、強い揺れだけが尾を引く）。
+    // 振幅に比例した項を足して、大きい揺れほど速く収まるようにする。
+    this.shake = Math.max(0, this.shake - dt * (40 + this.shake * 2.2));
+    this.stepShake(dt);
+    // 装飾の時計は設定の係数を掛けて別に積む（drawBackground が使う）。
+    this._decoTime = (this._decoTime || 0) + dt * motionFactor();
     this.screenFlash = Math.max(0, (this.screenFlash || 0) - dt * 1.6);
     const now = this.time;
     this.dying = this.dying.filter(d => now - d.t < 0.35);
@@ -777,13 +884,39 @@ export class GameView {
     if (this.flashes.length > 200) this.flashes.splice(0, this.flashes.length - 200);
   }
 
+  // 💥 揺れの向きを「前のコマから続くもの」にする。
+  // 以前は render のたびに独立した一様乱数を translate に渡していた。中身は
+  // 白色雑音（毎コマ無関係な位置へ飛ぶ）なので、同じ振幅でも数倍うるさく見え、
+  // 「チカチカする」の一因になっていた。20Hz で目標点を引き直し、そこへ
+  // 寄せていくと、振れ幅はそのままでも「揺れ」として読める動きになる。
+  // 目標は前回と逆側に取る ── 同じ側へ続けて飛ぶと片寄った滑りに見えるため。
+  stepShake(dt) {
+    if (!(this.shake > 0)) { this._shakeX = 0; this._shakeY = 0; this._shakeAcc = 0; return; }
+    this._shakeAcc = (this._shakeAcc || 0) + dt;
+    if (!this._shakeTx || this._shakeAcc >= 0.05) {
+      this._shakeAcc = 0;
+      const flip = v => (v > 0 ? -1 : 1) * (0.175 + Math.random() * 0.325);   // ±0.175〜0.5（従来の振れ幅と同じ）
+      this._shakeTx = flip(this._shakeTx || 0);
+      this._shakeTy = flip(this._shakeTy || 0);
+    }
+    const k = Math.min(1, dt * 22);   // 目標へ寄せる速さ（60fps で約3コマぶん）
+    this._shakeX = (this._shakeX || 0) + (this._shakeTx - (this._shakeX || 0)) * k;
+    this._shakeY = (this._shakeY || 0) + (this._shakeTy - (this._shakeY || 0)) * k;
+  }
+
   render() {
     const { ctx } = this;
+    // 画面が隠れている・まだ寸法が付いていないときは W/H が 0 や NaN になる。
+    // そのまま描くとグラデーションの生成が例外を投げるので、寸法が付くまで待つ。
+    // （描かなくても状態は update() が進めているので、見えるようになった時点で
+    //   正しい絵が出る）
+    if (!(this.W > 0) || !(this.H > 0)) return;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.W, this.H);
 
     if (this.shake > 0) {
-      ctx.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
+      // 乱数は stepShake() が持っている（render は描くだけ）。
+      ctx.translate((this._shakeX || 0) * this.shake, (this._shakeY || 0) * this.shake);
     }
 
     this.drawBackground();
@@ -812,6 +945,12 @@ export class GameView {
   drawBackground() {
     const { ctx } = this;
     const theme = getBoard(this.boardId);
+    // 🎚️ 装飾の時計。設定「エフェクト量」と OS の「視差効果を減らす」で
+    // 進み方に係数が掛かっている（update() で積んでいる）。
+    // 粒の数を減らすだけでは1粒あたりの瞬きの速さは変わらないので、
+    // 明滅・流れ・オーロラの角速度はすべてこちらを見る。
+    // 「視差効果を減らす」では係数が 0 になり、この時計が止まる＝装飾が静止する。
+    const t0 = this._decoTime || 0;
     const g = ctx.createLinearGradient(0, 0, 0, this.H);
     g.addColorStop(0, theme.bg[0]);
     g.addColorStop(1, theme.bg[1]);
@@ -822,16 +961,16 @@ export class GameView {
     if (theme.aurora) {
       const hues = [160, 200, 285];
       for (let b = 0; b < 3; b++) {
-        ctx.globalAlpha = 0.10 + 0.05 * Math.sin(this.time * 0.7 + b * 2.1);
-        ctx.fillStyle = `hsl(${hues[b] + 12 * Math.sin(this.time * 0.3 + b)}, 90%, 60%)`;
+        ctx.globalAlpha = 0.10 + 0.05 * Math.sin(t0 * 0.7 + b * 2.1);
+        ctx.fillStyle = `hsl(${hues[b] + 12 * Math.sin(t0 * 0.3 + b)}, 90%, 60%)`;
         ctx.beginPath();
         const baseY = this.H * (0.10 + b * 0.09);
         ctx.moveTo(-20, baseY);
         for (let px = -20; px <= this.W + 20; px += 24) {
-          ctx.lineTo(px, baseY + Math.sin(px * 0.012 + this.time * (0.8 + b * 0.25) + b * 3) * this.H * 0.05);
+          ctx.lineTo(px, baseY + Math.sin(px * 0.012 + t0 * (0.8 + b * 0.25) + b * 3) * this.H * 0.05);
         }
         for (let px = this.W + 20; px >= -20; px -= 24) {
-          ctx.lineTo(px, baseY + this.H * (0.10 + b * 0.02) + Math.sin(px * 0.010 + this.time * 0.6 + b) * this.H * 0.04);
+          ctx.lineTo(px, baseY + this.H * (0.10 + b * 0.02) + Math.sin(px * 0.010 + t0 * 0.6 + b) * this.H * 0.04);
         }
         ctx.closePath();
         ctx.fill();
@@ -843,44 +982,58 @@ export class GameView {
     for (const d of this.deco) {
       let x = d.x * this.W;
       let y = d.y * this.H;
-      let alpha = 0.3 + 0.3 * Math.sin(this.time * d.sp + d.tw);
+      let alpha = 0.3 + 0.3 * Math.sin(t0 * d.sp + d.tw);
       let color = '#cfe0ff';
       let r = d.r;
       if (theme.fireflies) color = '#b8ff9e';
       else if (theme.nebula) color = '#d9b8ff';
       if (theme.bubbles || theme.fireflies) {
-        y = ((d.y - this.time * 0.01 * d.sp) % 1 + 1) % 1 * this.H;
+        y = ((d.y - t0 * 0.01 * d.sp) % 1 + 1) % 1 * this.H;
       } else if (theme.embers) {
-        // rising embers with flicker and drift
-        y = ((d.y - this.time * 0.03 * d.sp) % 1 + 1) % 1 * this.H;
-        x += Math.sin(this.time * 2 + d.tw) * 10;
-        color = Math.sin(this.time * 6 + d.tw) > 0 ? '#ff8a5c' : '#ff5d5d';
-        alpha = 0.35 + 0.35 * Math.sin(this.time * 5 + d.tw);
+        // 立ちのぼる火の粉。
+        // 以前はここだけ極端に騒がしく、鬼ステージ（AI対戦の「鬼」）で
+        // 「画面がチカチカする」原因の一つになっていた:
+        //   ・色を Math.sin(t*6)>0 で2色に**切り替えて**いた
+        //     → 1粒あたり毎秒1.91回の急変、40粒で毎秒76回のちらつき
+        //   ・明るさが 0.35+0.35*sin(t*5) で毎秒0.8回の全消え全点き
+        //     （他のステージは 0.05〜0.36回/秒。桁が違う）
+        //   ・しかも色(6rad/s)と明るさ(5rad/s)で周波数がズレていたので
+        //     6.28秒周期のうなりが出て、点き方が不規則に見えていた
+        // いまは同じ角速度でゆっくり揺らし、色は切り替えず補間する。
+        // 「揺らめく火の粉」の印象は保ったまま、瞬きだけが消える。
+        y = ((d.y - t0 * 0.03 * d.sp) % 1 + 1) % 1 * this.H;
+        x += Math.sin(t0 * 2 + d.tw) * 10;
+        const heat = 0.5 + 0.5 * Math.sin(t0 * 1.8 + d.tw);   // 0..1
+        color = `rgb(${Math.round(255)},${Math.round(93 + 45 * heat)},${Math.round(93 - 1 * heat)})`;
+        alpha = 0.42 + 0.22 * Math.sin(t0 * 1.8 + d.tw);      // 消えきらない
       } else if (theme.petals) {
         // falling sakura petals with sway
-        y = ((d.y + this.time * 0.025 * d.sp) % 1) * this.H;
-        x += Math.sin(this.time * 1.6 + d.tw) * 16;
+        y = ((d.y + t0 * 0.025 * d.sp) % 1) * this.H;
+        x += Math.sin(t0 * 1.6 + d.tw) * 16;
         color = Math.sin(d.tw) > 0 ? '#ffc0dc' : '#ff9ecb';
-        alpha = 0.45 + 0.25 * Math.sin(this.time * 2 + d.tw);
+        alpha = 0.45 + 0.25 * Math.sin(t0 * 2 + d.tw);
         r = d.r * 1.4;
       } else if (theme.holy) {
-        // slow golden sparkles that swell and fade
+        // ゆっくり膨らんで消える金色のきらめき。
+        // 以前は alpha が半周期まるごと 0（完全消灯）で、しかも半径が2倍まで
+        // 膨らんでいたので「点滅」に見えていた。下限を持たせて、ふくらみも控えめに。
         color = '#ffe9a8';
-        const tw = Math.sin(this.time * d.sp * 1.5 + d.tw);
-        alpha = Math.max(0, tw) * 0.8;
-        r = d.r * (1 + Math.max(0, tw));
+        const tw = Math.sin(t0 * d.sp * 1.5 + d.tw);
+        alpha = 0.16 + 0.5 * Math.max(0, tw);
+        r = d.r * (1 + 0.5 * Math.max(0, tw));
       } else if (theme.snow) {
         // gently falling snowflakes with sway
-        y = ((d.y + this.time * 0.018 * d.sp) % 1) * this.H;
-        x += Math.sin(this.time * 1.2 + d.tw) * 12;
+        y = ((d.y + t0 * 0.018 * d.sp) % 1) * this.H;
+        x += Math.sin(t0 * 1.2 + d.tw) * 12;
         color = '#eaf4ff';
-        alpha = 0.5 + 0.3 * Math.sin(this.time * 1.5 + d.tw);
+        alpha = 0.5 + 0.3 * Math.sin(t0 * 1.5 + d.tw);
         r = d.r * 1.2;
       } else if (theme.digital) {
-        // cyber rain: glyphs streaking downward
-        y = ((d.y + this.time * 0.08 * d.sp) % 1) * this.H;
+        // 電脳の雨。色は粒ごとに固定（d.tw は時間で変わらないので点滅しない）。
+        // 明滅だけ 4rad/s → 1.9rad/s に落として、他のステージと同じ落ち着きに揃える。
+        y = ((d.y + t0 * 0.08 * d.sp) % 1) * this.H;
         color = Math.sin(d.tw) > 0.3 ? '#5ee86e' : '#9effc0';
-        alpha = 0.25 + 0.35 * Math.sin(this.time * 4 + d.tw);
+        alpha = 0.3 + 0.28 * Math.sin(t0 * 1.9 + d.tw);
       }
       ctx.globalAlpha = Math.max(0, alpha);
       ctx.fillStyle = color;
@@ -1389,8 +1542,16 @@ export class MiniBoard {
     const rect = this.canvas.getBoundingClientRect();
     if (!rect.width) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    this.canvas.width = rect.width * dpr;
-    this.canvas.height = rect.height * dpr;
+    // 寸法が変わっていないなら代入しない。canvas.width への代入は、同じ値でも
+    // ビットマップを作り直して中身を消す（＝正しさの問題でもある: 代入と描画の
+    // 間で例外が出れば空の板が残る）。MiniBoard は setGrid のたび、つまり
+    // AIの手番ごとに描かれるので、120x120@2dpr なら毎回 57.6KB を確保し直して
+    // いた。寸法が変わったときだけ作り直し、消去は下の clearRect に任せる。
+    const bw = Math.round(rect.width * dpr), bh = Math.round(rect.height * dpr);
+    if (this.canvas.width !== bw || this.canvas.height !== bh) {
+      this.canvas.width = bw;
+      this.canvas.height = bh;
+    }
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const cell = Math.min(rect.width, rect.height) / SIZE;

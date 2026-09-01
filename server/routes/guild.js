@@ -52,6 +52,8 @@ guildRouter.get('/api/guilds', (req, res) => {
   if (!rateLimit(`guilds:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください' });
   const week = curWeek();
   const real = Object.values(db.guilds).map(g => guildView(db, g, week));
+  // 🎭 一覧は実ギルドと同じ「浅い」形で（detailed を渡さない）。ゴーストだけ
+  // members / quests を抱えていると、持ち物の多さでどれが住人のギルドか分かる。
   const ghosts = getCustom().toggles.guilds ? ghostGuildViews(week).filter(g => !real.some(r => r.name === g.name || r.tag === g.tag)) : [];
   const rows = real.concat(ghosts).sort((a, b) => b.weeklyPoints - a.weeklyPoints).slice(0, 50).map((g, i) => ({ ...g, rank: i + 1 }));
   const mine = req.user && req.user.guildId && db.guilds[req.user.guildId]
@@ -66,7 +68,8 @@ guildRouter.get('/api/guilds/:id', (req, res) => {
   // truthy 判定を通り、そのあと g.members で落ちて 500 になっていた。
   const g = Object.prototype.hasOwnProperty.call(db.guilds, req.params.id) ? db.guilds[req.params.id] : null;
   if (g) return res.json({ guild: guildView(db, g, curWeek(), { detailed: true, viewerId: req.user && req.user.id, levelOf }) });
-  const ghost = ghostGuildViews(curWeek()).find(x => x.id === req.params.id);
+  // 詳細は実ギルドと同じ深さ（members / quests / ownerId / code つき）で返す。
+  const ghost = ghostGuildViews(curWeek(), Date.now(), { detailed: true }).find(x => x.id === req.params.id);
   if (ghost) return res.json({ guild: ghost });
   res.status(404).json({ error: 'ギルドが見つかりません' });
 });
@@ -89,7 +92,16 @@ guildRouter.post('/api/guilds/create', requireAuth, maintenanceGuard, (req, res)
 guildRouter.post('/api/guilds/join', requireAuth, maintenanceGuard, (req, res) => {
   const b = req.body || {};
   const guild = findGuild(db, { id: b.id, code: b.code });
-  if (!guild) return res.status(404).json({ error: b.code ? 'そのコードのギルドは見つかりません' : 'ギルドが見つかりません' });
+  if (!guild) {
+    // 🎭 一覧に並んでいる住人のギルドに加入を試したとき、「そんなギルドは無い」
+    // と返すと、それだけで住人のギルドが特定できる（実在するのに存在しない、は
+    // 住人にしか起きない）。招待制の実ギルドとまったく同じ断り方にそろえる
+    // ── ゴーストは open:false なので、これが本来出るはずの文言でもある。
+    if (b.id && ghostGuildViews(curWeek()).some(g => g.id === String(b.id))) {
+      return res.status(409).json({ error: 'このギルドは招待制です（ルームコードが必要）' });
+    }
+    return res.status(404).json({ error: b.code ? 'そのコードのギルドは見つかりません' : 'ギルドが見つかりません' });
+  }
   const out = joinGuild(db, req.user, guild, { viaCode: !!b.code });
   if (out.error) return res.status(409).json({ error: out.error });
   saveDb();

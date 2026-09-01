@@ -55,6 +55,20 @@ const TESTS = [
   'engine.test.mjs',
   'modes-structure.test.mjs',
   'mode-registry.test.mjs',
+  // 商品を足したのにアイコン表を更新し忘れる（＝棚に同じ絵が並ぶ）を止める。
+  // サーバーも DOM も要らないので、安いほうに置いてある。
+  'icons.test.mjs',
+  // 遊び方（public/js/rules.js）の数字が、サーバー／engine の式とズレていないか。
+  // 一覧に入れ忘れていたので走っていなかった（第1波の統合で発覚）。
+  // サーバーも DOM も要らないので、icons と同じ安い組に置く。
+  'rules.test.mjs',
+  // 段位（帯・24段）の唯一の正解が public/js/ranks.js であること。
+  // server に手書きの表が復活していないかをソース検査で見張るので、
+  // rules と同じくサーバー不要の安い組に置く。
+  'ranks.test.mjs',
+  // 👑 ちゃちゃまるが全ボードに載り、住人の中で1位であること。
+  // 住人の計算だけを回すのでサーバーは要らない（ranking-ai と同じ性格）。
+  'champion.test.mjs',
   'workshop.test.mjs',
   'viewresize.test.mjs',
   'i18n.test.mjs',
@@ -82,6 +96,12 @@ const TESTS = [
   'inventory.test.mjs',
   'useredit.test.mjs',
   'security.test.mjs',
+  // 「ソロを押してすぐ終了」の連投で稼げないこと＋1日の上限。
+  // security と同じく「配ってはいけないものを配っていないか」を見るので隣に置く。
+  'farming.test.mjs',
+  // 🎭 住人（AIプレイヤー）の正体が非管理者に漏れていないか。security の隣に
+  // 置く ── 見ているものは違うが、どちらも「返してはいけないものを返していないか」。
+  'secrecy.test.mjs',
   'adminevent.test.mjs',
   'throne.test.mjs',
   'social.test.mjs',

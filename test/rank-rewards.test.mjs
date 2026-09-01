@@ -157,8 +157,17 @@ try {
   check('…and an AI resident outranks the small real scores', lbT.throne && lbT.throne.username !== 'アリス' && lbT.throne.username !== 'ボブ', lbT.throne && lbT.throne.username);
   const crowned = (lbT.rows || []).find(r => r.throne);
   check('the crowned holder is a VISIBLE row on the board', !!crowned && crowned.username === lbT.throne.username, crowned && crowned.username);
+  // v2.34: 非管理者には kind:'resident' を出さない（住人の正体になる）ので、
+  // 一般の目には実プレイヤーとまったく同じ 'player' の名刺に見えるのが正しい。
+  // 管理者トークンでだけ 'resident' が返り、王座も従来どおり載る。
   const profT = await j('/api/profile/' + encodeURIComponent(lbT.throne.username));
-  check('AI throne holder has a resident profile listing the throne', profT.status === 200 && profT.profile.kind === 'resident' && (profT.profile.thrones || []).includes('score'), JSON.stringify(profT.profile && { kind: profT.profile.kind, thrones: profT.profile.thrones }));
+  check('AI throne holder looks like a normal player to everyone else',
+    profT.status === 200 && profT.profile.kind === 'player' && (profT.profile.thrones || []).includes('score'),
+    JSON.stringify(profT.profile && { kind: profT.profile.kind, thrones: profT.profile.thrones }));
+  const profTAdmin = await j('/api/profile/' + encodeURIComponent(lbT.throne.username), {}, admin2.token);
+  check('AI throne holder has a resident profile listing the throne (admin)',
+    profTAdmin.status === 200 && profTAdmin.profile.kind === 'resident' && (profTAdmin.profile.thrones || []).includes('score'),
+    JSON.stringify(profTAdmin.profile && { kind: profTAdmin.profile.kind, thrones: profTAdmin.profile.thrones }));
   // Crowd OFF (env 0) → residents lose eligibility, real players only.
   await stop();
   await start();

@@ -27,6 +27,12 @@ import {
 } from '../../public/js/engine.js';
 import { ctx } from '../context.js';
 
+// 🎭 お題（dailyModifierOf）の ghost は「住人のその日のスコア係数」── 完全に
+// サーバー内部の数字で、画面は id / icon / ja / en / descJa / descEn / target しか
+// 見ていない。フィールド名がそのまま「AIの成績をこちらで作っています」と
+// 言っているので、配る形からは落とす（関門も落とすが、最初から出さない）。
+const publicModifier = mod => { if (!mod) return mod; const { ghost, ...rest } = mod; return rest; };
+
 // index.js のモジュールスコープにしか無いもの。値は起動時に一度だけ
 // 流し込む（init… は server.listen より前・battle 生成より後に呼ばれる）。
 let db, migrateUser, applyGameResult, rateLimit, WEEK_MS, WEEKLY_PIECES, currentWeekNum, weekIdOf, weeklySeed, finalizeWeeklyRankings;
@@ -80,7 +86,7 @@ weeklyDailyRouter.get('/api/daily', (req, res) => {
     day,
     seed: dailySeed(day),
     pieces: DAILY_PIECES,
-    modifier: dailyModifierOf(day),
+    modifier: publicModifier(dailyModifierOf(day)),
     target: dailyTargetOf(day),
     endsAt: nextJstMidnight(),
     played: !!today,
@@ -339,7 +345,7 @@ dailyReplayRouter.get('/api/daily/replays', (req, res) => {
     day,
     seed: dailySeed(day),
     pieces: DAILY_PIECES,
-    modifier: dailyModifierOf(day),
+    modifier: publicModifier(dailyModifierOf(day)),
     rows,
     mine,
     max: DAILY_REPLAY_TOP,

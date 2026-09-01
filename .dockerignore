@@ -12,3 +12,7 @@ server/data
 block-blitz-backup-*.json
 # 実行に不要。イメージを小さくする（test は起動時にポートを掴むテストも含む）。
 test
+# 開発用の確認ページ（アイコン一覧）。以前は public/ の中にあって本番URLでも
+# 誰でも開けたので tools/ へ出した。サーバーは public/ しか配らないので実害は
+# 無いが、イメージに入れる意味も無い。
+tools

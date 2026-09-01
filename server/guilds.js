@@ -9,6 +9,7 @@
 import crypto from 'crypto';
 import { getRoster, residentStats } from './ambient.js';
 import { unit, strHash, mulberry32 } from './residents.js';
+import { anonId } from './sanitize.js';
 
 export const GUILD_CREATE_COST = 2000;
 export const GUILD_MAX_MEMBERS = 20;
@@ -455,7 +456,17 @@ export function ghostGuilds() {
   // 大きい世界で8個が満員のまま440人が無所属なのも、どちらも不自然。
   // 1ギルドおよそ14人になるように選び、4〜GHOST_DEFS.length の範囲に収める。
   const want = Math.max(4, Math.min(GHOST_DEFS.length, Math.round(roster.length * 0.7 / 14)));
-  const guilds = GHOST_DEFS.slice(0, want).map((d, i) => ({ ...d, id: `ghost${i}`, members: [], ghost: true }));
+  // 🎭 公開する id は `ghost0` のような連番にしない ── 形を見ただけで
+  // 「生成物＝住人のギルド」と分かってしまう。実ギルドと同じ UUID 形の
+  // 不透明な値にする（sanitize.js の anonId）。
+  //
+  // ただし **数字を決めている種は seedKey のまま**にする。週間ポイントも
+  // 週間クエストの進み具合も id をシードにしているので、起動ごとに変わる
+  // 公開 id をそのまま使うと、再起動のたびにゴーストギルドの成績が飛ぶ
+  // （このコードベースがいちばん嫌う「数字が嘘をつく」やつ）。
+  const guilds = GHOST_DEFS.slice(0, want).map((d, i) => ({
+    ...d, id: anonId(`ghost-guild:${i}`), seedKey: `ghost${i}`, members: [], ghost: true,
+  }));
   for (const r of roster) {
     const h = unit(r.id, 'guild');
     if (h < 0.3) continue;                          // ~30% of residents are guildless
@@ -494,10 +505,13 @@ function ghostQuestState(guild, weekId, now) {
     ? guild.members.reduce((a, r) => a + (r.skill || 0), 0) / guild.members.length
     : 0;
   const power = 0.6 + size * 0.5 + skill * 0.5;
-  const quests = pickQuestIds(guild.id, weekId).map(id => {
+  // シードは seedKey（`ghost0` …）で引く。公開 id は起動ごとに変わるので、
+  // そちらを種にすると再起動でクエストの抽選も進捗も別物になる。
+  const seedKey = guild.seedKey || guild.id;
+  const quests = pickQuestIds(seedKey, weekId).map(id => {
     const def = questDefOf(id);
     if (!def) return null;
-    const ratio = (0.35 + unit(`${guild.id}-${def.id}`, weekId) * 0.95) * power * weekFrac;
+    const ratio = (0.35 + unit(`${seedKey}-${def.id}`, weekId) * 0.95) * power * weekFrac;
     const progress = Math.max(0, Math.min(def.goal, Math.round(def.goal * ratio)));
     return {
       id: def.id, name: def.name, nameEn: def.nameEn,
@@ -515,19 +529,56 @@ function ghostQuestState(guild, weekId, now) {
   };
 }
 
-export function ghostGuildViews(weekId, now = Date.now()) {
-  return ghostGuilds().map((g, i) => {
+// detailed: guildView(..., { detailed: true }) と同じ深さで返すかどうか。
+// 一覧（/api/guilds）は実ギルドを浅い形で返すので、ゴーストだけ members や
+// quests を持っていると **持ち物の多さ**が指紋になる。深さも実ギルドに合わせる。
+export function ghostGuildViews(weekId, now = Date.now(), { detailed = false } = {}) {
+  return ghostGuilds().map(g => {
+    const seedKey = g.seedKey || g.id;
     const weeklyPoints = ghostWeekly(g, weekId, now);
     const quests = ghostQuestState(g, weekId, now);
-    const lifetime = Math.round(weeklyPoints * (6 + (strHash(g.id) % 9)));
+    // lifetime も seedKey で（公開 id は起動ごとに変わるため）。
+    const lifetime = Math.round(weeklyPoints * (6 + (strHash(seedKey) % 9)));
     const level = guildLevel(lifetime);
-    return {
-      id: g.id, name: g.name, tag: g.tag, icon: g.icon, desc: g.desc, open: i % 3 !== 0,
+    // 🎭 実ギルドの detailed ビュー（guildView）と **同じ欄をそろえる**。
+    // 欠けている欄が1つでもあると、「createdAt が無いギルド＝住人のギルド」
+    // という形の指紋になる。createdAt はロースターと同じく決定的に作る。
+    const createdAt = Date.UTC(2026, 6, 20) + (strHash(`${seedKey}-born`) % 60) * 86400000;
+    const base = {
+      id: g.id, name: g.name, tag: g.tag, icon: g.icon, desc: g.desc,
+      // 🎭 住人のギルドは全部「招待制」にする。以前は 1/3 が公開募集だったので、
+      // 加入を試すと必ず 404（＝そのギルドは実在しない）が返り、「加入だけ絶対に
+      // 失敗するギルド＝住人のギルド」という総当たり判定になっていた。招待制なら、
+      // 実在する招待制ギルドとまったく同じ断り方（ルームコードが要る）になる
+      // ── コードは誰も知らないので、結果として誰も入れないことは変わらない。
+      open: false,
       level, bonusPct: Math.round(guildCoinBonus(level) * 100),
       memberCount: g.members.length, maxMembers: GUILD_MAX_MEMBERS,
-      weeklyPoints, lifetime, ghost: true,
-      questsDone: quests.doneCount, questTotal: quests.total, quests,
-      members: g.members.map(r => { const st = residentStats(r, now, weekId); return { username: r.name, level: st.level, rating: st.rating, weeklyPts: Math.round((600 + r.skill * 2600) * 0.9) }; }),
+      weeklyPoints, lifetime, createdAt, ghost: true,
+      questsDone: quests.doneCount, questTotal: quests.total,
+    };
+    if (!detailed) return base;
+    // 名簿は詳細を開いたときだけ組む（一覧で毎回 residentStats を人数ぶん
+    // 回すと、ギルド一覧が住人の数だけ重くなる）。
+    const members = g.members.map((r, mi) => {
+      const st = residentStats(r, now, weekId);
+      return {
+        id: anonId(`ghost-member:${seedKey}:${r.id}`),
+        username: r.name, level: st.level,
+        role: mi === 0 ? 'owner' : 'member',
+        weeklyPts: Math.round((600 + r.skill * 2600) * 0.9),
+        rating: st.rating,
+        joinedAt: createdAt,
+      };
+    });
+    return {
+      ...base,
+      quests,
+      // 実ギルドの detailed ビューが持つ欄。code は「リーダー本人以外は null」
+      // なので、他人のギルドを覗いたときと同じ null になる。
+      ownerId: members.length ? members[0].id : null,
+      code: null,
+      members,
     };
   });
 }

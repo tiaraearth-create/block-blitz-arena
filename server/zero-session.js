@@ -339,9 +339,16 @@ export function tick(s, run, deps) {
       const view = stateView(s, run);
       // canWill は視聴者ごとに違う（とどめを刺して未記入の段があるか）。共有 view の
       // ハードコード null を上書きして配る ── 再接続後も伝言を書く権利を復元できる。
+      // 席の「自分」印も視聴者ごとなので、seats だけ差し替える（view ごと作り直すと
+      // 盤面のスナップショットを人数ぶん取り直すことになる）。
       for (const e of seatedHumans(s)) {
         const canWill = (run.broken || []).some(b => b.by === e.name && !b.will);
-        emit(e, { ...view, canWill, you: youView(e) });
+        emit(e, {
+          ...view,
+          seats: view.seats.map(x => (x.name === e.name ? { ...x, you: true } : x)),
+          canWill,
+          you: youView(e),
+        });
       }
     }
   }
@@ -788,7 +795,8 @@ export function submitDealVote(run, userId, pick) {
 // 画面に送る形
 // ---------------------------------------------------------------------------
 
-export function stateView(s, run) {
+// viewerName: 受け取る人の名前。席の「自分」印だけに使う（省略すると誰にも付かない）。
+export function stateView(s, run, viewerName = null) {
   const danIndex = Math.min(DAN.length - 1, run.dan | 0);
   // 表示も判定とまったく同じ基準を使う（片方だけ人数で動くと、ゲージが
   // 満タンなのに割れない／空なのに割れる、が起きる）。
@@ -816,8 +824,15 @@ export function stateView(s, run) {
     // とどめを刺してまだ伝言を残していない段があれば、書く権利がある
     canWill: null,
     zeroGrid: s.zero.engine ? s.zero.engine.snapshot() : null,
+    // 席順。以前は human:true/false をそのまま載せていたので、断罪の席次表が
+    // そのまま「誰が人間で誰が住人か」の一覧になっていた（画面もそれを見て
+    // 人間の席だけ色を変えていた）。載せるのは「自分の席かどうか」だけにする
+    // ── 画面がやりたかったのは元々そちらで、正体は要らない。
+    // ⚠ クライアント側（public/js/modes.js の zeroSeats）も s.human → s.you に
+    // 追随が要る。
     seats: s.entrants.map(e => ({
-      name: e.name, human: !!e.human, score: Math.floor(e.score || 0),
+      name: e.name, you: !!viewerName && e.name === viewerName,
+      score: Math.floor(e.score || 0),
       alive: !!e.alive, executed: !!e.executed,
     })),
   };

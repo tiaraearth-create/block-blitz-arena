@@ -154,7 +154,11 @@ try {
   const meAfter = await j('/api/me', {}, tok);
   check('dethroned player keeps the other thrones only', !(meAfter.user.thrones || []).includes('score') && (meAfter.user.thrones || []).includes('puzzle'), JSON.stringify(meAfter.user.thrones));
   const feed = await j('/api/feed');
-  check('takeover announced on the live feed', (feed.feed || []).some(f => f.real && /王座/.test(f.text || '')), JSON.stringify((feed.feed || []).filter(f => f.real).map(f => f.text).slice(-3)));
+  // v2.34: フィードの real（⭐＝実プレイヤーの出来事）は配らなくなった ──
+  // ⭐が付かない行＝住人、という総当たり表になっていたため（server/sanitize.js）。
+  // 見たいのは「奪取が告知されたか」なので、本文だけを見る。
+  check('takeover announced on the live feed', (feed.feed || []).some(f => /王座/.test(f.text || '')), JSON.stringify((feed.feed || []).map(f => f.text).slice(-3)));
+  check('フィードに ⭐ 印（real）が載らない', !(feed.feed || []).some(f => 'real' in f), JSON.stringify((feed.feed || [])[0] || null));
 
   // ---- 👻 幽霊屋敷 (隠しモード) ----
   await j('/api/game/result', { method: 'POST', body: { mode: 'ghost', score: 8000, lines: 12, maxCombo: 4, duration: 90, won: false } }, tok);

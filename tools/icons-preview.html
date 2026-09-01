@@ -1,0 +1,31 @@
+<!doctype html><html><head><meta charset="utf-8"><title>icons</title>
+<style>
+body{background:#0b0e1f;color:#dfe6ff;font-family:system-ui,sans-serif;margin:0;padding:16px}
+h1{font-size:15px;margin:0 0 4px}
+p.note{font-size:11px;color:#8f9dc0;margin:0 0 12px;line-height:1.6}
+h2{font-size:13px;color:#9fb0d4;margin:22px 0 8px;letter-spacing:.1em}
+h2 b{color:#ffd75e}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px}
+.c{background:#161b33;border:1px solid #2a3252;border-radius:10px;padding:10px 6px;text-align:center}
+.c div{font-size:9.5px;color:#8f9dc0;margin-top:6px;word-break:break-all}
+/* 色を落として「形だけ」にする段。ここで見分けが付かないものは、
+   色覚特性のある人・高コントラスト設定・白黒印刷で潰れている。 */
+.mono{filter:grayscale(1) brightness(2.2) contrast(1.4)}
+/* さらに強い検査。--ic-a / --ic-b を両方まっ白に上書きして、
+   本当にシルエット（外形と抜き）だけで区別できるかを見る。 */
+.solid{background:#000;border-color:#333}
+.solid svg{--ic-a:#fff!important;--ic-b:#fff!important}
+.solid div{color:#666}
+</style></head><body>
+<h1>Block Blitz Arena — アイコン一覧</h1>
+<p class="note">
+  <b>開発用。サーバーは配信しない</b>（public/ の外に置いてあるので、本番URLからは開けない）。<br>
+  開き方: このファイルをブラウザに直接ドロップするか <code>file://</code> で開く。<br>
+  ※ ES モジュールを file:// から読めないブラウザでは、リポジトリのルートで
+  <code>npx serve .</code> のような静的サーバーを立てて <code>/tools/icons-preview.html</code> を開く。<br>
+  商品を足したら <b>public/js/icons.js</b> にもアイコンを足すこと（忘れると test/icons.test.mjs が落ちる）。
+</p>
+<h2>ALL ICONS（<b id="n"></b>）</h2><div class="grid" id="g"></div>
+<h2>SILHOUETTE CHECK — 色を落として形だけで見分けが付くか</h2><div class="grid" id="m"></div>
+<h2>SOLID CHECK — 2色とも白に潰しても区別できるか</h2><div class="grid" id="s"></div>
+<script type="module" src="./icons-preview.js"></script></body></html>

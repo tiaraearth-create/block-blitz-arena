@@ -193,10 +193,33 @@ export const BOSSES = [
 // Raid-exclusive bosses: never appear in the solo boss mode.
 // Tougher than anything there — more HP (further scaled by party size)
 // and harder-hitting, faster attacks.
+//
+// ⚠ hp は「1人あたり」。server/battle.js が `hp × 参加人数` にする（レイドは
+//   常に4人。人が足りなければボットが埋める）ので、実際のHPはこの4倍になる。
+//   ダメージは参加者スコアの単純合計（battle.js の totalDamage）で、レイドでは
+//   奥義もブースターも無効（modes.js が showItemBar(false)）＝素の腕だけ。
+//
+// v2.34 で引き直した。理由は「勝てるかどうか以前に、届く桁ですらなかった」から。
+// public/js/engine.js の Engine と public/js/ai.js の chooseMove で 120秒ぶんの
+// 手を打たせて実測した1人あたりのスコア（中央値・お邪魔の投入も再現）:
+//   0.7秒/手（＝鬼AI相当・上手い人）  7,200〜8,100点
+//   1.1秒/手（＝達人AI相当・普通の人） 5,200〜5,400点
+//   1.7秒/手（＝戦士AI相当）          3,100〜3,400点
+// つまりパーティ4人の合計は上手くて 28,000〜32,000点、中堅で 20,000点前後。
+// 旧値のクラーケンは 35,000×4 = 140,000 で、上手いパーティでも **4.6倍** 足りず、
+// ハデス（240,000）に至っては 8倍。誰も一度も倒せない設定だった。
+//
+// 引き直しの並び（4人合計スコアに対する必要ダメージ / 実測の撃破率）:
+//   クラーケン 18,000 … 中堅パーティ(≈20,000)が90%で倒せる「入口」
+//   ティアマト 24,800 … 高レート帯(≈28,000)で85%。中堅では届かない「歯ごたえ」
+//   ハデス    31,200 … 上手い4人(≈32,000)で65%。強いパーティでないと落ちない
+// 攻撃も見直した。旧値のクラーケンは 7秒ごとに7個＝120秒で119マスのお邪魔を
+// 撒いていて、入口のボスがいちばん妨害の密度が高いモードの1つになっていた。
+// 難度の順（お邪魔の総量）が強さの順と揃うように、入口ほど緩くする。
 export const RAID_BOSSES = [
-  { id: 'kraken',  name: '深海のクラーケン', nameEn: 'Abyssal Kraken',            emoji: '🐙', hp: 35000, atkSec: 7, atkCells: 7 },
-  { id: 'tiamat',  name: '魔竜ティアマト',   nameEn: 'Tiamat the Dread Dragon',   emoji: '🐲', hp: 45000, atkSec: 7, atkCells: 8 },
-  { id: 'hades',   name: '冥王ハデス',       nameEn: 'Hades, Lord of the Dead',   emoji: '💀', hp: 60000, atkSec: 6, atkCells: 8 },
+  { id: 'kraken',  name: '深海のクラーケン', nameEn: 'Abyssal Kraken',            emoji: '🐙', hp: 4500, atkSec: 9, atkCells: 5 },
+  { id: 'tiamat',  name: '魔竜ティアマト',   nameEn: 'Tiamat the Dread Dragon',   emoji: '🐲', hp: 6200, atkSec: 8, atkCells: 6 },
+  { id: 'hades',   name: '冥王ハデス',       nameEn: 'Hades, Lord of the Dead',   emoji: '💀', hp: 7800, atkSec: 7, atkCells: 7 },
 ];
 
 // ---- Titles (称号) — earned from stats, one equippable ----

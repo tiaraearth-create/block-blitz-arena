@@ -1,8 +1,8 @@
 // App bootstrap: wire menu, session restore, global buttons.
 import { session, api, refreshMe, setToken } from './net.js';
-import { $, $$, showScreen, showModal, closeModal, toast, updateTopbar, fmt, staffExtras , goBack, initHistory } from './dom.js';
+import { $, $$, showScreen, showModal, closeModal, popModal, toast, updateTopbar, fmt, staffExtras , goBack, initHistory } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked, tutorialDone } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
 import { initClipHud } from './clipexport.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openInventory, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
@@ -14,6 +14,11 @@ import { setAdminEvent } from './adminevent.js';
 import { t, setLang, LANG, applyStaticI18n, catName } from './i18n.js';
 import { openFriends } from './friends.js';
 import { initParty } from './party.js';
+// 📖 ルールの「内容」は rules.js が唯一の正解。ここは並べるだけで、
+// 説明の本文も数字も一切持たない（数字を直すときに2か所直す羽目にならない）。
+import { ONLINE_MODES, onlineModeLine, rulesSections } from './rules.js';
+// 🎨 絵文字ではなく自前のアイコン。index.html は静的なので、起動時に流し込む。
+import { icon, iconEl, hasIcon } from './icons.js';
 
 // ---------------------------------------------------------------------------
 // 🧯 クライアントJSエラーの自動報告（POST /api/clienterror）
@@ -101,8 +106,133 @@ applyStaticI18n();
 // Admins have every unlockable open from the start.
 const isAdminUser = () => !!session.user && session.user.role === 'admin';
 
+// ---------------------------------------------------------------------------
+// 📖 遊び方
+//
+// なぜ作ったか（ユーザーの実話）
+//   友達に遊ばせたら「2ライン同時消しで相手に攻撃できる」を最後まで知らなかった。
+//   調べたら当然で、このゲームには**ルールを説明する場所が1つも無かった** ──
+//   初回チュートリアルは4ステップだけ・1人用モードでしか動かず、オンライン対戦の
+//   選択画面はボタンが並ぶだけ、「ヘルプ」に相当する画面も無い。
+//
+// 作りのきまり
+//   ・文言も数字もここには書かない。rules.js の rulesSections() を順に並べるだけ。
+//     （数字はサーバー／engine.js の式から写したもので、test/rules.test.mjs が
+//       ズレを見張っている。ここに書き写すとその見張りの外に出てしまう。）
+//   ・独立した <section id="screen-…"> にはしない。dom.js の SCREENS 配列に
+//     名前を足さないと「その画面だけ無言で真っ白」になり（test/clientwiring の
+//     5番が同じ事故を見張っている）、dom.js は別タスクの担当だから。
+//     screens.js の 🏛️殿堂と同じくモーダルで出す（.modal は 88dvh で
+//     縦スクロールするので、長い説明でも入る）。
+// ---------------------------------------------------------------------------
+
+// 「一度でも開いたか」。初回の印（#rulesDot）を消す判断にだけ使う。
+const RULES_SEEN_KEY = 'bba_rules_seen';
+
+function rulesSeen() {
+  // localStorage が使えない環境（プライベートモード等）では「既読」扱い。
+  // 消せない印を出し続けるより無害。
+  try { return localStorage.getItem(RULES_SEEN_KEY) === '1'; } catch { return true; }
+}
+
+// 遊び方に使うアイコン。icons.js に 'rules'（開いた本＋？）が入ったので
+// いまはそれが選ばれる。missions（チェック付きクリップボード）を流用しては
+// いけない ── あれは 📋ミッションの絵そのもので、ナビに同じ絵が2つ並ぶ。
+// 名前で探しているのは、絵の名前が変わってもここを直さずに済ませるため。
+const RULES_ICON = ['rules', 'help', 'howto'].find(hasIcon) || null;
+
+/** 遊び方の絵。アイコンがまだ無ければ 📖 の絵文字で代用する。 */
+function rulesIcon(size = 20) {
+  return RULES_ICON ? icon(RULES_ICON, { size }) : `<span style="font-size:${size}px">📖</span>`;
+}
+
+/**
+ * 初回導線の印。まだ一度も遊び方を開いておらず、かつチュートリアルも
+ * 終えていない人にだけ光らせる。開いた瞬間に消えて二度と出ない。
+ */
+function updateRulesDot() {
+  const dot = $('#rulesDot');
+  if (!dot) return;
+  dot.classList.toggle('hidden', rulesSeen() || tutorialDone());
+}
+
+// 節の1行。文字列ならそのまま段落、{ head, body } なら表として出す。
+// 表は既存の .rank-reward-list / .rank-reward-row（左に見出し・右に値の行）を
+// 借りている ── style.css は別タスクの担当なので、新しいクラスは足せない。
+function rulesRowHtml(row) {
+  if (typeof row === 'string') {
+    return `<p style="font-size:13px;line-height:1.85;margin:0 0 8px">${row}</p>`;
+  }
+  const head = (row.head || []);
+  const body = (row.body || []);
+  return `<div class="rank-reward-list">
+    <div class="rank-reward-row" style="background:none;border-style:dashed;font-size:11.5px;color:var(--muted);padding:4px 12px">
+      <span style="flex:1">${head[0] || ''}</span><span>${head[1] || ''}</span>
+    </div>
+    ${body.map(cells => `
+      <div class="rank-reward-row">
+        <span style="flex:1">${cells[0]}</span><b>${cells[1]}</b>
+      </div>`).join('')}
+  </div>`;
+}
+
+/**
+ * 遊び方を開く。
+ * @param {object} opts.back 親を開き直す関数（オンライン対戦の選択画面などから
+ *   呼ぶとき）。渡すと ✕ が ← になり、閉じたときに親へ戻る。
+ */
+function showRules(opts = {}) {
+  // 開いた時点で初回の印は用済み。閉じ方に依らず消したいので、ここで立てる。
+  try { localStorage.setItem(RULES_SEEN_KEY, '1'); } catch { /* 保存できなくても読める */ }
+  updateRulesDot();
+  const back = typeof opts.back === 'function' ? opts.back : null;
+  const m = showModal(`
+    <h2>${rulesIcon(24)} ${t('遊び方', 'How to play')}</h2>
+    <p class="muted center" style="font-size:12.5px;margin:-6px 0 14px">
+      ${t('数字はゲーム本体の式から写したものです。', 'Every number here is taken straight from the game code.')}
+    </p>
+    ${rulesSections().map(sec => `
+      <section style="margin-bottom:20px">
+        <h3 style="display:flex;align-items:center;gap:8px;font-size:16px;font-weight:900;margin:0 0 8px">
+          ${icon(sec.icon, { size: 20 })}<span>${sec.title}</span>
+        </h3>
+        ${sec.rows.map(rulesRowHtml).join('')}
+      </section>`).join('')}
+    <div class="modal-buttons">
+      <button class="btn btn-primary" id="ruClose">${back ? t('もどる', 'Back') : t('とじる', 'Close')}</button>
+    </div>`, { back });
+  // popModal は「親が居れば親へ、居なければ閉じる」。✕／←／Esc／背景タップと
+  // まったく同じ道を通すので、閉じ方によって戻り先が変わらない。
+  m.querySelector('#ruClose').onclick = () => { audio.click(); popModal(); };
+  return m;
+}
+
+// メニューのナビから。index.html の #btnRules がこの入口。
+$('#btnRules').onclick = () => { audio.click(); showRules(); };
+updateRulesDot();
+
 // ---- menu buttons ----
-$('#btnSolo').onclick = () => { audio.click(); startSolo(); };
+// ▶ ソロプレイ。ここだけ説明が1行も無いまま試合が始まっていた（他の16モードは
+// 全部「押したら開始モーダルに1〜2行」で説明している）ので、同じ形に揃える。
+// 初見の人が最初に押すボタンでもあるので、遊び方への入口もここに置く。
+function showSoloSetup() {
+  const best = Math.max(Number(localStorage.getItem('bba_best') || 0),
+    session.user ? (session.user.stats.bestScore || 0) : 0);
+  const m = showModal(`
+    <h2>${icon('mode_solo', { size: 24 })} ${t('ソロプレイ', 'Solo Play')}</h2>
+    <p class="muted center" style="margin-bottom:12px">
+      ${t('手札の3ピースを8×8の盤面に置いて、<b>たて or よこ8マス</b>をそろえて消す基本モード。<br><small>時間制限なし・回転なし。置ける場所が無くなったら終了 — ハイスコアはランキングに載ります。</small>',
+          'The basic mode: drop your three pieces on the 8x8 board and complete a <b>full row or column</b>.<br><small>No timer, no rotating. It ends when nothing fits — your best score goes on the leaderboard.</small>')}
+    </p>
+    ${best ? `<p class="center" style="font-size:13px;font-weight:800">${t(`自己ベスト ${fmt(best)}点`, `Best ${fmt(best)} pts`)}</p>` : ''}
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="soRules">${rulesIcon(18)} ${t('遊び方', 'How to play')}</button>
+      <button class="btn btn-primary" id="soStart">${t('▶ はじめる', '▶ Play')}</button>
+    </div>`);
+  m.querySelector('#soRules').onclick = () => { audio.click(); showRules({ back: showSoloSetup }); };
+  m.querySelector('#soStart').onclick = () => { audio.click(); closeModal(); startSolo(); };
+}
+$('#btnSolo').onclick = () => { audio.click(); showSoloSetup(); };
 
 $('#btnVsAi').onclick = () => {
   audio.click();
@@ -292,24 +422,101 @@ async function openBossSelect(preferIndex = null) {
 window.__bbaOpenBossSelect = openBossSelect;
 $('#btnBoss').onclick = () => openBossSelect();
 
-$('#btnOnline').onclick = () => {
-  audio.click();
-  const m = showModal(`
-    <h2>${t('🌐 オンライン対戦', '🌐 Online Battle')}</h2>
-    <div class="form-col">
-      <button class="btn btn-primary btn-big" data-online="duel">${t('⚔️ 1v1 ランクマッチ', '⚔️ 1v1 Ranked')}</button>
-      <button class="btn btn-melt btn-big" data-online="attack">${t('💥 アタック戦（NEW! 妨害あり）', '💥 Attack Duel (NEW! send garbage)')}</button>
-      <button class="btn btn-online btn-big" data-online="team">${t('👥 2v2 チーム戦', '👥 2v2 Team Battle')}</button>
-      <button class="btn btn-gold btn-big" data-online="tourney">${t('🏆 トーナメント（8人制）', '🏆 Tournament (8 players)')}</button>
-      <button class="btn btn-oni btn-big" data-online="royale">${t('💯 バトルロイヤル（100人）', '💯 Battle Royale (100 players)')}</button>
-      <button class="btn btn-boss btn-big" data-online="raid">${t('🐲 レイドボス戦（協力）', '🐲 Raid Boss (co-op)')}</button>
-      <button class="btn btn-coop btn-big" data-online="coop">${t('🤝 協力プレイ（2人で1盤面）', '🤝 Co-op (2 players, 1 board)')}</button>
-      <button class="btn btn-online btn-big" data-online="custom">${t('🔧 カスタムルーム', '🔧 Custom Room')}</button>
-    </div>`);
-  m.querySelectorAll('[data-online]').forEach(btn => {
-    btn.onclick = () => { closeModal(); startOnline(btn.dataset.online); };
-  });
+// ---------------------------------------------------------------------------
+// 🌐 オンライン対戦の選択画面
+//
+// 直した問題
+//   ボタンが8個並ぶだけで説明文が1行も無く、「押すまで何が起きるか分からない」
+//   画面だった。攻撃があるのは一部のモードだけなのに、その違いもどこにも
+//   書かれていない ── 友達が最後まで攻撃を知らなかった直接の原因がこれ。
+//   ボタンごとに rules.js の1行説明を必ず添える。
+//
+// 名前と並び順も入れ替えた
+//   攻撃ありの試合を対戦の本流にする、というのがこの版の決定。先頭に
+//   「1v1 ランクマッチ」（内部 'attack'）を置き、攻撃なしは「クラシック」
+//   （内部 'duel'）としてその次に置く。
+//   ⚠️ 内部の呼び名（'duel' / 'attack'）は変えていない。サーバーとテストが
+//      多数参照していて、名前を入れ替えると意味が反転する。変えたのは
+//      **表示名と並び順だけ**で、その対応は rules.js の ONLINE_MODES にある。
+//   ⚠️ startOnline() の既定値は 'duel'（＝クラシック）のまま。ここからは必ず
+//      押されたボタンの kind を明示的に渡すので、既定値には落ちない。
+//      modes.js は別タスクの担当なので、既定値そのものは触らない。
+//
+// ⚠️ data-online="…" は**リテラルで**書くこと。
+//    test/rules.test.mjs が main.js のソースを /data-online="([a-z]+)"/ で読んで
+//    「並んでいる全モードに rules.js の1行説明があるか」を突き合わせている。
+//    テンプレート式（data-online="${kind}"）にすると一覧が0件になり、検査は
+//    何も見ないまま緑になる ── 説明の抜けを二度と検出できなくなる。
+//    中身（アイコン・名前・説明・並び順）は下の配線で ONLINE_MODES から流し込む。
+// ---------------------------------------------------------------------------
+
+// ここに要るのはボタンの色だけ。名前・説明・並び順は rules.js が唯一の正解。
+const ONLINE_BTN_CLASS = {
+  attack: 'btn-primary',   // 対戦の本流。メニューの ▶ソロ と同じ主役の青
+  duel: 'btn-online',
+  team: 'btn-coop',
+  tourney: 'btn-gold',
+  royale: 'btn-oni',
+  raid: 'btn-boss',
+  coop: 'btn-chimera',
+  custom: 'btn-ghost',
 };
+
+function showOnlineSelect() {
+  const m = showModal(`
+    <h2>${icon('mode_online', { size: 24 })} ${t('オンライン対戦', 'Online Battle')}</h2>
+    <p class="muted center" style="font-size:12.5px;margin:-6px 0 12px">
+      ${t('押す前にルールが分かるように、全モードに1行の説明を付けてあります。',
+          'Every mode has a one-line summary, so you know what happens before you tap.')}
+    </p>
+    <!-- btn-big は付けない。1行説明が入って2段になるぶん、8個並べると
+         19px では画面に収まらなくなる（.btn の 16px でも指の当たりは足りる）。 -->
+    <div class="form-col" id="onlineList">
+      <button class="btn" data-online="attack"></button>
+      <button class="btn" data-online="duel"></button>
+      <button class="btn" data-online="team"></button>
+      <button class="btn" data-online="tourney"></button>
+      <button class="btn" data-online="royale"></button>
+      <button class="btn" data-online="raid"></button>
+      <button class="btn" data-online="coop"></button>
+      <button class="btn" data-online="custom"></button>
+    </div>
+    <div class="modal-buttons">
+      <button class="btn btn-ghost" id="olRules">${rulesIcon(18)} ${t('攻撃のしくみを読む', 'How attacking works')}</button>
+    </div>`);
+
+  const list = m.querySelector('#onlineList');
+  // 並び順の正解も rules.js。上の HTML の順ではなく ONLINE_MODES の順に並べ直す
+  // ので、本流を入れ替えるときに直すのは rules.js だけで済む。
+  // appendChild は「移動」なので、並べ直してもボタンは増えない。
+  for (const mode of ONLINE_MODES) {
+    const btn = list.querySelector(`[data-online="${mode.kind}"]`);
+    if (btn) list.appendChild(btn);
+  }
+
+  list.querySelectorAll('[data-online]').forEach(btn => {
+    const kind = btn.dataset.online;
+    const mode = ONLINE_MODES.find(x => x.kind === kind);
+    btn.classList.add(ONLINE_BTN_CLASS[kind] || 'btn-online');
+    // rules.js に載っていないモードが混ざっても、名前だけは出して押せるままに
+    // する（説明の抜けは test/rules.test.mjs が別に落としてくれる）。
+    const name = mode ? mode.name() : kind;
+    const tag = mode && mode.tag ? mode.tag() : '';
+    btn.innerHTML = `
+      <span style="display:flex;align-items:center;justify-content:center;gap:7px;flex-wrap:wrap">
+        ${mode ? icon(mode.icon, { size: 22 }) : ''}<span>${name}</span>
+        ${tag ? `<i style="font-size:11px;font-weight:800;font-style:normal;opacity:.85;border:1px solid currentColor;border-radius:999px;padding:1px 7px">${tag}</i>` : ''}
+      </span>
+      <small style="display:block;margin-top:5px;font-size:12px;font-weight:600;line-height:1.55;opacity:.92;white-space:normal">${onlineModeLine(kind)}</small>`;
+    // 押されたモードを必ず明示で渡す（startOnline の既定値 'duel' に落ちない）。
+    btn.onclick = () => { audio.click(); closeModal(); startOnline(kind); };
+  });
+
+  // 攻撃表・得点表までは1行では書けないので、続きは遊び方へ。
+  // back を渡してあるので、閉じるとこの選択画面に戻る。
+  m.querySelector('#olRules').onclick = () => { audio.click(); showRules({ back: showOnlineSelect }); };
+}
+$('#btnOnline').onclick = () => { audio.click(); showOnlineSelect(); };
 $('#btnCancelQueue').onclick = () => { audio.click(); cancelMatchmaking(); };
 
 $('#btnMissions').onclick = () => { audio.click(); openMissions(); };
@@ -1075,6 +1282,105 @@ function ensureNewModeButtons() {
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ensureNewModeButtons, { once: true });
 else ensureNewModeButtons();
 
+// ---------------------------------------------------------------------------
+// 🎨 index.html の絵文字を、自前のアイコン（icons.js）へ差し替える
+//
+// なぜ JS から流し込むのか
+//   index.html は静的で、しかも**日本語の文言が正**（英語面は i18n.js の
+//   applyStaticI18n() が textContent ごと書き換える）。HTML に <svg> を直接
+//   書くと、英語で遊んでいる人の画面ではその瞬間にアイコンが消える。
+//   同じ理由で、ここは applyStaticI18n() と ensureNewModeButtons()（どちらも
+//   textContent を上書きする）より**あと**でなければならない。
+//
+// なぜ絵文字をやめるのか
+//   絵文字は端末とOSで絵が変わるうえ、同じ絵が別の意味で使い回される
+//   （🏰 が「ダンジョン」と「ギルド」の両方、🛡️ が「管理」と管理者アバターの
+//   両方に付いていた）。icons.js の絵は id が違えば必ず形も違う。
+//
+// 触らないもの
+//   ・#userAvatar … updateTopbar()（dom.js）が権限によって絵を差し替える。
+//     あちらも icons.js を使うようになった（user_guest / user / mod / admin）。
+//     ここで塗ると次のログインで必ず消えるので、二重管理にしないこと。
+//   ・試合中の HUD（#btnReroll / #btnUlt / #btnAuto など） … 中に <b> の
+//     カウンタを抱えていて game.js / modes.js が書き換えるので、別途で。
+// ---------------------------------------------------------------------------
+
+// 先頭の絵文字（＋異体字セレクタ・ZWJ・続く空白）だけを落とす。
+// 日本語もラテン文字も Extended_Pictographic ではないので、ラベルは削れない。
+const LEAD_EMOJI = /^(?:\p{Extended_Pictographic}|\uFE0F|\u200D|\s)+/u;
+
+// モード一覧のボタン（.menu-buttons の中）。左に絵、右にラベル。
+const MODE_BTN_ICONS = {
+  btnSolo: 'mode_solo', btnVsAi: 'mode_ai', btnBoss: 'mode_boss',
+  btnDungeon: 'mode_dungeon', btnSprint: 'mode_sprint', btnWeekly: 'mode_weekly',
+  btnDaily: 'mode_daily', btnSurvival: 'mode_survival', btnMeltdown: 'mode_meltdown',
+  btnChimera: 'mode_chimera', btnChain: 'mode_chain', btnBlueprint: 'mode_blueprint',
+  btnPuzzle: 'mode_puzzle', btnWorkshop: 'mode_workshop', btnDig: 'mode_dig',
+  btnGhost: 'mode_ghost', btnChaos: 'mode_chaos', btnOnline: 'mode_online',
+};
+
+// ナビ（.menu-nav）。絵は <span> の中に入っている ── .nav-btn span が
+// font-size:22px を持っているので、その器を残したまま中身だけ入れ替える。
+// #btnHallOfFame は screens.js が足すことがあるので、「在れば塗る」だけに
+// してある（無くても何も起きない）。
+// 📖 #btnRules はここに入れない ── 専用の絵がまだ無く、いちばん近い missions は
+// 📋ミッションの絵そのものなので、並べると2つのナビが同じ絵になる。
+// icons.js に 'rules' が入った日に下の paintStaticIcons() が自動で塗り始める。
+const NAV_BTN_ICONS = {
+  btnMissions: 'missions', btnFriends: 'friends',
+  btnGuild: 'guild', btnNews: 'news', btnLeaderboard: 'leaderboard',
+  btnHallOfFame: 'hall', btnInventory: 'inventory', btnShop: 'shop',
+  btnGacha: 'gacha', btnGemShop: 'gemshop', btnBattlePass: 'battlepass',
+  btnAdmin: 'admin',
+};
+
+function paintModeIcon(id, name) {
+  const el = $('#' + id);
+  if (!el || el.querySelector('svg')) return;        // 二度塗りしない
+  const label = (el.textContent || '').replace(LEAD_EMOJI, '').trim();
+  el.replaceChildren(iconEl(name, { size: 20 }), document.createTextNode(' ' + label));
+}
+
+function paintNavIcon(id, name) {
+  const el = $('#' + id);
+  if (!el) return;
+  const span = el.querySelector('span');             // 絵の器。ラベルとドットは触らない
+  if (!span || span.querySelector('svg')) return;
+  span.replaceChildren(iconEl(name, { size: 22 }));
+}
+
+// 🪙/💎 のチップ。数字の <b> は updateTopbar() が書き換えるので、
+// その手前にある絵文字の文字ノードだけを差し替える。
+// 絵を消すと読み上げに「0」しか残らないので、こちらは label 付きで出す。
+function paintChipIcon(sel, name, label) {
+  const el = document.querySelector(sel);
+  if (!el || el.querySelector('svg')) return;
+  const first = el.firstChild;
+  if (!first || first.nodeType !== 3) return;        // 形が変わっていたら何もしない
+  const wrap = document.createElement('span');
+  wrap.innerHTML = icon(name, { size: 15, label });
+  first.replaceWith(wrap.firstElementChild, document.createTextNode(' '));
+}
+
+function paintStaticIcons() {
+  try {
+    for (const [id, name] of Object.entries(MODE_BTN_ICONS)) paintModeIcon(id, name);
+    for (const [id, name] of Object.entries(NAV_BTN_ICONS)) paintNavIcon(id, name);
+    if (RULES_ICON) paintNavIcon('btnRules', RULES_ICON);   // 絵が入ったら自動で移る
+    paintChipIcon('.coin-chip', 'coins', t('コイン', 'Coins'));
+    paintChipIcon('.gem-chip', 'gems', t('ジェム', 'Gems'));
+    // ⚙️ 設定。名前は index.html / i18n.js の title・aria-label が持っている。
+    const settings = $('#btnSettings');
+    if (settings && !settings.querySelector('svg')) settings.replaceChildren(iconEl('settings', { size: 18 }));
+  } catch {
+    // 絵が塗れなくても遊べる（絵文字のまま残るだけ）。メニューの配線は道連れにしない。
+  }
+}
+// ⚠️ ensureNewModeButtons のあとに登録すること。あちらは btnChain / btnBlueprint /
+//    btnWorkshop の textContent を書き換えるので、先に塗ると消える。
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paintStaticIcons, { once: true });
+else paintStaticIcons();
+
 // ---- time attack ----
 $('#btnSprint').onclick = () => {
   audio.click();
@@ -1255,7 +1561,10 @@ function updateOfflineTag(announce) {
   const tag = $('#offlineTag');
   if (!tag) return;
   const off = navigator.onLine === false;
-  tag.textContent = t('📴 オフライン', '📴 Offline');
+  // 絵文字ではなく icons.js のアイコン。読み上げには名前が要るので、
+  // 絵は aria-hidden のまま「オフライン」の文字だけを残す。
+  tag.replaceChildren(iconEl('offline', { size: 14 }),
+    document.createTextNode(' ' + t('オフライン', 'Offline')));
   tag.classList.toggle('hidden', !off);
   if (!announce) return;
   if (off) toast(t('📴 通信が切れました。つながると自動で元に戻ります', '📴 You are offline — everything resumes once the connection is back'), 'err', 4000);

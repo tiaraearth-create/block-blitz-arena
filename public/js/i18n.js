@@ -166,7 +166,9 @@ const SERVER_MSG_EN = {
   // ---- v2.10 完全対応: セッション/プロフィール/バグ報告/ガチャ/ギルド ----
   'アカウントのデータが見つかりません（データ復元待ち）': 'Account data not found (restore pending)',
   'セッションが終了しました。もう一度ログインしてください': 'Your session has ended — please log in again',
-  'その名前はアリーナの住人が使っています。別の名前でどうぞ': 'That name belongs to an Arena resident — please pick another',
+  // v2.34: 登録／改名で名前が弾かれる理由の出し分けをやめたので、この文は
+  // サーバーから出なくなった。この1行だけで「住人」という別種の名前枠がある
+  // ことが読み取れてしまうため、死んだ対訳ごと消す。
   '少し待ってください': 'Please wait a moment',
   'プレイヤーが見つかりません': 'Player not found',
   '報告が多すぎます。少し待ってください': 'Too many reports — please wait a bit',
@@ -329,7 +331,9 @@ export function applyStaticI18n() {
   }
 
   // nav (each is <span>icon</span> + text node)
-  const nav = { btnMissions: 'Missions', btnFriends: 'Friends', btnGuild: 'Guild', btnNews: 'News', btnLeaderboard: 'Ranking', btnInventory: 'Items', btnShop: 'Shop', btnGacha: 'Gacha', btnGemShop: 'Gems', btnBattlePass: 'Pass', btnAdmin: 'Admin' };
+  // btnRules（📖 遊び方）はナビの先頭。ここに無いと、英語で遊ぶ人だけ
+  // 唯一のルール説明の入口が日本語のまま残る。
+  const nav = { btnRules: 'How to Play', btnMissions: 'Missions', btnFriends: 'Friends', btnGuild: 'Guild', btnNews: 'News', btnLeaderboard: 'Ranking', btnInventory: 'Items', btnShop: 'Shop', btnGacha: 'Gacha', btnGemShop: 'Gems', btnBattlePass: 'Pass', btnAdmin: 'Admin' };
   for (const [id, label] of Object.entries(nav)) {
     const el = document.getElementById(id);
     if (!el) continue;
@@ -358,6 +362,9 @@ export function applyStaticI18n() {
   // tooltips + document title
   const attr = (sel, name, val) => { const el = document.querySelector(sel); if (el) el.setAttribute(name, val); };
   attr('#btnSettings', 'title', 'Settings');
+  // ⚙️ は起動時に icons.js のアイコン（aria-hidden）へ差し替わるので、
+  // 名前は aria-label だけが持つ。title と両方を英語にしておくこと。
+  attr('#btnSettings', 'aria-label', 'Settings');
   attr('#liveFeed', 'title', 'Live feed');
   attr('#chaosBar', 'title', 'Until the next rule change');
   attr('#chatReplyCancel', 'title', 'Cancel reply');

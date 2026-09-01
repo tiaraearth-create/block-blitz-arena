@@ -11,7 +11,12 @@ import { freePort } from './_port.mjs';
 // ポート固定をやめた理由は test/_port.mjs を参照（他人のサーバーを
 // 自分のものと誤認して、緑のまま嘘をつく可能性があった）。
 const PORT = await freePort();
-const DIR = path.join(os.tmpdir(), 'bba-battle-test');
+// 保存先の名前にもポートを混ぜる。固定名（bba-battle-test）だと、run-all を
+// 2つ同時に走らせたときに両方が同じフォルダを使い、片方の rmSync が
+// もう片方の admin-credentials.txt を消して ENOENT で落ちる（実際に踏んだ）。
+// ポートは freePort() が実行ごとに別の値をくれるので、これで衝突しない。
+// 同じ作法は test/restore-auth.test.mjs / test/wsip.test.mjs が先にやっている。
+const DIR = path.join(os.tmpdir(), `bba-battle-test-${PORT}`);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let proc = null;
@@ -38,7 +43,8 @@ async function stop() {
 }
 
 // ちいさなWSクライアント: 受信を型別に貯めて、来るまで待てる。
-function makeClient(guestName) {
+// token を渡すとログイン済みとして名乗る（住人まわりの検査は管理者経路を使う）。
+function makeClient(guestName, token = null) {
   const ws = new WebSocket(`ws://localhost:${PORT}/ws`);
   const inbox = {};
   const c = {
@@ -58,7 +64,7 @@ function makeClient(guestName) {
     (inbox[m.type] = inbox[m.type] || []).push(m);
   });
   return new Promise((res, rej) => {
-    ws.on('open', () => { c.send({ type: 'hello', guestName }); });
+    ws.on('open', () => { c.send(token ? { type: 'hello', token } : { type: 'hello', guestName }); });
     ws.on('error', rej);
     (async () => { await c.wait('hello_ok', 8000); res(c); })().catch(rej);
   });
@@ -94,7 +100,11 @@ try {
   const mfA = await A.wait('match_found');
   const mfB = await B.wait('match_found');
   check('attack戦がマッチングされる', mfA.mode === 'attack' && mfB.mode === 'attack', `modes=${mfA.mode}/${mfB.mode}`);
-  check('2人とも人間同士', mfA.players.every(p => !p.isBot), JSON.stringify(mfA.players.map(p => p.name)));
+  // v2.34: isBot は非管理者には出さない（住人の正体がそのまま乗るため）。
+  // 「人間同士で組めたか」は、席に並んだ名前が名乗った2人ぶんかどうかで見る。
+  const names = mfA.players.map(p => p.name).sort();
+  check('2人とも人間同士', names.length === 2 && names.join('/') === ['アタッカーA', 'ディフェンダーB'].sort().join('/'), JSON.stringify(names));
+  check('一般プレイヤーには isBot が届かない', mfA.players.every(p => !('isBot' in p)), JSON.stringify(mfA.players));
 
   // ---- 攻撃リレー: Aの3ライン消し → Bにお邪魔4個 ----
   await sleep(3500);   // カウントダウン明け
@@ -137,7 +147,16 @@ try {
   await B.wait('result', 25000);
 
   // ---- ソロ入場 → ボットが補充される ----
-  const C = await makeClient('ソロ участник');
+  // isBot は管理者にしか届かないので、この検査だけ運営アカウントで入る
+  // （見たいのは「席がボットで埋まったか」なので、経路を管理者に替えれば
+  //  意図はそのまま確かめられる）。
+  const adminPw = fs.readFileSync(path.join(DIR, 'admin-credentials.txt'), 'utf8').match(/password: (.+)/)[1].trim();
+  const adminLogin = await fetch(`http://localhost:${PORT}/api/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'るみまき', password: adminPw }),
+  }).then(r => r.json());
+  check('管理者ログイン', !!adminLogin.token);
+  const C = await makeClient(null, adminLogin.token);
   C.send({ type: 'queue', mode: 'attack' });
   const mfC = await C.wait('match_found', 15000);
   check('1人でもボットが相手になる', mfC.mode === 'attack' && mfC.players.some(p => p.isBot), JSON.stringify(mfC.players.map(p => [p.name, p.isBot])));

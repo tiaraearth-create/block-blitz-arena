@@ -9,13 +9,21 @@ import { PALETTE } from './themes.js';
 import { chooseMove, AI_LEVELS, planImmortalMove } from './ai.js';
 import { audio } from './audio.js';
 import { session, api, refreshMe, BattleClient } from './net.js';
-import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf, staffExtras , applyScoreFit } from './dom.js';
+import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf, rankBadge, rankLabel, staffExtras , applyScoreFit } from './dom.js';
 import { t, trServer, catName } from './i18n.js';
 // ショップに並ぶ英語名の出典。HUD・トーストが名前を自前で手書きしていたため、
 // 同じ物に英語名が2つある状態になっていた（ショップ「God Strike」＝発動トースト
 // 「Divine Strike!」）。名前はこの表からだけ引く。
 import { CATALOG_EN } from './catalog-en.js';
-import { fireUlt, ultIcon, ultColor, ultExists, DEFAULT_ULT } from './skills.js';
+// 独自SVGアイコン。端末ごとに絵が変わる絵文字を「アイコンとして使っている所」
+// だけを置き換えるために使う（文章の飾りの絵文字はそのまま）。
+import { icon, itemIconName, bossIconName, medalIconName } from './icons.js';
+// 攻撃の量の式。サーバー（server/battle.js の attackCells）と同じものを
+// rules.js が持っている ── 試合中に「何個送ったか」を先に見せるために引く。
+// 数字をここへ書き写さない（写した瞬間、サーバーとズレても誰も気づけなくなる）。
+import { attackCellsFor } from './rules.js';
+// ultIcon（絵文字）はもう引かない ── 奥義の絵は icons.js の ult_* から出す。
+import { fireUlt, ultColor, ultExists, DEFAULT_ULT } from './skills.js';
 // 常時つながっているチャットの socket に相乗りするための口。
 // サーバーの shard() は「そのユーザーの最初のソケット」に送るので、
 // ページ読み込み時に張るこちらへ届くことがある（下の ZeroMode を参照）。
@@ -94,8 +102,9 @@ function afterCountdown(mode, fn) {
 // 止める口が無い。演出中に中断すると、結果モーダルやメニューの下に全画面の
 // カウントダウンが残って数字が動き続けていた（暗幕越しに透ける／メニューに
 // 戻ると素で見える）。せめて中断した時点で画面からは消す。
-// ※ dom.js の countdownOverlay 自体が中断ハンドルを返さないので、カウント音
-//    だけは鳴り切ってしまう。音まで止めるには dom.js 側に口が要る。
+// ※ 音も一緒に止まる。dom.js の countdownOverlay は「要素が DOM から外れたら
+//    自分から止まる」作りになったので、remove() だけで鳴り切らない。
+//    確実に止めたいときは dom.js の cancelCountdowns() を呼んでもよい。
 function clearIntroOverlays() {
   for (const el of document.querySelectorAll('.countdown-overlay, .oni-intro, .kami-intro')) el.remove();
 }
@@ -122,6 +131,59 @@ function bumpScore(el) {
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+// ---------------------------------------------------------------------------
+// 絵文字の枠に独自SVGアイコンを入れる／戻す
+//
+// 絵文字を置いていた枠（#bossEmoji / #ultIcon / アイテムバーの .ib-icon）は
+// どれも「文字」として大きさが決まっていた。SVG は文字ではないので、
+// そのまま入れると2つズレる:
+//   ・font-size は効かない（icon() は width/height を px で焼く）
+//   ・.bba-ic の vertical-align: -0.15em ぶん、行の中で沈んで枠が伸びる
+// アイコンは箱として置きたいだけなので、枠を inline-flex にして行から外す。
+//
+// ⚠️ アニメーション（.boss-hit / .boss-atk / .boss-dead / .boss-enrage /
+//    .ult-ready のバウンド）は枠そのものに transform / filter を掛けている。
+//    中身を SVG に替えても掛かる先は枠のままなので、演出はそのまま効く。
+//    枠は flex コンテナ（.boss-panel / .chip）の子なので block 化されており、
+//    inline 要素だと transform が効かない問題も起きない。
+function paintIcon(el, name, size) {
+  if (!el) return null;
+  el.style.display = 'inline-flex';
+  el.style.alignItems = 'center';
+  el.style.justifyContent = 'center';
+  el.innerHTML = icon(name, { size });
+  return el;
+}
+
+// アイコンがまだ無いもの（ダンジョンの雑魚は40帯×5種＝200体以上ある）は
+// 絵文字のまま。paintIcon で付けた inline style を必ず外してから戻す。
+function paintEmoji(el, text) {
+  if (!el) return null;
+  el.style.display = '';
+  el.style.alignItems = '';
+  el.style.justifyContent = '';
+  el.textContent = text;
+  return el;
+}
+
+// ボスの顔（#bossEmoji）。画面でいちばん大きい絵なので、端末ごとに顔が
+// 変わる絵文字はここがいちばん惜しかった。
+// className を毎回 'boss-emoji' に戻すのは元からの作法 ── 前の戦いの
+// .boss-dead / .boss-enrage を次のボスへ持ち越さないため。
+// size は通常のボスパネルが 44px の絵文字だったので 40、レイドや管理者
+// イベントの1行パネル（.boss-panel.slim, 24px）では 24 を渡す。
+const BOSS_FACE_SLIM = 24;
+function setBossFace(el, iconName, size = 40) {
+  if (!el) return null;
+  el.className = 'boss-emoji';
+  return paintIcon(el, iconName, size);
+}
+function setBossFaceEmoji(el, emoji) {
+  if (!el) return null;
+  el.className = 'boss-emoji';
+  return paintEmoji(el, emoji);
 }
 
 async function submitResult(payload) {
@@ -573,7 +635,10 @@ export function showUltBar(on) {
   clearInterval(ultTicker);
   ultTicker = null;
   if (!on) return;
-  $('#ultIcon').textContent = ultIcon(equippedUlt());
+  // 奥義の絵も独自アイコンへ。ショップ・ガチャ・遊び方はすでに icons.js の
+  // ult_* を出しているのに、試合中のボタンだけ絵文字（💥＝ult_blast）で、
+  // 同じ 💥 を使う管理者ブースター「神の一撃」と見分けが付かなかった。
+  paintIcon($('#ultIcon'), itemIconName(equippedUlt()), 16);
   btn.style.setProperty('--ult-color', ultColor(equippedUlt()));
   updateUltHud();
   // Cheap poll: catches gauge changes from placements, items and timed effects
@@ -685,8 +750,11 @@ function renderItemBar() {
     // title のツールチップはスマホでは絶対に読めない（指を乗せ続けられない）。
     // 何のボタンなのか分からないまま、買ったアイテムが使われずに終わっていた。
     // 短い名前を下に常時出す。
+    // 絵は独自アイコン（icons.js）から id で引く。ITEM_DEFS.icon の絵文字は
+    // 残してあるが、それは端末で絵が変わるうえ 💥 が「神の一撃」と奥義
+    // ult_blast の両方に出ていた ── ショップと同じ絵にそろえる。
     return `<button class="chip icon-btn item-btn ${d.admin ? 'admin-item' : ''}" data-item="${id}" title="${t(d.tip, d.tipEn)}">`
-      + `<span class="ib-icon">${d.icon}<b>0</b></span>`
+      + `<span class="ib-icon">${icon(itemIconName(id), { size: 18 })}<b>0</b></span>`
       + `<span class="ib-label">${t(d.name, d.nameEn)}</span>`
       + '</button>';
   }).join('');
@@ -2242,6 +2310,7 @@ class VersusBase {
   // brings the boards back and the choice is remembered.
   buildPanels(others) {
     const cards = $('#oppCards');
+    this.clearComboTimers();
     cards.innerHTML = '';
     this.oppList = others.slice();
     // Your own side first: in 2v2 the partner used to render between the two
@@ -2315,8 +2384,17 @@ class VersusBase {
     if (state.combo >= 2) {
       const cb = document.querySelector(`[data-slot-combo="${slot}"]`);
       if (cb) {
+        // 文字を空にするのではなく見せ消しにする。空文字にすると行ボックスの
+        // 高さが 14px→12px と動き、その2pxで盤面のキャンバスが作り直されて
+        // 1フレーム真っ白になっていた（AI対戦のチカチカの主犯）。
         cb.textContent = `${state.combo} COMBO!`;
-        setTimeout(() => { cb.textContent = ''; }, 1200);
+        cb.style.visibility = 'visible';
+        // タイマーはスロットに1本だけ。使い捨てにしていたころは、AIの手番
+        // （鬼700ms・創造神380ms）が消去の1200msより短いせいで、前の手の
+        // タイマーが新しいコンボを消してしまい表示がストロボしていた。
+        this.comboTimers = this.comboTimers || {};
+        clearTimeout(this.comboTimers[slot]);
+        this.comboTimers[slot] = setTimeout(() => { cb.style.visibility = 'hidden'; }, 1200);
       }
     }
     // Kept even while the strip hides the boards, so ⤢ can show the CURRENT
@@ -2351,7 +2429,18 @@ class VersusBase {
     }, 250);
   }
 
-  stopTimer() { if (this.timerInt) { clearInterval(this.timerInt); this.timerInt = null; } }
+  stopTimer() {
+    if (this.timerInt) { clearInterval(this.timerInt); this.timerInt = null; }
+    this.clearComboTimers();
+  }
+
+  // 試合が終わったあとに残ったコンボ消去タイマーは、次の試合のコンボを
+  // 消しに来る（同じ [data-slot-combo] を掴んでいるため）。始めるときと
+  // 終わるときの両方で必ず捨てる。
+  clearComboTimers() {
+    for (const id of Object.values(this.comboTimers || {})) clearTimeout(id);
+    this.comboTimers = {};
+  }
 
   updateBars(me, opp) {
     const total = me + opp;
@@ -2850,8 +2939,7 @@ class BossMode {
     $('#btnEmote').classList.add('hidden');
     $('#bossPanel').classList.remove('hidden', 'slim');
     document.querySelector('.boss-atkbar').classList.remove('hidden');
-    $('#bossEmoji').textContent = this.boss.emoji;
-    $('#bossEmoji').className = 'boss-emoji';
+    setBossFace($('#bossEmoji'), bossIconName(this.boss.id));
     $('#bossName').textContent = catName(this.boss);
     showItemBar(true);
     this.hp = this.boss.hp;
@@ -3146,8 +3234,7 @@ class BossRushMode {
     this.phase2 = false;
     this.pendingAtk = null;
     if (view) view.dangerCells = null;
-    $('#bossEmoji').textContent = this.boss.emoji;
-    $('#bossEmoji').className = 'boss-emoji';
+    setBossFace($('#bossEmoji'), bossIconName(this.boss.id));
     const lapTxt = this.lap() > 0 ? t(`（${this.lap() + 1}周目）`, ` (lap ${this.lap() + 1})`) : '';
     $('#bossName').textContent = `${catName(this.boss)}${lapTxt}`;
     this.updateHpBar();
@@ -3976,7 +4063,12 @@ function dungeonFloor(f, realm = DUNGEON_REALMS.tower) {
   if (isBoss) hp = Math.round(hp * (isFinal ? (realm.finalMult || 3) : 2.1));
   const atkSec = Math.max(4.5, (15 - f * 0.09) * realm.atkSecMult) * (isBoss ? 1.25 : 1);
   const atkCells = Math.min(8, 1 + Math.floor(f / 12) + (isBoss ? 2 : 0) + realm.extraAtkCells);
-  return { floor: f, band, isBoss, isFinal, emoji, name, nameEn, hp, atkSec, atkCells };
+  // 独自アイコンがある敵だけ iconName を持つ。今あるのは深淵の最下層
+  // （深淵王アビスゼロ＝icons.js の boss_abysszero）だけで、残り200体以上の
+  // 雑魚・区画ボスにはまだ絵が無い。無いものを1つの共通アイコンに落とすと
+  // 「全部同じ顔」になり、icons.js が潰したはずの重複が戻るので絵文字のまま。
+  const iconName = (realm.id === 'abyss' && isFinal) ? bossIconName('abysszero') : null;
+  return { floor: f, band, isBoss, isFinal, emoji, iconName, name, nameEn, hp, atkSec, atkCells };
 }
 
 const DUNGEON_PERKS = [
@@ -4081,8 +4173,8 @@ class DungeonMode {
     const v = getView();
     setModeTheme({ ...equippedTheme(), boardId: this.info.band.board });
     audio.playTrack(this.info.band.track);
-    $('#bossEmoji').textContent = this.info.emoji;
-    $('#bossEmoji').className = 'boss-emoji';
+    if (this.info.iconName) setBossFace($('#bossEmoji'), this.info.iconName);
+    else setBossFaceEmoji($('#bossEmoji'), this.info.emoji);
     $('#bossName').textContent = t(`${this.realm.prefix}${f} ${this.info.band.name}：${this.info.name}`, `${this.realm.prefix}${f} ${this.info.band.nameEn}: ${this.info.nameEn}`);
     this.phase = 1;
     this.applyCurse(f);
@@ -4837,7 +4929,7 @@ class OnlineMode extends VersusBase {
         // 自分でキャンセルしたぶんは quit() が後始末済み（leftOnPurpose）。
         // 拾いたいのはサーバー都合で待ち行列が解散されたとき
         //（endAllForShutdown / prepare-update）── 検索画面の
-        //「🎯 レート … あと N 秒で AIプレイヤーが参戦します」は server push でしか
+        //「🎯 レート … あと N 秒で対戦相手が見つかります」は server push でしか
         // 更新されないので、放っておくと二度と進まない画面の前で待ち続けることになる。
         // このあとサーバーは error も送ってくるが、こちらが socket を閉じると
         // 届かないことがあるので、理由はここでも出す。
@@ -4864,7 +4956,7 @@ class OnlineMode extends VersusBase {
         // 以前は inMatch / custom / tourney のときしか後始末をしていなかった。
         // duel・attack・team・raid・coop・royale はマッチング画面で
         // inMatch=false のまま待つので、そこで切れると何も起きず ── 毎秒の
-        // queued も止まり「あと N 秒で AIプレイヤーが参戦します」を表示した
+        // queued も止まり「あと N 秒で対戦相手が見つかります」を表示した
         // まま凍った検索画面に置き去りになっていた。BattleClient に再接続は
         // 無く、サーバー側のキューも切断で消えるので待っても永久にマッチしない。
         // 切れたら kind に関係なくメニューへ戻す。
@@ -4908,7 +5000,7 @@ class OnlineMode extends VersusBase {
   // The search screen used to say one frozen sentence and then drop you into a
   // bot match with no explanation. This is the truth, once a second: how long
   // you have waited, how wide the rating search has opened, how many real
-  // people are in this queue, and exactly when an AI player will step in.
+  // people are in this queue, and roughly when a match will be found.
   onQueued(msg) {
     const st = $('#mmStatus');
     const sub = $('#mmSub');
@@ -4923,12 +5015,14 @@ class OnlineMode extends VersusBase {
       `⏱️ ${clock} elapsed ・ others waiting in this mode: <b>${others}</b>`);
     const q = $('#mmQueue');
     if (!q) return;
-    if (msg.botInSec > 0) {
+    // サーバーが botInSec → matchInSec に改名した（フィールド名そのものが
+    // 「この先に来るのはボットだ」と白状していたため）。読む側もそろえる。
+    if (msg.matchInSec > 0) {
       q.innerHTML = t(
-        `🎯 レート ${msg.rating} ±${msg.band} で検索中<br>あと <b>${msg.botInSec}</b> 秒で AIプレイヤーが参戦します`,
-        `🎯 Searching rating ${msg.rating} ±${msg.band}<br>an AI player joins in <b>${msg.botInSec}</b>s`);
+        `🎯 レート ${msg.rating} ±${msg.band} で検索中<br>あと <b>${msg.matchInSec}</b> 秒で対戦相手が見つかります`,
+        `🎯 Searching rating ${msg.rating} ±${msg.band}<br>a match will be found in <b>${msg.matchInSec}</b>s`);
     } else {
-      q.textContent = t('🤖 AIプレイヤーを準備しています…', '🤖 Bringing in an AI player…');
+      q.textContent = t('🎯 対戦相手を探しています…', '🎯 Finding an opponent…');
     }
   }
 
@@ -5095,7 +5189,16 @@ class OnlineMode extends VersusBase {
     // 2+ lines buries somebody. The server picks the target (often the leader).
     if (r && r.lineCount >= 2 && this.inMatch && !this.ended && !this.royaleDead) {
       this.client.send({ type: 'royale_attack', lines: r.lineCount, combo: r.streak });
-      toast(t(`⚔️ ${r.lineCount}ライン攻撃！`, `⚔️ ${r.lineCount}-line strike!`), 'ok', 900);
+      const cells = attackCellsFor(r.lineCount, r.streak);
+      // ここは1手ごとに撃てるのに、以前は毎回トーストを出していた。トーストは
+      // 同時3件で頭打ちなので、脱落・KO・ストーム・復活といった「見逃すと困る
+      // 通知」を自分の攻撃で押し出していた。盤面のフロートテキストへ移す。
+      const v = getView();
+      v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.18,
+        t('💥 攻撃！', '💥 ATTACK!'), '#ff8a5c', 1.5);
+      v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.18 + v.cell,
+        t(`お邪魔 +${cells}`, `+${cells} garbage`), '#ffd75e', 1.05);
+      attackLesson('sent', { lines: r.lineCount, cells });
     }
   }
 
@@ -5131,6 +5234,9 @@ class OnlineMode extends VersusBase {
     v.shake = 9;
     audio.bossAttack();
     if (msg.from) toast(t(`💥 ${msg.from} の攻撃！ お邪魔${cells.length}個`, `💥 Hit by ${msg.from}! ${cells.length} garbage`), 'err', 1500);
+    // ⚡ストームは from が null で降ってくる。誰かの攻撃ではないので、
+    // 「相手がラインを消した」と教えると嘘になる（レッスンの回数も無駄に減る）。
+    if (msg.from) attackLesson('taken', { lines: Number(msg.lines) || 0, cells: cells.length });
     if (this.engine.over) this.onRoyaleTopOut();
   }
 
@@ -5279,7 +5385,7 @@ class OnlineMode extends VersusBase {
       return;
     }
     const rows = (msg.top || []).map((x, i) => `
-      <div class="rs-row"><span>${['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i] || ''} ${escapeHtml(x.name)}</span><b>${fmt(x.score)}${x.kills ? ` ・ 💀${x.kills}` : ''}</b></div>`).join('');
+      <div class="rs-row"><span>${medalIconName(i + 1) ? icon(medalIconName(i + 1), { size: 18 }) : `#${i + 1}`} ${escapeHtml(x.name)}</span><b>${fmt(x.score)}${x.kills ? ` ・ 💀${x.kills}` : ''}</b></div>`).join('');
     const m = showModal(`
       <div class="result-banner win">👑 ${escapeHtml(msg.winner.name)}</div>
       <p class="muted center">${t('100人の頂点', 'Last one standing of 100')}</p>
@@ -5773,7 +5879,9 @@ class OnlineMode extends VersusBase {
 
     const others = msg.players.filter(p => !p.isYou).map(p => ({
       slot: p.slot,
-      name: `${p.name}${p.rating != null ? ` (${rankOf(p.rating).icon}R${p.rating})` : ''}`,
+      // ここは buildPanels 側で escapeHtml を通る「ただの文字」なので、
+      // アイコン（SVG）を混ぜてはいけない。段位は名前で書く。
+      name: `${p.name}${p.rating != null ? ` (${rankLabel(p.rating)} R${p.rating})` : ''}`,
       isAlly: (this.isTeam && p.team === msg.you.team) || this.isRaid,
     }));
     this.setupHud(msg.duration || MATCH_SECONDS);
@@ -5790,8 +5898,7 @@ class OnlineMode extends VersusBase {
       // one-line bar rather than the 72px block solo boss fights use.
       $('#bossPanel').classList.remove('hidden');
       $('#bossPanel').classList.add('slim');
-      $('#bossEmoji').textContent = msg.boss.emoji;
-      $('#bossEmoji').className = 'boss-emoji';
+      setBossFace($('#bossEmoji'), bossIconName(msg.boss.id), BOSS_FACE_SLIM);
       $('#bossName').textContent = t(msg.boss.name, catName(msg.boss));
       document.querySelector('.boss-atkbar').classList.add('hidden');
       this.updateRaidHp();
@@ -5824,6 +5931,11 @@ class OnlineMode extends VersusBase {
       this.startTimer(() => this.timeUp());
       this.stateInt = setInterval(() => this.pushState(), 900);
     }), audio);
+
+    // 🎓 初めての対戦だけ、短いガイドを重ねる。攻撃の説明を出すかどうかは
+    // matchMode で決まる（クラシック・2v2・トーナメントでは出さない）。
+    // 3-2-1 の裏では読めないので、出るのは操作できるようになってから。
+    maybeStartVersusTutorial(this, this.matchMode);
   }
 
   toggleEmotePicker() {
@@ -5914,9 +6026,16 @@ class OnlineMode extends VersusBase {
     // 💥 アタック戦: 2ライン以上の消去は相手への攻撃になる
     if (this.matchMode === 'attack' && result && result.lineCount >= 2 && this.inMatch && !this.ended) {
       this.client.send({ type: 'attack', lines: result.lineCount, combo: result.streak });
+      // 送った量は rules.js の attackCellsFor（＝サーバーの attackCells と同じ式）で
+      // 先に出せる。実際に送る量を決めるのはサーバーなので、これは表示専用。
+      const cells = attackCellsFor(result.lineCount, result.streak);
       const v = getView();
       v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.18,
         t('💥 攻撃！', '💥 ATTACK!'), '#ff8a5c', 1.5);
+      // 「何個送ったか」を2行目に。1行に混ぜると盤面の幅（8マス）を超える。
+      v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.18 + v.cell,
+        t(`お邪魔 +${cells}`, `+${cells} garbage`), '#ffd75e', 1.05);
+      attackLesson('sent', { lines: result.lineCount, cells });
       audio.combo(2);
     }
   }
@@ -5971,6 +6090,11 @@ class OnlineMode extends VersusBase {
     view.shake = 10;
     view.addFloatText(view.boardX + view.boardSize / 2, view.boardY + view.boardSize * 0.3,
       t(`💥 妨害 +${cells.length}！`, `💥 +${cells.length} garbage!`), '#ff5d5d', 1.5);
+    // 何をされたのか（相手が何ラインまとめて消したのか）を最初の数回だけ教える。
+    // 個数からの逆算は原理的にできない（3ライン＋コンボ6 と 4ライン はどちらも
+    // 6個）ので、サーバーの 'garbage' が lines を載せている。載っていない古い
+    // サーバーが相手なら 0 で来て「2ライン以上」までしか言わない（嘘は教えない）。
+    attackLesson('taken', { lines: Number(msg.lines) || 0, cells: cells.length });
     this.pushState();
     if (this.engine.over) this.onTopOut();
   }
@@ -6077,14 +6201,19 @@ class OnlineMode extends VersusBase {
     if (msg.user) { session.user = msg.user; updateTopbar(); }
     if (msg.outcome === 'win') { audio.victory(); confettiBurst(); } else audio.gameOver();
     // 📈 段位の昇格/降格
+    //
+    // to.name は「帯」ではなく**段**の表示名（『ゴールド II』）になった。
+    // 「帯」を付けたままだと『ゴールド II帯に昇格！！』という日本語にならない
+    // 文になるので落とす。帯だけが要るときは to.band.name を見ること。
+    // 英語面（Promoted to Gold II!!）はもともと正しいのでそのまま。
     if (msg.tierChange && msg.tierChange.up) {
       setTimeout(() => {
         confettiBurst(80);
         audio.levelUp();
-        toast(t(`${msg.tierChange.to.icon} ${msg.tierChange.to.name}帯に昇格！！`, `${msg.tierChange.to.icon} Promoted to ${msg.tierChange.to.nameEn}!!`), 'announce', 5000);
+        toast(t(`${msg.tierChange.to.icon} ${msg.tierChange.to.name}に昇格！！`, `${msg.tierChange.to.icon} Promoted to ${msg.tierChange.to.nameEn}!!`), 'announce', 5000);
       }, 700);
     } else if (msg.tierChange) {
-      setTimeout(() => toast(t(`${msg.tierChange.to.icon} ${msg.tierChange.to.name}帯に降格…`, `${msg.tierChange.to.icon} Demoted to ${msg.tierChange.to.nameEn}…`), 'err', 3500), 700);
+      setTimeout(() => toast(t(`${msg.tierChange.to.icon} ${msg.tierChange.to.name}に降格…`, `${msg.tierChange.to.icon} Demoted to ${msg.tierChange.to.nameEn}…`), 'err', 3500), 700);
     }
 
     const banners = msg.tourney
@@ -6136,7 +6265,7 @@ class OnlineMode extends VersusBase {
     const myRating = msg.user && msg.user.stats ? msg.user.stats.rating : null;
     const tier = myRating != null ? rankOf(myRating) : null;
     const ratingRow = msg.ratingDelta
-      ? `<div class="rs-row"><span>${t('📈 レート変動', '📈 Rating')}</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}${tier ? ` <span style="color:${tier.color}">${tier.icon}${t(tier.name, tier.nameEn)}</span>` : ''}</b></div>`
+      ? `<div class="rs-row"><span>${t('📈 レート変動', '📈 Rating')}</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}${tier ? ` ${rankBadge(myRating)}` : ''}</b></div>`
       : '';
 
     const m = showModal(`
@@ -6653,8 +6782,9 @@ class AdminEventMode extends VersusBase {
     panel.classList.remove('hidden');
     panel.classList.add('slim');
     document.querySelector('.boss-atkbar').classList.add('hidden');
-    $('#bossEmoji').textContent = this.modeId === 'invasion' ? '👑' : '🏛️';
-    $('#bossEmoji').className = 'boss-emoji';
+    // 👑＝管理者、🏛️＝共同作業。どちらも「絵として意味を持つ」ので独自アイコンへ。
+    // 👑 は段位マスター・管理者奥義・複数のバッジと重複していた絵文字でもある。
+    setBossFace($('#bossEmoji'), this.modeId === 'invasion' ? 'admin' : 'hall', BOSS_FACE_SLIM);
     $('#bossName').textContent = this.modeId === 'invasion'
       ? t('管理者', 'The Admin') : t('共同作業', 'Great Work');
     this.updateWorldPanel();
@@ -7209,7 +7339,10 @@ class ZeroMode extends VersusBase {
     if (seats && m.seats) {
       seats.innerHTML = m.seats.map(s => {
         const cls = ['zero-seat'];
-        if (s.human) cls.push('me');
+        // サーバーが seats[].human を廃止し、受信者本人の席だけ you:true を
+        // 立てるようになった。human は「人間全員」に 'me' が付いていて挙動と
+        // しても誤りだったので、you に読み替える（＝自分の席だけ光る）。
+        if (s.you) cls.push('me');
         if (s.executed) cls.push('gone');
         else if (!s.alive) cls.push('down');
         return `<span class="${cls.join(' ')}">${escapeHtml(s.name)}</span>`;
@@ -7349,7 +7482,9 @@ class ZeroMode extends VersusBase {
 
   onDealVote(m) {
     this.renderTally(m.tally);
-    if (!m.human) return;                 // 住人の票はいちいち出さない（流れる）
+    // zero_deal_vote から human が消えた（住人の票にだけ印が無い＝人間の
+    // 一覧表になっていたため）。ここで human を見ていると投票トーストが
+    // 1つも出なくなるので、誰の票でも同じように出す。
     toast(t(m.by + ' が投票した', m.by + ' voted'), 'ok', 1200);
   }
 
@@ -7729,6 +7864,7 @@ function endToMenu() {
   if (view) view.stop();
   stopAutopilot();
   stopTutorial();   // 🎓 コーチマークをメニューへ持ち越さない
+  clearAtkLesson(); // 💥 攻撃の実地レッスンの帯も持ち越さない
   // どのモードでも、3-2-1 の途中で抜けるとオーバーレイだけがメニューの上に
   // 残っていた（countdownOverlay は中断できないため）。ここで必ず片付ける。
   clearIntroOverlays();
@@ -7776,6 +7912,9 @@ export function startVsAi(level) {
   currentMode = new AiMode(level);
   window.__bbaMode = currentMode;
   currentMode.start();
+  // 🎓 対戦の初回ガイド。AI戦には攻撃が無い（同じピースが両者に配られる
+  // スコア勝負）ので、攻撃の説明は出さない。
+  maybeStartVersusTutorial(currentMode, 'ai');
 }
 
 export function startOnline(kind = 'duel') {
@@ -7849,8 +7988,14 @@ function markTutorialDone() {
 }
 
 // デバッグ／やり直し用。メニューから呼ぶ導線は別担当（main.js）。
+//
+// 「チュートリアルをやり直す」で戻るのは1人用ガイドだけ…にはしない。
+// 初回だけ出すガイドはこのあと3つになった（1人用・対戦・攻撃の実地レッスン）ので、
+// ここで全部戻す。片方だけ戻る「やり直す」は、押した人には壊れて見える。
 export function resetTutorial() {
-  try { localStorage.removeItem(TUT_KEY); } catch { /* ignore */ }
+  for (const k of [TUT_KEY, VS_TUT_KEY, ATK_SENT_KEY, ATK_TAKEN_KEY]) {
+    try { localStorage.removeItem(k); } catch { /* ignore */ }
+  }
 }
 
 let activeTutorial = null;
@@ -8166,6 +8311,423 @@ class Tutorial {
         this.render();
       }
     }
+  }
+}
+
+// ===========================================================================
+// 💥 攻撃の実地レッスン（アタック戦・バトルロイヤル）
+// ===========================================================================
+// 何が問題だったか:
+//   2ライン以上まとめて消すと相手にお邪魔が飛ぶ。それがこのゲームの対戦の
+//   中心なのに、画面に出るのは「💥 攻撃！」の4文字だけだった。
+//   **何をしたから攻撃になったのか**（＝まとめて消したこと）も、
+//   **何個送ったのか**も分からないので、何試合遊んでもルールを覚えられない。
+//   受けた側も「💥 妨害 +2！」だけで、相手が何をしたのかが見えなかった。
+//
+// 出し方の加減（ここが肝）:
+//   ・毎回      … 盤面のフロートテキスト（「💥 攻撃！」＋「お邪魔 +2」）。
+//   ・最初の数回 … 文になった小さい帯を HUD の下に出す。
+//   ・いちばん最初の1回だけ … トースト。
+//   トーストは同時3件で頭打ち・同じ文言は「×N」にまとまる仕様なので、
+//   攻撃のたびに撃つと脱落・KO・切断といった見逃せない通知を押し出す。
+//   だから主役はフロートテキストと帯にして、トーストは1回に絞る。
+//
+// 回数は localStorage（既存の bba_tut_done と同じ流儀）。送った側／受けた側で
+// 別々に数える ── ずっと殴られっぱなしの人が「受けた側の説明」を
+// 一度も読めないまま打ち止めになるのを避けるため。
+// ---------------------------------------------------------------------------
+
+const ATK_SENT_KEY = 'bba_atk_lesson_sent';
+const ATK_TAKEN_KEY = 'bba_atk_lesson_taken';
+const ATK_LESSON_MAX = 3;   // これだけ見たら、もう邪魔なので出さない
+
+function atkLessonSeen(key) {
+  // localStorage が使えない環境では「見終わった」扱い。出せないガイドを
+  // 出そうとして例外を投げるより無害（tutorialDone と同じ考え方）。
+  try { return Number(localStorage.getItem(key)) || 0; } catch { return ATK_LESSON_MAX; }
+}
+
+function bumpAtkLesson(key, seen) {
+  try { localStorage.setItem(key, String(seen + 1)); } catch { /* 保存できなくても進行は止めない */ }
+}
+
+// HUD のすぐ下に出す小さい帯。
+// ⚠️ 見た目を inline style で書いているのは、この波では public/css/style.css が
+//    別担当の担当ファイルで触れないため。CSS へ移すときは .atk-lesson を作って
+//    ここを className だけにできる（forOthers に出してある）。
+function showAtkLessonBanner(title, body, hint) {
+  if (!document.body) return;
+  const old = document.querySelector('.atk-lesson');
+  if (old) old.remove();
+  const el = document.createElement('div');
+  el.className = 'atk-lesson';
+  // 盤面も手札も指で触れなくならないように、帯自体は入力を吸わない。
+  el.style.cssText = [
+    'position:fixed', 'left:50%', 'transform:translateX(-50%)',
+    'z-index:95',                       // トースト(90)より上、チュートリアル(150)より下
+    'pointer-events:none',
+    'width:min(340px,calc(100vw - 28px))',
+    'box-sizing:border-box',
+    'padding:9px 13px', 'border-radius:14px',
+    'background:linear-gradient(160deg,rgba(58,26,20,0.96),rgba(24,14,30,0.96))',
+    'border:1px solid #ff8a5c',
+    'box-shadow:0 12px 32px rgba(0,0,0,0.55),0 0 18px rgba(255,138,92,0.28)',
+    'font-size:12.5px', 'line-height:1.55', 'font-weight:700', 'text-align:center',
+    'color:#fff',
+  ].join(';');
+  const b = document.createElement('b');
+  b.style.cssText = 'display:block;color:#ffb27a;font-size:13.5px;font-weight:900';
+  b.textContent = title;
+  const p = document.createElement('span');
+  p.style.cssText = 'display:block';
+  p.textContent = body;
+  el.appendChild(b);
+  el.appendChild(p);
+  if (hint) {
+    const s = document.createElement('small');
+    s.style.cssText = 'display:block;margin-top:3px;color:#c9c2d8;font-size:11px;font-weight:600';
+    s.textContent = hint;
+    el.appendChild(s);
+  }
+  document.body.appendChild(el);
+  // 置き場所は「相手パネルの下」。攻撃した／されたその瞬間に相手の盤面を
+  // 隠してしまうと、いちばん見たいもの（自分が送ったお邪魔が積もる様子）が
+  // 見えない。相手パネルが無い場面では HUD の下に落とす。
+  // 盤面の上端には少しかぶるが、帯は入力を吸わないので置く手はそのまま通る。
+  const anchor = (() => {
+    const opp = $('#oppPanel');
+    if (opp && !opp.classList.contains('hidden')) return opp;
+    return document.querySelector('#screen-game .game-hud');
+  })();
+  const r = anchor && anchor.getBoundingClientRect();
+  el.style.top = r && r.height ? `${Math.round(r.bottom + 6)}px` : '96px';
+  // CSS を触れないぶん、出入りのアニメは Web Animations API で。
+  // 非対応環境（el.animate が無い）ではただ出て消えるだけで、破綻はしない。
+  if (el.animate) {
+    el.animate([{ opacity: 0, transform: 'translateX(-50%) translateY(-8px)' },
+      { opacity: 1, transform: 'translateX(-50%) translateY(0)' }], { duration: 180, easing: 'ease-out' });
+  }
+  setTimeout(() => el.remove(), 2800);
+}
+
+// メニューへ戻るとき（endToMenu）に必ず片付ける。position: fixed なので、
+// 残ると次の画面の上に浮いたままになる。
+function clearAtkLesson() {
+  const el = document.querySelector('.atk-lesson');
+  if (el) el.remove();
+}
+
+/**
+ * 攻撃した／された瞬間に「いま何が起きたか」を教える。
+ * @param {'sent'|'taken'} dir  送った側か受けた側か
+ * @param {{lines:number, cells:number}} info  ライン数と、お邪魔の個数
+ */
+function attackLesson(dir, info) {
+  const cells = Math.max(0, Number(info && info.cells) || 0);
+  if (!cells) return;
+  const lines = Math.max(0, Number(info && info.lines) || 0);
+  const key = dir === 'sent' ? ATK_SENT_KEY : ATK_TAKEN_KEY;
+  const seen = atkLessonSeen(key);
+  if (seen >= ATK_LESSON_MAX) return;
+  bumpAtkLesson(key, seen);
+
+  let title, body;
+  if (dir === 'sent') {
+    title = t(`💥 ${lines}ライン同時消し！`, `💥 ${lines} lines at once!`);
+    body = t(`相手の盤面にお邪魔を ${cells}個 送り込んだ`,
+      `You dumped ${cells} garbage blocks on your opponent`);
+  } else {
+    title = t(`💥 お邪魔を ${cells}個 受けた`, `💥 You took ${cells} garbage blocks`);
+    // 受けた側は、サーバーが lines を載せてくれる場合だけライン数まで言う。
+    // 個数から逆算はできない（3ライン＋コンボと4ラインが同じ個数になる）。
+    body = lines >= 2
+      ? t(`相手の${lines}ライン同時消し`, `Your opponent cleared ${lines} lines at once`)
+      : t('相手が2ライン以上をまとめて消した', 'Your opponent cleared 2 or more lines at once');
+  }
+  // 1回目だけ「ではどうすればいいのか」を足す。2回目以降は起きたことだけ。
+  const hint = seen === 0
+    ? (dir === 'sent'
+      ? t(`2ライン→${attackCellsFor(2)}個 / 3ライン→${attackCellsFor(3)}個 / 4ライン→${attackCellsFor(4)}個（1ラインでは飛ばない）`,
+        `2 lines → ${attackCellsFor(2)} / 3 → ${attackCellsFor(3)} / 4 → ${attackCellsFor(4)} (a single line sends nothing)`)
+      : t('お邪魔は単独では消えない。それを含む列を8マス埋めれば消える',
+        'Garbage never clears on its own — fill the whole line that contains it'))
+    : '';
+  showAtkLessonBanner(title, body, hint);
+
+  // トーストはいちばん最初の1回だけ（同時3件の枠を攻撃で埋めない）。
+  if (seen === 0) {
+    toast(dir === 'sent'
+      ? t('💥 まとめて消すと相手を攻撃できる！', '💥 Clearing lines together attacks your opponent!')
+      : t('💥 攻撃された！ 2ライン以上まとめて消すと撃ち返せる',
+        '💥 You were attacked! Clear 2+ lines at once to strike back'), 'announce', 3000);
+  }
+}
+
+// ===========================================================================
+// 🎓 対戦モードの初回ガイド
+// ===========================================================================
+// 既存の Tutorial は1人用モード専用（TUT_MODES）で、対戦のルールは一言も
+// 出てこなかった。オンライン対戦・AI対戦を初めて開いた人は、
+//   ・上に出ているのが相手の盤面と得点だということ
+//   ・まとめて消すと相手を攻撃できること
+//   ・時間内のスコア勝負で、盤面が埋まっても終わりではないこと
+//   ・✕ で抜けたときに何が起きるか
+// のどれも知らないまま2分を終えていた。
+//
+// 既存 Tutorial の作法をそのまま守る:
+//   ・進行に一切割り込まない（engine.place / view.onPlace / onIntentPlace を
+//     どれも奪わない）。見ているのは「モードがまだ生きているか」だけ。
+//   ・どのステップにも必ず「スキップ」がある（＝詰まない）。
+//   ・完了／スキップで localStorage に印を付け、二度と出さない。
+//   ・吹き出しは第1波の #tutTip / .tut-top / .tut-btns / .tut-pulse を使う。
+//   ・本体は pointer-events: none。押せる必要があるボタンだけ受け口に戻す。
+//
+// ⚠️ 攻撃の無いモード（クラシック・2v2・トーナメント・AI戦）では②を出さない。
+//    出すと嘘を教えることになる（そこでは何ライン消しても相手に何も飛ばない）。
+// ---------------------------------------------------------------------------
+
+const VS_TUT_KEY = 'bba_tut_vs_done';
+
+export function versusTutorialDone() {
+  try { return localStorage.getItem(VS_TUT_KEY) === '1'; } catch { return true; }
+}
+
+function markVersusTutorialDone() {
+  try { localStorage.setItem(VS_TUT_KEY, '1'); } catch { /* 保存できなくても進行は止めない */ }
+}
+
+// ガイドを出してよい対戦。「相手の盤面と得点が並び、制限時間内のスコアで
+// 勝負が決まる」がそのまま通じる形のものだけを入れる。
+//   raid   … 1体のボスを全員で削る協力戦。「相手の得点」も「引き分け」も噛み合わない
+//   royale … #oppPanel に出るのは相手の盤面ではなく順位・生存数・KO数の帯。
+//            攻撃はあるが①の説明が嘘になるので、こちらは実地レッスン
+//            （attackLesson）に任せる
+//   coop / land … 1つの盤面を2人で操作する別ゲーム。説明が丸ごと違う
+const VS_TUT_MODES = new Set(['attack', 'duel', 'team', 'tourney']);
+// このうち「2ライン以上で相手を攻撃できる」のは1v1ランクマッチだけ
+// （rules.js の battle 節と同じ区別。クラシック・2v2・トーナメントは攻撃なし）。
+const VS_TUT_ATTACK_MODES = new Set(['attack']);
+
+// 対戦から呼ぶ入口。matchMode は match_found の msg.mode（AI戦は 'ai'）。
+function maybeStartVersusTutorial(mode, matchMode) {
+  stopTutorial();   // 前の回の吹き出しを絶対に持ち越さない
+  if (versusTutorialDone()) return;
+  if (!mode) return;
+  const isAi = matchMode === 'ai';
+  if (!isAi && !VS_TUT_MODES.has(matchMode)) return;
+  const tut = new VersusTutorial(mode, {
+    hasAttack: VS_TUT_ATTACK_MODES.has(matchMode),
+    // ⚠️ 「途中終了は引き分け」が本当なのは AI戦だけ。
+    //    オンラインの離脱は敗北（相手の不戦勝）── OnlineMode.quit() と
+    //    quitWarning() がそう言っている。ここで引き分けと教えると、
+    //    それを信じて抜けた人がレートを落とす。いちばん高い代償の嘘なので、
+    //    出典（quit のトースト）と同じ向きの文だけを出す。
+    quitIsDraw: isAi,
+  });
+  activeTutorial = tut;
+  tut.start();
+}
+
+class VersusTutorial {
+  constructor(mode, opts = {}) {
+    this.mode = mode;
+    this.hasAttack = !!opts.hasAttack;
+    this.quitIsDraw = !!opts.quitIsDraw;
+    this.steps = this.buildSteps();
+    this.step = 0;
+    this.tip = null;
+    this.poll = null;
+    this.pulsed = [];
+    this.stopped = false;
+  }
+
+  // 文言は「押す前に何が起きるか分かる」ことがすべてなので、雰囲気ではなく
+  // ルールそのものを書く（rules.js の方針と同じ）。
+  // 攻撃の数字は attackCellsFor から出す ── 書き写すとサーバーとズレたときに
+  // 誰も気づけない。
+  buildSteps() {
+    const steps = [
+      {
+        pulse: '#oppPanel',
+        title: t('🎓 相手のようす', '🎓 Watch your opponent'),
+        // 2v2 では味方の盤面もここに並ぶので「相手の」と言い切らない。
+        body: t('ほかのプレイヤーの盤面と得点はここに出ます。上のバーが、どちらが勝っているかの目安。',
+          "The other players' boards and scores appear here. The bar above shows who is ahead."),
+        hint: '',
+      },
+    ];
+    if (this.hasAttack) {
+      steps.push({
+        pulse: '',
+        title: t('🎓 まとめて消すと攻撃になる', '🎓 Clear together to attack'),
+        body: t('2ライン以上を同時に消すと、相手の盤面にお邪魔ブロックが飛びます。1ラインでは飛びません。',
+          'Clearing 2 or more lines at once dumps garbage blocks on your opponent. A single line does nothing.'),
+        hint: t(`2ライン→${attackCellsFor(2)}個 / 3ライン→${attackCellsFor(3)}個 / 4ライン→${attackCellsFor(4)}個。コンボ3回ごとに+1個。`,
+          `2 lines → ${attackCellsFor(2)} blocks / 3 → ${attackCellsFor(3)} / 4 → ${attackCellsFor(4)}. Every 3 combo adds one more.`),
+      });
+    }
+    steps.push({
+      pulse: '#hudTimer',
+      title: t('🎓 勝ち方', '🎓 How you win'),
+      body: t('制限時間内にスコアが高いほうが勝ちです。盤面が埋まっても終わりではなく、スコアを持ったまま盤面だけリセットされます。',
+        'The higher score when time runs out wins. Filling your board does not end the run — it resets the board and keeps your score.'),
+      hint: '',
+    });
+    steps.push(this.quitIsDraw ? {
+      pulse: '#btnQuit',
+      title: t('🎓 途中でやめても負けにならない', '🎓 Leaving early is not a loss'),
+      body: t('AI戦は ✕ で抜けても引き分け扱いです。気軽に試して大丈夫。',
+        'In a match against the AI, quitting with ✕ counts as a draw. Feel free to experiment.'),
+      hint: '',
+    } : {
+      pulse: '#btnQuit',
+      title: t('🎓 最後まで粘ろう', '🎓 See it through'),
+      body: t('✕ で抜けると敗北扱い（相手の不戦勝）になります。盤面が埋まっても終わりではないので、時間いっぱい粘るのが得です。',
+        'Quitting with ✕ counts as a loss — your opponent takes the win. Filling your board is not the end, so play out the clock.'),
+      hint: '',
+    });
+    return steps;
+  }
+
+  // ---- 出入り口 ----------------------------------------------------------
+
+  start() {
+    if (this.stopped) return;
+    // 3-2-1 のカウントダウン（と鬼／神／創造神の入場演出）は全画面を覆うので、
+    // その裏に吹き出しを出しても読めない。時間で待つのではなく
+    // 「操作できるようになったか」を見る ── 演出の長さが変わっても壊れない。
+    this.poll = setInterval(() => this.tick(), 200);
+  }
+
+  teardown(completed) {
+    if (this.stopped) return;
+    this.stopped = true;
+    clearInterval(this.poll);
+    this.poll = null;
+    this.clearPulse();
+    if (this.tip) { this.tip.remove(); this.tip = null; }
+    if (activeTutorial === this) activeTutorial = null;
+    if (completed) markVersusTutorialDone();
+  }
+
+  skip() {
+    audio.click();
+    this.teardown(true);
+    toast(t('🎓 チュートリアルを閉じました', '🎓 Tutorial closed'), 'info', 1800);
+  }
+
+  finishAll() {
+    audio.coin();
+    this.teardown(true);
+    toast(this.hasAttack
+      ? t('🎓 まとめて消して殴り合おう！', '🎓 Clear them together and fight!')
+      : t('🎓 準備完了！スコアで勝とう！', '🎓 You are ready — outscore them!'), 'ok', 2600);
+  }
+
+  // ---- ハイライト --------------------------------------------------------
+
+  pulse(sel) {
+    if (!sel) return null;
+    const el = $(sel);
+    // 隠れているボタンに枠だけ付けても意味がないので、見えている物だけ。
+    if (!el || el.classList.contains('hidden')) return null;
+    el.classList.add('tut-pulse');
+    this.pulsed.push(el);
+    return el;
+  }
+
+  clearPulse() {
+    for (const el of this.pulsed) el.classList.remove('tut-pulse');
+    this.pulsed = [];
+  }
+
+  // ---- 置き場所 ----------------------------------------------------------
+
+  // ①で見せたい「相手の盤面と得点」（#oppPanel）と、指で触る手札を
+  // どちらも隠さない場所を探す。縦持ちだと盤面の下と手札の間がふつう大きく
+  // 空くので、入るならそこへ。入らなければ相手パネルのすぐ下へ。
+  positionTip() {
+    const tip = this.tip;
+    if (!tip) return;
+    tip.classList.add('tut-top');   // bottom 固定を外して top で置く
+    const h = tip.offsetHeight || 170;
+    const canvas = $('#gameCanvas');
+    const v = view;
+    if (canvas && v && v.cell) {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width) {
+        const boardBottom = rect.top + v.boardY + v.boardSize;
+        // 手札の枠は縦に広いが、コマ自体はその中央あたりに描かれる
+        // （game.js の drawTray）。横持ちは手札が盤面の右なので下は canvas の底まで空く。
+        const trayTop = v.sideTray ? (rect.top + rect.height) : (rect.top + v.trayY + v.trayH * 0.38);
+        if (trayTop - boardBottom >= h + 12) {
+          tip.style.top = `${Math.round(boardBottom + 8)}px`;
+          return;
+        }
+      }
+    }
+    const opp = $('#oppPanel');
+    const r = opp && !opp.classList.contains('hidden') ? opp.getBoundingClientRect() : null;
+    if (r && r.height) { tip.style.top = `${Math.round(r.bottom + 8)}px`; return; }
+    const hud = document.querySelector('#screen-game .game-hud');
+    const hr = hud && hud.getBoundingClientRect();
+    tip.style.top = hr && hr.height ? `${Math.round(hr.bottom + 8)}px` : '';
+  }
+
+  // ---- 本文 --------------------------------------------------------------
+
+  render() {
+    const tip = this.tip;
+    if (!tip) return;
+    const c = this.steps[this.step];
+    const last = this.step >= this.steps.length - 1;
+    tip.innerHTML = [
+      `<b>${escapeHtml(`${c.title}（${this.step + 1}/${this.steps.length}）`)}</b>`,
+      `<p>${escapeHtml(c.body)}</p>`,
+      c.hint ? `<small>${escapeHtml(c.hint)}</small>` : '',
+      '<div class="tut-btns">',
+      `<button class="btn btn-ghost" id="tutSkip">${t('スキップ', 'Skip')}</button>`,
+      `<button class="btn btn-primary" id="tutNext">${escapeHtml(last ? t('はじめる！', 'Start playing!') : t('次へ', 'Next'))}</button>`,
+      '</div>',
+    ].join('');
+    const btns = tip.querySelector('.tut-btns');
+    if (btns) btns.style.pointerEvents = 'auto';
+    const skip = tip.querySelector('#tutSkip');
+    if (skip) skip.onclick = () => this.skip();
+    const next = tip.querySelector('#tutNext');
+    if (next) next.onclick = () => this.advance();
+    this.clearPulse();
+    this.pulse(c.pulse);
+    // 高さが決まってから置き場所を決める（中身によって高さが変わるため）。
+    this.positionTip();
+  }
+
+  advance() {
+    audio.click();
+    if (this.step >= this.steps.length - 1) { this.finishAll(); return; }
+    this.step++;
+    this.render();
+  }
+
+  // ---- 監視（ポーリング）------------------------------------------------
+
+  tick() {
+    const m = this.mode;
+    // モードが差し替わった／終わったら、記録は立てずに静かに畳む。
+    // （何も読めていないのに「見た」ことにしない）
+    if (!m || m.ended || currentMode !== m) { this.teardown(false); return; }
+    if (this.tip) return;
+    // まだ 3-2-1 の最中／入場演出の最中。操作できるようになるまで待つ。
+    if (!view || view.inputLocked) return;
+    if (document.querySelector('.countdown-overlay')) return;
+    const tip = document.createElement('div');
+    tip.id = 'tutTip';
+    // 本体は入力を吸わない ── 読みながら置こうとしたタップを奪わないため。
+    // 押せる必要があるのは .tut-btns だけなので、そこだけ render() で戻す。
+    tip.style.pointerEvents = 'none';
+    document.body.appendChild(tip);
+    this.tip = tip;
+    this.render();
   }
 }
 
@@ -9182,7 +9744,8 @@ export async function openDailyReplays(day) {
   rows.forEach((row, i) => {
     const el = document.createElement('div');
     el.className = 'ms-row';
-    const medal = row.rank === 1 ? '🥇' : row.rank === 2 ? '🥈' : row.rank === 3 ? '🥉' : `#${row.rank}`;
+    // 順位の絵は icons.js（medal_1/2/3）。4位以降は #N のまま。
+    const medal = medalIconName(row.rank) ? icon(medalIconName(row.rank), { size: 18 }) : `#${row.rank}`;
     el.innerHTML = `
       <div class="ms-info">
         <div class="ms-name">${medal} ${escapeHtml(row.username || '???')}${row.you ? ` <small>(${t('あなた', 'you')})</small>` : ''}</div>

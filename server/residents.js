@@ -13,6 +13,10 @@
 
 import { TITLES } from './catalog.js';
 import { dailyGhostFactor } from './daily.js';
+// 段位（帯）の唯一の正解。ここに帯の表を手書きすると、画面とサーバーで
+// 「ゴールドなのにプラチナ扱い」がいつか必ず起きる。server/catalog.js が
+// public/js/catalog-en.js を読んでいるのと同じ作法で、素のJSを直に読む。
+import { bandOf } from '../public/js/ranks.js';
 
 // ---------------------------------------------------------------------------
 // Deterministic helpers
@@ -151,6 +155,82 @@ export const CHAMPION = {
 // Day index (JST) of the arena's launch — resident "join dates" hang off it.
 const LAUNCH_DAY = jstDay(Date.UTC(2026, 6, 20, 15));
 
+// 👑 王者かどうか。名前で決めるのが本筋だが、名簿の引き直しで名前が変わった
+// 過去データも拾えるよう skill でも見る（他のアーキタイプの上限は 0.98 なので、
+// 0.995 に届くのは王者だけ）。
+export function isChampion(r) {
+  return !!r && (r.name === CHAMPION.name || r.skill >= CHAMPION.skill);
+}
+
+// ---------------------------------------------------------------------------
+// 👑 「住人の中でいちばん強い」を、式のどの入り口でも崩れないようにする
+// ---------------------------------------------------------------------------
+// これまで王者を最強にしていたのは skill(0.995) と天井の帯(CHAMP_CAP)だけで、
+// それ以外の入り口 ── 得意分野(aptitude)・練習の間隔と当たり外れ(personalBest)・
+// 3日ごとの調子(moodFor)・週や日の運(weeklyBest / residentDailyScore)・
+// 参加日(joinedDay) ── は全部ふつうに乱数だった。だから
+//
+//   ・ハイスコア部門: 練習日が2日おきの住人が、5日おきの王者を追い抜く
+//   ・レート部門: 王者の調子が -1、相手が +1 の日に逆転する
+//   ・デイリー/ウィークリー部門: その日その週の運だけで決まるので日常的に負ける
+//
+// が起きていた（実測: ハイスコア部門に1件も出てこないボードがあった）。
+// 個別に「王者だけ+α」を足すと式が嘘をつき始めるので、**同じ式に、いちばん良い
+// 入力を渡す** 形に統一する: 練習量も調子も運も常に最良、得意分野は全部得意。
+// こうすると、どの項も他の住人以上なので、比較しなくても必ず上に来る。
+//
+//   ・skill      0.995 > 他の上限 0.98        （CHAMPION）
+//   ・aptitude   1.16 = 得意分野の最大値       （下の aptitude）
+//   ・patience   skill が高いほど早く伸びる    （personalBest）
+//   ・練習の間隔 最短(2日) / ずれ 最大         （下の CHAMP_* とその使用箇所）
+//   ・当たり外れ 常に上振れ(luck=1)
+//   ・調子       常に絶好調(mood=+1)
+//   ・参加日     いちばん古い ＝ 練習日数が最大 （makeResident）
+//   ・天井       CHAMP_CAP は他の帯と重ならない（下）
+//
+// 「王者だけ別式」ではないので、レート上限2600・塔99F・タイムアタック59,000 と
+// いった **頂は人間に残す** 約束はそのまま効く。
+const CHAMP_APTITUDE = 1.16;   // aptitude() が返しうる最大値（favMode と同じ）
+const CHAMP_CADENCE = 2;       // personalBest の練習間隔の最小値
+const CHAMP_LUCK = 1;          // 当たり外れ（unit の上限）
+const CHAMP_MOOD = 1;          // 調子 moodFor の上限
+// 👑 王者の敗北数の割合。147勝0敗（実測）は明らかに作り物なので、少数の負けを
+// 決定論的に持たせる。勝率は 98% で「住人の中で断トツ」は変わらない。
+const CHAMP_LOSS_RATE = 0.02;
+
+// ---------------------------------------------------------------------------
+// 上限への「張り付き」を崩す、住人ごとの天井
+// ---------------------------------------------------------------------------
+// 各ボードには絶対上限がある（頂は人間に残す、という約束）。ところが最上位の
+// 住人はその上限に **ちょうど** 届いてしまうので、レート2600・塔99F・
+// タイムアタック59,000 が同時にきっかり並ぶ ── 本物のプレイヤーの記録が
+// 3つのボードで同時に理論値ぴったりで止まることは起こらないので、
+// 「この人は計算式です」と数字が白状しているのと同じだった。
+//
+// そこで上限そのものを、住人ごとに 0.97〜0.999 倍のあたりへずらす。
+//   ・自己ベスト系は **日付を見ない**（seed だけ）。日で動かすと天井が下がった
+//     日に自己ベストが縮み、「自己ベストは下がらない」が壊れる。
+//   ・レートだけは調子(mood)と同じ3日ブロックで天井も動かす。レートは
+//     上下してよい数字なので、ここで日付の揺らぎを受け持つ。
+//
+// ⚠ 王者の帯 (0.994〜0.999) と他の住人の帯 (0.970〜0.988) は **重ならない**。
+//   天井に届く住人が何人いても、王者の天井が必ずいちばん高い ＝ 王者は
+//   引き続き「全住人の頂点」であり続ける（ユーザーの明示要求）。
+const CHAMP_CAP = [0.994, 0.005];
+const OTHER_CAP = [0.970, 0.018];
+function capFactor(r, bucket) {
+  const [base, span] = isChampion(r) ? CHAMP_CAP : OTHER_CAP;
+  return base + unit(r.id, `cap:${bucket}`) * span;
+}
+// 自己ベスト系（時間に依らない天井 ＝ 単調性を壊さない）
+function capOf(r, key, cap) {
+  return Math.floor(cap * capFactor(r, key));
+}
+// レートの天井だけは3日ごとに揺れる（調子のブロックと同じ刻み）
+function ratingCapOf(r, day) {
+  return Math.floor(2600 * capFactor(r, `R${Math.floor(day / 3)}`));
+}
+
 function weightedPick(list, rnd) {
   const total = list.reduce((a, x) => a + (x.w || 1), 0);
   let r = rnd() * total;
@@ -176,7 +256,7 @@ function makeResident(i, rng, forced = {}) {
   const joinedDay = arch.newbie
     ? null                                   // "joined recently" — resolved at read time
     : LAUNCH_DAY - 30 + Math.floor(rng() * 60);
-  return {
+  const out = {
     id: forced.id || `r${i}`,
     name, arch: arch.id, lang,
     skill: Math.round(skill * 1000) / 1000,
@@ -190,6 +270,27 @@ function makeResident(i, rng, forced = {}) {
     joinedDay,
     custom: !!forced.name,
   };
+  // 👑 王者は「引きで普通の住人として出た回」でも王者にそろえる。
+  // これまで差し替えていたのは skill だけだったので、たまたま夜型として
+  // 引かれた回のちゃちゃまるは modes に sprint / tourney を持たず、
+  // aptitude が 0.87 に落ちてタイムアタックのボードで他の住人に負けていた
+  // （buildRoster のコメントが約束している「どちらの経路でも最強」が、
+  //  引きによっては嘘になっていた）。乱数の消費順は変えていないので、
+  //  他の住人の内容はこれまでと1ビットも変わらない。
+  if (name === CHAMPION.name) {
+    const ca = archetype(CHAMPION.arch);
+    out.arch = ca.id;
+    out.modes = ca.modes;
+    out.favMode = 'pvp';
+    out.lang = 'ja';
+    out.registered = true;
+    // 参加日はいちばん古い日に固定する（他の住人は LAUNCH_DAY-30 〜 +29 の引き）。
+    // 自己ベストの「練習日の回数」は age から出るので、ここが遅い引きになると、
+    // 古参の住人のほうが練習量で上回ってハイスコア部門を持っていってしまう。
+    // アリーナの開幕からいる ＝ 王者、というのは設定としても自然。
+    out.joinedDay = LAUNCH_DAY - 30;
+  }
+  return out;
 }
 
 export function buildRoster(seed = 'v1', size = ROSTER_SIZE) {
@@ -201,7 +302,17 @@ export function buildRoster(seed = 'v1', size = ROSTER_SIZE) {
     for (let tries = 0; ; tries++) {
       r = makeResident(i, rng);
       if (!used.has(r.name)) break;
-      if (tries > 8) { r.name += String(Math.floor(rng() * 900) + 100); break; }
+      if (tries > 8) {
+        r.name += String(Math.floor(rng() * 900) + 100);
+        // 連番が付いた ＝ この住人はもう王者ではない。makeResident は名前を見て
+        // 強さを 0.995 に固定するので、ここで戻さないと「2人目のちゃちゃまる」
+        // （ちゃちゃまる768 など）が skill 0.995 のまま残る。isChampion は
+        // 名前だけでなく skill でも判定するので、その偽者が王者と同じ特別扱いを
+        // 受け、ボードによっては本物より上に出ていた（600人の名簿で実際に発生）。
+        // その属性の上限まで下げる ＝ 王者に次ぐ強さの、ふつうの住人になる。
+        if (r.skill >= CHAMPION.skill) r.skill = archetype(r.arch).skill[1];
+        break;
+      }
     }
     used.add(r.name);
     roster.push(r);
@@ -223,6 +334,10 @@ export function buildRoster(seed = 'v1', size = ROSTER_SIZE) {
       favMode: 'pvp',
       lang: 'ja',
       registered: true,
+      // makeResident の王者ぶんと同じ。差し替え経路だけ base の参加日が
+      // 残っていると、「引かれた回の王者」と「差し替えた回の王者」で
+      // 自己ベストの伸びが変わる（＝名簿のシード次第で最強でなくなる）。
+      joinedDay: LAUNCH_DAY - 30,
     };
   }
   return roster;
@@ -242,13 +357,13 @@ export function customResident(spec, index) {
 // Derived, slowly-drifting stats
 // ---------------------------------------------------------------------------
 
-const TIERS = [
-  [1700, 'マスター', 'Master'], [1500, 'ダイヤ', 'Diamond'], [1300, 'プラチナ', 'Platinum'],
-  [1100, 'ゴールド', 'Gold'], [950, 'シルバー', 'Silver'], [0, 'ブロンズ', 'Bronze'],
-];
+// 帯（ブロンズ〜レジェンド）は public/js/ranks.js が唯一の正解。
+// ここには表を持たない ── 以前はしきい値の写しを持っていて、片方だけ触ると
+// 画面とサーバーで段位がズレる状態だった（住人の帯だけ6帯で止まっていて、
+// レート1900以上の住人が全員「マスター」に丸められていたのもこれが原因）。
 export function tierOf(rating) {
-  const t = TIERS.find(([min]) => rating >= min) || TIERS[TIERS.length - 1];
-  return { name: t[1], nameEn: t[2] };
+  const b = bandOf(rating);
+  return { name: b.name, nameEn: b.nameEn };
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +390,11 @@ export function tierOf(rating) {
 // ---------------------------------------------------------------------------
 
 // 得意なモードのボードでは伸びやすく、苦手なボードでは伸びにくい。
+// 👑 王者だけは全ボードが得意（＝この関数が返しうる最大値）。
+// 以前は王者もふつうに 0.87 を引くことがあり、タイムアタックやダンジョンの
+// ボードで格下の住人に抜かれていた。
 function aptitude(r, mode) {
+  if (isChampion(r)) return CHAMP_APTITUDE;
   if (!mode) return 1;
   if (r.favMode === mode) return 1.16;
   if (r.modes && r.modes.includes(mode)) return 1.07;
@@ -286,15 +405,20 @@ function aptitude(r, mode) {
 // age に対して単調（更新しかしない）で、同じ日なら何度呼んでも同じ。
 const MAX_STEPS = 60;
 function personalBest(r, age, key, base, span, apt) {
-  const cadence = 2 + Math.floor(unit(r.id, `${key}c`) * 4);          // 2〜5日おきに挑戦
-  const offset = Math.floor(unit(r.id, `${key}o`) * cadence);          // 全員が同じ日に伸びない
+  const champ = isChampion(r);
+  // 👑 王者は「いちばん練習していて、いちばん出る」。間隔は最短、ずれは最大、
+  //    出来は常に上振れ。他の住人の cadence は 2〜5・offset は 0〜cadence-1 なので、
+  //    同じ age なら王者の steps が必ず最大になる（age≥1 で floor((age+c-1)/c) ≤
+  //    floor((age+1)/2) が成り立つ）。
+  const cadence = champ ? CHAMP_CADENCE : 2 + Math.floor(unit(r.id, `${key}c`) * 4);   // 2〜5日おきに挑戦
+  const offset = champ ? cadence - 1 : Math.floor(unit(r.id, `${key}o`) * cadence);    // 全員が同じ日に伸びない
   const steps = Math.min(MAX_STEPS, Math.max(0, Math.floor((age + offset) / cadence)));
   const patience = 9 + (1 - r.skill) * 30;                             // 上手いほど早く頭打ち
   let best = base;
   for (let i = 0; i <= steps; i++) {
     const ceil = base + span * apt * (1 - Math.exp(-i / patience));
     // その日の出来。たまに大当たりが出て、それが記録として残る。
-    const luck = unit(r.id, `${key}:${i}`);
+    const luck = champ ? CHAMP_LUCK : unit(r.id, `${key}:${i}`);
     const attempt = base + (ceil - base) * (0.55 + luck * 0.45);
     if (attempt > best) best = attempt;
   }
@@ -304,7 +428,10 @@ function personalBest(r, age, key, base, span, apt) {
 // 調子（mood）: 3日ごとに切り替わるブロック。sin波と違って「連勝が続く」「急に
 // 落ちる」が起きるので、日々見ていると人間がプレイしているように見える。rating 専用の
 // 入力なので residentStats から切り出してある。
+// 👑 王者だけは常に絶好調。ここを乱数のままにすると「王者の調子が -1、格下が +1」の
+// 日にレート部門で抜かれる（mood は最大 ±70pt 動く）。
 function moodFor(r, day) {
+  if (isChampion(r)) return CHAMP_MOOD;
   const block = Math.floor(day / 3);
   const form = (unit(r.id, `f${block}`) - 0.5) * 2;                     // -1..1
   const formPrev = (unit(r.id, `f${block - 1}`) - 0.5) * 2;
@@ -317,10 +444,12 @@ function moodFor(r, day) {
 // ズレる（このコードベースが最も嫌う「数字から嘘がばれる」系の穴）。
 // v2.14: 住人は大幅強化。それでもレートは 2600 止まり（Eloに上限は無いので勝ち
 // 続ける人間は超えうる）— 頂は人間に残す。
-function ratingFor(r, s, age, mood) {
+function ratingFor(r, s, age, mood, day) {
   const climb = 1 - Math.exp(-age / (30 + (1 - s) * 60));
   const aptPvp = aptitude(r, 'pvp');
-  return Math.min(2600, Math.round(850 + Math.pow(s, 1.3) * 1600 * aptPvp * (0.72 + 0.28 * climb) + mood * 70));
+  // 上限は 2600 のままだが、住人ごとの天井（ratingCapOf）で 0.97〜0.999 倍の
+  // あたりに散らす。全員がきっかり 2600 で止まる不自然さを消すため。
+  return Math.min(ratingCapOf(r, day), Math.round(850 + Math.pow(s, 1.3) * 1600 * aptPvp * (0.72 + 0.28 * climb) + mood * 70));
 }
 
 // rating だけを軽量に出す（personalBest の重いループを一切踏まない）。
@@ -330,7 +459,7 @@ export function residentRating(r, now = Date.now()) {
   const seedN = strHash(r.id) % 1000;
   const joined = r.joinedDay === null ? day - (seedN % 14) : r.joinedDay;
   const age = Math.max(1, day - joined);
-  return ratingFor(r, r.skill, age, moodFor(r, day));
+  return ratingFor(r, r.skill, age, moodFor(r, day), day);
 }
 
 export function residentStats(r, now = Date.now(), weekId = 'W0') {
@@ -351,15 +480,23 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   //     100万点级に届きうる。住人は 900,000 で頭打ち。
   //   ・レートは 2600 止まり（Eloに上限は無いので、勝ち続ける人間は超えうる）
   //   ・王座は同値なら実プレイヤーが勝つ — どの王冠も理論上は奪還できる。
-  const rating = ratingFor(r, s, age, mood);
+  const rating = ratingFor(r, s, age, mood, day);
   const level = Math.max(1, Math.min(60, 1 + Math.floor(age * (0.10 + s * 0.45))));
   // ここから下は全部「自己ベスト」— 練習日に更新され、下がらず、住人ごとに
   // 更新日がずれる。得意ボードほど天井が高い。
+  // 上限（900,000 / 99 / 59,000 / 175,000）は据え置きのまま、住人ごとの天井
+  // （capOf）でその 0.97〜0.999 倍のあたりに散らす ── 最上位が複数のボードで
+  // 同時にきっかり上限へ張り付くのを止めるため。天井は seed だけで決まるので
+  // 「同じ日なら同じ値」「自己ベストは下がらない」はどちらも保たれる。
   const scoreSpan = 5000 + Math.pow(s, 2) * 1000000;
-  const bestScore = Math.min(900000, personalBest(r, age, 'sc', 2500, scoreSpan, aptitude(r, 'solo')));
+  const bestScore = Math.min(capOf(r, 'sc', 900000), personalBest(r, age, 'sc', 2500, scoreSpan, aptitude(r, 'solo')));
   // 99止まり: 塔100F制覇（🏰バッジ）は人間だけのものにしておく。
-  const dungeonMax = Math.min(99, 1 + personalBest(r, age, 'dg', 0, Math.pow(s, 1.3) * 160, aptitude(r, 'dungeon')));
-  const wk = unit(r.id, weekId);
+  const dungeonMax = Math.min(capOf(r, 'dg', 99), 1 + personalBest(r, age, 'dg', 0, Math.pow(s, 1.3) * 160, aptitude(r, 'dungeon')));
+  // 👑 王者の「その週の運」は常に最良（他の住人は 0..1 の乱数）。
+  // ここが乱数のままだと、ウィークリー部門は skill より運の寄与が大きいので
+  // （weeklyMix = skill×0.6 + 運×0.4）、格下に日常的に抜かれる。
+  const champ = isChampion(r);
+  const wk = champ ? CHAMP_LUCK : unit(r.id, weekId);
   const weeklyMix = s * 0.6 + wk * 0.4;
   // ウィークリーは「その週でいちばん良かった1回」なので、週の途中で下がっては
   // いけない。以前は日ごとの調子 mood をそのまま掛けていたため、weekId が同じ
@@ -368,8 +505,8 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
   // 同じボードで住人だけが理由もなく後退して見える。週内の各日ぶんを引いて
   // その最大値を取れば、週の頭からは伸びる一方になり、月曜のリセットで
   // ちゃんと引き直される — 本物のウィークリーと同じ振る舞いになる。
-  let weeklyForm = 0;
-  for (let d = weekDayIndex(now); d >= 0; d--) weeklyForm = Math.max(weeklyForm, unit(r.id, `wf${weekId}:${d}`));
+  let weeklyForm = champ ? CHAMP_LUCK : 0;
+  if (!champ) for (let d = weekDayIndex(now); d >= 0; d--) weeklyForm = Math.max(weeklyForm, unit(r.id, `wf${weekId}:${d}`));
   const badges = [];
   if (s > 0.8 && age > 15) badges.push('oni');
   if (s > 0.93 && age > 40) badges.push('kami');
@@ -397,19 +534,27 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
     if (t) title = { id: t.id, name: t.name, color: t.color };
   }
   const aptSprint = aptitude(r, 'sprint');
+  const pvpWins = Math.floor(age * s * 1.8 * aptPvp);
   return {
     rating, level, bestScore, dungeonMax, age,
     tier: tierOf(rating),
-    pvpWins: Math.floor(age * s * 1.8 * aptPvp),
-    pvpLosses: Math.floor(age * (1 - s) * 0.8),
+    pvpWins,
+    // 👑 王者は skill が 0.995 なので (1-s)×0.8 が切り捨てで 0 になり、
+    // ずっと「147勝0敗」と表示されていた。1敗もしていない対戦成績は、
+    // それだけで作り物だと分かる（このコードベースがいちばん嫌う嘘のつき方）。
+    // 勝ち数から決定論的に少数の負けを作る ── 勝率は 98% のままで、
+    // 「住人の中で断トツ」は1ミリも変わらない。
+    pvpLosses: champ
+      ? Math.max(1, Math.round(pvpWins * CHAMP_LOSS_RATE))
+      : Math.floor(age * (1 - s) * 0.8),
     // ウィークリーは週ごとにリセットされる記録なので、そこだけは（他の自己ベストの
     // ような）長期の階段ではなく「その週の調子」= weeklyMix と weeklyForm で決まる。
     weeklyBest: Math.floor(Math.pow(weeklyMix, 2) * 90000 * aptitude(r, 'weekly') * (0.8 + 0.4 * weeklyForm) + 800),
     // タイムアタックの理論上限は 1000点/秒 × 60秒 = 60,000。住人はその内側
     // （59,000 / 175,000）で頭打ち — 頂点そのものは人間に残す。
-    sprintBest: Math.min(59000, personalBest(r, age, 'sp', 600, Math.pow(s, 2) * 62000, aptSprint)),
-    sprint180: Math.min(175000, personalBest(r, age, 's3', 2000, Math.pow(s, 2) * 186000, aptSprint)),
-    survivalWave: Math.max(1, Math.min(99, personalBest(r, age, 'sv', 3, s * 95, aptitude(r, 'survival')))),
+    sprintBest: Math.min(capOf(r, 'sp', 59000), personalBest(r, age, 'sp', 600, Math.pow(s, 2) * 62000, aptSprint)),
+    sprint180: Math.min(capOf(r, 's3', 175000), personalBest(r, age, 's3', 2000, Math.pow(s, 2) * 186000, aptSprint)),
+    survivalWave: Math.max(1, Math.min(capOf(r, 'sv', 99), personalBest(r, age, 'sv', 3, s * 95, aptitude(r, 'survival')))),
     badges, title,
   };
 }
@@ -425,7 +570,11 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
 // 運の項もまとめて掛ける — 頂は必ず人間に残す、という約束のため。
 export function residentDailyScore(r, now = Date.now()) {
   const day = jstDay(now);
-  const luck = unit(r.id, `dc${day}`);          // その日の出来 0..1
+  // 👑 王者の「その日の出来」は常に最良。デイリーは1発勝負で運の寄与がとても
+  // 大きく（0.35〜1.00 の幅）、ここを乱数にすると skill 0.9 の住人が運だけで
+  // 王者を抜く日が頻繁に出る。日ごとの数字はお題の係数で動くので、値が
+  // 毎日同じになることはない。
+  const luck = isChampion(r) ? CHAMP_LUCK : unit(r.id, `dc${day}`);   // その日の出来 0..1
   const s = r.skill;
   const raw = 400 + Math.pow(s, 1.6) * 21000 * (0.35 + 0.65 * luck) + luck * 1500;
   return Math.floor(raw * dailyGhostFactor(now));

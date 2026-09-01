@@ -25,18 +25,27 @@ try {
     hadSaved = true;
   }
 } catch { settings = { ...DEFAULTS }; hadSaved = false; /* corrupted storage -> defaults */ }
+// ♿ OS の「視差効果を減らす」。問い合わせは1本だけ持ち、初回既定にも
+// 実行中の追随にも同じものを使う（matchMedia をあちこちで作らない）。
+let rmQuery = null;
+let reducedMotion = false;
+try {
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    rmQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    reducedMotion = !!rmQuery.matches;
+  }
+} catch { rmQuery = null; reducedMotion = false; /* matchMedia 非対応環境 -> 既定のまま */ }
+
 // OS の「視差効果を減らす」設定は、まだ一度も保存していない人にだけ既定として反映する。
 // 保存済みの設定は絶対に上書きしない（一度でも設定画面を触れば hadSaved=true）。
-if (!hadSaved) {
-  try {
-    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-        && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      settings.shake = false;
-      settings.flash = false;
-      settings.particles = 'low';
-      settings.haptics = false;   // 振動も「余計な刺激」の側に入れておく
-    }
-  } catch { /* matchMedia 非対応環境 -> 既定のまま */ }
+// あとから OS 側が切り替わっても、ここは二度と走らない ── 保存済みの値を
+// 後出しで書き換えないため。実行中の追随は prefersReducedMotion() を
+// 見る側（背景装飾など）の仕事にしてある。
+if (!hadSaved && reducedMotion) {
+  settings.shake = false;
+  settings.flash = false;
+  settings.particles = 'low';
+  settings.haptics = false;   // 振動も「余計な刺激」の側に入れておく
 }
 // A pinned track id that no longer exists (renamed/removed in an update)
 // silently degrades to auto — the UI must never show a phantom pin.
@@ -51,10 +60,62 @@ export function particleFactor() {
   return settings.particles === 'low' ? 0.35 : settings.particles === 'high' ? 1.9 : 1;
 }
 
+// OS の「視差効果を減らす」が今 ON か。読み込み時の値ではなく、
+// 実行中に切り替えられたら追随する（下の change 監視で更新している）。
+export function prefersReducedMotion() { return reducedMotion; }
+
+// 🎚️ 動きの「速さ」の係数。particleFactor は粒の数の係数なので、
+// これだけを下げても1粒あたりの瞬きの速さは変わらず、体感はほとんど変わらない
+// （背景の明滅・流れが「低」でも同じ速さで瞬いていた）。角速度にはこちらを掛ける。
+// 「視差効果を減らす」なら 0 ＝ 動きが完全に止まる（粒そのものは消さない）。
+export function motionFactor() {
+  if (reducedMotion) return 0;
+  return settings.particles === 'low' ? 0.45 : 1;
+}
+
+// 設定の変更／OS 側の変更を、画面が受け取れるようにする。
+// 粒の数のように「作り直さないと反映されない」ものがあるので、
+// 変わった瞬間を知る手段が要る（毎フレーム数え直すのは無駄）。
+const settingSubs = new Set();
+const motionSubs = new Set();
+
+export function onSettingsChange(fn) {
+  if (typeof fn !== 'function') return () => {};
+  settingSubs.add(fn);
+  return () => settingSubs.delete(fn);
+}
+
+export function onReducedMotionChange(fn) {
+  if (typeof fn !== 'function') return () => {};
+  motionSubs.add(fn);
+  return () => motionSubs.delete(fn);
+}
+
+// 購読側が投げても他の購読者と呼び出し元を巻き込まない。
+function fire(subs, arg) {
+  for (const fn of [...subs]) { try { fn(arg); } catch { /* 購読側の事故は握りつぶす */ } }
+}
+
+try {
+  if (rmQuery) {
+    const onRm = e => {
+      const now = !!(e && typeof e.matches === 'boolean' ? e.matches : rmQuery.matches);
+      if (now === reducedMotion) return;
+      reducedMotion = now;
+      // ここでは settings を書き換えない（上の hadSaved の約束）。
+      fire(motionSubs, now);
+    };
+    if (typeof rmQuery.addEventListener === 'function') rmQuery.addEventListener('change', onRm);
+    else if (typeof rmQuery.addListener === 'function') rmQuery.addListener(onRm);   // 旧 Safari
+  }
+} catch { /* 監視できない環境 -> 読み込み時の値のまま */ }
+
 export function updateSettings(patch) {
   Object.assign(settings, patch);
   localStorage.setItem(KEY, JSON.stringify(settings));
-  applySettings();
+  // 音の適用が転んでも購読側（背景装飾の粒数など）には必ず知らせる。
+  // 片方の失敗で「設定を変えたのに絵だけ変わらない」を作らない。
+  try { applySettings(); } finally { fire(settingSubs, settings); }
 }
 
 export function applySettings() {

@@ -13,6 +13,7 @@ import { api, session } from './net.js';
 import { $, showModal, closeModal, toast, fmt, updateTopbar } from './dom.js';
 import { t, catName, catDesc } from './i18n.js';
 import { audio } from './audio.js';
+import { icon, medalIconName } from './icons.js';
 import { startAdminEventMode } from './modes.js';
 
 let ae = null;              // latest playerView from the server
@@ -215,7 +216,7 @@ function worldHtml() {
     return `
       <div class="ae-world">
         <div class="ae-world-label">${t('今日のトップ', 'Today’s top scores')}</div>
-        ${w.board.slice(0, 3).map((b, i) => `<div class="ae-world-sub">${['🥇', '🥈', '🥉'][i]} ${b.name} — ${fmt(b.score)}</div>`).join('')}
+        ${w.board.slice(0, 3).map((b, i) => `<div class="ae-world-sub">${icon(medalIconName(i + 1), { size: 16 })} ${b.name} — ${fmt(b.score)}</div>`).join('')}
       </div>`;
   }
   return '';

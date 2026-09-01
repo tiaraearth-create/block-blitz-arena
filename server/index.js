@@ -38,6 +38,8 @@ import {
   ghostGuildOfResident, trackGuildQuests,
 } from './guilds.js';
 import { TRANSLATE_ENGINE, translateChat } from './translate.js';
+// 住人の正体を隠す共通の関門（詳しい理由は server/sanitize.js の冒頭）。
+import { secrecyMiddleware } from './sanitize.js';
 import {
   validateBackup, applyRestore, snapshot, healGuildRosters,
 } from './backup.js';
@@ -52,6 +54,9 @@ import {
   createPoll, eventPollOptions, vote as castVote, pollView, tickPoll, winnerOf, isOpen as pollOpen,
 } from './polls.js';
 import { jstDayKey } from './adminevent.js';
+// 段位の帯（しきい値の唯一の正解）。migrateUser が「どこまで昇格を告知したか」の
+// 初期値を作るのに使う。手書きの表を持たない ── server/battle.js と同じ理由。
+import { bandOf } from '../public/js/ranks.js';
 import {
   DAILYC_COINS, DAILYC_GEMS, DAILYC_MAX_SCORE, DAILYC_ATTEMPT_MS,
   dailyModifierOf, dailyTargetOf,
@@ -334,6 +339,11 @@ if (FRAME_ANCESTORS.length) {
 }
 
 app.use(authMiddleware);
+// 🎭 住人（AIプレイヤー）の正体を隠す関門。authMiddleware の**直後**に置く
+// （req.user が要る）。/api/admin/* は経路ごとバイパスするので管理者パネルの
+// 名簿・投票の内訳・殿堂の顔ぶれは従来どおり。管理者本人のリクエストは
+// どの経路でも素通し。
+app.use(secrecyMiddleware(req => !!(req.user && req.user.role === 'admin')));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   // 埋め込み先を指定したときだけ XFO を外す（理由は FRAME_ANCESTORS の注記）。
@@ -400,9 +410,26 @@ const ASSET_HASH_ENABLED = process.env.ASSET_HASH !== '0';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const ASSET_JS_DIR = path.join(PUBLIC_DIR, 'js');
 const ASSET_INDEX_HTML = path.join(PUBLIC_DIR, 'index.html');
+// スタイルシートにも版数を焼く。
+//
+// 以前は js だけに ?v= を付けていて、index.html の
+// `<link rel="stylesheet" href="css/style.css">` は素のままだった。
+// URL が永久に変わらないので:
+//  ・Service Worker（public/sw.js）は ?v の無い要求を networkFirst で扱う。
+//    通信が一瞬でも落ちると控えの**古い style.css** を返し、
+//    そのとき js だけは新しい ── 見た目だけが前の版という混ざった状態になる。
+//  ・端末の HTTP キャッシュも、no-cache とはいえ再検証待ちのあいだ古い絵を出す。
+// 実際に v2.34 の点検中、CSS を直したのにブラウザが古いままという状態を踏んだ。
+// js と同じ約束（中身が変わったら URL も変わる）に揃える。
+const ASSET_CSS = path.join(PUBLIC_DIR, 'css', 'style.css');
+const ASSET_CSS_URL = '/css/style.css';
 // `from './x.js'` と `import('./x.js')` の両形式。
 const IMPORT_SPEC_RE = /(from\s*|import\s*\(\s*)(['"])(\.\/[\w.-]+\.js)(['"])/g;
 const ASSET_NAME_RE = /^\/js\/([\w.-]+\.js)$/;
+
+let cssVer = null;      // style.css の版数
+let cssBody = null;     // 読み込んだ中身
+let cssMtime = null;
 
 const assetVer = new Map();     // 'main.js' -> 版数
 const assetBody = new Map();    // 'main.js' -> 変換済みソース
@@ -457,12 +484,41 @@ function buildAssetHashes() {
     });
     assetBody.set(n, ok ? out : text);
   }
+  // style.css の版数も同じ回で作る（index.html の書き換えで使う）。
+  try {
+    cssBody = fs.readFileSync(ASSET_CSS, 'utf8');
+    cssMtime = fs.statSync(ASSET_CSS).mtimeMs;
+    cssVer = assetHash(cssBody);
+  } catch { cssBody = null; cssVer = null; cssMtime = null; }
+
   try {
     const html = fs.readFileSync(ASSET_INDEX_HTML, 'utf8');
     assetIndexMtime = fs.statSync(ASSET_INDEX_HTML).mtimeMs;
     const mv = assetVer.get('main.js');
     if (mv) {
-      const out = html.replace(/(src=")(\.?\/?js\/main\.js)(")/, `$1$2?v=${mv}$3`);
+      let out = html.replace(/(src=")(\.?\/?js\/main\.js)(")/, `$1$2?v=${mv}$3`);
+      // <link rel="modulepreload"> の href にも同じ ?v= を焼く。
+      //
+      // 焼かないと preload と実際の読み込みが**別のURL**になる ── preload は
+      // 素の js/modes.js を取りに行き、main.js から辿る import は
+      // ./modes.js?v=<hash> なので、ブラウザから見て別物になり、先読みした
+      // 20本がまるごともう一度落ちてくる（先読みが速くするどころか、
+      // 起動時の往復を倍にしていた）。名前が assetVer に無いものは
+      // 素のまま残す（存在しない ?v= を付けて 404 にしないため）。
+      out = out.replace(
+        /(<link\b[^>]*\brel="modulepreload"[^>]*\bhref=")(\.?\/?js\/([A-Za-z0-9_-]+\.js))(")/g,
+        (m, pre, href, name, post) => {
+          const v = assetVer.get(name);
+          return v ? `${pre}${href}?v=${v}${post}` : m;
+        });
+      // スタイルシートにも同じ ?v= を焼く（上の ASSET_CSS のコメント参照）。
+      // 版数が出せなかったときは素のまま残す ── 存在しない ?v= を付けて
+      // 見た目が丸ごと落ちるより、キャッシュが効きすぎるほうがまだ軽い。
+      if (cssVer) {
+        out = out.replace(
+          /(<link\b[^>]*\brel="stylesheet"[^>]*\bhref=")(\.?\/?css\/style\.css)(")/,
+          `$1$2?v=${cssVer}$3`);
+      }
       assetIndexHtml = out === html ? null : out;   // 置換できなければ素のまま配る
     }
   } catch { assetIndexHtml = null; }
@@ -498,9 +554,23 @@ app.use((req, res, next) => {
     if (body == null) return next();
     return sendAsset(req, res, body, 'application/javascript; charset=utf-8', assetVer.get(m[1]));
   }
+  // スタイルシートも js と同じ扱い ── ?v= が現行の版数と一致した要求だけ immutable。
+  if (req.path === ASSET_CSS_URL) {
+    try {
+      if (cssMtime !== fs.statSync(ASSET_CSS).mtimeMs) buildAssetHashes();
+    } catch { /* 消えていたら express.static に落ちる */ }
+    if (cssBody != null) return sendAsset(req, res, cssBody, 'text/css; charset=utf-8', cssVer);
+  }
   if (req.path === '/' || req.path === '/index.html') {
     try {
-      if (assetIndexMtime !== fs.statSync(ASSET_INDEX_HTML).mtimeMs) buildAssetHashes();
+      // index.html 自身だけでなく **style.css の更新も見る**。
+      // 焼き込んだ ?v= は index.html の中にあるので、CSS だけを直したときに
+      // ここで気づかないと、古い版数のリンクを配り続ける
+      // （＝直したはずの見た目が誰にも届かない）。
+      const cssChanged = (() => {
+        try { return cssMtime !== fs.statSync(ASSET_CSS).mtimeMs; } catch { return false; }
+      })();
+      if (cssChanged || assetIndexMtime !== fs.statSync(ASSET_INDEX_HTML).mtimeMs) buildAssetHashes();
     } catch { /* 読めなければ下の分岐で素のまま配られる */ }
     if (assetIndexHtml) return sendAsset(req, res, assetIndexHtml, 'text/html; charset=utf-8', null);
   }
@@ -604,6 +674,10 @@ function migrateUser(user) {
     blueprintPlays: 0, blueprintClears: 0,
     workshopPlays: 0, workshopClears: 0,
   })) if (s[k] === undefined) s[k] = v;
+  // 📈 段位の昇格を「どこまで全体告知したか」の印（battle.js が書く / 読む）。
+  // 既存アカウントは、いま到達している帯を『告知ずみ』として始める ── 0 から
+  // 始めると、この機能が入った日に上位帯の人が次の1戦で全員もう一度告知される。
+  if (s.rankAnnounced === undefined) s.rankAnnounced = bandOf(s.ratingBest || s.rating || 0).min;
   if (!s.bossRanks || typeof s.bossRanks !== 'object') s.bossRanks = {};
   // 同じ汚染で stats に増えた永久ゴミキー（'undefined' と 'constructorPrev'
   // のようなプロトタイプ名由来の ~Prev）を落とす。放っておくと db.json が
@@ -818,6 +892,31 @@ const GEMDROP_MIN_SECONDS = 20;
 // 1日に💎ドロップで配る上限。gemDrop は1プレイ3個なので40プレイぶん —
 // 普通に遊ぶ人が上限に当たることはまずないが、機械的な連投は必ずここで止まる。
 const GEMDROP_DAILY_CAP = 120;
+// 🪙/XP の1日あたりの上限。💎の GEMDROP_DAILY_CAP と同じ考え方の2枚目の歯止め。
+//
+// なぜ要るか: 固定ぶんを0にしても「スコアだけを申告する偽の結果」は残る。
+// duration は『前回の提出からの実経過＋90秒』で押さえてあるが、レート上限
+// いっぱい（250件/時＝14.4秒おき）に投げれば毎回 約104秒ぶん、rateCap 2,000/秒
+// で 208,000点まで名乗れる ── 1試合の上限 1,000🪙 に毎回張り付いて
+// 250,000🪙/時 が湧く。「1日にいくらまで湧くか」を決めないと歯止めにならない。
+//
+// 値の根拠（実測。engine.js + ai.js で120秒/60秒のプレイを回して報酬式に通した）:
+//   ・実力上位の人のソロ無限: 中央値 8,639点/97秒 → 3,414🪙・15,878bpXp・3,414accXp /時
+//   ・普通の人のソロ無限:     中央値 6,829点/105秒 → 2,636🪙・10,873bpXp・2,636accXp /時
+//   ・毎試合が1試合上限に張り付く3分プレイ（奥義でスコアを盛った本気の走り）:
+//     18,462🪙・14,769bpXp・11,077accXp /時 ← 現実的な「正直な上限」はここ
+// その最速の取り分でも 8時間 連続でようやく届く高さに置く。実測の中央値
+// （3,414🪙/時）なら44時間ぶんなので、普通に何時間か遊んで当たることはない。
+// 一方、偽の結果の 250,000🪙/時 は 1日 150,000🪙 まで＝40分の1に落ちる。
+//
+// 環境変数で下げられるようにしてあるのは運用（と test/farming.test.mjs）のため。
+// MATCH_SECONDS と同じ作法で「既定値はコードに、調整は環境に」。
+const grindCap = (env, def) => (Number(process.env[env]) > 0 ? Number(process.env[env]) : def);
+const GRIND_DAILY_CAP = {
+  coins: grindCap('GRIND_COIN_DAY', 150000),
+  bpXp: grindCap('GRIND_BPXP_DAY', 120000),
+  accXp: grindCap('GRIND_ACCXP_DAY', 90000),
+};
 // 🐛報告箱の上限。バグ報告と通報が同じ配列を使うので、値は必ず1つに保つ。
 const BUGREPORT_CAP = 300;
 // サーバーが配りうるバッジの全一覧。管理画面の編集欄（routes/admin.js）と、
@@ -1004,7 +1103,34 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 45秒以上のプレイは今までどおり満額。それより短い回は取り分が縮むが、
   // スコア連動ぶんは一切触らないので、短いステージの実入りが消えるわけではない。
   const BASE_FULL_SECONDS = 45;
-  const paceScale = Math.max(0.25, Math.min(1, duration / BASE_FULL_SECONDS));
+  // ⚠ ここの下限 0.25 が「ソロを押してすぐ終了」を稼ぎに変えていた。
+  //
+  // 何もせずに結果だけ送っても paceScale が 0.25 で残るので、毎回
+  // 5🪙 / 8bpXp / 5accXp が必ず入る。結果送信の上限は250件/時なので、
+  // 放置で 1,250🪙/時・2,000bpXp/時・1,250accXp/時 が湧いていた。
+  //
+  // かといって既存の realPlay（1,000点以上 かつ 20秒以上）を門にすると、
+  // 🛠️工房の10秒ステージのような「短いが本物のプレイ」まで固定ぶんが0になり、
+  // 正直に短く遊んだ人の取り分を削ることになる（それは直したい向きの逆）。
+  // だから判定は「遊んだ形跡が **無い** こと」だけに絞る ── スコアもラインも
+  // ほとんど動いていない回を『遊んでいない』とみなし、そこだけ固定ぶんを落とす。
+  // 1ライン消せば 8マス×1点＋100点で必ず超えるので、1手でも本当に遊んだ回が
+  // ここに落ちることはない。スコア連動ぶん（score/100 など）は一切触らない。
+  //
+  // 200 という高さの理由: 0 にすると「ソロを開いて1マス置いてすぐ終了」を
+  // 繰り返すだけで固定ぶんが取れてしまう（実クライアントで2タップの操作）。
+  // 200 なら 2ラインぶんの実プレイが要る。
+  //
+  // 既知のトレードオフ: 🏗️ブループリントは「ラインを揃えてはいけない」ルールで、
+  // 失敗した回のスコアは置いたマス数そのもの（設計図は27マス級なので最大でも
+  // 30点前後・lines は必ず0）。つまり **失敗した回だけ** 固定ぶんが0になる。
+  // 完成した回は完成ボーナス（マス数×40）で1,000点を超えるので影響なし。
+  // 1日1回のパズルの、しかも失敗した回の 20🪙 なので許容した。気になるなら
+  // ブループリント側で「置いたマス」に点を厚くするのが筋（報酬式ではなく
+  // モードの得点設計の話 — public/js/modes.js の担当へ）。
+  const NOPLAY_SCORE = 200;
+  const idleResult = score < NOPLAY_SCORE && lines === 0;
+  const paceScale = idleResult ? 0 : Math.max(0.25, Math.min(1, duration / BASE_FULL_SECONDS));
   const paced = n => Math.round(n * paceScale);
   let coins = Math.min(1000, paced(20) + Math.floor(score / 100) + (won ? paced(50) : 0));
   if (mode === 'chaos') coins = Math.min(1500, Math.round(coins * 1.5));   // chaos-mode bonus
@@ -1096,6 +1222,25 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     coins += guildBonus;
     const mine = (guild.weekly[wk] && guild.weekly[wk].byMember[user.id]) || 0;
     if (mine > (user.stats.guildBestWeek || 0)) user.stats.guildBestWeek = mine;
+  }
+
+  // 1日あたりの上限で頭を押さえる（値の根拠は GRIND_DAILY_CAP のコメント）。
+  // ここに置くのは「イベント倍率もギルド還元も乗せ終わった、実際に配る額」を
+  // 数えたいから ── 倍率の前で数えると、イベント中だけ上限が実質2倍になる。
+  // 日付は 💎ドロップと同じ JST の1日。`s`（= user.stats）の宣言はこの下なので
+  // ここでは user.stats を直に見る（eventGemDay のブロックと同じ作法・一時的死角）。
+  {
+    const gs = user.stats;
+    const gday = jstDayKey();
+    if (!gs.grindDay || gs.grindDay.day !== gday) gs.grindDay = { day: gday, coins: 0, bpXp: 0, accXp: 0 };
+    const take = (key, want) => {
+      const got = Math.max(0, Math.min(Math.floor(want) || 0, GRIND_DAILY_CAP[key] - (Number(gs.grindDay[key]) || 0)));
+      gs.grindDay[key] = (Number(gs.grindDay[key]) || 0) + got;
+      return got;
+    };
+    coins = take('coins', coins);
+    bpXp = take('bpXp', bpXp);
+    accXp = take('accXp', accXp);
   }
 
   user.coins += coins;
@@ -1735,16 +1880,18 @@ app.post('/api/register', (req, res) => {
   if (password.length < 6) {
     return res.status(400).json({ error: 'パスワードは6文字以上にしてください' });
   }
+  // ⚠ 名前が使えない理由は **絶対に出し分けない**。
+  //   ① すでに実プレイヤーが使っている
+  //   ② AI住人と同名（チャットの返信/プロフィールで人間と区別がつかなくなる）
+  //   ③ 予約名（👁️管理者ゼロ を騙れると、イベント中に偽の宣告を撒ける）
+  // 以前は①②③で文言が違ったので、名前を投げ分けるだけで「これは住人」
+  // 「これは実在プレイヤー」が判定できた ── 名簿を総当たりすれば住人が
+  // 全員あぶり出せる列挙オラクルだった。同じ 409・同じ文言に統一する。
+  const NAME_TAKEN = 'そのユーザー名は既に使われています';
   const exists = Object.values(db.users).some(u => u.username.toLowerCase() === username.toLowerCase());
-  if (exists) return res.status(409).json({ error: 'そのユーザー名は既に使われています' });
-  // AI住人と同名のアカウントは作れない — チャットの返信/プロフィールで
-  // 住人と人間の区別がつかなくなる。
-  if (residentByName(username)) return res.status(409).json({ error: 'その名前はアリーナの住人が使っています。別の名前でどうぞ' });
-  // 👁️ 管理者ゼロ を騙れると、イベント中に偽の宣告を撒けてしまう。
-  // 名前だけ見ている相手には本物と区別がつかない。
-  if (RESERVED_NAMES.some(n => n.toLowerCase() === username.toLowerCase())) {
-    return res.status(409).json({ error: 'その名前は使えません。別の名前でどうぞ' });
-  }
+  const isResident = !!residentByName(username);
+  const isReserved = RESERVED_NAMES.some(n => n.toLowerCase() === username.toLowerCase());
+  if (exists || isResident || isReserved) return res.status(409).json({ error: NAME_TAKEN });
 
   const user = newUser(username, password);
   const token = issueToken(user.id);
@@ -1810,13 +1957,12 @@ app.post('/api/me/rename', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'ユーザー名は2〜16文字（英数字・日本語）で入力してください' });
   }
   if (username.toLowerCase() !== user.username.toLowerCase()) {
+    // /api/register とまったく同じ扱い ── 理由を出し分けると、こちらが
+    // 住人の列挙オラクルとして残る（登録だけ塞いでも改名で総当たりできる）。
     const exists = Object.values(db.users).some(u => u.id !== user.id && u.username.toLowerCase() === username.toLowerCase());
-    if (exists) return res.status(409).json({ error: 'そのユーザー名は既に使われています' });
-    if (residentByName(username)) return res.status(409).json({ error: 'その名前はアリーナの住人が使っています。別の名前でどうぞ' });
-    // 登録で塞いでも、改名で取れては意味がない。
-    if (RESERVED_NAMES.some(n => n.toLowerCase() === username.toLowerCase())) {
-      return res.status(409).json({ error: 'その名前は使えません。別の名前でどうぞ' });
-    }
+    const isResident = !!residentByName(username);
+    const isReserved = RESERVED_NAMES.some(n => n.toLowerCase() === username.toLowerCase());
+    if (exists || isResident || isReserved) return res.status(409).json({ error: 'そのユーザー名は既に使われています' });
   }
   const DAY = 24 * 60 * 60 * 1000;
   if (user.role !== 'admin' && user.lastRename && Date.now() - user.lastRename < DAY) {
@@ -2162,22 +2308,35 @@ app.get('/api/profile/:name', (req, res) => {
     } });
   }
   const r = residentByName(name);
+  const admin = !!(req.user && req.user.role === 'admin');
   if (r && r.registered) {
     const st = residentStats(r, Date.now());
     const a = archetype(r.arch);
+    // 🎭 非管理者に返す形は、上の実プレイヤーと **1キーもズレてはいけない**。
+    // kind:'resident' はもちろん、archLabel / hours / favMode / online のような
+    // 「実プレイヤーには存在しない欄」が1つでも残っていると、そのキーの有無だけで
+    // 総当たりできてしまう（関門も落とすが、そもそも組み立てない）。
+    // 管理者には従来どおり全部返す ── 名簿の突き合わせに要る。
     return res.json({ profile: {
-      kind: 'resident', name: r.name, role: 'user',
+      kind: admin ? 'resident' : 'player', name: r.name, role: 'user',
       level: st.level, rating: st.rating, bestScore: st.bestScore,
       pvpWins: st.pvpWins, pvpLosses: st.pvpLosses, dungeonMax: st.dungeonMax,
       badges: st.badges, title: st.title,
       guildTag: tagOfName(db, r.name, null),
-      archLabel: a.label, archLabelEn: a.labelEn,
-      hours: r.hours, favMode: r.favMode,
-      online: activeResidents().some(x => x.id === r.id),
       thrones: thronesOfName(r.name),
+      ...(admin ? {
+        archLabel: a.label, archLabelEn: a.labelEn,
+        hours: r.hours, favMode: r.favMode,
+        online: activeResidents().some(x => x.id === r.id),
+      } : {}),
     } });
   }
-  if (r) return res.json({ profile: { kind: 'guest', name: r.name } });
+  // 未登録の住人（＝ロビーには居るがランキングに載らない人）は、実在のゲストと
+  // まったく同じ 404 にする。以前はここだけ kind:'guest' の名刺を返していたので、
+  // 「404 が返らない名前＝住人」という総当たりの当たり判定になっていた
+  // （本物のゲストは db.users にも住人名簿にも居ないので必ず 404）。
+  // 管理者にだけは従来どおり名刺を返す。
+  if (r && admin) return res.json({ profile: { kind: 'guest', name: r.name } });
   res.status(404).json({ error: 'プレイヤーが見つかりません' });
 });
 
@@ -3191,10 +3350,21 @@ function settleSeasonHallOfFame() {
 app.get('/api/halloffame', (req, res) => {
   if (!rateLimit(`hof:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください' });
   settleSeasonHallOfFame();
+  const admin = !!(req.user && req.user.role === 'admin');
   const list = (Array.isArray(db.meta.hallOfFame) ? db.meta.hallOfFame : [])
     .slice()
     .sort((a, b) => (b.number || 0) - (a.number || 0))
-    .slice(0, 50);
+    .slice(0, 50)
+    // 🎭 殿堂の各行には resident:true/false が焼かれている（db.meta.hallOfFame は
+    // 保存されるので、過去のシーズンぶんも全部）。非管理者にはその印を落とす。
+    // 関門も落とすが、保存済みのデータをそのまま流す経路なので、ここでも明示的に。
+    .map(e => (admin ? e : {
+      ...e,
+      boards: (Array.isArray(e.boards) ? e.boards : []).map(b => ({
+        ...b,
+        top: (Array.isArray(b.top) ? b.top : []).map(({ resident, ...t }) => t),
+      })),
+    }));
   res.json({ seasons: list, current: currentSeason() });
 });
 

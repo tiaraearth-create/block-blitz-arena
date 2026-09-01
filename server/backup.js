@@ -497,6 +497,40 @@ function mergeEarned(winner, loser) {
     }
   }
 
+  // 🪙 1日の稼ぎの上限カウンタ (index.js applyGameResult の
+  // grindDay = { day, coins, bpXp, accXp } / 上限は GRIND_DAILY_CAP)と、
+  // 💎ドロップの1日の受取総額 (eventGemDay = { day, got } / GEMDROP_DAILY_CAP)。
+  // どちらも「1日にいくらまで湧くか」を止めている唯一の記録なので、落とすと
+  // 復元した日だけ上限がまるごと1本ぶん増える（＝偽の結果の連投がその日だけ
+  // 通り放題になる）。日付つきの止め金は他と同じ扱いにする:
+  //   ・同じ日なら大きいほう（迷ったら閉じる）
+  //   ・勝った側に無ければ負けた側のものを引き継ぐ
+  //   ・日が違うときは新しい日のほう（古い日は次の結果で作り直される）
+  for (const [key, fields] of [['grindDay', ['coins', 'bpXp', 'accXp']], ['eventGemDay', ['got']]]) {
+    const ld = loser.stats && loser.stats[key];
+    if (!isPlainObj(ld) || !okDay(ld.day)) continue;
+    const wst4 = winner.stats || (winner.stats = {});
+    const wd = wst4[key];
+    const num = (o, f) => Math.max(0, Math.floor(Number(o && o[f]) || 0));
+    if (!isPlainObj(wd) || !okDay(wd.day) || String(ld.day) > String(wd.day)) {
+      const next = { day: String(ld.day) };
+      for (const f of fields) next[f] = num(ld, f);
+      wst4[key] = next;
+    } else if (String(wd.day) === String(ld.day)) {
+      for (const f of fields) wd[f] = Math.max(num(wd, f), num(ld, f));
+    }
+  }
+
+  // 📈 段位の昇格を「どこまで全体告知したか」の印 (battle.js の rankAnnounced /
+  // 値は帯の下限レート)。1700付近を往復するだけで同じ昇格が何度も全体配信される
+  // のを止めているのはこれだけなので、落とすと復元のたびにまた鳴る。
+  // 降ろす向きには倒さない ＝ 大きいほう（迷ったら閉じる）。
+  const lra = Number(loser.stats && loser.stats.rankAnnounced);
+  if (Number.isFinite(lra) && lra > 0) {
+    const wst5 = winner.stats || (winner.stats = {});
+    wst5.rankAnnounced = Math.max(Number(wst5.rankAnnounced) || 0, Math.floor(lra));
+  }
+
   // 🎁 ショップの1日1回の無料ギフト受領印 (routes/shop.js giftClaimedDay)。
   // user.stats.shopGiftDay = 'YYYY-MM-DD'。二重受取を止めているのはこの印だけ
   // なので、落とすと同じ日にもう一度ギフトを受け取れる。新しい日付（＝いま

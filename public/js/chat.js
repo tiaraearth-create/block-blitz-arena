@@ -1,6 +1,8 @@
 // Global chat: persistent WebSocket + drawer UI on the menu screen.
 import { session } from './net.js';
-import { $, toast, showModal, closeModal } from './dom.js';
+import { $, toast, showModal, closeModal, rankBadge } from './dom.js';
+// 段位もバッジも「絵を持つ側」は1か所だけ。ここには表を置かない。
+import { icon, badgeIconName } from './icons.js';
 import { audio } from './audio.js';
 import { t, trServer, LANG, catName } from './i18n.js';
 import { getSettings } from './settings.js';
@@ -13,7 +15,8 @@ let retryTimer = null;   // 再接続待ちのタイマー。張り直すとき�
 
 // ---------------------------------------------------------------------------
 // Live feed: a ticker on the menu showing what is happening around the arena
-// (simulated residents + real players' notable moments, starred).
+// (everyone's notable moments, shown the same way — see showTicker for why
+//  the ⭐ that used to mark real players is gone).
 // ---------------------------------------------------------------------------
 
 let feed = [];          // newest last
@@ -35,8 +38,10 @@ function showTicker(item, fresh = false) {
   if (!el || !txt || !item) return;
   el.classList.remove('hidden');
   txt.classList.remove('lf-swap'); void txt.offsetWidth; txt.classList.add('lf-swap');
-  txt.textContent = `${item.real ? '⭐' : ''}${item.icon} ${feedText(item)}`;
-  el.classList.toggle('real', !!item.real);
+  // 以前は item.real（本物のプレイヤーの快挙）に ⭐ を付けていたが、
+  // サーバーが real を配らなくなった ── ⭐が付かない行＝住人、という
+  // 一覧表になっていたため。誰の出来事も同じ見た目で流す。
+  txt.textContent = `${item.icon} ${feedText(item)}`;
   if (fresh) { el.classList.remove('lf-new'); void el.offsetWidth; el.classList.add('lf-new'); }
 }
 
@@ -67,12 +72,12 @@ export function showFeedModal() {
   const items = feed.slice().reverse();
   const m = showModal(`
     <h2>📡 ${t('ライブフィード', 'Live Feed')}</h2>
-    <p class="muted center" style="font-size:12px;margin-bottom:10px">${t('アリーナで今起きていること。⭐は本物のプレイヤーの快挙！', 'What is happening around the arena right now. ⭐ marks real players!')}</p>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">${t('アリーナで今起きていること', 'What is happening around the arena right now')}</p>
     <div class="feed-list">
       ${items.length ? items.map(it => `
-        <div class="feed-row ${it.real ? 'real' : ''}">
+        <div class="feed-row">
           <span class="feed-icon">${it.icon || '📡'}</span>
-          <span class="feed-text">${it.real ? '⭐ ' : ''}${escapeHtml(feedText(it))}</span>
+          <span class="feed-text">${escapeHtml(feedText(it))}</span>
           <span class="feed-ago">${fmtAgo(it.at)}</span>
         </div>`).join('') : `<p class="muted center">${t('まだ何も起きていません', 'Nothing has happened yet')}</p>`}
     </div>
@@ -146,35 +151,17 @@ function cancelReply() {
   $('#chatReplyBar').classList.add('hidden');
 }
 
-// バッジの絵文字。screens.js の badgeIcons（プロフィール／ランキング）と
-// 同じ26種を必ず全部持たせる ── under・heaven・zero・adminevent・
-// bronze・silver・gold の7つが抜けていたせいで、👁️断罪や👑管理者イベント制覇と
-// いったいちばん希少なバッジが、チャットのプロフィールカードでだけ
-// 見分けのつかない 🎖️ に潰れていた（同じバッジが画面ごとに違って見える）。
-// バッジを増やすときは screens.js の badgeIcons 2か所（showProfileModal /
-// ランキング描画）と BADGE_INFO・BADGE_ORDER もいっしょに直すこと。
-const PROFILE_BADGES = {
-  bronze: '🥉', silver: '🥈', gold: '🥇',
-  oni: '👹', kami: '🔱', souzou: '🌌', maou: '😈', rush: '⚔️',
-  dungeon: '🏰', under: '🕳️', heaven: '☁️', abyss: '🌑', zero: '👁️',
-  tourney: '🏆', royale: '💯', adminevent: '👑', weekly1: '🏅', daily7: '📅',
-  puzzle: '🧩', dig: '⛏️', ghost: '👻',
-  crown2: '👑', crown3: '👑', crown5: '👑', crown7: '🌈',
-  guildquest: '🎖️',
-};
-// 🏛 シーズン刻印バッジ `s{N}champ`（s3champ, s4champ …）はシーズンが終わるたびに
-// サーバー（server/index.js の settleSeasonHallOfFame）が新しいidを作るので、
-// 上の固定表では持ちきれない。固定キーを引く手前でこの正規表現に通すこと。
-// screens.js 側の seasonBadgeNo() と同じ扱い。
-const SEASON_BADGE_RE = /^s(\d{1,4})champ$/;
-function seasonBadgeNo(id) {
-  const m = SEASON_BADGE_RE.exec(String(id || ''));
-  return m ? Number(m[1]) : 0;
-}
-// プロフィールカードのバッジ1つぶん。動的なシーズン刻印を先に見て、
-// そのあと固定表を引く。名前は screens.js のインベントリ側で出す。
+// バッジの絵。ここには表を置かない ── icons.js の badgeIconName(id) が唯一の
+// 引き口で、シーズン刻印（s{N}champ）の畳み込みもあちらが持っている。
+//
+// なぜ表を消したか: 以前はこのファイルにも screens.js にも同じ絵文字表があり
+// （合わせて6か所）、片方だけ更新されるたびに「同じバッジが画面ごとに違って
+// 見える」が起きていた。絵文字そのものにも重複があって、👑 が管理者イベント・
+// 二冠・三冠・五冠の4つ、🎖️ がギルドの誉れと「表に無い全部」の受け皿を
+// 兼ねていたので、チャットのプロフィールカードでは見分けが付かなかった。
+// 表を持たなければ、ズレようがない。
 function profileBadgeIcon(id) {
-  return seasonBadgeNo(id) ? '🏛' : PROFILE_BADGES[id] || '🎖️';
+  return icon(badgeIconName(id), { size: 18 });
 }
 // 👑 王座のボード名（プロフィールカード表示用）
 const THRONE_LABELS = {
@@ -210,7 +197,11 @@ async function showProfileCard(name) {
     toast(t(`${p.name} はゲストプレイヤーです`, `${p.name} is a guest player`), '', 2000);
     return;
   }
-  const rk = p.rating >= 1700 ? '👑' : p.rating >= 1500 ? '💎' : p.rating >= 1300 ? '💠' : p.rating >= 1100 ? '🥇' : p.rating >= 950 ? '🥈' : '🥉';
+  // 段位の絵。しきい値をここに書かない ── public/js/ranks.js が唯一の正解。
+  // 以前はこの1行が 1700 以上を全部 👑 に丸める6帯ぶんの表を持っていたので、
+  // 帯がグランドマスター（1900）とレジェンド（2100）まで広がったあとも、
+  // チャットのプロフィールカードだけが3帯を同じ絵で出していた。
+  const rk = rankBadge(p.rating, { withName: false, size: 15 });
   const m = showModal(`
     <div class="profile-card">
       <div class="pc-head">
@@ -238,7 +229,7 @@ async function showProfileCard(name) {
       </div>
       ${(p.thrones || []).length ? `<p class="center pc-thrones">👑 ${p.thrones.map(b => THRONE_LABELS[b] ? t(THRONE_LABELS[b][0], THRONE_LABELS[b][1]) : b).join(' ・ ')} ${t('王者', 'Champion')}</p>` : ''}
       ${(p.badges || []).length ? `<p class="center pc-badges">${p.badges.map(b => profileBadgeIcon(b)).join(' ')}</p>` : ''}
-      ${p.kind === 'resident' ? `<p class="muted center" style="font-size:11px">${t('この住人はアリーナのAIプレイヤーです', 'This resident is one of the arena AI players')}</p>` : ''}
+      ${p.kind === 'resident' ? `<p class="muted center" style="font-size:11px">🛡️ ${t('運営のみ表示 ・ 住人アカウント', 'Staff only ・ resident account')}</p>` : ''}
     </div>
     <div class="modal-buttons"><button class="btn btn-primary" id="pcClose">${t('閉じる', 'Close')}</button></div>`);
   m.querySelector('#pcClose').onclick = closeModal;

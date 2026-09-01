@@ -12,6 +12,7 @@
 import {
   buildRoster, customResident, residentStats, residentDailyScore, onlineResidents, residentsForLevel,
   archetype, ARCHETYPES, jstHour, jstWeekday, jstDay, unit, mulberry32, strHash, JA_NAMES, EN_NAMES,
+  isChampion,
 } from './residents.js';
 import { dailyGhostFactor } from './daily.js';
 import { composeLine, chooseReplies as crowdReplies, buildCtx } from './crowd.js';
@@ -435,12 +436,24 @@ export function boardResidents(board, weekId, now = Date.now()) {
   const count = Math.min(100, Math.round((GHOST_COUNT[board] || 24) * Math.min(scale, 2.5)));
   // 📅 デイリーは「今日挑戦した住人」の顔ぶれ — 週ではなくJST日で入れ替わる。
   const bucket = board === 'daily' ? `D${jstDay(now)}` : weekId;
-  return getRoster()
-    .filter(r => r.registered)
+  const registered = getRoster().filter(r => r.registered);
+  // 👑 王者（ちゃちゃまる）は抽選に一切かけない。
+  //
+  // ここは「そのボードに出す住人の部分集合」を毎週引き直す抽選で、王者も
+  // ふつうに他の住人と同じ確率で漏れていた。結果、ハイスコア部門に1件も
+  // 出てこないボードが実在した（レート部門では1位なのに）── アリーナの
+  // 頂点が、日によってランキングから丸ごと消える。
+  // 抽選から外して常に先頭に置く。先頭なのは、値が同点になったときの
+  // 並び順（Array.prototype.sort は安定・王座計算も先に見つけたほうが勝つ）で
+  // 王者が他の住人の上に来るようにするため。
+  const champ = registered.find(isChampion) || null;
+  const pool = champ ? registered.filter(r => r !== champ) : registered;
+  const rest = pool
     .map(r => ({ r, k: unit(`${r.id}-${board}`, bucket) }))
     .sort((a, b) => a.k - b.k)
-    .slice(0, count)
+    .slice(0, champ ? Math.max(0, count - 1) : count)
     .map(x => x.r);
+  return champ ? [champ, ...rest] : rest;
 }
 
 export function ghostRows(board, weekId, taken, now = Date.now()) {

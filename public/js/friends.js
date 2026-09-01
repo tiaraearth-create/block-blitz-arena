@@ -10,6 +10,7 @@
 import { $, showScreen, showModal, closeModal, toast, fmt } from './dom.js';
 import { t } from './i18n.js';
 import { audio } from './audio.js';
+import { icon, medalIconName } from './icons.js';
 import { session, api } from './net.js';
 import { sendWs, onWsReady } from './chat.js';
 import { createParty, joinParty, currentParty, lastPartyMembers } from './party.js';
@@ -142,7 +143,9 @@ function challengeBtn(key, e) {
 
 function boardRow(key, e, i) {
   const me = !!(session.user && e.id === session.user.id);
-  const medal = ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
+  // 順位の絵は icons.js が唯一の引き口（medal_1/2/3）。4位以降は数字。
+  const mi = medalIconName(i + 1);
+  const medal = mi ? icon(mi, { size: 20 }) : `${i + 1}.`;
   return [
     `<div class="fr-row"${me ? ' style="border-color:rgba(255,255,255,0.28)"' : ''}>`,
     `  <span class="fr-lvl" style="min-width:26px;text-align:center">${medal}</span>`,

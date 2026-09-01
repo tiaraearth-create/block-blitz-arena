@@ -109,7 +109,14 @@ try {
   check('pieces=30', a.pieces === 30, `pieces=${a.pieces}`);
   check('target はお題の係数どおり', a.target === Math.round(5000 * a.modifier.target / 100) * 100, `target=${a.target} (${a.modifier.id})`);
   check('お題が bilingual', !!(a.modifier && a.modifier.id && a.modifier.ja && a.modifier.en && a.modifier.descJa && a.modifier.descEn), JSON.stringify(a.modifier));
-  check('お題に住人係数 ghost がある', typeof a.modifier.ghost === 'number' && a.modifier.ghost > 0, String(a.modifier.ghost));
+  // v2.34: 住人係数 ghost は **配らない**。名前がそのまま「AIの成績をこちらで
+  // 作っています」と言っているフィールドで、画面も一切使っていない。
+  // 係数が生きていること自体は下（そして末尾の全お題チェック）で、サーバー内部の
+  // dailyModifierOf を直接読んで確かめる。
+  const { dailyModifierOf: modOf } = await import('../server/daily.js');
+  const ghostFactor = modOf(today).ghost;
+  check('お題に住人係数 ghost がある（サーバー内部）', typeof ghostFactor === 'number' && ghostFactor > 0, String(ghostFactor));
+  check('住人係数 ghost はAPIから見えない', a.modifier.ghost === undefined, JSON.stringify(a.modifier));
   check('endsAt が24時間以内の未来', a.endsAt > Date.now() && a.endsAt <= Date.now() + 86400000, String(a.endsAt));
   check('未プレイ状態', a.played === false && a.score === null && a.streak === 0);
   const b = await j('/api/daily');
@@ -182,8 +189,8 @@ try {
   // お題を無視して住人が点を出すと、極小の日に「人間には不可能な行」が並ぶ。
   // 生の式の上限は約22,900点。お題の係数が効いていれば必ずその範囲に収まる。
   const topGhost = Math.max(...ghosts.map(r => r.dailyScore || 0));
-  check('住人の点がお題の係数の範囲に収まる', topGhost <= Math.ceil(22900 * a.modifier.ghost) + 1,
-    `top=${topGhost} 上限=${Math.ceil(22900 * a.modifier.ghost)} (${a.modifier.id} ghost=${a.modifier.ghost})`);
+  check('住人の点がお題の係数の範囲に収まる', topGhost <= Math.ceil(22900 * ghostFactor) + 1,
+    `top=${topGhost} 上限=${Math.ceil(22900 * ghostFactor)} (${a.modifier.id} ghost=${ghostFactor})`);
 
   // ---- ストリーク: 昨日クリア→継続 / 未クリア→リセット / 7日でバッジ -------
   const u2 = await j('/api/register', { method: 'POST', body: { username: 'デイリー六段', password: 'pass1234' } });

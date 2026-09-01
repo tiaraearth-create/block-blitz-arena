@@ -42,6 +42,14 @@
 <link rel="modulepreload" href="js/screens.js">
 <link rel="modulepreload" href="js/game.js">
 <link rel="modulepreload" href="js/dom.js">
+<!-- dom.js が起動直後に読む2本（icons.js → ranks.js）と、main.js が
+     メニューの組み立てで読む rules.js。ここに無いと dom.js を待ってから
+     取りに行くことになり、最初の描画がそのぶん遅れる。
+     href は素のまま置くこと ── サーバー(server/index.js buildAssetHashes)が
+     配信時に ?v=<hash> を焼き込んで、実際の import と同じURLに揃える。 -->
+<link rel="modulepreload" href="js/icons.js">
+<link rel="modulepreload" href="js/ranks.js">
+<link rel="modulepreload" href="js/rules.js">
 <link rel="modulepreload" href="js/net.js">
 <link rel="modulepreload" href="js/i18n.js">
 <link rel="modulepreload" href="js/catalog-en.js">
@@ -66,7 +74,7 @@
   <!-- ===================== Top bar ===================== -->
   <header id="topbar">
     <button id="userChip" class="chip">
-      <span id="userAvatar">👤</span>
+      <span id="userAvatar"></span>
       <span id="userName">ゲスト</span>
       <span id="userLevel" class="lvl hidden">Lv.1</span>
     </button>
@@ -76,7 +84,9 @@
     <div class="currency">
       <span class="chip coin-chip">🪙 <b id="coinsLabel">0</b></span>
       <span class="chip gem-chip">💎 <b id="gemsLabel">0</b></span>
-      <button id="btnSettings" class="chip icon-btn" title="設定">⚙️</button>
+      <!-- 中身の絵文字は起動時にアイコンへ差し替わる（＝読み上げに残る名前が
+           無くなる）ので、名前は title だけでなく aria-label でも持たせておく。 -->
+      <button id="btnSettings" class="chip icon-btn" title="設定" aria-label="設定">⚙️</button>
     </div>
   </header>
 
@@ -131,6 +141,14 @@
           <button class="btn btn-online btn-big" id="btnOnline">🌐 オンライン対戦</button>
         </div>
         <nav class="menu-nav">
+          <!-- 📖 遊び方。このゲームには長いあいだルールを説明する場所が1つも
+               無く、実際に「2ライン同時消しで相手を攻撃できる」を知らないまま
+               遊び終えた人が出た。ナビの先頭に置いて、いつでも開ける入口にする。
+               #rulesDot は初回だけ光る印（まだ一度も開いておらず、かつ
+               チュートリアルも終えていない人にだけ main.js が出す）。
+               絵文字はここに書いてあるが、起動時に main.js の paintStaticIcons()
+               が icons.js のアイコンへ差し替える（他のボタンと同じ扱い）。 -->
+          <button class="nav-btn" id="btnRules"><span>📖</span>遊び方<i id="rulesDot" class="nav-dot hidden">!</i></button>
           <button class="nav-btn" id="btnMissions"><span>📋</span>ミッション<i id="missionDot" class="nav-dot hidden"></i></button>
           <button class="nav-btn" id="btnFriends"><span>🤝</span>フレンド<i id="friendDot" class="nav-dot hidden"></i></button>
           <button class="nav-btn" id="btnGuild"><span>🏰</span>ギルド</button>

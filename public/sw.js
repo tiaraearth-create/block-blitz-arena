@@ -65,9 +65,24 @@ async function put(req, res) {
 }
 
 // 版数つきURL（?v=…）は「中身が変わったらURLも変わる」約束なので控えが先でよい。
+//
+// ⚠ 控え置き場の読み取りが失敗しても、**絶対にここで throw しないこと**。
+//   index.html が読む唯一の入口 <script type="module" src="js/main.js?v=…">
+//   がこの経路を通る。ここが reject すると respondWith がネットワークエラーに
+//   なり、main.js が読まれない ＝ **画面がロゴのまま止まり、コンソールには
+//   net::ERR_FAILED が1行出るだけ**という、原因の分からない全損になる。
+//   （v2.34 の点検中に「?v= の付いた要求だけが全部 Failed to fetch になり、
+//    メニューのボタンが1つも配線されない」状態を実際に踏んだ。あのときの
+//    直接の原因は自動操作ブラウザ側の制限で caches ではなかったが、
+//    「入口が1つの経路に頼っていて、その経路が黙って落ちる」という形は同じ。）
+//   caches が使えない端末（プライベートウィンドウ、サイトデータを塞いだ設定、
+//   容量逼迫）では現実に読み取りが投げる。控えは「あれば得をするもの」に
+//   留めて、落ちたら素のネットワークへ抜ける。
 async function cacheFirst(req) {
-  const hit = await caches.match(req);
-  if (hit) return hit;
+  try {
+    const hit = await caches.match(req);
+    if (hit) return hit;
+  } catch { /* 控えが読めないだけ。ネットワークで取り直せばよい */ }
   const res = await fetch(req);
   if (cacheable(res)) put(req, res.clone());
   return res;

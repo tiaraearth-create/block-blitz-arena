@@ -5,6 +5,9 @@ import { WebSocketServer } from 'ws';
 import { Engine } from '../public/js/engine.js';
 import { chooseMove } from '../public/js/ai.js';
 import { RAID_BOSSES } from './catalog.js';
+// 段位（帯・24段）の唯一の正解。手書きの表をここに持たない ── サーバーと画面で
+// しきい値がズレると「画面ではゴールドなのにサーバーはシルバー扱い」が起きる。
+import { rankOf, bandOf, RANK_BANDS } from '../public/js/ranks.js';
 import {
   effectiveScale, pickPersona, pickResidentBot, residentLine, residentById, residentByName,
   ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor, chatFloorMs, getRoster,
@@ -25,6 +28,8 @@ import { getSchedule as getAeSchedule, liveSlotFor as aeLiveSlotFor,
   SHARD as AE_SHARD, recordThrone as aeRecordThrone } from './adminevent.js';
 import { translateChat, translateLocal, detectLang } from './translate.js';
 import { isOpen as pollIsOpen, vote as pollVote, residentChoice, residentVoteAt, isSwingVoter } from './polls.js';
+// 住人の正体を隠す共通の関門（詳しい理由は server/sanitize.js の冒頭）。
+import { scrubFor } from './sanitize.js';
 
 const COUNTDOWN = 3;
 // ms alone in queue before an AI player fills the seat (randomized per entry
@@ -171,9 +176,18 @@ export function initBattle(server, deps) {
   // 続けている」状態に気づけるよう、数だけ管理画面へ出す。
   let chatChainErrors = 0;
 
+  // 🎭 その socket の持ち主が運営か。ws.user は hello 時点の控え（id と名前だけ）
+  // なので、権限は毎回 db から引き直す ── 降格した人の socket が張りっぱなしでも
+  // 権限だけ残る、を作らない。
+  const sockAdmin = sock => !!(sock && sock.user && db.users[sock.user.id] && db.users[sock.user.id].role === 'admin');
+
+  // WebSocket の唯一の出口。ここを通らないフレームは無いので、
+  // 住人の正体を明かすキー（isBot / human / real …）はここで最後に落とす。
+  // 個別の送信箇所でも組み立てない（match_found など）が、フレームは数十種類
+  // あって今後も増えるので、機械的に落とす関門を必ず1枚かませる。
   function send(sock, msg) {
     if (sock.isBot) return;
-    if (sock.readyState === sock.OPEN) sock.send(JSON.stringify(msg));
+    if (sock.readyState === sock.OPEN) sock.send(JSON.stringify(scrubFor(sockAdmin(sock), msg)));
   }
   function broadcastAll(msg) { for (const ws of clients) send(ws, msg); }
 
@@ -408,7 +422,7 @@ export function initBattle(server, deps) {
         `…The last one left you a message. "${will.text}" — from ${will.by}`);
     }
     send(e.ws, {
-      ...zeroStateView(sess, run),
+      ...zeroStateView(sess, run, e.name),
       type: 'zero_found',
       id: sess.id, seed: sess.seed, countdown: 3,
       // 再接続（新セッション）でも、とどめを刺して未記入の段があれば伝言を書ける。
@@ -972,7 +986,7 @@ export function initBattle(server, deps) {
             const cells = attackCells(r.lineCount, r.streak);
             for (const q of match.players) {
               if (q.slot === slot || q.team === p.team) continue;
-              deliverAttack(match, slot, q, cells);
+              deliverAttack(match, slot, q, cells, r.lineCount);
             }
           }
           broadcastState(match, slot, {
@@ -1071,10 +1085,14 @@ export function initBattle(server, deps) {
         tourney: tourney ? { round: tourney.round, final: tourney.final } : null,
         boss: match.boss || null,
         you: { slot: p.slot, team: p.team },
+        // isBot は運営にだけ載せる。関門（send）も落とすが、そもそも
+        // 組み立てないのが正しい ── 対戦相手が住人かどうかは、盤面の外から
+        // 分かってはいけない一番の情報。
         players: match.players.map(q => ({
           slot: q.slot, team: q.team, name: sockName(q.sock),
           level: sockLevel(q.sock), rating: sockRating(q.sock),
-          isBot: !!q.sock.isBot, isYou: q === p,
+          isYou: q === p,
+          ...(sockAdmin(p.sock) ? { isBot: !!q.sock.isBot } : {}),
         })),
       });
     }
@@ -1451,7 +1469,11 @@ export function initBattle(server, deps) {
     return Math.min(9, base + Math.min(3, Math.floor(combo / 3)));
   }
 
-  function deliverAttack(match, fromSlot, p, cells) {
+  // lines = 撃った側が同時に消したライン数。**個数からは逆算できない**ので
+  // 載せる ── attackCells(3, 6) と attackCells(4, 0) はどちらも6個になるため、
+  // cells だけを見ている受け手は「相手が2ライン以上をまとめて消した」までしか
+  // 言えなかった（public/js/modes.js の attackLesson が msg.lines を待っている）。
+  function deliverAttack(match, fromSlot, p, cells, lines = 0) {
     if (!cells || match.ended) return;
     if (p.sock.isBot) {
       if (p.sock.engine) {
@@ -1465,24 +1487,39 @@ export function initBattle(server, deps) {
         });
       }
     } else {
-      send(p.sock, { type: 'garbage', from: fromSlot, cells });
+      send(p.sock, { type: 'garbage', from: fromSlot, cells, lines });
     }
   }
 
-  // 段位（クライアント dom.js rankOf と同じしきい値）
-  const RANK_TIERS = [
-    { min: 0, icon: '🥉', name: 'ブロンズ', nameEn: 'Bronze' },
-    { min: 950, icon: '🥈', name: 'シルバー', nameEn: 'Silver' },
-    { min: 1100, icon: '🥇', name: 'ゴールド', nameEn: 'Gold' },
-    { min: 1300, icon: '💠', name: 'プラチナ', nameEn: 'Platinum' },
-    { min: 1500, icon: '💎', name: 'ダイヤ', nameEn: 'Diamond' },
-    { min: 1700, icon: '👑', name: 'マスター', nameEn: 'Master' },
-  ];
-  function tierOfRating(r) {
-    let out = RANK_TIERS[0];
-    for (const t of RANK_TIERS) if (r >= t.min) out = t;
-    return out;
-  }
+  // 段位。しきい値は public/js/ranks.js が唯一の正解で、ここには表を持たない。
+  // 以前は同じ数字を手書きで写していたので、帯を足したり動かしたりした瞬間に
+  // 「画面ではグランドマスターなのに、サーバーはマスターとして扱う」が起きる
+  // 状態だった（実際 ranks.js は8帯なのに、この表は6帯のまま止まっていた）。
+  //
+  // クライアント(modes.js)のトースト用に絵文字だけは必要なので、帯の id →
+  // 絵文字の対応表をここに置く。これは **しきい値ではない** ので、
+  // ranks.js に帯が増えたときは既定の 🎖️ に落ちるだけで、段位の判定はズレない。
+  const BAND_EMOJI = {
+    bronze: '🥉', silver: '🥈', gold: '🥇', platinum: '💠',
+    diamond: '💎', master: '👑', grandmaster: '🌟', legend: '🔥',
+  };
+  // 全体告知の下限。この帯より上に **上がったとき** だけ世界に流す。
+  const ANNOUNCE_FROM = 'gold';
+  const announceMin = (RANK_BANDS.find(b => b.id === ANNOUNCE_FROM) || RANK_BANDS[0]).min;
+  // 本人向けの表示は24段ぶん（ゴールドIII→II のような小さな昇格も出す）。
+  // 全体告知は帯（8種）が上がったときだけ ── 段まで告知すると、告知の量が
+  // そのまま3倍になってロビーが昇格通知で埋まる。
+  const rankInfoOf = (r) => {
+    const rk = rankOf(r);
+    const band = bandOf(r);
+    return {
+      // クライアント(modes.js)が読む形。min は昇格/降格の向きの判定に使う。
+      min: rk.min, icon: BAND_EMOJI[band.id] || '🎖️',
+      name: rk.label, nameEn: rk.labelEn,
+      // 全体告知に使う帯そのもの
+      band: { id: band.id, min: band.min, name: band.name, nameEn: band.nameEn, icon: BAND_EMOJI[band.id] || '🎖️' },
+    };
+  };
 
   // -------------------------------------------------------------------------
   // 🔁 再戦（リマッチ） — 対戦直後に同じ相手へ再挑戦
@@ -1558,10 +1595,13 @@ export function initBattle(server, deps) {
     // （スコアで勝っていた人が敗北になる、の逆もない）。記録と報酬は残る。
     if (reason === 'shutdown') winTeam = match.mode === 'raid' ? -2 : -1;
 
+    // 結果画面の並び。isBot は載せない（match_found と同じ理由）。
+    // 運営には下の送信時に足す ── 1本を全員へ配るので、ここでは持たせない。
     const playersInfo = match.players.map(p => ({
       slot: p.slot, team: p.team, name: sockName(p.sock),
-      score: p.score, moves: p.moves || 0, isBot: !!p.sock.isBot,
+      score: p.score, moves: p.moves || 0,
     }));
+    const playersInfoAdmin = playersInfo.map((row, i) => ({ ...row, isBot: !!match.players[i].sock.isBot }));
 
     // 試合開始時に固定した userId で人物を解決する（p.sock.user を見ない）。
     // 終了時点の名乗りで引くと、ゲスト化・別token での戦績回避／付け替えが通る。
@@ -1615,25 +1655,40 @@ export function initBattle(server, deps) {
           const oppRating = oppUser && oppUser.id !== me.id ? preRatings[1 - p.slot]
             : oppSock.isBot && oppSock.rating != null ? oppSock.rating : null;
           if (oppRating != null) {
-            const beforeTier = tierOfRating(me.stats.rating);
+            const beforeTier = rankInfoOf(me.stats.rating);
             ratingDelta = eloUpdate(me.stats.rating, oppRating, outcome);
             me.stats.rating = Math.max(0, me.stats.rating + ratingDelta);
             // レート系称号が下振れで剥がれないよう、到達最高レートを残す。
             me.stats.ratingBest = Math.max(me.stats.ratingBest || 0, me.stats.rating);
-            const afterTier = tierOfRating(me.stats.rating);
-            if (afterTier !== beforeTier) {
+            const afterTier = rankInfoOf(me.stats.rating);
+            // 24段のどれかが動いたら本人には知らせる（結果画面のトースト）。
+            if (afterTier.min !== beforeTier.min) {
               tierChange = { up: afterTier.min > beforeTier.min, from: beforeTier, to: afterTier };
-              // 📈 昇格はゴールド以上で全体アナウンス + 住人が祝う
-              if (tierChange.up && afterTier.min >= 1100) {
-                broadcastAll({
-                  type: 'announce',
-                  message: `${afterTier.icon} 「${me.username}」が${afterTier.name}帯に昇格！`,
-                  messageEn: `${afterTier.icon} "${me.username}" was promoted to ${afterTier.nameEn}!`,
-                  from: '大会運営',
-                });
-                // tier はオブジェクトで渡す — renderSlot が言語別に name/nameEn を選ぶ
-                react('rankup', { you: me.username, tier: afterTier, notName: me.username });
-              }
+            }
+            // 📈 全体アナウンス + 住人のお祝いは「帯（8種）が上がったとき」だけ。
+            //
+            // 段が III/II/I に割れて24段になったので、段ごとに流すと告知が3倍に
+            // なってロビーが昇格通知で埋まる。帯の移動だけに絞る。
+            //
+            // さらに、以前は「今回の1戦で帯が変わったか」しか見ていなかったので、
+            // しきい値の上下を往復するだけで（例: 1700付近で勝ち負けを繰り返す）
+            // 何度でも全体配信できた ── 同じ人の同じ昇格が一晩に何十回も流れる。
+            // 「どこまで告知したか」を本人の stats に残し、そこを **超えたときだけ**
+            // 流す。降格しても記録は下げない（＝往復では二度と鳴らない）。
+            // ⚠ この stats キーは server/backup.js の合流にも入れてある。
+            //    落とすと復元のたびに昇格告知がもう一度鳴る。
+            if (afterTier.band.min > beforeTier.band.min && afterTier.band.min >= announceMin
+                && afterTier.band.min > (Number(me.stats.rankAnnounced) || 0)) {
+              me.stats.rankAnnounced = afterTier.band.min;
+              const b = afterTier.band;
+              broadcastAll({
+                type: 'announce',
+                message: `${b.icon} 「${me.username}」が${b.name}帯に昇格！`,
+                messageEn: `${b.icon} "${me.username}" was promoted to ${b.nameEn}!`,
+                from: '大会運営',
+              });
+              // tier はオブジェクトで渡す — renderSlot が言語別に name/nameEn を選ぶ
+              react('rankup', { you: me.username, tier: b, notName: me.username });
             }
           }
         }
@@ -1685,7 +1740,7 @@ export function initBattle(server, deps) {
           ? { owner: match.owner.slice(), counts: landCounts(match), yours: p.slot + 1, moves: match.moves }
           : null,
         you: { slot: p.slot, team: p.team },
-        players: playersInfo,
+        players: sockAdmin(p.sock) ? playersInfoAdmin : playersInfo,
         ratingDelta, rewards, tierChange, rematchId,
         user: me ? publicUser(me) : null,
       });
@@ -1805,8 +1860,12 @@ export function initBattle(server, deps) {
     return {
       type: 'queued', mode,
       waited: Math.round(waited / 1000),
-      // Honest, not decorative: this is the actual moment a bot fills the seat.
-      botInSec: Math.max(0, Math.round((entry.botAt - Date.now()) / 1000)),
+      // 「あと何秒でマッチが成立するか」。中身は今までどおり entry.botAt
+      // （席を埋める瞬間）だが、フィールド名を botInSec のままにすると
+      // **名前そのものが「相手はボットです」と言っている**。値は正直なまま、
+      // 呼び名だけ中立にする。⚠ クライアント側（public/js/modes.js）も
+      // matchInSec に追随が要る。
+      matchInSec: Math.max(0, Math.round((entry.botAt - Date.now()) / 1000)),
       humans: queues[mode].length,
       band: ratingBand(waited),
       rating: ratingOf(entry.ws),
@@ -2317,7 +2376,8 @@ export function initBattle(server, deps) {
   // A 2+ line clear buries someone else. Targeting is deliberate: most of the
   // time it hits the current leader (a bounty that keeps #1 honest), otherwise
   // a random survivor. Never yourself.
-  function royaleAttack(r, from, cells) {
+  // lines は deliverAttack と同じ理由で持ち回す（個数からは逆算できない）。
+  function royaleAttack(r, from, cells, lines = 0) {
     if (!cells || r.ended) return;
     const others = royaleAlive(r).filter(e => e !== from);
     if (!others.length) return;
@@ -2327,14 +2387,14 @@ export function initBattle(server, deps) {
     // not fatal. 25% keeps the pressure and leaves the lead survivable.
     const target = (Math.random() < 0.25 && leader !== from) ? leader
       : others[Math.floor(Math.random() * others.length)];
-    royaleHit(r, target, cells, from);
+    royaleHit(r, target, cells, from, lines);
   }
 
-  function royaleHit(r, target, cells, from) {
+  function royaleHit(r, target, cells, from, lines = 0) {
     if (!target || !target.alive) return;
     if (target.human) {
       if (target.ws.readyState === target.ws.OPEN) {
-        send(target.ws, { type: 'royale_garbage', cells, from: from ? from.name : null });
+        send(target.ws, { type: 'royale_garbage', cells, from: from ? from.name : null, lines });
       }
       return;
     }
@@ -2483,7 +2543,7 @@ export function initBattle(server, deps) {
         e.lines = e.engine.linesCleared;
         e.combo = Math.max(e.combo, e.engine.maxCombo);
         e.grid = null;
-        if (res.lineCount >= 2) royaleAttack(r, e, attackCells(res.lineCount, res.streak));
+        if (res.lineCount >= 2) royaleAttack(r, e, attackCells(res.lineCount, res.streak), res.lineCount);
       }
       if (e.engine.over) royaleTopOut(r, e, null);
     }
@@ -2903,7 +2963,9 @@ export function initBattle(server, deps) {
           if (r.ok) {
             saveDb();
             for (const e of sess.entrants) if (e.human && e.ws && e.ws.readyState === e.ws.OPEN) {
-              send(e.ws, { type: 'zero_deal_vote', by: sockName(ws), pick: msg.pick, tally: r.tally, human: true });
+              // human: true は付けない。住人の票（zero-session.js の同名フレーム）
+              // にだけ無い印になるので、これが「誰が人間か」の一覧表になっていた。
+              send(e.ws, { type: 'zero_deal_vote', by: sockName(ws), pick: msg.pick, tally: r.tally });
             }
           } else {
             send(ws, { type: 'error', error: r.why === 'already' ? 'もう投票しました' : '投票を受け付けられません' });
@@ -2996,7 +3058,7 @@ export function initBattle(server, deps) {
           if (e.atkCells + rCells > atkCellsCap(r.startedAt)) return;
           e.atkLinesUsed += lines;
           e.atkCells += rCells;
-          royaleAttack(r, e, rCells);
+          royaleAttack(r, e, rCells, lines);
           return;
         }
         case 'attack': {
@@ -3024,7 +3086,7 @@ export function initBattle(server, deps) {
           me.atkCells += cells;
           for (const p of match.players) {
             if (p.slot === me.slot || p.team === me.team) continue;
-            deliverAttack(match, me.slot, p, cells);
+            deliverAttack(match, me.slot, p, cells, aLines);
           }
           break;
         }

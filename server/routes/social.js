@@ -17,6 +17,10 @@ import {
 import {
   jstDayKey,
 } from '../adminevent.js';
+import {
+  residentByName, residentStats, activeResidents,
+} from '../ambient.js';
+import { anonId } from '../sanitize.js';
 import { ctx } from '../context.js';
 
 // index.js のモジュールスコープにしか無いもの。値は起動時に一度だけ
@@ -63,6 +67,34 @@ socialRouter.post('/api/friends/search', requireAuth, (req, res) => {
   }
   const low = name.toLowerCase();
   const found = Object.values(db.users).find(u => u && u.username.toLowerCase() === low);
+  // 🎭 住人（AIプレイヤー）もここに出す。ランキングやチャットには名前が並ぶのに
+  // フレンド検索だけ「そんな人は居ない」と返していたので、
+  // 「見えているのに探せない名前＝住人」という総当たり判定になっていた。
+  //
+  // 申請そのものは通らないが、断り方は実プレイヤーとまったく同じ ──
+  // friends.js の sendRequest は「知らない id」も「申請を受け取らない設定の人」も
+  // 同じ REFUSED を返すので、こちらで何もしなくても文言はそろう。
+  if (!found) {
+    const r = residentByName(name);
+    if (r && r.registered) {
+      const st = residentStats(r, Date.now());
+      const online = activeResidents().some(x => x.id === r.id);
+      return res.json({
+        user: {
+          // id は不透明（連番の住人idを出さない）。実ユーザーの id と同じ見た目。
+          id: anonId(`resident:${r.id}`),
+          username: r.name,
+          level: st.level,
+          badges: (st.badges || []).slice(0, 6),
+          title: st.title ? st.title.id : null,
+          status: online ? 'online' : 'offline',
+          lastSeen: online ? Date.now() : Date.now() - 3600000,
+        },
+        already: false,
+        pending: false,
+      });
+    }
+  }
   // 見つからない理由は出し分けない（在籍の有無を総当たりで調べられる）。
   if (!found || found.id === req.user.id || found.banned) return res.json({ user: null });
   ensureSocial(req.user); ensureSocial(found);
@@ -83,7 +115,11 @@ socialRouter.post('/api/friends/request', requireAuth, maintenanceGuard, (req, r
     return res.status(429).json({ error: 'すこし待ってからお試しください' });
   }
   const target = userById(req.body.userId);
-  if (!target) return res.status(404).json({ error: '申請できませんでした' });
+  // 知らない id への申請は 409（friends.js の REFUSED と同じ扱い）。404 に
+  // していた頃は、住人や退会者を狙ったときだけ状態コードが違い、
+  // 「申請を受け取らない設定の実プレイヤー」と見分けがついた。文言は元から
+  // 同じなので、そろえるのはステータスだけでよい。
+  if (!target) return res.status(409).json({ error: '申請できませんでした' });
   migrateUser(target);
   const r = sendRequest(db, req.user, target.id);
   if (r.error) return res.status(409).json({ error: r.error });
@@ -216,7 +252,8 @@ socialRouter.post('/api/friends/challenge', requireAuth, maintenanceGuard, (req,
     return res.status(429).json({ error: 'すこし待ってからお試しください' });
   }
   const target = userById(String((req.body || {}).userId || ''));
-  if (!target) return res.status(404).json({ error: '挑戦状を送れませんでした' });
+  // 申請と同じ理由で 409 にそろえる（CH_REFUSED と同じステータス・同じ文言）。
+  if (!target) return res.status(409).json({ error: '挑戦状を送れませんでした' });
   migrateUser(target);
   const r = sendChallenge(db, req.user, target.id, jstDayKey());
   if (r.error) return res.status(409).json({ error: r.error });

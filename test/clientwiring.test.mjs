@@ -53,6 +53,25 @@ for (const f of CLIENT) {
 }
 
 // --- 3. 使っているのに import していない ---
+//
+// この検査はソースに正規表現を当てるので、**コメントに書かれた関数名**まで
+// 「呼び出し」に見えてしまう。実際に一度これで赤くなった:
+//   modes.js の「確実に止めたいときは dom.js の cancelCountdowns() を呼んでもよい」
+// という説明文が、import 忘れとして報告された。
+// コメントに関数名を（括弧つきで）書けないのは不便だし、書けないルールを
+// 人は守れない。丸ごとコメントの行だけ落としてから見る。
+//
+// 行の途中の // は落とさない ── 文字列の中の "https://" を壊すし、
+// 行の途中に関数呼び出しとコメントが同居していれば呼び出しは本物だから。
+function stripCommentLines(src) {
+  return src.split('\n')
+    .map(line => {
+      const s = line.trim();
+      return (s.startsWith('//') || s.startsWith('*') || s.startsWith('/*')) ? '' : line;
+    })
+    .join('\n');
+}
+
 const EXPORTS = {};
 for (const f of CLIENT) {
   const src = read(`public/js/${f}`);
@@ -73,10 +92,11 @@ for (const f of CLIENT) {
   // dom.js が出している名前を、他のファイルが import せずに呼んでいないか
   const domNames = EXPORTS.dom || new Set();
   const orphans = [];
+  const code = stripCommentLines(src);   // 説明文の中の関数名を拾わない
   for (const n of domNames) {
     if (f === 'dom.js') continue;
     if (imported.has(n) || declared.has(n)) continue;
-    if (new RegExp(`(?<![$\\w.])${n.replace(/\$/g, '\\$')}\\s*\\(`).test(src)) orphans.push(n);
+    if (new RegExp(`(?<![$\\w.])${n.replace(/\$/g, '\\$')}\\s*\\(`).test(code)) orphans.push(n);
   }
   check(`${f}: dom.js の関数を import せずに呼んでいない`, orphans.length === 0, orphans.join(', '));
 }
