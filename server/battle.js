@@ -3,13 +3,16 @@
 import crypto from 'crypto';
 import { WebSocketServer } from 'ws';
 import { Engine } from '../public/js/engine.js';
-import { chooseMove } from '../public/js/ai.js';
+// AI_LEVELS も読む。王者専用の手番間隔を写経せず souzou の定義から取るため
+// （ai.js を調整したときにサーバー側だけ古い値のまま残る、を作らない）。
+import { chooseMove, AI_LEVELS } from '../public/js/ai.js';
 import { RAID_BOSSES } from './catalog.js';
 // 段位（帯・24段）の唯一の正解。手書きの表をここに持たない ── サーバーと画面で
 // しきい値がズレると「画面ではゴールドなのにサーバーはシルバー扱い」が起きる。
 import { rankOf, bandOf, RANK_BANDS } from '../public/js/ranks.js';
 import {
-  effectiveScale, pickPersona, pickResidentBot, residentLine, residentById, residentByName,
+  effectiveScale, pickPersona, pickResidentBot, pickChampionBot,
+  residentLine, residentById, residentByName,
   ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor, chatFloorMs, getRoster,
   toggles, isQuietNow, popFactor, worldCtx,
 } from './ambient.js';
@@ -56,6 +59,11 @@ export function initBattle(server, deps) {
   const { db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, MATCH_DURATION } = deps;
   // 予約名判定（無ければ何も予約しない安全側デフォルト）。index.js が渡す。
   const reservedName = deps.reservedName || (() => false);
+  // 👑 「王者を破った」の全体速報。連発防止（1人1日1回・印は stats.champAnnDay）と
+  // 日英の文面は index.js の announceChampionFall が持っているので、こちらは
+  // endMatch で beatChampion が立った直後に呼ぶだけでよい。何度呼んでも二重には
+  // 鳴らない。テストの部分起動など deps が来ない環境では何もしない。
+  const announceChampionFall = deps.announceChampionFall || (() => false);
   // アカウント（未ログインはIP）単位の流量制限。sockRate は ws のプロパティに
   // カウンタを置くので、接続を増やすと持ち分もそのまま増える。
   // index.js から渡らない環境（テストの部分起動など）では素通しにする。
@@ -936,21 +944,65 @@ export function initBattle(server, deps) {
   const BOT_RATING = { easy: [720, 1020], normal: [980, 1300], hard: [1240, 1600], oni: [1520, 1950] };
   const BOT_LVL = { easy: [1, 7], normal: [5, 16], hard: [12, 30], oni: [22, 48] };
   const BOT_MOVE_MS = { easy: 2600, normal: 1700, hard: 1050, oni: 820 };
+  // 👑 王者専用の段。BOT_LEVELS には**足さない** ── 足すと randomBotLevel や
+  // 部屋の botLevel 設定から引けてしまい、「王者以外がこの強さで出る」ことに
+  // なる。ここに置いてあるのは王者1人ぶんの例外で、他の住人の強さ
+  // （BOT_LEVELS / BOT_MOVE_MS / BOT_RATING）は一切変えていない。
+  //
+  // souzou（創造神）= public/js/ai.js の最強手。手札の全順列を読むビームサーチ
+  // （beam:14）で、鬼(oni)の約1.5倍のスコアを出す。手番間隔も ai.js の定義から
+  // 読む（写経すると ai.js を触ったときにここだけ古くなる）。
+  const CHAMPION_AI = 'souzou';
+  // ⚠️ 手番間隔は ai.js の 380ms を**そのまま使わない**。
+  //
+  // 380ms は毎秒2.6手。2分間ミスなくこれを打ち続けられる人間は居ないので、
+  // 「速すぎてボットだと分かる」という、このゲームで最も避けたい正体の露出に
+  // 直結する（ユーザーからの指摘で判明）。強さは速さではなく手の質で作る。
+  //
+  // 700ms を選んだ根拠（120秒・21回試行の実測）:
+  //   ・実効の間隔は Bot.startPlay のゆらぎ（0.75〜1.25倍）と8%の考え込み
+  //     （1.2〜3.4秒）が乗るので、平均 約884ms ＝ 毎秒1.1手。
+  //   ・いま既に居る最強ボット「鬼」が 820ms 基準＝毎秒1.00手なので、
+  //     王者だけが不自然に速い、という見え方にならない。
+  //   ・その条件で souzou の思考は鬼に対して勝率 92%。しかも比較相手の「鬼」は
+  //     AIの完璧な置き方なので、実在の人間が相手ならさらに上回る。
+  //
+  // 注意: このゲームではスコアがほぼ手数で決まる（souzou の思考が上乗せするのは
+  // 1手あたり約7%）。つまり「人間の速度で絶対に負けない」は原理的に作れない。
+  // ユーザーの決定は「速さを人間の範囲に収め、戦績は実態に合わせる」。
+  const CHAMPION_MOVE_MS = 700;
   const EMOTE_SET = ['👍', '🔥', '😂', '😭', '🎉', '😱', '💪', '😎', '👏', '🤯'];
 
   class Bot {
     constructor(level = 'random', used) {
       this.isBot = true;
       this.level = BOT_LEVELS.includes(level) ? level : randomBotLevel();
+      // 👑 まれに王者が現れる（伝説枠）。ふつうの住人抽選からは外してあるので、
+      // この1行を通らないかぎり対戦相手としては出てこない。遭遇率は
+      // ambient.js の CHAMPION_ENCOUNTER で決める。
+      const champ = pickChampionBot(used);
       // Prefer a resident whose rating matches this strength — the name you
       // beat in ranked is the same one chatting in the lobby and sitting on
       // the leaderboard. Fall back to a throwaway persona otherwise.
-      const res = Math.random() < 0.7 ? pickResidentBot(this.level, used) : null;
+      const res = champ || (Math.random() < 0.7 ? pickResidentBot(this.level, used) : null);
       if (res) {
         this.resident = res.resident;
         this.name = res.name;
         this.rating = res.rating;
         this.fakeLevel = res.level;
+        // 王者だけ、引いた席の強さを捨てて専用AIに差し替える。
+        // champion は「この socket が王者か」を endMatch が見る印でもある
+        // （フィールド名に bot/ai/resident を使わないこと ── 送信フレームには
+        //  載せないが、うっかり載せたときに正体を明かす名前にしておかない）。
+        if (champ) {
+          this.champion = true;
+          this.aiLevel = CHAMPION_AI;
+          this.moveMs = CHAMPION_MOVE_MS;
+          // level は「BOT_LEVELS のどれか」を前提にしている読み手がいる
+          // （大会のボット同士のコイン投げが rank 表で引く）。既知の最上位に
+          // 揃えておかないと、王者が easy 席の抽選値のまま不戦敗しうる。
+          this.level = 'oni';
+        }
       } else {
         this.resident = null;
         const persona = pickPersona({ used });
@@ -966,7 +1018,9 @@ export function initBattle(server, deps) {
 
     startPlay(match, slot) {
       this.engine = new Engine(match.seed);
-      const moveMs = BOT_MOVE_MS[this.level] || 1700;
+      // 👑 王者は aiLevel/moveMs を持つ（他の住人は従来どおり level から引く）。
+      const aiLevel = this.aiLevel || this.level;
+      const moveMs = this.moveMs || BOT_MOVE_MS[this.level] || 1700;
       const endAt = match.startedAt + (COUNTDOWN + match.duration) * 1000;
       const tick = () => {
         if (match.ended) return;
@@ -975,7 +1029,7 @@ export function initBattle(server, deps) {
           return;
         }
         if (this.engine.over) this.engine.reviveBoard();
-        const mv = chooseMove(this.engine, this.level);
+        const mv = chooseMove(this.engine, aiLevel);
         if (mv) {
           const r = this.engine.place(mv.index, mv.row, mv.col);
           const p = match.players[slot];
@@ -1362,6 +1416,10 @@ export function initBattle(server, deps) {
   }
 
   function broadcastState(match, fromSlot, state) {
+    // 👀 観戦席のために、最後の盤面をここで控える。ここは人間（'state'）も
+    // ボット（startPlay）も必ず通る唯一の合流点なので、控える場所は1つで足りる。
+    const from = match.players[fromSlot];
+    if (from && Array.isArray(state.grid)) from.grid = state.grid;
     for (const p of match.players) {
       if (p.slot === fromSlot || p.sock.isBot) continue;
       send(p.sock, { type: 'opp_state', slot: fromSlot, ...state });
@@ -1560,6 +1618,10 @@ export function initBattle(server, deps) {
     clearInterval(match.landTick);
     matches.delete(match.id);
     for (const p of match.players) if (p.sock.isBot) p.sock.stop();
+    // 👀 観戦室（カスタムルームの観戦席）を畳んで、ふつうの部屋に戻す。
+    // 1秒ごとの specTick も同じ判定で畳むが、そちらは最大1秒遅れるので
+    // ここで即座に閉じる（結果を見せる前に観戦画面を残さない）。
+    if (match.roomCode) { try { endRoomSpectate(rooms.get(match.roomCode)); } catch (err) { console.error('[room] spectate end', err); } }
 
     const ts = teamScores(match);
     let winTeam = ts[0] > ts[1] ? 0 : ts[1] > ts[0] ? 1 : -1;   // -1 = draw
@@ -1602,6 +1664,11 @@ export function initBattle(server, deps) {
       score: p.score, moves: p.moves || 0,
     }));
     const playersInfoAdmin = playersInfo.map((row, i) => ({ ...row, isBot: !!match.players[i].sock.isBot }));
+
+    // 👑 この試合に王者（ちゃちゃまる）が出ていたか。
+    // 印の名前は「相手が誰か」ではなく「何を成し遂げたか」で付ける ──
+    // beatBot のような名前は、その1語で住人の正体を明かしてしまう。
+    const championSide = match.players.find(p => p.sock.isBot && p.sock.champion) || null;
 
     // 試合開始時に固定した userId で人物を解決する（p.sock.user を見ない）。
     // 終了時点の名乗りで引くと、ゲスト化・別token での戦績回避／付け替えが通る。
@@ -1723,9 +1790,32 @@ export function initBattle(server, deps) {
           });
         }
       }
+      // 👑 王者を倒したか（称号とアナウンスの実装は別タスク。ここは印だけ）。
+      //   ・王者と**別チーム**で、そのチームが勝ったときだけ
+      //   ・協力/レイドは相手ではなく共闘なので対象外
+      //   ・棄権・切断で転がり込んだ勝ちは含めない（逃げ得で称号は付かない）
+      const beatChampion = !!(championSide && !p.sock.isBot && !p.forfeited
+        && p.team !== championSide.team && outcome === 1
+        && match.mode !== 'coop' && match.mode !== 'raid'
+        && !championSide.forfeited);
+      // 生涯カウンター。称号は「一度でも倒したか」で決まるので、結果フレームの
+      // 印だけだと再ログインで消える。⚠ server/backup.js の合流にも入れてある
+      // （落とすと復元のたびに称号が消える）。
+      if (beatChampion && me) {
+        me.stats = me.stats || {};
+        me.stats.championWins = (me.stats.championWins || 0) + 1;
+        // 全体速報。ここで鳴らすのは applyGameResult より **後ろ** で
+        // beatChampion が決まるため（上の applyGameResult 呼び出しに
+        // beatChampion を渡すには判定を前に動かす必要がある）。
+        // 数えるのはこの1か所だけ ── announceChampionFall はカウンタを
+        // 触らないので二重計上にならない。
+        announceChampionFall(me);
+      }
       if (p.forfeited) continue;   // quitter is gone — stats recorded, nothing to send
       send(p.sock, {
         type: 'result',
+        // 👑 王者に勝った（false は載せない ── 「この試合だけ false が付く」も情報）
+        ...(beatChampion ? { beatChampion: true, championWins: me ? me.stats.championWins : 1 } : {}),
         outcome: outcome === 1 ? 'win' : outcome === 0 ? 'lose' : 'draw',
         reason, mode: match.mode,
         tourney: match.tourney ? { round: match.tourney.round, final: match.tourney.final } : null,
@@ -2031,18 +2121,59 @@ export function initBattle(server, deps) {
       botLevel: ['random', 'easy', 'normal', 'hard', 'oni'].includes(s.botLevel) ? s.botLevel : 'random',
     };
   }
+  // 対戦席の数。モードどおり（1v1=2 / 2v2=4 / 協力=2 / 陣取り=2）。
   const roomSeats = room => room.settings.mode === 'team' ? 4 : 2;
+  // 部屋の定員（対戦席＋観戦席）。以前は対戦席ぶんしか入れず、あふれた人は
+  // 「ルームが満員です」で**入室すらできなかった** ── 5人で集まって2人だけ
+  // 遊ぶ、ができない。定員を8にして、あふれたぶんは観戦席に座らせる。
+  const ROOM_MAX = 8;
+  const roomPlaying = room => room.players.filter(p => !room.watch.has(p));
+
+  // 席の整え直し。入室順に対戦席を埋め、あふれたら観戦席へ落とす。
+  // ホストが明示的に観戦席へ回した人（benched）は繰り上げない ── 自動で
+  // 戻すと「ホストが決めた席割り」を機械が上書きしてしまう。
+  function reseat(room) {
+    const need = roomSeats(room);
+    let n = 0;
+    for (const p of room.players) {
+      if (room.benched.has(p)) { room.watch.add(p); continue; }
+      if (n < need) { room.watch.delete(p); n++; }
+      else room.watch.add(p);
+    }
+  }
+
+  // 試合中の観戦席へ配る中身（watch / watchable）。ロイヤルと同じ取り決め。
+  function roomWatchExtra(room, ws) {
+    const match = room.matchId ? matches.get(room.matchId) : null;
+    if (!match || match.ended) return null;
+    const list = matchWatchable(match);
+    const target = pickWatch(list, ws);
+    return {
+      inMatch: true,
+      remain: Math.max(0, Math.round((match.startedAt + (COUNTDOWN + match.duration) * 1000 - Date.now()) / 1000)),
+      watch: target ? { name: target.name, score: target.score, grid: matchGridOf(match, target.slot) } : null,
+      watchable: list.map(x => ({ name: x.name, score: x.score, alive: x.alive })),
+    };
+  }
 
   function broadcastRoom(room) {
+    const seats = roomSeats(room);
     for (const ws of room.players) {
+      if (ws.readyState !== ws.OPEN) continue;
       send(ws, {
         type: 'room_update',
         code: room.code,
         settings: room.settings,
         youAreHost: room.players[0] === ws,
+        // 席の内訳。クライアントは seats（対戦席の数）と max（定員）で
+        // 「◯/8人・対戦席2」のような表示ができる。
+        seats, max: ROOM_MAX,
+        yourSeat: room.watch.has(ws) ? 'watch' : 'play',
         players: room.players.map((p, i) => ({
           name: sockName(p), isHost: i === 0, isYou: p === ws,
+          seat: room.watch.has(p) ? 'watch' : 'play',
         })),
+        ...(roomWatchExtra(room, ws) || { inMatch: false }),
       });
     }
   }
@@ -2050,44 +2181,115 @@ export function initBattle(server, deps) {
   function leaveRoom(ws, notify = true) {
     const room = roomOf(ws);
     ws.roomCode = null;
+    ws.watchTarget = null;
     if (!room) return;
     const i = room.players.indexOf(ws);
     if (i !== -1) room.players.splice(i, 1);
-    if (room.players.length === 0) rooms.delete(room.code);
-    else if (notify) broadcastRoom(room);
+    room.watch.delete(ws);
+    room.benched.delete(ws);
+    if (room.players.length === 0) { clearInterval(room.specTick); rooms.delete(room.code); }
+    else { reseat(room); if (notify) broadcastRoom(room); }
   }
 
   function startRoom(ws) {
     const room = roomOf(ws);
     if (!room) return;
     if (room.players[0] !== ws) { send(ws, { type: 'room_error', error: 'ホストのみ開始できます' }); return; }
+    if (room.matchId) { send(ws, { type: 'room_error', error: 'まだ試合中です' }); return; }
     const need = roomSeats(room);
     const coop = room.settings.mode === 'coop';
     const land = room.settings.mode === 'land';
-    if (room.players.length > need) {
-      send(ws, { type: 'room_error', error: `この設定では最大${need}人です（チーム戦に変更してください）` });
+    reseat(room);   // 設定変更の直後などに席がズレたままにしない
+    const play = roomPlaying(room);
+    // 対戦席が空っぽ（全員が観戦席）だと、ボットだけの試合を観るだけになる。
+    if (!play.length) {
+      send(ws, { type: 'room_error', error: '対戦席に誰もいません（観戦席から誰かを対戦席へ）' });
       return;
     }
-    if (room.players.length < need && !room.settings.botFill) {
-      send(ws, { type: 'room_error', error: `あと${need - room.players.length}人必要です（ボット補充をONにもできます）` });
+    if (play.length < need && !room.settings.botFill) {
+      send(ws, { type: 'room_error', error: `あと${need - play.length}人必要です（ボット補充をONにもできます）` });
       return;
     }
     // Humans keep join order: in team mode the first two are team A. Co-op
     // puts everyone on one side of one board.
     const teamOf = i => coop ? 0 : room.settings.team ? (i < 2 ? 0 : 1) : i % 2;
-    const entries = room.players.map((p, i) => ({ sock: p, team: teamOf(i) }));
+    const entries = play.map((p, i) => ({ sock: p, team: teamOf(i) }));
+    // 観戦者の名前もボットの名前空間から外す（同名の対戦相手が出ると
+    // 観戦席の本人が盤面に二重に現れて見える）。
     const used = new Set(room.players.map(p => sockName(p)));
     while (entries.length < need) entries.push({ sock: new Bot(room.settings.botLevel, used), team: teamOf(entries.length) });
-    const players = room.players.slice();
-    rooms.delete(room.code);
-    for (const p of players) p.roomCode = null;
-    createMatch({
+    // 対戦席の人だけ部屋から出す（従来どおり）。観戦席の人は部屋に残り、
+    // 部屋そのものが観戦のための入れ物になる ── 試合中も room_update が
+    // 届き続けるので、watch / watchable をそこに載せられる。
+    for (const p of play) {
+      const i = room.players.indexOf(p);
+      if (i !== -1) room.players.splice(i, 1);
+      room.watch.delete(p);
+      room.benched.delete(p);
+      p.roomCode = null;
+    }
+    const watchers = room.players.slice();
+    if (!watchers.length) { clearInterval(room.specTick); rooms.delete(room.code); }
+    const match = createMatch({
       mode: coop ? 'coop' : land ? 'land' : room.settings.team ? 'team' : 'duel',
       entries,
       // 陣取りは時間制。部屋で選んだ長さ（60/120/180秒）をそのまま使う。
       duration: coop ? COOP_MAX_SECS : room.settings.duration,
       rated: false,
     });
+    if (!watchers.length || !match) return;
+    // 観戦席が残っているときだけ、部屋を試合の「観戦室」として生かす。
+    room.matchId = match.id;
+    match.roomCode = room.code;
+    for (const p of watchers) p.watchTarget = null;   // 既定は「おまかせ＝首位」
+    reseat(room);        // 残った人で席を組み直す（試合後にそのまま次を組める）
+    broadcastRoom(room);
+    clearInterval(room.specTick);
+    room.specTick = setInterval(() => {
+      const m = room.matchId ? matches.get(room.matchId) : null;
+      if (!m || m.ended) { endRoomSpectate(room); return; }
+      broadcastRoom(room);
+    }, 1000);
+  }
+
+  // 試合が終わったら観戦を畳んで、ふつうの部屋に戻す。
+  function endRoomSpectate(room) {
+    if (!room) return;
+    clearInterval(room.specTick);
+    room.specTick = null;
+    room.matchId = null;
+    if (!rooms.has(room.code)) return;
+    for (const p of room.players) p.watchTarget = null;
+    // 対戦席は空になったので、観戦席の人が繰り上がって次の試合を組める。
+    room.watch.clear();
+    room.benched.clear();
+    reseat(room);
+    broadcastRoom(room);
+  }
+
+  // -------------------------------------------------------------------------
+  // 試合（room 経由）の観戦データ
+  // -------------------------------------------------------------------------
+  // ロイヤルと同じ形（name / score / alive）。**正体に関わる値は入れない**。
+  function matchWatchable(match) {
+    return match.players
+      .map(p => ({
+        slot: p.slot, name: sockName(p.sock),
+        score: Math.floor(p.score || 0),
+        alive: !p.finished && !p.forfeited,
+      }))
+      // 順位順（まだ打っている人が上、その中で点の高い順）。
+      .sort((a, b) => (Number(b.alive) - Number(a.alive)) || (b.score - a.score))
+      .slice(0, WATCHABLE_MAX);
+  }
+
+  // 見ている1人ぶんの盤面だけを取り出す。
+  //   ・協力/陣取りは1盤面（サーバー権威）なのでそれを返す
+  //   ・それ以外は各プレイヤーの最後の盤面（broadcastState が控えている）
+  function matchGridOf(match, slot) {
+    if (match.engine) return match.engine.snapshot();
+    const p = match.players[slot];
+    return p && Array.isArray(p.grid) ? p.grid : null;
   }
 
   // -------------------------------------------------------------------------
@@ -2142,7 +2344,8 @@ export function initBattle(server, deps) {
       // Rising difficulty: an AI player facing a human plays at round strength.
       const lv = TOURNEY_BOT_LEVELS[Math.min(t.round, TOURNEY_BOT_LEVELS.length - 1)];
       for (const s of [a, b]) {
-        if (s.isBot) s.level = lv[crypto.randomInt(lv.length)];
+        // 👑 王者だけはラウンドの強さに引き下げない（専用AIのまま）。
+        if (s.isBot && !s.champion) s.level = lv[crypto.randomInt(lv.length)];
       }
       const aLive = entrantAlive(a), bLive = entrantAlive(b);
       if (!aLive || !bLive) {
@@ -2356,6 +2559,42 @@ export function initBattle(server, deps) {
   const royaleAlive = r => r.entrants.filter(e => e.alive);
   function royaleRanked(r) {
     return royaleAlive(r).sort((a, b) => b.score - a.score);
+  }
+
+  // -------------------------------------------------------------------------
+  // 👀 観戦（バトルロイヤル と カスタムルームの観戦席で「同じ仕組み」を使う）
+  // -------------------------------------------------------------------------
+  // 取り決め（この波の3タスク共通・勝手に変えない）:
+  //   クライアント → { type:'watch', target: string|null }   null は「おまかせ＝首位」
+  //   サーバー   → watch:     { name, score, grid } | null    いま見ている相手
+  //               watchable: [{ name, score, alive }]        選べる相手（順位順）
+  //
+  // 守ること:
+  //   ・watchable に正体（isBot/resident/…）を**絶対に載せない**。名前・点・
+  //     生死だけ。送信の関門（send → scrubFor）でも落ちるが、そもそも作らない。
+  //   ・多いと帯域を食うので上位20人で切る。
+  //   ・盤面（64マス）を送るのは「その観戦者が見ている1人ぶん」だけ。
+  //     100人ぶんを毎秒配ると 100観戦者 × 100盤面 になって現実的でない。
+  const WATCHABLE_MAX = 20;
+  // 見たい相手の名前は socket に持つ（1本の socket はロイヤルかルームの
+  // どちらか一方にしか居ないので、置き場所は1つで足りる）。
+  const watchNameOf = ws => (ws && ws.watchTarget) || null;
+
+  // 指名が居ない／脱落したら黙って固まらせず、自動で首位へ戻す。
+  function pickWatch(list, ws) {
+    const want = watchNameOf(ws);
+    if (want) {
+      const hit = list.find(x => x.name === want);
+      if (hit) return hit;
+      ws.watchTarget = null;   // もう見られない相手 → おまかせ（首位）へ
+    }
+    return list[0] || null;
+  }
+
+  // ロイヤルの「選べる相手」。順位順（＝強い人が上）で上位20人。
+  function royaleWatchable(ranked) {
+    return ranked.slice(0, WATCHABLE_MAX)
+      .map(e => ({ name: e.name, score: Math.floor(e.score), alive: true }));
   }
 
   // Everyone still in, plus everyone watching, gets world events.
@@ -2640,11 +2879,20 @@ export function initBattle(server, deps) {
       const cutLine = nextCut && ranked.length > nextCut.keep && nextCut.keep >= 1
         ? ranked[nextCut.keep - 1] : null;
       const top = ranked.slice(0, 3).map(x => ({ name: x.name, score: Math.floor(x.score), kills: x.kills || 0 }));
-      const leader = ranked[0];
+      // 観戦者に配る「選べる相手」の一覧は1試合ぶんを1回だけ作る（人数ぶん
+      // 作り直すと、100人ロビーでは毎秒 100×20 個のオブジェクトになる）。
+      const watchable = royaleWatchable(ranked);
       for (let i = 0; i < r.entrants.length; i++) {
         const e = r.entrants[i];
         if (!e.human || e.ws.readyState !== e.ws.OPEN) continue;
         const rank = e.alive ? ranked.indexOf(e) + 1 : null;
+        // 観戦中の人だけ「誰を見ているか」を解決する。盤面はここで1人ぶんだけ
+        // 取り出す（royaleGridOf は entrant ごとに1tickキャッシュするので、
+        // 同じ相手を10人が見ても snapshot は1回で済む）。
+        const target = e.alive ? null : pickWatch(ranked, e.ws);
+        const watchEntry = target
+          ? { name: target.name, score: Math.floor(target.score), grid: royaleGridOf(target) }
+          : null;
         send(e.ws, {
           type: 'royale_state',
           rank, alive: ranked.length, score: Math.floor(e.score),
@@ -2658,8 +2906,11 @@ export function initBattle(server, deps) {
           nextKeep: nextCut ? nextCut.keep : null,
           storm: ROYALE_STORM[r.stormIdx] && elapsed >= ROYALE_DURATION * ROYALE_STORM[r.stormIdx].at
             ? ROYALE_STORM[r.stormIdx].cells : 0,
-          // Spectators watch the leader's board.
-          watch: !e.alive && leader ? { name: leader.name, score: Math.floor(leader.score), grid: royaleGridOf(leader) } : null,
+          // 👀 観戦: 既定は首位、`watch` で相手を切り替えられる。
+          watch: watchEntry,
+          // 選べる相手の一覧（観戦者にだけ配る ── 生存者に渡すと、他人の点を
+          // 常時20人ぶん見ながら戦えることになる）。
+          watchable: e.alive ? null : watchable,
           finale: r.finale
             ? royaleAlive(r).map(x => ({ name: x.name, score: Math.floor(x.score), grid: royaleGridOf(x) }))
             : null,
@@ -3178,8 +3429,14 @@ export function initBattle(server, deps) {
           leaveQueues(ws);
           leaveRoom(ws);
           const code = makeCode();
-          rooms.set(code, { code, players: [ws], settings: cleanSettings(msg.settings) });
+          // watch … いま観戦席にいる socket / benched … ホストが自分で観戦席へ
+          // 回した socket（対戦席が空いても勝手に繰り上げない印）。
+          rooms.set(code, {
+            code, players: [ws], settings: cleanSettings(msg.settings),
+            watch: new Set(), benched: new Set(), matchId: null, specTick: null,
+          });
           ws.roomCode = code;
+          ws.watchTarget = null;
           broadcastRoom(rooms.get(code));
           break;
         }
@@ -3193,20 +3450,84 @@ export function initBattle(server, deps) {
           const code = String(msg.code || '').trim().toUpperCase();
           const room = rooms.get(code);
           if (!room) { send(ws, { type: 'room_error', error: 'ルームが見つかりません' }); return; }
-          if (room.players.length >= roomSeats(room)) { send(ws, { type: 'room_error', error: 'ルームが満員です' }); return; }
+          // 定員は対戦席ではなく部屋そのもの（8人）。対戦席があふれた人は
+          // 下の reseat が観戦席へ回す ── 入室できない、にはしない。
+          if (room.players.length >= ROOM_MAX) { send(ws, { type: 'room_error', error: `ルームが満員です（最大${ROOM_MAX}人）` }); return; }
           leaveQueues(ws);
           leaveRoom(ws);
           room.players.push(ws);
           ws.roomCode = code;
+          ws.watchTarget = null;
+          // 試合中の部屋に入ってきた人は、そのまま観戦席へ。
+          if (room.matchId) { room.watch.add(ws); room.benched.add(ws); }
+          else reseat(room);
           broadcastRoom(room);
           break;
         }
         case 'room_set': {
           const room = roomOf(ws);
           if (!room || room.players[0] !== ws) return;
+          if (room.matchId) { send(ws, { type: 'room_error', error: '試合中は設定を変更できません' }); return; }
           room.settings = cleanSettings({ ...room.settings, ...msg.settings });
+          // モードが変わると対戦席の数が変わる（1v1=2 ⇄ 2v2=4）ので席を組み直す。
+          reseat(room);
           broadcastRoom(room);
           break;
+        }
+        // 👑 ホストが「誰を対戦席に出すか」を入れ替える。
+        //   { type:'room_seat', name:'<表示名>', seat:'play'|'watch' }
+        // ホスト以外が叩いても効かない（下の1行目で弾く）。
+        case 'room_seat': {
+          const room = roomOf(ws);
+          if (!room) return;
+          if (room.players[0] !== ws) { send(ws, { type: 'room_error', error: 'ホストのみ席を変更できます' }); return; }
+          if (room.matchId) { send(ws, { type: 'room_error', error: '試合中は席を変更できません' }); return; }
+          const seat = msg.seat === 'watch' ? 'watch' : 'play';
+          const name = String(msg.name == null ? '' : msg.name).slice(0, 40);
+          const target = room.players.find(p => sockName(p) === name);
+          if (!target) { send(ws, { type: 'room_error', error: 'その人はこのルームにいません' }); return; }
+          if (seat === 'watch') {
+            room.watch.add(target);
+            room.benched.add(target);   // 席が空いても勝手に戻さない
+          } else {
+            // 対戦席が埋まっているのに新しく上げようとしたら断る。
+            // 黙って reseat に落とさせると「押したのに戻る」ように見えるので、
+            // 理由を返す（先に誰かを観戦席へ回してもらう）。
+            const alreadyPlaying = !room.watch.has(target);
+            if (!alreadyPlaying && roomPlaying(room).length >= roomSeats(room)) {
+              send(ws, { type: 'room_error', error: `対戦席は${roomSeats(room)}人までです（先に誰かを観戦席へ）` });
+              return;
+            }
+            room.watch.delete(target);
+            room.benched.delete(target);
+          }
+          reseat(room);
+          broadcastRoom(room);
+          break;
+        }
+        // 👀 観戦する相手を選ぶ（ロイヤル / ルームの観戦席で共通）。
+        //   { type:'watch', target: string|null }   null は「おまかせ＝首位」
+        // ⚠ 観戦者以外からの watch は無視する。生存者が他人の盤面を覗けると
+        //   （次に何が来るか・どこが埋まっているかが分かるので）不正になる。
+        case 'watch': {
+          if (!sockRate(ws, 'watchTimes', 20, 10_000)) return;
+          const target = msg.target == null ? null : String(msg.target).slice(0, 40);
+          if (ws.royaleId) {
+            const r = royales.get(ws.royaleId);
+            const e = r ? r.entrants.find(x => x.ws === ws) : null;
+            if (!r || r.ended || !e || e.alive) return;   // 生存者・部外者は無視
+            ws.watchTarget = target;
+            return;
+          }
+          const room = roomOf(ws);
+          // 部屋では「観戦席にいて、その部屋が試合中」のときだけ効く。
+          if (room && room.matchId && room.watch.has(ws)) {
+            ws.watchTarget = target;
+            // 押した手応えをすぐ返す（次の1秒待ちにしない）。
+            broadcastRoom(room);
+            return;
+          }
+          return;
         }
         case 'room_leave': {
           leaveRoom(ws);

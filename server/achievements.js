@@ -195,6 +195,17 @@ export const ACHIEVEMENTS = [
   // ---- ✨ 全消し「昇華」 ----
   // 盤面を空にした通算回数（stats.perfectClears）。ほかの実績と同じく
   // 保存済み統計から毎回計算されるので、過去に空にした分もさかのぼって解除される。
+  // ---- 👑 アリーナ最強の相手（ランキングの頂点で待っている 👑ちゃちゃまる） ----
+  // 参照するのは対戦を裁く server/battle.js が endMatch で積む s.championWins。
+  // ほかの実績と同じく進捗は保存済み統計から毎回計算されるので、統計さえ
+  // 入っていれば過去に倒したぶんも遡って解除される。
+  // ⚠ 文言に「AI」「ボット」を出さない（住人の正体は管理者以外に漏らさない）。
+  // 相手が人間でもそのまま読める言い回しだけを使うこと。
+  a('ach_champ1',   '👑', 'legend', 1,  6000,  50,  '王者を討ちし者', 'The Crown Taker',
+    'アリーナ最強と呼ばれた相手に勝つ', 'Defeat the strongest player in the arena', u => S(u).championWins || 0),
+  a('ach_champ10',  '👑', 'legend', 10, 20000, 160, '頂を獲りし者',   'Taker of the Summit',
+    'アリーナ最強と呼ばれた相手に10回勝つ', 'Defeat the strongest player in the arena 10 times', u => S(u).championWins || 0),
+
   a('ach_pclear1',  '✨', 'legend', 1,  600,  5,  '昇華のはじまり', 'First Sublimation', '盤面を初めて空にする',  'Empty the board for the first time', u => S(u).perfectClears || 0),
   a('ach_pclear10', '✨', 'legend', 10, 2800, 22, '無へ還す者',     'Into the Void',     '盤面を10回空にする',    'Empty the board 10 times',           u => S(u).perfectClears || 0),
   a('ach_pclear50', '🕳️', 'legend', 50, 9000, 80, '無の求道者',     'Voidseeker',        '盤面を50回空にする',    'Empty the board 50 times',           u => S(u).perfectClears || 0),

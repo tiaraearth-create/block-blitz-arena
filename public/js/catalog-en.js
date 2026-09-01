@@ -158,6 +158,10 @@ export const CATALOG_EN = {
   lobbyface: { name: 'Lobby Regular', desc: 'Send 300 chat messages' },
   ghostmaster: { name: 'Ghost Whisperer', desc: 'Score 15,000 in the Haunted House' },
   voidseeker: { name: 'Voidseeker', desc: 'Emptied the board enough times' },
+  // 👑 王者撃破の称号（server/catalog.js の crownfeller / summittaker）。
+  // 文面に AI／ボットを出さない ── 相手が人間でもそのまま成立する言い回し。
+  crownfeller: { name: 'The Crown Taker', desc: 'Defeat the strongest player in the arena' },
+  summittaker: { name: 'Taker of the Summit', desc: 'Defeat the strongest player in the arena 10 times' },
   // 📕 図鑑のセットコンプ称号
   ultcollector: { name: 'Arts Collector', desc: 'Own every ultimate skill' },
   rainbowtrio: { name: 'The Rainbow Three', desc: 'Own all gacha-exclusive gear' },

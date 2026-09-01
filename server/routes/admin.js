@@ -185,6 +185,9 @@ const EDITABLE_STATS = [
   // 順位なので 1 が最高。0 は「記録なし」を意味するので下限は 0 のまま。
   { key: 'royaleBest', label: 'ロイヤル最高順位（0=記録なし）', max: 100 },
   { key: 'royaleKills', label: 'ロイヤル通算KO', max: 1_000_000 },
+  // 👑 王者撃破の回数。称号 crownfeller/summittaker と実績 ach_champ1/10 が
+  // これを毎回読み直して判定するので、事故で消えたときに手で戻せる口が要る。
+  { key: 'championWins', label: '👑王者撃破', max: 1_000_000 },
 ];
 
 // ADMIN_KNOWN_BADGES（サーバーが配りうるバッジの全一覧）は index.js に置いたまま

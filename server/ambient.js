@@ -273,12 +273,52 @@ export function pickPersona({ used, guestChance = 0.3, rnd = Math.random } = {})
   }
 }
 
+// ---------------------------------------------------------------------------
+// 👑 伝説枠: 王者（ちゃちゃまる）との遭遇
+// ---------------------------------------------------------------------------
+// これまで王者は「鬼の帯に入る住人28人のうちの1人」として普通に抽選されて
+// いた（鬼枠に当たった対戦のうち約3.6%）。王者に専用の最強AIを与えた以上、
+// その頻度で当たると「勝てない相手」が日常になる。抽選からは丸ごと外し、
+// ここでだけ、決めた確率で呼び出す ＝ 遭遇率をこの1行で調整できる。
+//
+// 値の根拠（1試合＝ボット1席として）:
+//   ・0.01 なら 100試合に1回。1日20試合遊ぶ人で5日に1度めぐり会う計算で、
+//     「稀に出会う伝説」の頻度としてちょうどよい（毎日は会わない／
+//     1か月遊んで一度も会わない、にもならない）。
+//   ・従来の実効遭遇率（鬼枠12% × 住人採用70% × 28人に1人 ≒ 0.30%）よりは
+//     むしろ**上げて**ある。専用AIを与えたぶん、一度の遭遇の価値が上がった
+//     ので「存在は知っているが会えない」側に倒しすぎないため。
+// テスト用に環境変数で上書きできる（CHAMPION_RATE=1 で必ず出る）。
+export const CHAMPION_ENCOUNTER = (() => {
+  const v = Number(process.env.CHAMPION_RATE);
+  return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.01;
+})();
+
+// 王者を対戦相手として出す（出ないときは null）。pickResidentBot と同じ形を
+// 返すので、呼び出し側は「住人を引いた」のと同じ扱いができる。
+// ⚠ 強さ（専用AI）を決めるのは battle.js。ここは「誰が出るか」だけを決める。
+export function pickChampionBot(used, now = Date.now()) {
+  if (!custom.toggles.bots || !effectiveScale()) return null;
+  if (Math.random() >= CHAMPION_ENCOUNTER) return null;
+  const champ = getRoster().find(isChampion);
+  if (!champ || (used && used.has(champ.name))) return null;
+  if (used) used.add(champ.name);
+  const st = residentStats(champ, now);
+  return {
+    resident: champ, name: champ.name, registered: champ.registered,
+    rating: champ.registered ? st.rating : null, level: champ.registered ? st.level : 1,
+  };
+}
+
 // A resident to disguise a bot of the given strength. Prefers residents who
 // are "online" right now; returns null when none fits (caller falls back).
 export function pickResidentBot(level, used, now = Date.now()) {
   if (!custom.toggles.bots || !effectiveScale()) return null;
   const online = new Set(activeResidents(now).map(r => r.id));
-  const fits = residentsForLevel(getRoster(), level, now).filter(r => !used || !used.has(r.name));
+  // 👑 王者は通常の抽選から外す（上の pickChampionBot だけが出せる）。
+  // 外さないと、遭遇率を1か所で決めるという上の設計が成り立たない。
+  const fits = residentsForLevel(getRoster(), level, now)
+    .filter(r => !isChampion(r) && (!used || !used.has(r.name)));
   if (!fits.length) return null;
   const pool = fits.filter(r => online.has(r.id));
   const pickFrom = pool.length && Math.random() < 0.8 ? pool : fits;

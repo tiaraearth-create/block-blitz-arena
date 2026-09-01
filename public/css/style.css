@@ -719,6 +719,17 @@ body {
 .result-banner.lose { color: var(--muted); }
 .result-banner.draw { color: var(--cyan); }
 @keyframes winPop { from { transform: scale(0.3) rotate(-8deg); opacity: 0; } }
+/* 👑 王者撃破の一行（modes.js onResult の championNote）。めったに出ないので
+   金の枠で「特別な一戦だった」ことを見せる。文面そのものは相手の正体を
+   明かさない（住人の秘匿）。 */
+.champion-fell {
+  margin: 10px 0 0; padding: 9px 12px; border-radius: 10px;
+  font-weight: 900; font-size: 15px; color: var(--gold);
+  background: rgba(255,215,94,0.10); border: 1px solid rgba(255,215,94,0.45);
+  text-shadow: 0 0 18px rgba(255,215,94,0.45);
+  animation: winPop .5s cubic-bezier(.2,1.6,.4,1);
+}
+.champion-fell small { display: inline-block; margin-top: 2px; font-weight: 700; }
 .result-stats { display: flex; flex-direction: column; gap: 8px; margin: 14px 0; }
 .rs-row { display: flex; justify-content: space-between; background: var(--panel); border-radius: 10px; padding: 9px 14px; font-weight: 700; font-size: 14px; }
 .rs-row b { color: var(--gold); }
@@ -842,6 +853,33 @@ body[data-screen="game"] #toast-root { gap: 5px; }
 .room-player .rp-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .room-player .rp-host { font-size: 12px; color: var(--gold); }
 .room-settings { display: flex; flex-direction: column; gap: 8px; width: min(420px, 92vw); }
+
+/* 席分け（⚔️ 対戦席 / 👀 観戦席）。
+   以前は入室順の一枚並びで、「自分は対戦に出るのか、見るだけなのか」が
+   どこにも書いていなかった。定員を超えた人が黙って観戦になるのだから、
+   その線は画面に引いておく。席の入れ替えボタンはホストにしか出さない ──
+   ホスト以外に出すと、押せるのにサーバーに弾かれるだけのボタンになる。 */
+.room-seat-group { display: flex; flex-direction: column; gap: 8px; }
+.room-seat-group + .room-seat-group { margin-top: 12px; }
+.room-seat-title {
+  display: flex; align-items: baseline; gap: 8px; padding-left: 4px;
+  font-size: 12px; font-weight: 900; color: var(--muted);
+}
+.room-seat-title b { color: var(--text); font-variant-numeric: tabular-nums; }
+.room-player.open { opacity: 0.45; border-style: dashed; }
+.room-player.watcher { background: rgba(67,217,232,0.08); border-color: rgba(67,217,232,0.30); }
+.room-player .rp-seat {
+  flex: 0 0 auto; white-space: nowrap; cursor: pointer;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 999px;
+  color: var(--text); font-family: inherit; font-size: 12px; font-weight: 800;
+  padding: 0 12px;
+  /* 指で押す部品。.chip と同じ 44px を下限にする。 */
+  min-height: 44px;
+}
+.room-player .rp-seat:hover { background: var(--panel); }
+.room-player .rp-seat:disabled { opacity: 0.35; cursor: default; }
+.rs-empty { font-size: 11px; padding: 4px 0 2px; }
+.rs-cap { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--dim); }
 
 /* ============ Autopilot ============ */
 #btnAuto b { font-size: 11px; color: var(--muted); }
@@ -1974,31 +2012,111 @@ body[data-screen="game"] #topbar { display: none; }
 .rl-feed-line b { color: var(--red); }
 .rl-feed-line.out { opacity: 0; }
 
-/* Spectating: a corner window onto the leader's board. Sits over the dead
-   space beside the (square) board, so it never covers a cell. */
+/* 👀 観戦 — 盤面の箱を丸ごと使う。
+   以前は .game-canvas-wrap の右上に出す 84px（スマホ 64px）の窓だった。
+   8x8 を 84px に詰めると1マス 10.5px ── ブロックの形も、消えた列も、
+   誰が追い込まれているのかも読めない大きさで、しかも見る相手は
+   サーバーが選んだ首位に固定だった。脱落した人にはもう自分の盤面が
+   要らないのだから、箱ごと相手に明け渡す。
+   高さの割り当ては 見出し(auto) / 盤面(1fr) / 相手えらび(auto) の3段。
+   実測（iPhone SE 375x667・バトルロイヤルの帯つき）:
+     自分が遊んでいるときの盤面 347px（1マス 43.4px）
+     観戦の盤面               347px  ← まったく同じ大きさ
+   390x844 でも両方 362px。縦に余っても横で頭打ちになるので、
+   「見出しと相手えらびのぶん盤面が小さくなる」ことは起きない。 */
 .rl-spectate {
-  position: absolute; top: 6px; right: 6px; z-index: 5;
-  background: rgba(10,13,30,0.9); border: 1px solid var(--line);
-  border-radius: 12px; padding: 6px 8px;
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  animation: rowIn .3s ease;
+  position: absolute; inset: 0; z-index: 6;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 6px 6px 2px;
+  /* 完全に不透明にする。透かすと、もう遊べない自分の盤面が相手の盤面に
+     重なって二重に見える。body と同じ塗りにして継ぎ目を消す。 */
+  background: radial-gradient(120% 100% at 50% 0%, var(--bg1), var(--bg0) 70%);
+  border-radius: 12px;
+  animation: fadeIn .25s ease;
 }
-.rl-spectate canvas { width: 84px; height: 84px; border-radius: 8px; }
-.rl-spec-head { font-size: 11px; font-weight: 800; color: var(--cyan); max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rl-spec-sub { font-size: 10px; color: var(--muted); font-weight: 700; }
+.rl-spec-bar { flex: 0 0 auto; text-align: center; min-width: 0; }
+.rl-spec-head {
+  font-size: 14px; font-weight: 800; color: var(--cyan); line-height: 1.35;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rl-spec-head b { color: var(--text); }
+.rl-spec-sub {
+  font-size: 12px; font-weight: 700; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 
-/* Finale: the last three boards, side by side. */
-.rl-finale {
-  position: absolute; left: 0; right: 0; bottom: 4px; z-index: 5;
-  display: flex; justify-content: center; gap: 8px; pointer-events: none;
+.rl-spec-stage {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
 }
-.rl-fin-card {
-  background: rgba(10,13,30,0.9); border: 1px solid var(--gold);
-  border-radius: 10px; padding: 4px 6px; text-align: center;
+.rl-spec-canvas {
+  display: block; border-radius: 10px;
+  background: rgba(0,0,0,0.25);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+  /* 実寸は modes.js の sizeSpectateBoard() が px で入れる。CSS の
+     aspect-ratio だけでは、幅と高さの両方に上限がある箱で正方形を保てず
+     （片方の制約に負けて長方形になる）、MiniBoard は短辺基準の正方形を
+     左上に寄せて描くので中央からずれる。ここは初期値だけ。 */
+  width: 120px; height: 120px;
 }
-.rl-fin-card canvas { width: 54px; height: 54px; border-radius: 6px; display: block; }
-.rl-fin-name { font-size: 9.5px; font-weight: 800; color: var(--muted); max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rl-fin-score { font-size: 11px; font-weight: 900; color: var(--gold); }
+.rl-spec-stage.empty .rl-spec-canvas { opacity: 0.25; }
+/* 相手を切り替えた直後は、サーバーの返事が来るまで「まだ前の人の盤面」。
+   薄くして、押したのに何も起きなかったのではないと判るようにする。 */
+.rl-spectate.waiting .rl-spec-canvas { opacity: 0.5; }
+
+/* 相手えらび。縦持ちで盤面を潰さないよう、折り返さない1行の横スクロール帯
+   にする（折り返す形にすると、人数が増えたぶんだけ盤面が縮んでいく）。 */
+.rl-spec-picker {
+  flex: 0 0 auto;
+  display: flex; align-items: stretch; gap: 6px;
+  overflow-x: auto; overflow-y: hidden;
+  padding: 2px 2px 6px;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+}
+/* 既定のスクロールバーは 15px あり、札の帯（52px）の1/4以上を食う。
+   指で触る端末では重ならない overlay なので、痩せさせても操作は変わらない。 */
+.rl-spec-picker::-webkit-scrollbar { height: 6px; }
+.rl-spec-picker::-webkit-scrollbar-track { background: transparent; }
+.rl-spec-picker::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
+/* 🔥 ファイナルの印。帯を横に送っても左端に貼り付いたままにする ──
+   ただの先頭要素にすると、下位の人を選んだ瞬間に流れて消える。 */
+.rl-spec-note {
+  flex: 0 0 auto; display: flex; align-items: center; white-space: nowrap;
+  font-size: 11px; font-weight: 900; color: var(--gold); padding: 0 6px 0 2px;
+  position: sticky; left: 0; z-index: 1;
+  background: linear-gradient(90deg, var(--bg0) 70%, transparent);
+}
+.rl-spec-chip {
+  flex: 0 0 auto; scroll-snap-align: center;
+  display: flex; align-items: center; gap: 5px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+  color: var(--text); font-family: inherit; font-size: 12px; font-weight: 700;
+  padding: 0 12px; cursor: pointer;
+  /* 指で押す部品。.chip に書いてある「44px は最低ライン」に合わせる。 */
+  min-height: 44px;
+  transition: background .15s, border-color .15s, transform .1s;
+}
+.rl-spec-chip:hover { background: var(--panel2); }
+.rl-spec-chip:active { transform: scale(0.96); }
+.rl-spec-chip.active {
+  border-color: var(--cyan); background: rgba(67,217,232,0.16);
+  box-shadow: 0 0 10px rgba(67,217,232,0.30);
+}
+/* 「おまかせ」だけは別の印。active（＝いま映っている盤面）と同じ色にすると、
+   首位を見ている間は2つ同時に点いて、どちらが盤面なのか読めなくなる。 */
+.rl-spec-chip.auto.on { border-color: var(--purple); background: rgba(176,107,255,0.14); }
+.rl-spec-chip.dead, .rl-spec-chip[disabled] { opacity: 0.4; cursor: default; }
+.rl-spec-chip.dead:hover { background: var(--panel); }
+.rl-chip-rank {
+  display: inline-flex; align-items: center;
+  font-size: 11px; font-weight: 900; color: var(--muted);
+}
+.rl-chip-name { max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-chip-score { color: var(--gold); font-weight: 900; font-variant-numeric: tabular-nums; }
+.rl-chip-note { font-size: 10px; font-weight: 800; color: var(--muted); }
+.rl-chip-on, .rl-chip-dead { display: inline-flex; align-items: center; }
 
 /* ---- 👑 admin event ---- */
 .ae-banner {
@@ -2073,8 +2191,11 @@ body[data-screen="game"] #topbar { display: none; }
 }
 
 @media (max-width: 520px) {
-  .rl-spectate canvas { width: 64px; height: 64px; }
-  .rl-fin-card canvas { width: 44px; height: 44px; }
+  /* 👀 観戦: 盤面はもう縮めない（豆粒に戻ってしまう）。文字と札だけ詰める。 */
+  .rl-spec-head { font-size: 13px; }
+  .rl-spec-sub { font-size: 11px; }
+  .rl-spec-chip { font-size: 11px; padding: 0 10px; gap: 4px; }
+  .rl-chip-name { max-width: 6.5em; }
   .ae-slot-time { font-size: 16px; min-width: 54px; }
 }
 

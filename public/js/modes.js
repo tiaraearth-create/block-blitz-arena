@@ -5048,7 +5048,155 @@ class OnlineMode extends VersusBase {
     $('#btnRoomBack').onclick = () => { audio.click(); this.quit(); };
   }
 
+  // 席の割り当て。サーバー（server/battle.js の broadcastRoom）が
+  //   seats … 対戦席の数（1v1/協力/陣取り=2・2v2=4）
+  //   max   … 部屋の定員（ROOM_MAX=8）
+  //   players[].seat … 'play' | 'watch'
+  // を送ってくる。それが唯一の正解なので、来ていればそのまま使う。
+  // 来ていない場合（古いサーバー）だけ「先に入った人から対戦席」で代用する ──
+  // 古い startRoom も join 順で席を決めていたので、見た目と実際がズレない。
+  roomSeatPlan(msg) {
+    const s = msg.settings || {};
+    const mode = s.mode || (s.team ? 'team' : 'duel');
+    const declared = Number(msg.seats);
+    const playSeats = Number.isFinite(declared) && declared > 0
+      ? declared : (mode === 'team' ? 4 : 2);
+    const play = [], watch = [];
+    (msg.players || []).forEach((p, i) => {
+      const seat = p.seat === 'watch' || p.seat === 'play'
+        ? p.seat : (i < playSeats ? 'play' : 'watch');
+      (seat === 'play' ? play : watch).push(p);
+    });
+    // 部屋そのものの定員（サーバーの ROOM_MAX）。送ってこない実装なら
+    // 「いま居る人数」で代用する（＝定員の表示が嘘にならない）。
+    const max = Number(msg.max) > 0 ? Number(msg.max) : (msg.players || []).length;
+    return { mode, playSeats, play, watch, max };
+  }
+
+  // ルームの席を「対戦席」と「観戦席」に分けて描く。ホストにだけ席の
+  // 入れ替えボタンを出す（ホスト以外に出すと、押せるのに何も起きない
+  // ボタンになる ── サーバーが弾くのが正しいが、押せること自体が嘘）。
+  renderRoomSeats(msg) {
+    const { mode, playSeats, play, watch, max } = this.roomSeatPlan(msg);
+    const host = !!msg.youAreHost;
+    const teamMark = n => {
+      if (mode === 'coop') return '🤝';
+      if (mode === 'land') return '🚩';
+      return mode === 'team' ? (n < 2 ? '🟦' : '🟥') : '⚔️';
+    };
+    const full = play.length >= playSeats;
+    const row = (p, n, seat) => `
+      <div class="room-player${p.isYou ? ' me' : ''}${seat === 'watch' ? ' watcher' : ''}">
+        <span class="rp-team">${seat === 'play' ? teamMark(n) : '👀'}</span>
+        <span class="rp-name">${escapeHtml(p.name)}${p.isYou ? t('（あなた）', ' (you)') : ''}</span>
+        ${p.isHost ? `<span class="rp-host">${t('👑 ホスト', '👑 Host')}</span>` : ''}
+        ${host ? `<button class="rp-seat" data-seat-name="${escapeHtml(p.name)}"
+            data-seat-to="${seat === 'play' ? 'watch' : 'play'}"
+            ${seat === 'watch' && full ? 'disabled' : ''}
+            title="${seat === 'play' ? t('観戦席へ移す', 'Move to the spectator seats') : t('対戦席へ移す', 'Move to a player seat')}"
+          >${seat === 'play' ? t('👀 観戦席へ', '👀 Watch') : t('⚔️ 対戦席へ', '⚔️ Play')}</button>` : ''}
+      </div>`;
+    const openSeat = `
+      <div class="room-player open">
+        <span class="rp-team">＋</span>
+        <span class="rp-name">${t('空き席', 'Open seat')}</span>
+      </div>`;
+    $('#roomPlayers').innerHTML = `
+      <div class="room-seat-group">
+        <div class="room-seat-title">${t('⚔️ 対戦席', '⚔️ Player seats')}<b>${play.length}/${playSeats}</b></div>
+        ${play.map((p, n) => row(p, n, 'play')).join('')}
+        ${openSeat.repeat(Math.max(0, playSeats - play.length))}
+      </div>
+      <div class="room-seat-group">
+        <div class="room-seat-title">${t('👀 観戦席', '👀 Spectator seats')}<b>${watch.length}</b>
+          <span class="rs-cap">${t(`この部屋は ${play.length + watch.length}/${max} 人`, `${play.length + watch.length}/${max} in this room`)}</span>
+        </div>
+        ${watch.length ? watch.map(p => row(p, 0, 'watch')).join('')
+          : `<p class="muted center rs-empty">${t('対戦席に入りきらない人はここで観戦します', 'Anyone who does not fit in a player seat watches from here')}</p>`}
+      </div>`;
+    if (!host) return;
+    $('#roomPlayers').querySelectorAll('[data-seat-name]').forEach(b => {
+      b.onclick = () => {
+        audio.click();
+        // server/battle.js の case 'room_seat' と同じ形。断られたときは
+        // room_error が返るので、こちらで先読みして席を動かさない
+        // （動かすと、サーバーが弾いた席割りが一瞬だけ本物に見える）。
+        this.client.send({ type: 'room_seat', name: b.dataset.seatName, seat: b.dataset.seatTo });
+      };
+    });
+  }
+
+  // カスタムルームの観戦席。試合が始まったあとも room_update が届き、
+  // そこに watch / watchable が載る（この波の取り決め）。ロビーの更新では
+  // ないので、部屋の画面ではなく観戦ビューへ回す。
+  onRoomSpectate(msg) {
+    if (this.ended) return;
+    if (!this.spectatingRoom) {
+      this.spectatingRoom = true;
+      this.inMatch = true;
+      showScreen('game');
+      $('#oppPanel').classList.add('hidden');
+      $('#bossPanel').classList.add('hidden');
+      $('#coopBar').classList.add('hidden');
+      $('#btnEmote').classList.add('hidden');
+      $('#hudTimer').classList.add('hidden');
+      // 自分の試合が無いのだから、自分の試合の道具は出さない。
+      // 引き直しも奥義も、押しても何も起きないボタンになる。
+      $('#btnReroll').classList.add('hidden');
+      $('#btnUlt').classList.add('hidden');
+      showItemBar(false);
+      // 自分は打たない。GameView は観戦ビューに完全に覆われるが、
+      // 入力だけは閉じておく（覆いの隙間から触れる端末を作らない）。
+      const v = getView();
+      v.inputLocked = true;
+      $('#hudScore').textContent = '-';
+      $('#hudSub').textContent = t('👀 観戦席', '👀 SPECTATING');
+      toast(t('👀 観戦席から試合を見ています', '👀 Watching from the spectator seats'), 'announce', 2600);
+    }
+    const w = msg.watch || null;
+    const parts = [];
+    if (w) parts.push(fmt(w.score));
+    if (typeof msg.remain === 'number') parts.push(`${msg.remain}s`);
+    this.updateSpectateView({
+      name: w ? w.name : '',
+      score: w ? w.score : 0,
+      grid: w ? w.grid : null,
+      sub: parts.join(' ・ '),
+      // 観戦ビューは name / score / alive しか読まない（取り決めどおり）。
+      watchable: Array.isArray(msg.watchable)
+        ? msg.watchable.slice(0, this.watchListMax).map(r => ({
+            name: r.name, score: Number(r.score) || 0, alive: r.alive !== false,
+          }))
+        : (w ? [{ name: w.name, score: Number(w.score) || 0, alive: true }] : []),
+    });
+  }
+
+  // 観戦していた試合が終わった。ルーム画面へ返す ── 観戦席の人は部屋に
+  // 残ったままなので、そのまま次の試合を組める（サーバーの endRoomSpectate が
+  // 席を組み直して broadcastRoom してくる）。
+  leaveRoomSpectate() {
+    this.clearSpectateView();   // spectatingRoom もここで false に戻る
+    this.inMatch = false;
+    // 観戦のあいだ隠した自分用のボタンを戻す（次の試合で自分が出るときに
+    // 消えたままだと、引き直しも奥義も使えない試合になる）。
+    $('#btnReroll').classList.remove('hidden');
+    $('#hudSub').textContent = 'SCORE';
+    showScreen('room');
+    toast(t('👀 観戦が終わりました。ルームに戻ります', '👀 The match is over — back to the room'), 'ok', 2600);
+  }
+
   onRoomUpdate(msg) {
+    // 試合中の観戦席には、同じ room_update に inMatch / watch / watchable が
+    // 載って届く（server/battle.js の roomWatchExtra）。ロビーの更新ではない
+    // ので、先に振り分ける ── 下のロビー描画に流すと、試合の最中に部屋の
+    // 画面が出てきて盤面を覆ってしまう。
+    if (msg.inMatch || msg.watch !== undefined || msg.watchable !== undefined) {
+      this.onRoomSpectate(msg);
+      return;
+    }
+    // 試合が終わると inMatch:false のふつうの部屋フレームに戻る。観戦を畳んで
+    // ルーム画面へ返す（放っておくと、盤面の上に前の試合の観戦窓が残る）。
+    if (this.spectatingRoom) this.leaveRoomSpectate();
     this.roomInfo = msg;
     // パーティーから作った部屋なら、合言葉を待っている人がいる。
     if (this._onRoomCode) this._onRoomCode(msg.code);
@@ -5056,17 +5204,8 @@ class OnlineMode extends VersusBase {
     $('#roomLobby').classList.remove('hidden');
     $('#roomCodeLabel').textContent = msg.code;
 
-    $('#roomPlayers').innerHTML = msg.players.map((p, i) => `
-      <div class="room-player ${p.isYou ? 'me' : ''}">
-        <span class="rp-team">${(() => {
-          const rm = msg.settings.mode || (msg.settings.team ? 'team' : 'duel');
-          if (rm === 'coop') return '🤝';
-          if (rm === 'land') return '🚩';
-          return msg.settings.team ? (i < 2 ? '🟦' : '🟥') : '⚔️';
-        })()}</span>
-        <span class="rp-name">${escapeHtml(p.name)}${p.isYou ? t('（あなた）', ' (you)') : ''}</span>
-        ${p.isHost ? `<span class="rp-host">${t('👑 ホスト', '👑 Host')}</span>` : ''}
-      </div>`).join('');
+    // 対戦席と観戦席を分けて描く（席の入れ替えはホストだけ）。
+    this.renderRoomSeats(msg);
 
     const host = msg.youAreHost;
     const s = msg.settings;
@@ -5293,7 +5432,13 @@ class OnlineMode extends VersusBase {
 
     // Danger meter: a number you can act on, not a vague warning.
     const d = $('#rlDanger');
-    if (d && !msg.spectating) {
+    // 脱落したら、危険メーターは**消す**。以前は「観戦中は更新しない」だけの
+    // 分岐だったので、死ぬ直前に見えていた「⚠️ 脱落圏！ あと 359 点で生き残れる」
+    // が観戦中ずっと貼り付いたままだった（もう自分の点は動かないのに）。
+    if (d && msg.spectating) {
+      d.className = 'rl-danger';
+      d.textContent = '';
+    } else if (d) {
       if (msg.safeBy == null || msg.nextKeep == null) {
         d.className = 'rl-danger';
         d.textContent = '';
@@ -5308,51 +5453,273 @@ class OnlineMode extends VersusBase {
       }
     }
 
-    if (msg.spectating && msg.watch) this.renderRoyaleSpectate(msg);
-    // ファイナルの一覧は観戦者だけに出す。生き残っている本人に出すと、
-    // 手札の上に重なって、いちばん大事な最後の3人で置けなくなる。
-    if (msg.finale && msg.finale.length && msg.spectating) this.renderRoyaleFinale(msg.finale);
+    // 観戦は「盤面の箱を丸ごと使う1枚」に統一した。ファイナル（残り3人）の
+    // 3枚並べは renderRoyaleSpectate の一覧に畳んである ── 両方出すと
+    // 375x667 で盤面が潰れるうえ、生存中の本人に出すと手札に重なって
+    // 最後の3人でブロックを置けなくなっていた。
+    if (msg.spectating) this.renderRoyaleSpectate(msg);
   }
 
-  // Dying at 30 seconds into a 3-minute mode used to eject you to a modal with
-  // nothing to do. Now you watch the leader play it out.
-  renderRoyaleSpectate(msg) {
+  // ---- 👀 観戦ビュー（バトルロイヤル／カスタムルームの観戦席で共用） ------
+  //
+  // 以前の観戦は .game-canvas-wrap の右上に 84px（スマホ 64px）の窓を出すだけ
+  // だった。8x8 の盤面を 84px に詰めると1マス 10.5px ── 何が起きているのか
+  // 読めない大きさで、しかも見る相手はサーバーが選んだ首位に固定だった。
+  // 脱落した人にはもう自分の盤面が要らないのだから、盤面の箱を丸ごと明け渡す。
+  //
+  // 通信の形は royale_state / room_update で共通（この波の取り決め）:
+  //   → { type: 'watch', target: string|null }   null は「おまかせ（首位）」
+  //   ← watch:     { name, score, grid } | null
+  //   ← watchable: [{ name, score, alive }]      順位順・上位20人まで
+  // watchable には正体に関わる欄（isBot など）を載せない取り決めなので、
+  // こちらも name / score / alive の3つ以外は読まない（読まなければ、将来
+  // 誤って足された欄も画面には出ない）。
+
+  // 一覧に並べる札の上限。サーバーの WATCHABLE_MAX（20）の写しではなく、
+  // **画面側の都合**の上限 ── 横スクロールの帯に何百枚も札を作らないための
+  // 保険。片方だけ増えても「短いほうで切れる」だけで、ズレて困ることはない。
+  get watchListMax() { return 20; }
+
+  mountSpectateView() {
     let box = document.querySelector('.rl-spectate');
-    if (!box) {
-      box = document.createElement('div');
-      box.className = 'rl-spectate';
-      box.innerHTML = `<div class="rl-spec-head"></div><canvas class="rl-spec-canvas"></canvas><div class="rl-spec-sub"></div>`;
-      document.querySelector('.game-canvas-wrap').appendChild(box);
-      this.specBoard = new MiniBoard(box.querySelector('canvas'));
+    if (box) return box;
+    const wrap = document.querySelector('.game-canvas-wrap');
+    if (!wrap) return null;
+    box = document.createElement('div');
+    box.className = 'rl-spectate';
+    box.innerHTML = `
+      <div class="rl-spec-bar">
+        <div class="rl-spec-head"></div>
+        <div class="rl-spec-sub"></div>
+      </div>
+      <div class="rl-spec-stage"><canvas class="rl-spec-canvas" aria-label="観戦中の盤面"></canvas></div>
+      <div class="rl-spec-picker" role="group" aria-label="観戦する相手"></div>`;
+    wrap.appendChild(box);
+    this.specBoard = new MiniBoard(box.querySelector('.rl-spec-canvas'));
+    // 一覧のボタンは順位が動くたびに作り直すので、押される側ではなく箱で受ける。
+    box.querySelector('.rl-spec-picker').addEventListener('click', e => {
+      const b = e.target.closest('[data-watch-name]');
+      if (!b || b.disabled) return;
+      audio.click();
+      // data-* は文字列しか持てない。「おまかせ」は空文字で表し、
+      // サーバーへは取り決めどおり null を送る。
+      const name = b.dataset.watchName;
+      this.requestWatch(name === '' ? null : name);
+    });
+    // 盤面は「入る箱の短いほう」に合わせた正方形にする。CSS の aspect-ratio
+    // では、幅と高さの両方に上限がある状況で正方形を保てない（片方の制約に
+    // 負けて長方形になり、MiniBoard は短辺基準の正方形を左上に寄せて描くので
+    // 中央からずれる）。実測して px で決める。
+    if (typeof ResizeObserver === 'function') {
+      this.specRO = new ResizeObserver(() => this.sizeSpectateBoard());
+      this.specRO.observe(box.querySelector('.rl-spec-stage'));
     }
-    box.querySelector('.rl-spec-head').textContent =
-      t(`👀 観戦中: ${msg.watch.name}`, `👀 Spectating ${msg.watch.name}`);
-    box.querySelector('.rl-spec-sub').textContent =
-      `${fmt(msg.watch.score)} ・ ${t(`残り${msg.alive}人`, `${msg.alive} alive`)} ・ ${msg.remain}s`;
-    if (msg.watch.grid && this.specBoard) this.specBoard.setGrid(msg.watch.grid);
+    this.sizeSpectateBoard();
+    return box;
   }
 
-  renderRoyaleFinale(players) {
-    let box = document.querySelector('.rl-finale');
-    if (!box) {
-      box = document.createElement('div');
-      box.className = 'rl-finale';
-      document.querySelector('.game-canvas-wrap').appendChild(box);
-      this.finaleBoards = {};
+  // 観戦の箱を畳む。ResizeObserver を切らないと、破棄されたモードの
+  // MiniBoard が画面の回転のたびに生き返る。
+  clearSpectateView() {
+    if (this.specRO) { this.specRO.disconnect(); this.specRO = null; }
+    const el = document.querySelector('.rl-spectate');
+    if (el) el.remove();
+    this.specBoard = null;
+    this.specSide = 0;
+    this.specPickerSig = null;
+    this.specPickShown = null;
+    this.watchTarget = null;
+    this.watchWait = 0;
+    this.spectatingRoom = false;
+  }
+
+  sizeSpectateBoard() {
+    const box = document.querySelector('.rl-spectate');
+    const stage = box && box.querySelector('.rl-spec-stage');
+    const cv = stage && stage.querySelector('.rl-spec-canvas');
+    if (!cv) return;
+    const r = stage.getBoundingClientRect();
+    const side = Math.floor(Math.max(0, Math.min(r.width, r.height)));
+    // 同じ値を代入し直さない。ResizeObserver の中で子の大きさを変えるので、
+    // 毎回書くと「観測 → 変更 → 観測」で鳴りっぱなしになりうる。
+    if (!side || side === this.specSide) return;
+    this.specSide = side;
+    cv.style.width = `${side}px`;
+    cv.style.height = `${side}px`;
+    if (this.specBoard) this.specBoard.render();
+  }
+
+  // 見たい相手をサーバーへ頼む。返事（watch.name）が来るまでは「頼んだだけ」
+  // なので、見出しも一覧の選択も**サーバーが送ってきた名前**で描く。
+  // 先に自分で選択を動かすと、サーバーがまだ対応していない実装のときに
+  // 「選んだのに別の人の盤面が出ている」という嘘の画面になる。
+  requestWatch(target) {
+    this.watchTarget = target;
+    this.client.send({ type: 'watch', target: target || null });
+    const box = document.querySelector('.rl-spectate');
+    if (box) box.classList.add('waiting');
+  }
+
+  /**
+   * 観戦ビューの中身を更新する。royale_state / room_update の両方から呼ぶ。
+   * info: { name, score, grid, sub, watchable, finale, note }
+   */
+  updateSpectateView(info) {
+    const box = this.mountSpectateView();
+    if (!box) return;
+    const name = info.name || '';
+    const rows = info.watchable || [];
+    // 頼んだ相手に切り替わるまでは「待機」。ただし**待ちっぱなしにしない**:
+    //  ・見たかった相手が一覧から消えた（脱落・離脱）なら、サーバーは勝手に
+    //    おまかせ（首位）へ戻す（server/battle.js の pickWatch）。こちらが
+    //    希望を握ったままだと、薄暗い待機の盤面から二度と戻らない。
+    //  ・一覧に居るのに5回（≒5秒）待っても切り替わらないなら、その希望は
+    //    サーバーに届いていない。映っている盤面を素直に見せるほうがまし。
+    if (this.watchTarget && this.watchTarget !== name) {
+      this.watchWait = (this.watchWait || 0) + 1;
+      const gone = rows.length && !rows.some(r => r.name === this.watchTarget);
+      if (gone || this.watchWait >= 5) { this.watchTarget = null; this.watchWait = 0; }
+    } else {
+      this.watchWait = 0;
     }
-    for (const p of players) {
-      let cell = box.querySelector(`[data-fin="${CSS.escape(p.name)}"]`);
-      if (!cell) {
-        cell = document.createElement('div');
-        cell.className = 'rl-fin-card';
-        cell.dataset.fin = p.name;
-        cell.innerHTML = `<canvas></canvas><div class="rl-fin-name">${escapeHtml(p.name)}</div><div class="rl-fin-score">0</div>`;
-        box.appendChild(cell);
-        this.finaleBoards[p.name] = new MiniBoard(cell.querySelector('canvas'));
+    box.classList.toggle('waiting', !!this.watchTarget && this.watchTarget !== name);
+    box.querySelector('.rl-spec-head').innerHTML = name
+      ? t(`👀 観戦中: <b>${escapeHtml(name)}</b>`, `👀 Spectating <b>${escapeHtml(name)}</b>`)
+      : t('👀 観戦できる相手を探しています…', '👀 Looking for someone to watch…');
+    box.querySelector('.rl-spec-sub').textContent = info.sub || '';
+    box.querySelector('.rl-spec-stage').classList.toggle('empty', !name);
+    this.sizeSpectateBoard();
+    // grid が来ていない回は前の盤面を残す（MiniBoard.setGrid が長さを見て弾く）。
+    // name と grid は同じ watch オブジェクトで届くので、名前だけ変わって
+    // 盤面が前の人のまま、という食い違いは起きない。
+    if (this.specBoard && Array.isArray(info.grid)) this.specBoard.setGrid(info.grid);
+    this.renderWatchPicker(box, name, rows, info.note || '');
+  }
+
+  // 観戦相手の一覧。スマホの縦持ちで盤面を潰さないよう、高さを固定した
+  // 横スクロール1行に収める（折り返す形にすると、人数が増えたぶんだけ
+  // 盤面が縮んでいく）。
+  renderWatchPicker(box, watching, rows, note) {
+    const list = box.querySelector('.rl-spec-picker');
+    // 顔ぶれ・生死・選択が変わらない限り作り直さない。1秒ごとに innerHTML を
+    // 差し替えると、横スクロールの位置が毎秒先頭へ戻って下位の人を押せなくなる。
+    // watchTarget も鍵に入れる。首位を見ているときに「おまかせ」を押すと
+    // watching は変わらないが、選択の印は移らないといけない。
+    const pick = `${watching}|${this.watchTarget || ''}`;
+    const sig = `${pick}|${note}|${rows.map(r => `${r.name}:${r.alive === false ? 0 : 1}`).join(',')}`;
+    if (sig !== this.specPickerSig) {
+      this.specPickerSig = sig;
+      // 「見ている相手が変わったか」は別に持つ。順位は毎秒入れ替わるので、
+      // 作り直したこと自体を「選び直した」とみなすと、下で毎秒スクロールを
+      // 動かしてしまう。
+      const pickChanged = pick !== this.specPickShown;
+      this.specPickShown = pick;
+      // 「おまかせ」＝ target:null。見ていた人が脱落しても、サーバーが
+      // 勝手に首位へ移してくれる席。
+      // 印は active ではなく on。active は「いま画面に映っている盤面」の印で、
+      // おまかせで首位を見ていると相手の札と2つ同時に点き、どちらが盤面なのか
+      // 読めなくなる（実機で実際にそうなった）。
+      const auto = !this.watchTarget;
+      const chips = [
+        `<button class="rl-spec-chip auto${auto ? ' on' : ''}" data-watch-name="" aria-pressed="${auto ? 'true' : 'false'}">
+           <span class="rl-chip-name">${t('おまかせ', 'Auto')}</span>
+           <span class="rl-chip-note">${t('首位', 'Leader')}</span>
+         </button>`,
+      ];
+      rows.forEach((r, i) => {
+        const dead = r.alive === false;
+        const on = r.name === watching;
+        const rank = i + 1;
+        const medal = medalIconName(rank);
+        chips.push(`
+          <button class="rl-spec-chip${on ? ' active' : ''}${dead ? ' dead' : ''}"
+                  data-watch-name="${escapeHtml(r.name)}" ${dead ? 'disabled' : ''}
+                  aria-pressed="${on ? 'true' : 'false'}">
+            <span class="rl-chip-rank">${medal ? icon(medal, { size: 14 }) : `#${rank}`}</span>
+            <span class="rl-chip-name">${escapeHtml(r.name)}</span>
+            <b class="rl-chip-score" data-score-for="${escapeHtml(r.name)}">${fmt(r.score || 0)}</b>
+            ${dead ? `<span class="rl-chip-dead">${icon('close', { size: 12 })}</span>`
+                   : on ? `<span class="rl-chip-on">${icon('check', { size: 12 })}</span>` : ''}
+          </button>`);
+      });
+      // 横スクロールの位置は自力で持ち帰る。innerHTML の差し替えは中身ごと
+      // 作り直すので scrollLeft が 0 に戻る ── ロイヤルでは上位20人の順位が
+      // 毎秒入れ替わる＝毎秒作り直すので、下位まで送った帯が1秒ごとに先頭へ
+      // 跳ね返って**そもそも下の人を押せなくなる**。
+      const keep = list.scrollLeft;
+      list.innerHTML = (note ? `<span class="rl-spec-note">${escapeHtml(note)}</span>` : '') + chips.join('');
+      list.scrollLeft = keep;
+      // 見ている相手が変わったときだけ、その札を目に入れる。しかも**はみ出して
+      // いるときだけ**動かす ── scrollIntoView({inline:'center'}) は見えていても
+      // 中央へ寄せるので、先頭の「🔥 ファイナル」と「おまかせ」を押し出していた
+      // （実機で確認: 札を出した直後から scrollLeft が 77px 進んでいた）。
+      const act = pickChanged ? list.querySelector('.rl-spec-chip.active') : null;
+      if (act) {
+        const lr = list.getBoundingClientRect(), ar = act.getBoundingClientRect();
+        if (ar.left < lr.left) list.scrollLeft -= (lr.left - ar.left) + 12;
+        else if (ar.right > lr.right) list.scrollLeft += (ar.right - lr.right) + 12;
       }
-      cell.querySelector('.rl-fin-score').textContent = fmt(p.score);
-      if (p.grid && this.finaleBoards[p.name]) this.finaleBoards[p.name].setGrid(p.grid);
+    } else {
+      // 作り直さない回でも点数だけは動かす（毎秒更新される唯一の値）。
+      for (const r of rows) {
+        const el = list.querySelector(`[data-score-for="${CSS.escape(r.name)}"]`);
+        if (el) el.textContent = fmt(r.score || 0);
+      }
     }
+  }
+
+  // ---- 💯 バトルロイヤルの観戦 --------------------------------------------
+  //
+  // ファイナル（残り3人）の3枚並べは廃止した。観戦ビューと同時に出すと、
+  // 375x667 では盤面の下 1/4 を潰し、しかも1枚 54px（1マス 6.75px）で
+  // 「何かが動いている」以上のことは読めなかった。残り3人は下の一覧に
+  // 🔥 の印で出し、盤面はいつでも1枚を大きく見せる ── 見たい人は一覧で
+  // 切り替えられるので、情報としては3枚並べより多い。
+  renderRoyaleSpectate(msg) {
+    const rows = this.royaleWatchable(msg);
+    // ファイナル中は3人ぶんの盤面が finale で届く。サーバーが target を
+    // まだ見ていない実装でも、選んだ相手の盤面をここで差し替えられる。
+    let shown = msg.watch || null;
+    if (this.watchTarget && Array.isArray(msg.finale)) {
+      const f = msg.finale.find(p => p && p.name === this.watchTarget);
+      if (f) shown = f;
+    }
+    const name = shown ? shown.name : '';
+    const rank = rows.findIndex(r => r.name === name) + 1;
+    const parts = [];
+    if (shown) parts.push(fmt(shown.score));
+    if (rank) parts.push(`#${rank}`);
+    parts.push(t(`残り${msg.alive}人`, `${msg.alive} alive`));
+    parts.push(`${msg.remain}s`);
+    this.updateSpectateView({
+      name,
+      score: shown ? shown.score : 0,
+      grid: shown ? shown.grid : null,
+      sub: parts.join(' ・ '),
+      watchable: rows,
+      note: msg.finale && msg.finale.length ? t('🔥 ファイナル', '🔥 FINALE') : '',
+    });
+  }
+
+  // 一覧の元ネタ。サーバーが watchable を送ってくればそれが正（順位順・
+  // 上位20人）。まだ送ってこない間も一覧を空にしないよう、royale_state が
+  // 前から積んでいる finale（残り3人）・top（上位3人）・いま見ている人から
+  // 組み立てて代用する。どちらの経路も name / score / alive しか触らない。
+  royaleWatchable(msg) {
+    if (Array.isArray(msg.watchable)) {
+      return msg.watchable.slice(0, this.watchListMax).map(r => ({
+        name: r.name, score: Number(r.score) || 0, alive: r.alive !== false,
+      }));
+    }
+    const seen = new Map();
+    const add = (name, score) => {
+      if (!name || seen.has(name)) return;
+      seen.set(name, { name, score: Number(score) || 0, alive: true });
+    };
+    for (const p of msg.finale || []) add(p.name, p.score);
+    for (const p of msg.top || []) add(p.name, p.score);
+    if (msg.watch) add(msg.watch.name, msg.watch.score);
+    return [...seen.values()].sort((a, b) => b.score - a.score);
   }
 
   onRoyaleCut(msg) {
@@ -5399,14 +5766,10 @@ class OnlineMode extends VersusBase {
   }
 
   clearRoyaleOverlays() {
-    for (const sel of ['.rl-spectate', '.rl-finale']) {
-      const el = document.querySelector(sel);
-      if (el) el.remove();
-    }
-    this.specBoard = null;
-    this.finaleBoards = null;
+    this.clearSpectateView();
     $('#oppPanel').classList.remove('royale-panel');
-    document.querySelector('.vs-bar').classList.remove('hidden');
+    const vs = document.querySelector('.vs-bar');
+    if (vs) vs.classList.remove('hidden');
   }
 
   onRoyaleResult(msg) {
@@ -5443,9 +5806,11 @@ class OnlineMode extends VersusBase {
         ${msg.payout ? `<div class="rs-row"><span>🏅 ${t('順位報酬', 'Placement reward')}（${tierName}）</span><b>+${fmt(msg.payout.coins)}🪙${msg.payout.gems ? ` +${fmt(msg.payout.gems)}💎` : ''}</b></div>` : ''}
         ${rewardsRows(msg.rewards)}
       </div>
+      ${spectate ? `<div class="modal-buttons">
+        <button class="btn btn-online" id="rWatch">${t('👀 決着を見届ける', '👀 Watch the finish')}</button>
+      </div>` : ''}
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
-        ${spectate ? `<button class="btn btn-online" id="rWatch">${t('👀 決着を見届ける', '👀 Watch the finish')}</button>` : ''}
         <button class="btn btn-oni" id="rAgain">${t('もう一度参戦', 'Drop in again')}</button>
       </div>`, { dismissable: false });
     m.querySelector('#rMenu').onclick = () => { closeModal(); this.ended = true; this.destroy(); endToMenu(); };
@@ -6215,6 +6580,15 @@ class OnlineMode extends VersusBase {
     } else if (msg.tierChange) {
       setTimeout(() => toast(t(`${msg.tierChange.to.icon} ${msg.tierChange.to.name}に降格…`, `${msg.tierChange.to.icon} Demoted to ${msg.tierChange.to.nameEn}…`), 'err', 3500), 700);
     }
+    // 👑 王者撃破のお祝い。段位の昇格と重なっても潰し合わないよう、
+    // 少し後ろにずらす（toast は同時3〜4件で頭打ちになる）。
+    if (msg.beatChampion) {
+      setTimeout(() => {
+        confettiBurst(120);
+        audio.levelUp();
+        toast(t('👑 アリーナ最強を破った！', '👑 You beat the strongest in the arena!'), 'announce', 5000);
+      }, 1200);
+    }
 
     const banners = msg.tourney
       ? { win: t('👑 トーナメント優勝！！', '👑 TOURNAMENT CHAMPION!!'), lose: t('敗退…', 'Eliminated…'), draw: 'DRAW' }
@@ -6262,6 +6636,19 @@ class OnlineMode extends VersusBase {
         ${scoreRows}`;
     }
 
+    // 👑 王者を倒した。印は server/battle.js が endMatch で載せる
+    //   beatChampion … true のときだけ載る（false は載せない ＝「この試合だけ
+    //                  false が付く」ことも相手が誰かの手がかりになるため）
+    //   championWins … 生涯の撃破回数（user.stats.championWins と同値）
+    // 文面は「相手が誰か」ではなく「何を成し遂げたか」で書く ── 住人の正体は
+    // 管理者以外に明かさないので、相手が人間でもそのまま成立する言い回しだけ。
+    const championNote = msg.beatChampion
+      ? `<p class="center champion-fell">${t('👑 頂に土をつけた！', '👑 You toppled the summit!')}`
+        + ((msg.championWins || 0) > 1
+          ? `<br><small class="muted">${t(`通算 ${fmt(msg.championWins)} 回目`, `${fmt(msg.championWins)} times total`)}</small>` : '')
+        + '</p>'
+      : '';
+
     const myRating = msg.user && msg.user.stats ? msg.user.stats.rating : null;
     const tier = myRating != null ? rankOf(myRating) : null;
     const ratingRow = msg.ratingDelta
@@ -6271,6 +6658,7 @@ class OnlineMode extends VersusBase {
     const m = showModal(`
       <div class="result-banner ${msg.outcome}">${banners[msg.outcome]}</div>
       ${reasonNote}
+      ${championNote}
       <div class="result-stats">
         ${scoreRows}
         ${ratingRow}
@@ -6359,6 +6747,9 @@ class OnlineMode extends VersusBase {
     $('#coopBar').classList.add('hidden');
     $('#btnOppDensity').classList.add('hidden');
     if (this.isRoyale) this.clearRoyaleOverlays();
+    // ルームの観戦席は isRoyale ではないので、こちらは無条件に畳む
+    // （残すと次のモードの盤面の上に前の試合の観戦窓が乗ったままになる）。
+    this.clearSpectateView();
     if (view) view.onIntentPlace = null;
     this.client.close();
   }

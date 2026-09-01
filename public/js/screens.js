@@ -225,6 +225,7 @@ function showProfileModal() {
       <div class="rs-row"><span>${tr('段位', 'Rank')}</span><button class="btn btn-sm btn-ghost" id="pLadder">🎖️ ${tr('段位一覧を見る', 'View the rank ladder')}</button></div>
       <div class="rs-row"><span>${tr('オンライン戦績', 'Online record')}</span><b>${tr(`${u.stats.pvpWins}勝 ${u.stats.pvpLosses}敗`, `${u.stats.pvpWins}W ${u.stats.pvpLosses}L`)}</b></div>
       <div class="rs-row"><span>${tr('AI撃破', 'AI wins')}</span><b>${fmt(u.stats.aiWins)}</b></div>
+      ${(u.stats.championWins || 0) > 0 ? `<div class="rs-row"><span>${tr('👑 王者撃破', '👑 Champion defeated')}</span><b style="color:var(--gold)">${tr(`${fmt(u.stats.championWins)}回`, `${fmt(u.stats.championWins)}×`)}</b></div>` : ''}
       <div class="rs-row"><span>${tr('プレイ回数', 'Games played')}</span><b>${fmt(u.stats.gamesPlayed)}</b></div>
       <div class="rs-row"><span>${tr('バッジ', 'Badges')}</span><b class="badge-row">${u.badges.length ? u.badges.map(b => `<span title="${escapeHtml(badgeName(b))}">${badgeIcon(b, 20)}</span>`).join('') : tr('なし', 'None')}</b></div>
       ${u.guild ? `<div class="rs-row"><span>${tr('ギルド', 'Guild')}</span><b>${u.guild.icon} [${escapeHtml(u.guild.tag)}] ${escapeHtml(u.guild.name)}${u.guild.owner ? ' 👑' : ''}</b></div>` : ''}
@@ -357,6 +358,10 @@ function showStatsModal() {
       ${tile(tr('🔥連続ログイン', '🔥 Login streak'), tr(`${fmt(s.loginStreak || 1)}日`, `${fmt(s.loginStreak || 1)}d`), 'var(--red)')}
       ${tile(tr('🏰最高到達階', '🏰 Deepest floor'), `F${fmt(s.dungeonMax || 0)}`)}
       ${tile(tr('💀最高ウェーブ', '💀 Best wave'), `W${fmt(s.survivalWave || 0)}`)}
+      ${/* 👑 アリーナ最強の相手を破った回数。0 のときは出さない ── 会ったことの
+            ない人に「0回」と並べると、取り逃したように見えるうえ、めったに
+            会えない相手の存在を先にばらしてしまう。 */''}
+      ${(s.championWins || 0) > 0 ? tile(tr('👑王者撃破', '👑 Champion beaten'), fmt(s.championWins), 'var(--gold)') : ''}
     </div>
     ${fav ? `<p class="muted center" style="margin-top:10px;font-size:12px">${tr('よく遊ぶモード', 'Most played')}: <b>${escapeHtml(modeLabel(fav[0]))}</b> (${fav[1]}${tr('戦', '')})</p>` : ''}
     <div class="modal-buttons">
@@ -954,6 +959,25 @@ const lbMedal = (rank, size = 20) => (rank >= 1 && rank <= 3
   ? icon(`medal_${rank}`, { size, cls: 'lb-medal' })
   : `${rank}`);
 
+// 👑 レート部門の「◯勝◯敗」。それなりの試合数を戦って **1敗もしていない**
+// 人だけ、数字を金色にして目に留まるようにする。ランキングの上位はほぼ全員が
+// 数敗しているので、無敗はその1行だけで格が伝わる情報になる。
+//
+// ⚠ 判定に使うのは公開ずみの勝敗数だけ。「誰であるか」は一切見ない ──
+// 特定の人だけ見た目が変わる作りにすると、その差そのものが正体の手がかりに
+// なる（住人の秘匿は test/secrecy.test.mjs の担当だが、見た目の差は機械では
+// 見つけられないので、ここで作らないと決めておく）。
+// 実プレイヤーでも 20勝0敗 なら同じ金色になる。
+const UNBEATEN_MIN_WINS = 20;
+function lbRecordHtml(r) {
+  const w = Math.max(0, Number(r.pvpWins) || 0);
+  const l = Math.max(0, Number(r.pvpLosses) || 0);
+  const body = tr(`${w}勝${l}敗`, `${w}W ${l}L`);
+  return (l === 0 && w >= UNBEATEN_MIN_WINS)
+    ? `<b style="color:var(--gold)" title="${tr('無敗', 'Unbeaten')}">${body}</b>`
+    : body;
+}
+
 export async function openLeaderboard(board = 'score') {
   showScreen('leaderboard');
   const gen = ++viewGen;
@@ -1021,7 +1045,7 @@ export async function openLeaderboard(board = 'score') {
         <div class="lb-name ${r.crowns ? `crowned${Math.min(3, r.crowns)}` : ''}">${r.throne ? `<span class="lb-crown" title="${tr('現王者', 'Reigning champion')}">${icon('throne', { size: 14, label: tr('現王者', 'Reigning champion') })}</span>` : ''}${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
           <span class="lb-badges">${(r.badges || []).map(b => `<span title="${escapeHtml(badgeName(b))}">${badgeIcon(b, 13)}</span>`).join('')}</span>
           ${r.title ? `<span class="lb-title" style="color:${escapeHtml(r.title.color)}">《${escapeHtml(r.title.id ? catName(r.title) : r.title.name)}》</span>` : ''}
-          <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? `${SEP}${tr(`${r.pvpWins}勝${r.pvpLosses}敗`, `${r.pvpWins}W ${r.pvpLosses}L`)}` : ''}${board === 'sprint' && r.sprint180 ? `${SEP}${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? `${SEP}🌑A${fmt(r.abyssMax)}` : ''}</div>
+          <div class="lb-lvl">Lv.${r.level}${board === 'rating' ? `${SEP}${lbRecordHtml(r)}` : ''}${board === 'sprint' && r.sprint180 ? `${SEP}${tr('3分', '3min')} ${fmt(r.sprint180)}` : ''}${board === 'dungeon' && r.abyssMax ? `${SEP}🌑A${fmt(r.abyssMax)}` : ''}</div>
         </div>
         <div class="lb-score">${lbValueHtml(board, lbValue(board, r))}</div>
       </div>`).join('')

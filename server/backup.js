@@ -521,6 +521,15 @@ function mergeEarned(winner, loser) {
     }
   }
 
+  // 👑 王者（住人の頂点）を倒した回数 (battle.js の championWins)。
+  // これは「稼いだもの」── 称号が「一度でも倒したか」で決まるので、進行度で
+  // 負けたコピーが持っていると復元のたびに称号が消える。大きいほうを採る。
+  const lcw = Number(loser.stats && loser.stats.championWins);
+  if (Number.isFinite(lcw) && lcw > 0) {
+    const wst6 = winner.stats || (winner.stats = {});
+    wst6.championWins = Math.max(Number(wst6.championWins) || 0, Math.floor(lcw));
+  }
+
   // 📈 段位の昇格を「どこまで全体告知したか」の印 (battle.js の rankAnnounced /
   // 値は帯の下限レート)。1700付近を往復するだけで同じ昇格が何度も全体配信される
   // のを止めているのはこれだけなので、落とすと復元のたびにまた鳴る。
@@ -529,6 +538,20 @@ function mergeEarned(winner, loser) {
   if (Number.isFinite(lra) && lra > 0) {
     const wst5 = winner.stats || (winner.stats = {});
     wst5.rankAnnounced = Math.max(Number(wst5.rankAnnounced) || 0, Math.floor(lra));
+  }
+
+  // 👑 「王者を倒した」の全体速報を今日もう流したかの印
+  // (index.js announceChampionFall / user.stats.champAnnDay = 'YYYY-MM-DD' JST)。
+  // 1人1日1回に絞っているのはこの印だけなので、落とすと**復元した日に
+  // もう一度全体速報が鳴る**。上の rankAnnounced とまったく同じ性格なので
+  // 同じ扱い ＝ 新しい日のほうを採る（古い日付は次の撃破で上書きされるだけで
+  // 止め金にならない）。勝った側に無ければ負けた側のものを引き継ぐ。
+  const lca = loser.stats && loser.stats.champAnnDay;
+  if (okDay(lca)) {
+    const wst7 = winner.stats || (winner.stats = {});
+    if (!okDay(wst7.champAnnDay) || String(lca) > String(wst7.champAnnDay)) {
+      wst7.champAnnDay = String(lca);
+    }
   }
 
   // 🎁 ショップの1日1回の無料ギフト受領印 (routes/shop.js giftClaimedDay)。

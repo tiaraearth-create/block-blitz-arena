@@ -285,6 +285,14 @@ export const TITLES = [
   // 🕳️ 隠し称号。条件はあえてぼかしてある（何回で取れるかは書かない）。
   // 全消し「昇華」を50回。ghostmaster と同じく、説明が達成のヒントを兼ねる。
   { id: 'voidseeker', name: '無の求道者',     color: '#7c3aed', desc: '盤面を空にした回数が一定に達した' },
+  // 👑 アリーナ最強の相手（ランキングの頂点で待っている 👑ちゃちゃまる）に
+  // 土をつけた人の称号。
+  // ⚠ 文言には「AI」「ボット」を絶対に出さない ── 称号はプロフィール・チャット・
+  // ランキングに一生ついて回る飾りで、いちばん人目に触れる場所だから。
+  // 「王者」「頂」は相手が人間でもそのまま成立する言い回しなので、正体を
+  // 明かさずに事件の大きさだけが伝わる。
+  { id: 'crownfeller', name: '王者を討ちし者', color: '#ffd75e', desc: 'アリーナ最強と呼ばれた相手に勝つ' },
+  { id: 'summittaker', name: '頂を獲りし者',   color: '#fff3b0', desc: 'アリーナ最強と呼ばれた相手に10回勝つ' },
   // 📕 コレクション図鑑のセットコンプ報酬（COLLECTION_SETS 参照）
   { id: 'ultcollector', name: '奥義蒐集家',   color: '#43d9e8', desc: '奥義をすべて集める' },
   { id: 'rainbowtrio',  name: '虹の三種',     color: '#ff6bd4', desc: 'ガチャ限定の装備をすべて集める' },
@@ -549,6 +557,12 @@ export function earnedTitles(user) {
   if ((s.ghostBest || 0) >= 15000) out.push('ghostmaster');
   // 全消し「昇華」の通算回数。統計は減らないので、一度取れば剥がれない。
   if ((s.perfectClears || 0) >= 50) out.push('voidseeker');
+  // 👑 アリーナ最強の相手を破った通算回数（対戦を裁く server/battle.js が
+  // endMatch で積む s.championWins）。ここも保存された統計から毎回計算し直す
+  // だけなので、実装より前に倒していた回も、統計さえ入っていれば遡って解除される。
+  // 減らないカウンタなので、streak5 で踏んだ「取ったのに剥がれる」穴は無い。
+  if ((s.championWins || 0) >= 1) out.push('crownfeller');
+  if ((s.championWins || 0) >= 10) out.push('summittaker');
   // 📕 図鑑のセットコンプ称号。所持装備は減らないのでコンプ自体が剥がれることは
   // ないが、受け取り済み（user.collections）も無条件に認める ── 消費できる
   // ブースターを含むセットに将来称号を付けても、在庫を使い切った瞬間に

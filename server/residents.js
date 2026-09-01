@@ -194,9 +194,16 @@ const CHAMP_APTITUDE = 1.16;   // aptitude() が返しうる最大値（favMode 
 const CHAMP_CADENCE = 2;       // personalBest の練習間隔の最小値
 const CHAMP_LUCK = 1;          // 当たり外れ（unit の上限）
 const CHAMP_MOOD = 1;          // 調子 moodFor の上限
-// 👑 王者の敗北数の割合。147勝0敗（実測）は明らかに作り物なので、少数の負けを
-// 決定論的に持たせる。勝率は 98% で「住人の中で断トツ」は変わらない。
-const CHAMP_LOSS_RATE = 0.02;
+// 👑 王者の敗北数。**0敗（無敗）**。
+//
+// 前の波では「147勝0敗は作り物に見える」と判断して 2% の負けを決定論的に
+// 持たせていた。ユーザーの決定はその逆で、「不自然に見えるから負けを足す」
+// のではなく「**本当に負けないだけの強さを与えて0敗を実態にする**」。
+// 実装は server/battle.js 側 ── 王者が対戦相手として出るときだけ専用の
+// 最強AI（public/js/ai.js の souzou / 全順列読みのビームサーチ）を使う。
+// 実測の勝率はそのタスクの numbers に残してある。
+// ここを 0 以外に戻すときは、その最強AIの実測勝率と必ずセットで考えること。
+const CHAMP_LOSSES = 0;
 
 // ---------------------------------------------------------------------------
 // 上限への「張り付き」を崩す、住人ごとの天井
@@ -539,14 +546,11 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
     rating, level, bestScore, dungeonMax, age,
     tier: tierOf(rating),
     pvpWins,
-    // 👑 王者は skill が 0.995 なので (1-s)×0.8 が切り捨てで 0 になり、
-    // ずっと「147勝0敗」と表示されていた。1敗もしていない対戦成績は、
-    // それだけで作り物だと分かる（このコードベースがいちばん嫌う嘘のつき方）。
-    // 勝ち数から決定論的に少数の負けを作る ── 勝率は 98% のままで、
-    // 「住人の中で断トツ」は1ミリも変わらない。
-    pvpLosses: champ
-      ? Math.max(1, Math.round(pvpWins * CHAMP_LOSS_RATE))
-      : Math.floor(age * (1 - s) * 0.8),
+    // 👑 王者は 0敗（ユーザーの明示要求）。skill が 0.995 なので
+    // (1-s)×0.8 は切り捨てで 0 になり、素の式でも 0 に落ちる ── つまり
+    // 「王者だけ別式」を足しているのではなく、**足していた例外を外した**。
+    // 実態のほうは battle.js の専用AIが担保する（CHAMP_LOSSES のコメント参照）。
+    pvpLosses: champ ? CHAMP_LOSSES : Math.floor(age * (1 - s) * 0.8),
     // ウィークリーは週ごとにリセットされる記録なので、そこだけは（他の自己ベストの
     // ような）長期の階段ではなく「その週の調子」= weeklyMix と weeklyForm で決まる。
     weeklyBest: Math.floor(Math.pow(weeklyMix, 2) * 90000 * aptitude(r, 'weekly') * (0.8 + 0.4 * weeklyForm) + 800),

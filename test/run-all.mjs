@@ -66,9 +66,6 @@ const TESTS = [
   // server に手書きの表が復活していないかをソース検査で見張るので、
   // rules と同じくサーバー不要の安い組に置く。
   'ranks.test.mjs',
-  // 👑 ちゃちゃまるが全ボードに載り、住人の中で1位であること。
-  // 住人の計算だけを回すのでサーバーは要らない（ranking-ai と同じ性格）。
-  'champion.test.mjs',
   'workshop.test.mjs',
   'viewresize.test.mjs',
   'i18n.test.mjs',
@@ -108,6 +105,15 @@ const TESTS = [
   'daily.test.mjs',
   'battle.test.mjs',
   'royale.test.mjs',
+  // 👀 観戦の取り決め（watch / watchable）。ロイヤル側をWSで1試合ぶん通すので
+  // royale の隣に置く（実時間で30秒ほどかかる）。
+  'spectate.test.mjs',
+  // 🚪 カスタムルームの定員8人と観戦席。実マッチを1本回すので重い組。
+  'room.test.mjs',
+  // 👑 ちゃちゃまる。住人の計算（サーバー不要）に加えて、v2.35 から
+  // 「本当に対戦相手として出て、倒すと印が付く」をWSで通しで見るので、
+  // 純ロジックの安い組ではなくサーバー組に置いてある。
+  'champion.test.mjs',
   'shutdown.test.mjs',
 ];
 

@@ -32,6 +32,9 @@ import {
   ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider, setTakenNamesProvider, crowdMood, ambientQueue, isQuietNow, residentByName, activeResidents, residentStats, archetype,
   boardResidents,
 } from './ambient.js';
+// 👑 王者の名前は住人名簿の唯一の正解（residents.js）から取る。速報の文面に
+// 文字列を書き写すと、名簿を差し替えた日に告知だけが古い名前を出し続ける。
+import { CHAMPION } from './residents.js';
 import { BADGE_NAMES } from './crowd.js';
 import {
   leaveGuild, addGuildPoints, guildLevel, guildCoinBonus, tagOfName,
@@ -673,6 +676,12 @@ function migrateUser(user) {
     chainPlays: 0, chainBest: 0, chainMax: 0,
     blueprintPlays: 0, blueprintClears: 0,
     workshopPlays: 0, workshopClears: 0,
+    // 👑 アリーナ最強の相手を破った回数。積んでいるのは対戦を裁く
+    // server/battle.js（endMatch の beatChampion 判定）で、ここは欄をそろえる
+    // だけ。称号（catalog.js の crownfeller / summittaker）と実績
+    // （achievements.js の ach_champ1 / ach_champ10）はこれを毎回読み直して
+    // 判定するので、遡及解除がそのまま効く。
+    championWins: 0,
   })) if (s[k] === undefined) s[k] = v;
   // 📈 段位の昇格を「どこまで全体告知したか」の印（battle.js が書く / 読む）。
   // 既存アカウントは、いま到達している帯を『告知ずみ』として始める ── 0 から
@@ -925,7 +934,7 @@ const BUGREPORT_CAP = 300;
 const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'zero7', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7', 'guildquest'];
 const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']);
 
-function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, trusted, preClamped }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, beatChampion, trusted, preClamped }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   // mode はキー生成にも使う（下の `${mode}Prev`）。クライアント申告なので、
   // 長さを切っておかないと巨大文字列で stats を無限に太らせられる（実測で
@@ -1655,6 +1664,22 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   }
   if (prevKey) s[prevKey] = Math.max(prevFloor, Math.floor(Number(floor) || 0));
   postRealFeed(user, feedNotes);
+  // 👑 アリーナ最強の相手を破った ── ここでは **数えない**。
+  //
+  // 生涯カウンター s.championWins を積むのは対戦を裁く server/battle.js
+  // （endMatch の beatChampion 判定）で、そちらは棄権・自己対戦・共闘
+  // （協力/レイド）を全部はじいたうえで加算している。ここでも足すと二重に
+  // なるので、この印は「全体速報を1回鳴らすかどうか」だけに使う。
+  // 王者が破れたのは世界の事件なので、個人の速報（postRealFeed は1人45秒に
+  // 1件までしぼる）とは別枠で流す。連発防止は announceChampionFall の中で
+  // 「1人1日1回」。
+  //
+  // 印を立てられるのは対戦を裁いたサーバー自身だけ。クライアントが名乗れる欄の
+  // 一覧（下の RESULT_FIELDS）には **わざと載せない** ので、/api/game/result
+  // 経由の申告はここへ届かない。それでも trusted を二重に見るのは、将来
+  // RESULT_FIELDS に足されたときに黙って通らないようにするため ── 速報は
+  // 全プレイヤーに届く放送で、偽の申告で鳴らせてはいけない。
+  if (beatChampion && trusted && won) announceChampionFall(user);
   notifyDailyOvertaken(user, overtook);
 
   // Daily / weekly missions advance off the same event.
@@ -1706,6 +1731,55 @@ function postRealFeed(user, notes) {
     battle.crowd.feed({ icon: n.icon, real: true, who: user.username, text: n.ja, textEn: n.en });
     if (n.react) battle.crowd.react(n.react[0], n.react[1]);
   }
+}
+
+// 👑 「アリーナ最強の相手が破れた」の全体速報。
+//
+// トーナメント優勝の全体告知（server/battle.js の finishTourneyRound）と同じ
+// 作りにしてある: broadcastAll の 'announce' で全体チャットへ、crowd.feed で
+// ライブフィードへ。個人の速報（postRealFeed）とは別枠にしているのは、
+// あちらが「1人45秒に1件」でしぼるため ── 自己ベスト更新と同時に王者を倒すと、
+// いちばん流したい1件が黙って捨てられていた。
+//
+// ■ 連発防止
+// 同じ人が同じ日に何度倒しても、流れるのは1回だけ（印は stats.champAnnDay、
+// JSTの日で数える）。回数そのものは server/battle.js が stats.championWins に
+// 積み続けるので、称号・実績の遡及計算には影響しない。
+// 何度呼んでも安全（2回目以降はその日ぶんが立っているので黙って false を返す）
+// ので、呼び出し口が2つ（applyGameResult の beatChampion 引数と、battle.js へ
+// 渡している deps.announceChampionFall）あっても二重には鳴らない。
+// ⚠ この印を復元で落とすと、復元した日にもう一度鳴る。server/backup.js の
+//   mergeEarned で stats.rankAnnounced と同じ扱い（新しい日を採る）にすること
+//   ＝ 別担当へ申し送りずみ。
+//
+// ■ 文面
+// 「AI」「ボット」を出さない。王者は住人の頂点で、住人の正体は管理者以外に
+// 絶対に漏らさない（test/secrecy.test.mjs が見張っている）。相手が人間でも
+// そのまま成立する言い回しだけを使う。
+function announceChampionFall(user) {
+  // battle は下のほうで作られる const なので、起動処理の途中で結果を通されると
+  // TDZ で落ちる（postRealFeed と同じガード）。ここで抜けるときは印も立てない
+  // ── 立ててしまうと「鳴らなかった日」を1日ぶん食いつぶす。
+  if (!battleReady || !battle.broadcastAll) return false;
+  const s = user.stats;
+  const today = jstDayKey();
+  if (s.champAnnDay === today) return false;
+  s.champAnnDay = today;
+  const nm = user.username;
+  battle.broadcastAll({
+    type: 'announce',
+    message: `👑 速報 ── 「${nm}」が ${CHAMPION.name} を破った！ 頂に土がついた`,
+    messageEn: `👑 Breaking — "${nm}" has taken down ${CHAMPION.name}! The summit has fallen`,
+    from: '運営',
+  });
+  if (battle.crowd) {
+    battle.crowd.feed({
+      icon: '👑', real: true, who: nm,
+      text: `${nm} が ${CHAMPION.name} を破った！`,
+      textEn: `${nm} took down ${CHAMPION.name}!`,
+    });
+  }
+  return true;
 }
 
 // 📅 デイリーで追い抜かれた人にだけ、その場で知らせる。
@@ -3597,6 +3671,9 @@ const RESULT_FIELDS = [
   // ための識別子なので、名乗らせてよい（day は形式を、attemptId は保存済みの
   // pending との一致を applyGameResult 側で必ず検証する）。
   'day', 'attemptId',
+  // 👑 beatChampion は **わざと載せない**（trusted / preClamped と同じ内部専用の鍵）。
+  // 立てられるのは対戦を裁いた server/battle.js だけ。ここに足すと
+  // { beatChampion: true } の連投で称号と実績（＝💎の原資）が湧く。
 ];
 function pickResultFields(body) {
   const src = (body && typeof body === 'object') ? body : {};
@@ -3978,6 +4055,11 @@ const battle = initBattle(server, {
     return !!s && RESERVED_NAMES.some(r => r.toLowerCase() === s);
   },
   isMaintenance: inMaintenance,
+  // 👑 「王者を破った」の全体速報。battle.js が endMatch で beatChampion を
+  // 立てた直後に呼べばよい（`deps.announceChampionFall(me)` の1行）。
+  // 連発防止（1人1日1回）と文面はこちらが持つので、呼ぶ側は判定だけでよい。
+  // 何度呼んでも安全 ── 同じ日の2回目以降は何もせず false を返す。
+  announceChampionFall,
   // WSの接続元IP。HTTP側の req.ip と同じ規則で解く（上の clientIpOf のコメント参照）。
   clientIp: clientIpOf,
   guildTagOf: (name, user) => tagOfName(db, name, user),
