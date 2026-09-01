@@ -9,7 +9,7 @@ import {
   updateRerollHud, handleEngineOver, fireUltCurrent, useGameItem, equippedUlt, startSolo,
 } from './modes.js';
 import { fireUlt, ULT_META } from './skills.js';
-import { session } from './net.js';
+import { session, api } from './net.js';
 import { $, showModal, closeModal, toast, confettiBurst, fmt, staffExtras } from './dom.js';
 import { audio } from './audio.js';
 import { SHAPES } from './engine.js';
@@ -108,11 +108,14 @@ export function showAdminPalette(tab = 'board') {
   const toggle = (key, label) => `<button class="btn btn-sm ${god[key] ? 'btn-gold' : 'btn-ghost'}" data-god="${key}">${god[key] ? `${ic('check')} ` : ''}${label}</button>`;
 
   const sections = {
-    board: [btn('clear', '全消し'), btn('clearbottom', '下半分を消す'), btn('cleargarbage', 'お邪魔だけ消す'), btn('fill', 'ランダムに50%埋める'), btn('checker', '市松模様にする'), btn('revive', `${ic('reroll')} 盤面リセット（スコア維持）`)],
-    score: [btn('score1k', '+1,000'), btn('score10k', '+10,000'), btn('score100k', '+100,000'), btn('scorex2', '×2'), btn('scorezero', '0にする', 'btn-ai')],
-    hand: [btn('reroll', `${ic('reroll')} リロール +5`), btn('rerollinf', 'リロール無限'), btn('hand1', '全部 1×1'), btn('hand3', '全部 3×3'), btn('handline', '全部 5マス線'), btn('handrainbow', `${ic('ult_rainbow')} 最適な手札`)],
+    // 絵は「その操作の道具」に対応するものだけを付ける。意味が薄いところに
+    // 飾りで足すと、絵と操作の対応が崩れて全体の手がかりが弱くなる
+    // （＋1,000 のような数字は、それ自体が既にいちばん強い手がかり）。
+    board: [btn('clear', `${ic('item_god_wipe')} 全消し`), btn('clearbottom', `${ic('cut')} 下半分を消す`), btn('cleargarbage', `${ic('item_cleaner')} お邪魔だけ消す`), btn('fill', `${ic('block')} ランダムに50%埋める`), btn('checker', `${ic('cat_board')} 市松模様にする`), btn('revive', `${ic('reroll')} 盤面リセット（スコア維持）`)],
+    score: [btn('score1k', '+1,000'), btn('score10k', '+10,000'), btn('score100k', '+100,000'), btn('scorex2', '×2'), btn('scorezero', `${ic('trash')} 0にする`, 'btn-ai')],
+    hand: [btn('reroll', `${ic('reroll')} リロール +5`), btn('rerollinf', `${ic('infinity')} リロール無限`), btn('hand1', `${ic('mini')} 全部 1×1`), btn('hand3', `${ic('block')} 全部 3×3`), btn('handline', `${ic('lines')} 全部 5マス線`), btn('handrainbow', `${ic('ult_rainbow')} 最適な手札`)],
     time: [btn('time60', `${ic('mode_sprint')} +60秒`), btn('time300', `${ic('mode_sprint')} +5分`), btn('timeup', '即タイムアップ', 'btn-ai'), btn('bosshalf', '敵HP半減'), btn('boss1', '敵HPを1に'), btn('bosskill', `${ic('mode_boss')} 即討伐`), btn('bossatk', `${ic('warn')} 今すぐ敵の攻撃`)],
-    dungeon: [btn('floorclear', `${ic('mode_dungeon')} フロア即クリア`), btn('warp10', '10フロア進む'), btn('lives', '残機 +5'), btn('perks', 'パーク全付与'), btn('floor100', '最深部へワープ', 'btn-oni')],
+    dungeon: [btn('floorclear', `${ic('mode_dungeon')} フロア即クリア`), btn('warp10', '10フロア進む'), btn('lives', `${ic('heart')} 残機 +5`), btn('perks', `${ic('perk_atk')} パーク全付与`), btn('floor100', `${ic('skull')} 最深部へワープ`, 'btn-oni')],
     ult: [btn('ultmax', `${ic('ultimate')} ゲージMAX`), btn('ultfire', '装備奥義を即発動'),
       // 奥義の絵は icons.js を id で引く（skills.js の絵文字は 🛡️/☄️ が
       // 別の商品と重なっていたので、棚と同じ独自アイコンにそろえる）。
@@ -361,6 +364,387 @@ export function quickAutopilot() {
     const i = AUTO_SPEEDS.indexOf(autopilot.speed);
     if (i >= 0 && i < AUTO_SPEEDS.length - 1) { autopilot.speed = AUTO_SPEEDS[i + 1]; toast(`速度 x${autopilot.speed}`, '', 1000); updateAutoBtn(); }
     else { stopAutopilot(); toast('停止しました', '', 1200); }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 📊 プレイヤー統計（管理者専用）
+// ---------------------------------------------------------------------------
+//
+// 「誰がいつオンラインになったのか」を運営が読む面。出どころは
+// /api/admin/playerstats（一覧＋全体サマリ）と /api/admin/playerstats/:id
+// （個人の詳細）と /api/admin/residents（住人の名簿）の3本だけで、どれも
+// requireAuth + requireAdmin で守られている。
+//
+// ■ なぜ admintools.js に置くのか
+// 管理者パネルの画面そのもの（screens.js / index.html）は別担当の持ち物。
+// こちらから触れるのは「自分で作った DOM を差し込むこと」だけなので、
+// パネルにボタンを1つ足して、中身はモーダルで持つ形にしてある。
+// 枠が別担当の手で正式に生えたら、そちらから showPlayerStats() を呼ぶだけで
+// この差し込みは外せる（mountPlayerStatsButton が二重に足さない）。
+//
+// ■ CSS を増やさない
+// public/css も別担当なので、既にある .stat-card / .live-* / .tabs だけを
+// 借り、足りないところはインライン指定で済ませている。
+//
+// ■ 住人（AI）と実プレイヤー
+// サーバーが **入れ物ごと** 分けて返す（summary.players と summary.residents）。
+// 画面でも混ぜない。ここは管理者しか到達できない面なので区別を出してよいが、
+// 同じ描画関数を非管理者の画面へ持ち出さないこと。
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// 時刻の見せ方。運営が知りたいのは「どれくらい前か」なので相対表記を先に出し、
+// 実際の日時は title 属性に置く（並べたときに桁がそろい、詳しく見たいときは
+// 触れば分かる）。0 は「記録がない」であって「1970年」ではないので必ず — にする。
+function whenText(t) {
+  if (!t) return '—';
+  const d = Math.max(0, Date.now() - t);
+  if (d < 60000) return 'たった今';
+  if (d < 3600000) return `${Math.floor(d / 60000)}分前`;
+  if (d < 86400000) return `${Math.floor(d / 3600000)}時間前`;
+  if (d < 30 * 86400000) return `${Math.floor(d / 86400000)}日前`;
+  return `${Math.floor(d / 86400000 / 30)}か月前`;
+}
+const whenFull = t => (t ? new Date(t).toLocaleString('ja-JP') : '記録なし');
+const dayText = t => (t ? new Date(t).toLocaleDateString('ja-JP') : '—');
+
+// 累計プレイ時間などの秒数。0 は本当に 0 なので — にはしない。
+function durText(secs) {
+  const s = Math.max(0, Math.floor(Number(secs) || 0));
+  if (s < 60) return `${s}秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}分`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}時間${m % 60}分`;
+  return `${Math.floor(h / 24)}日${h % 24}時間`;
+}
+// 在席区間の長さ（ms）。1分未満の区間もあるので秒まで出す。
+const spanText = ms => durText(Math.round((Number(ms) || 0) / 1000));
+
+// ログイン回数は v2.37 から数え始めた。0 は「0回来た」ではなく
+// 「まだ数えていない」なので、0 と未計測を同じ顔で出さない。
+const countText = (n, unit) => (n > 0 ? `${fmt(n)}${unit}` : '—');
+
+const PS_TABS = [
+  ['summary', '全体', 'leaderboard'],
+  ['players', 'プレイヤー', 'user'],
+  ['residents', '住人', 'mask'],
+];
+const PS_SORTS = [
+  ['lastOnline', '最終オンライン'], ['playSecs', 'プレイ時間'], ['games', 'プレイ回数'],
+  ['logins', 'ログイン'], ['streak', '連続'], ['rating', 'レート'],
+  ['level', 'レベル'], ['createdAt', '登録日'], ['name', '名前'],
+];
+
+// 開き直しても条件が残るように、状態はモジュールに置く。
+const ps = { tab: 'summary', sort: 'lastOnline', order: 'desc', q: '', offset: 0, limit: 50 };
+
+const psAdmin = () => !!session.user && session.user.role === 'admin';
+
+export async function showPlayerStats(tab = ps.tab) {
+  if (!psAdmin()) return toast('管理者専用です', 'err');
+  ps.tab = PS_TABS.some(([id]) => id === tab) ? tab : 'summary';
+  const modal = showModal(`
+    <h2>${ic('leaderboard', 20)} プレイヤー統計</h2>
+    <div class="tabs" style="justify-content:center;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+      ${PS_TABS.map(([id, l, name]) => `<button class="tab ${ps.tab === id ? 'active' : ''}" data-pt="${id}">${ic(name)} ${l}</button>`).join('')}
+    </div>
+    <div id="psBody"><p class="muted center">読み込み中…</p></div>
+    <div class="modal-buttons"><button class="btn btn-ghost" id="psClose">閉じる</button></div>`);
+  modal.querySelector('#psClose').onclick = closeModal;
+  modal.querySelectorAll('[data-pt]').forEach(b => {
+    b.onclick = () => { audio.click(); ps.offset = 0; closeModal(); showPlayerStats(b.dataset.pt); };
+  });
+  const body = modal.querySelector('#psBody');
+  try {
+    if (ps.tab === 'residents') renderResidentsTab(body, await api('/api/admin/residents'));
+    else renderStatsTab(body, await api(psQuery()), modal);
+  } catch (err) {
+    // 403 は「管理者ではない」。サーバー側の requireAdmin が最終判断なので、
+    // ここで理由をそのまま見せる（画面側の判定だけを信じない）。
+    body.innerHTML = `<p class="muted center">${ic('warn', 14)} ${esc(err.message)}</p>`;
+  }
+}
+
+function psQuery() {
+  const p = new URLSearchParams({
+    sort: ps.sort, order: ps.order,
+    offset: String(ps.offset), limit: String(ps.limit),
+  });
+  if (ps.q) p.set('q', ps.q);
+  return `/api/admin/playerstats?${p.toString()}`;
+}
+
+// 全体サマリとプレイヤー一覧は同じ応答から描く（サーバーに2回聞かない）。
+function renderStatsTab(body, data, modal) {
+  body.innerHTML = ps.tab === 'summary' ? summaryHtml(data) : playersHtml(data);
+  if (ps.tab === 'summary') return;
+
+  const reload = async () => {
+    body.innerHTML = '<p class="muted center">読み込み中…</p>';
+    try { renderStatsTab(body, await api(psQuery()), modal); }
+    catch (err) { body.innerHTML = `<p class="muted center">${ic('warn', 14)} ${esc(err.message)}</p>`; }
+  };
+  const search = body.querySelector('#psSearch');
+  if (search) {
+    // Enter でも「検索」でも同じ経路。入力のたびに投げると、
+    // 8,000件の集計を打鍵ごとに走らせることになるので投げない。
+    const go = () => { ps.q = search.value.trim(); ps.offset = 0; reload(); };
+    search.addEventListener('keydown', ev => { if (ev.key === 'Enter') go(); ev.stopPropagation(); });
+    body.querySelector('#psSearchGo').onclick = () => { audio.click(); go(); };
+  }
+  body.querySelectorAll('[data-sort]').forEach(b => {
+    b.onclick = () => {
+      audio.click();
+      // 同じ列をもう一度押したら昇順／降順を入れ替える。
+      if (ps.sort === b.dataset.sort) ps.order = ps.order === 'desc' ? 'asc' : 'desc';
+      else { ps.sort = b.dataset.sort; ps.order = b.dataset.sort === 'name' ? 'asc' : 'desc'; }
+      ps.offset = 0;
+      reload();
+    };
+  });
+  body.querySelectorAll('[data-page]').forEach(b => {
+    b.onclick = () => { audio.click(); ps.offset = Math.max(0, Number(b.dataset.page) || 0); reload(); };
+  });
+  body.querySelectorAll('[data-uid]').forEach(b => {
+    b.onclick = () => { audio.click(); showPlayerDetail(b.dataset.uid); };
+  });
+}
+
+function summaryHtml(data) {
+  const s = data.summary || {};
+  const p = s.players || {};
+  const r = s.residents || {};
+  const card = (v, label, title = '') => `<div class="stat-card"${title ? ` title="${esc(title)}"` : ''}><b>${v}</b><span>${esc(label)}</span></div>`;
+  const modes = (s.modes || []).map(m => `<div class="live-row" style="grid-template-columns:minmax(0,1fr) auto">
+      <span class="live-name">${esc(m.id)}</span>
+      <span class="live-sub">${fmt(m.plays)}戦 ・ ${fmt(m.wins)}勝 ・ 最高 ${fmt(m.best)}点</span>
+    </div>`).join('');
+  // 推移は棒グラフ1本。CSS を足せないので、幅の割合だけで見せる。
+  const trend = s.trend || [];
+  const peak = Math.max(1, ...trend.map(d => Math.max(d.actives, d.signups)));
+  const trendRows = trend.map(d => `<div class="live-row" style="grid-template-columns:88px minmax(0,1fr) auto">
+      <span class="live-sub">${esc(d.day)}</span>
+      <span style="display:block;height:10px;border-radius:5px;background:rgba(255,255,255,.06)">
+        <span style="display:block;height:10px;border-radius:5px;width:${Math.round(d.actives / peak * 100)}%;background:var(--cyan,#43d9e8)"></span></span>
+      <span class="live-sub">遊んだ ${fmt(d.actives)} ・ 新規 ${fmt(d.signups)}</span>
+    </div>`).join('');
+  return `
+    <p class="live-head">${ic('user', 14)} 実プレイヤー</p>
+    <div class="admin-stats" style="margin-bottom:10px">
+      ${card(fmt(p.total || 0), '登録ユーザー')}
+      ${card(fmt(p.online || 0), 'いま接続中')}
+      ${card(fmt(p.activeToday || 0), '今日きた人')}
+      ${card(fmt(p.activeWeek || 0), '今週きた人')}
+      ${card(fmt(p.activeMonth || 0), '30日以内')}
+      ${card(fmt(p.newToday || 0), '今日の新規')}
+      ${card(fmt(p.newWeek || 0), '今週の新規')}
+      ${card(durText(p.totalPlaySecs || 0), '総プレイ時間')}
+      ${card(fmt(p.totalGames || 0), '総プレイ回数')}
+      ${card(countText(p.totalLogins || 0, '回'), 'ログイン総数', 'v2.37 から計測。それ以前のログインは含まれません')}
+      ${card(fmt(p.banned || 0), '凍結中')}
+      ${card(fmt(p.muted || 0), 'ミュート中')}
+    </div>
+    ${/* ⚠ 住人（AI）の数は実プレイヤーと必ず別の箱に出す。足した数を1つ出すと、
+          この画面を見た運営が「実際に何人来ているか」を二度と読めなくなる。 */''}
+    <p class="live-head">${ic('mask', 14)} 住人（AI・運営だけに見えます）</p>
+    <div class="admin-stats" style="margin-bottom:10px">
+      ${card(fmt(r.total || 0), '名簿の人数')}
+      ${card(fmt(r.online || 0), 'いまオンライン')}
+      ${card(fmt(r.withRecord || 0), '実対戦の記録あり')}
+      ${card(`${fmt(r.wins || 0)}-${fmt(r.losses || 0)}`, '住人の通算（勝-敗）')}
+    </div>
+    <p class="live-head">${ic('leaderboard', 14)} モード別の人気
+      <span class="muted" style="font-weight:400;font-size:11px">（直近${fmt(s.historyKeep || 40)}戦ぶんの履歴から）</span></p>
+    ${modes ? `<div class="live-list">${modes}</div>` : '<p class="muted" style="font-size:12px">まだ履歴がありません</p>'}
+    <p class="live-head" style="margin-top:10px">${ic('calendar', 14)} 直近${fmt(s.trendDays || 14)}日の推移</p>
+    ${trendRows ? `<div class="live-list">${trendRows}</div>` : '<p class="muted" style="font-size:12px">まだ記録がありません</p>'}`;
+}
+
+function playersHtml(data) {
+  const rows = (data.users || []).map(u => {
+    const tag = u.role === 'admin' ? '<span class="live-tag admin">管理</span>'
+      : u.role === 'mod' ? '<span class="live-tag admin">モデ</span>' : '';
+    const state = u.banned ? '<span class="live-tag guest">凍結</span>'
+      : u.online ? '<span class="live-tag user">接続中</span>' : '';
+    return `<button data-uid="${esc(u.id)}" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;width:100%;text-align:left;background:rgba(255,255,255,.04);border:0;border-radius:8px;padding:6px 10px;color:inherit;font:inherit;cursor:pointer">
+      <span class="live-name">${esc(u.username)}${tag}${state}</span>
+      <span class="live-sub" title="${esc(whenFull(u.lastOnline))}">${esc(whenText(u.lastOnline))}</span>
+      <span class="live-sub" style="grid-column:1/-1;white-space:normal">
+        プレイ ${esc(durText(u.playSecs))} ・ ${fmt(u.gamesPlayed)}戦 ・ ログイン ${esc(countText(u.logins, '回'))}
+        ・ 連続 ${fmt(u.loginStreak)}日（最長${fmt(u.loginStreakBest)}）
+        ・ R${fmt(u.rating)} ・ Lv.${fmt(u.level)} ・ 登録 ${esc(dayText(u.createdAt))}</span>
+    </button>`;
+  }).join('');
+  const from = data.matched ? data.offset + 1 : 0;
+  const to = Math.min(data.matched, data.offset + data.limit);
+  const prev = Math.max(0, data.offset - data.limit);
+  const next = data.offset + data.limit;
+  return `
+    <div class="settings-row" style="margin-bottom:6px">
+      <input id="psSearch" type="text" maxlength="16" placeholder="名前で検索…" value="${esc(ps.q)}" style="flex:1;min-width:140px">
+      <button class="btn btn-sm btn-primary" id="psSearchGo">${ic('search')} 検索</button>
+    </div>
+    <div class="tabs" style="flex-wrap:wrap;gap:4px;margin-bottom:6px">
+      ${PS_SORTS.map(([id, l]) => `<button class="tab ${ps.sort === id ? 'active' : ''}" data-sort="${id}" style="font-size:11px;padding:4px 8px">${esc(l)}${ps.sort === id ? (ps.order === 'desc' ? ' ▼' : ' ▲') : ''}</button>`).join('')}
+    </div>
+    <p class="muted" style="font-size:11px;margin:0 0 6px">
+      ${fmt(data.total)}人中 ${fmt(data.matched)}人が該当 ・ ${fmt(from)}〜${fmt(to)}件目を表示（1ページ${fmt(data.limit)}件）
+      ・ 行を押すと詳しい記録が開きます</p>
+    ${rows ? `<div class="live-list" style="max-height:min(52vh,420px)">${rows}</div>`
+      : '<p class="muted center" style="font-size:12px">該当するプレイヤーがいません</p>'}
+    <div class="settings-row" style="justify-content:center;margin-top:8px">
+      <button class="btn btn-sm btn-ghost" data-page="${prev}" ${data.offset <= 0 ? 'disabled' : ''}>← 前の${fmt(data.limit)}件</button>
+      <button class="btn btn-sm btn-ghost" data-page="${next}" ${next >= data.matched ? 'disabled' : ''}>次の${fmt(data.limit)}件 →</button>
+    </div>`;
+}
+
+// 🎭 住人の名簿。/api/admin/residents は前から `record`（実プレイヤーと
+// 当たったぶんの実戦績）を返していたのに、どの画面も読んでいなかった。
+// 「計算で出しているレート」と「実際に人間と当たった結果」は別物なので、
+// 並べて出さないと名簿の調整ができない。
+function renderResidentsTab(body, data) {
+  const list = (data.residents || []).slice()
+    .sort((a, b) => (b.record ? b.record.w + b.record.l : -1) - (a.record ? a.record.w + a.record.l : -1));
+  const rows = list.map(r => {
+    const rec = r.record;
+    // 「実対戦 3勝7敗 / レート -55」。差分が無い住人は行が無いのと同じなので、
+    // 0勝0敗の行と取り違えないよう言葉で書き分ける。
+    const recText = rec
+      ? `実対戦 ${fmt(rec.w)}勝${fmt(rec.l)}敗 / レート ${rec.rd > 0 ? '+' : ''}${fmt(rec.rd)}${rec.lastAt ? ` ・ ${whenText(rec.lastAt)}` : ''}`
+      : '実対戦の記録なし';
+    return `<div class="live-row" style="grid-template-columns:minmax(0,1fr) auto">
+      <span class="live-name">${esc(r.name)}
+        <span class="live-tag ${r.online ? 'user' : 'guest'}">${r.online ? 'オンライン' : 'オフ'}</span>
+        ${r.custom ? '<span class="live-tag admin">追加</span>' : ''}</span>
+      <span class="live-sub">R${fmt(r.rating)} ・ ${esc(r.tier || '')} ・ Lv.${fmt(r.level)}</span>
+      <span class="live-sub" style="grid-column:1/-1;white-space:normal">${esc(r.archLabel || '')} ・ 腕前${Math.round((r.skill || 0) * 100)} ・ ${esc(recText)}</span>
+    </div>`;
+  }).join('');
+  const retired = (data.retired || []).length;
+  const st = data.status || {};
+  body.innerHTML = `
+    <p class="muted" style="font-size:11px;margin:0 0 6px">
+      ${ic('warn', 12)} ここは運営専用の面です。住人は実プレイヤーではありません
+      ${st.scale != null ? ` ・ にぎわい倍率 ×${esc(st.scale)}` : ''}
+      ${retired ? ` ・ 引退 ${fmt(retired)}人` : ''}</p>
+    ${rows ? `<div class="live-list" style="max-height:min(56vh,460px)">${rows}</div>`
+      : '<p class="muted center" style="font-size:12px">名簿が空です</p>'}`;
+}
+
+// 個人の詳細。閉じたら一覧へ戻れるように showModal の back を渡す。
+export async function showPlayerDetail(id) {
+  if (!psAdmin()) return;
+  const back = () => showPlayerStats('players');
+  const modal = showModal(`<h2>${ic('user', 20)} プレイヤーの記録</h2>
+    <div id="psdBody"><p class="muted center">読み込み中…</p></div>
+    <div class="modal-buttons"><button class="btn btn-ghost" id="psdClose">閉じる</button></div>`, { back });
+  modal.querySelector('#psdClose').onclick = closeModal;
+  const body = modal.querySelector('#psdBody');
+  let d;
+  try { d = await api(`/api/admin/playerstats/${encodeURIComponent(id)}`); }
+  catch (err) { body.innerHTML = `<p class="muted center">${ic('warn', 14)} ${esc(err.message)}</p>`; return; }
+
+  const u = d.user || {};
+  const live = d.live || {};
+  const card = (v, label, title = '') => `<div class="stat-card"${title ? ` title="${esc(title)}"` : ''}><b style="font-size:17px">${v}</b><span>${esc(label)}</span></div>`;
+
+  // 在席区間。「いつからいつまで居たか」がこの画面の本題。
+  const spans = (d.online || []).map(s => {
+    const end = s.at + (s.ms || 0);
+    return `<div class="live-row" style="grid-template-columns:minmax(0,1fr) auto">
+      <span class="live-sub" style="white-space:normal">${esc(new Date(s.at).toLocaleString('ja-JP'))} → ${esc(new Date(end).toLocaleTimeString('ja-JP'))}</span>
+      <span class="live-sub">${esc(spanText(s.ms))}</span>
+    </div>`;
+  }).join('');
+
+  const hist = (d.history || []).map(h => `<div class="live-row" style="grid-template-columns:minmax(0,1fr) auto">
+      <span class="live-name">${esc(h.mode)}${h.won ? '<span class="live-tag user">勝</span>' : ''}</span>
+      <span class="live-sub" title="${esc(whenFull(h.t))}">${fmt(h.score)}点 ・ ${esc(whenText(h.t))}</span>
+    </div>`).join('');
+
+  const modes = (d.modes || []).map(m => `<div class="live-row" style="grid-template-columns:minmax(0,1fr) auto">
+      <span class="live-name">${esc(m.id)}</span>
+      <span class="live-sub">${fmt(m.plays)}戦 ${fmt(m.wins)}勝 ・ 最高 ${fmt(m.best)}点</span>
+    </div>`).join('');
+
+  const reports = (d.reports || []).map(r => `<div class="live-row" style="grid-template-columns:minmax(0,1fr) auto">
+      <span class="live-sub" style="white-space:normal">${esc(String(r.text).slice(0, 120))}</span>
+      <span class="live-sub">${esc(r.status === 'done' ? '処理済' : '未処理')} ・ ${esc(whenText(r.at))}</span>
+    </div>`).join('');
+
+  const acts = (d.adminActions || []).map(a => `<div class="live-row" style="grid-template-columns:minmax(0,1fr) auto">
+      <span class="live-sub" style="white-space:normal">${esc(a.action)} ← ${esc(a.by)}</span>
+      <span class="live-sub" title="${esc(whenFull(a.at))}">${esc(whenText(a.at))}</span>
+    </div>`).join('');
+
+  const section = (title, iconName, html, empty) =>
+    `<p class="live-head" style="margin-top:10px">${ic(iconName, 14)} ${esc(title)}</p>`
+    + (html ? `<div class="live-list" style="max-height:min(30vh,240px)">${html}</div>`
+      : `<p class="muted" style="font-size:12px">${esc(empty)}</p>`);
+
+  body.innerHTML = `
+    <p class="live-head">${esc(u.username || '')}
+      <span class="live-tag ${live.online ? 'user' : 'guest'}">${live.online ? '接続中' : 'オフライン'}</span>
+      ${u.role !== 'user' ? `<span class="live-tag admin">${esc(u.role)}</span>` : ''}
+      ${u.banned ? '<span class="live-tag guest">凍結</span>' : ''}</p>
+    <div class="admin-stats" style="margin-bottom:8px">
+      ${card(esc(whenText(live.lastOnline)), '最終オンライン', whenFull(live.lastOnline))}
+      ${card(esc(whenText(live.lastLoginAt)), '最終ログイン', whenFull(live.lastLoginAt))}
+      ${card(esc(durText(live.playSecs)), '累計プレイ時間')}
+      ${card(fmt((u.stats && u.stats.gamesPlayed) || 0), '総プレイ回数')}
+      ${card(esc(countText(live.logins, '回')), 'ログイン回数', 'v2.37 から計測')}
+      ${card(`${fmt(live.loginStreak || 0)}日`, `連続ログイン（最長${fmt(live.loginStreakBest || 0)}）`)}
+      ${card(fmt((u.stats && u.stats.rating) || 0), 'レート')}
+      ${card(`Lv.${fmt(u.level || 1)}`, 'レベル')}
+      ${card(esc(dayText(u.createdAt)), '登録日')}
+      ${card(esc(live.lastDaily || '—'), 'ボーナス最終受取')}
+      ${card(esc(countText(live.sessions, '回')), '接続セッション数')}
+      ${card(fmt(d.onlineTotal || 0), '在席区間の記録数')}
+    </div>
+    ${section('在席の履歴（いつからいつまで居たか）', 'clock', spans,
+      d.onlineTotal ? '' : 'まだ在席の記録がありません（記録を始める前のアカウント、または一度も接続していません）')}
+    ${section('直近のプレイ履歴', 'rematch', hist, 'まだプレイ履歴がありません')}
+    ${section('モード別の内訳', 'leaderboard', modes, '—')}
+    ${section('この人からの通報・バグ報告', 'bug', reports, '報告はありません')}
+    ${section('運営がこの人に対して行った操作', 'admin', acts, '記録はありません')}`;
+}
+
+// 管理者パネル（#screen-admin）に入口を1つ足す。
+//
+// index.html と screens.js は別担当の持ち物なので、ボタンだけをこちらから
+// 差し込む。.admin-actions を名乗るのは、モデレーターで開いたときに
+// screens.js がこのクラスの箱をまとめて畳んでくれるから（管理者専用の面を
+// モデレーターに出さない仕組みに、そのまま乗る）。
+// 正式な枠が生えたら、あちらから showPlayerStats() を呼ぶだけでよい ──
+// 既に #btnPlayerStats があれば足さないので、二重にはならない。
+export function mountPlayerStatsButton() {
+  if (document.getElementById('btnPlayerStats')) return;
+  const screen = document.getElementById('screen-admin');
+  const anchor = screen && screen.querySelector('#adminUserSearch');
+  const before = anchor ? anchor.closest('.admin-actions') : null;
+  if (!screen || !before) return;
+  const row = document.createElement('div');
+  row.className = 'admin-actions';
+  const btn = document.createElement('button');
+  btn.id = 'btnPlayerStats';
+  btn.className = 'btn btn-ghost btn-sm';
+  btn.innerHTML = `${ic('leaderboard')} プレイヤー統計`;
+  btn.onclick = () => { audio.click(); showPlayerStats(); };
+  row.appendChild(btn);
+  screen.insertBefore(row, before);
+}
+
+// main.js は起動の終盤にこのモジュールを読む（startGodLoop を呼ぶため）ので、
+// この時点で index.html の DOM は出来上がっている。念のため、まだなら
+// DOMContentLoaded を待って1回だけ試す。
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mountPlayerStatsButton, { once: true });
+  } else {
+    mountPlayerStatsButton();
   }
 }
 

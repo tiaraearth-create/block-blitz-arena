@@ -868,6 +868,9 @@ async function pollStatus() {
     // api() attaches the bearer token, which is what lets /api/status return
     // YOUR admin-event slot and countdown instead of a generic schedule.
     const data = await api('/api/status');
+    // 応答が返った＝サーバーに届いている。navigator.onLine は「Wi-Fiに
+    // つながっている」しか見ていないので、これが本当の可否の判断材料になる。
+    noteServerReachable(true);
     // Keep every counter (menu badge + chat drawer) on the same number.
     $('#onlineCount').textContent = data.online;
     $('#chatOnline').textContent = t(`${data.online}人`, `${data.online} online`);
@@ -882,7 +885,12 @@ async function pollStatus() {
     window.__bbaPoll = data.poll || null;
     if (!data.poll || prevPoll !== data.poll.id) refreshPollBanner();
     else updatePollBannerClock();
-  } catch { /* server unreachable — keep hidden */ }
+  } catch (err) {
+    // status 0（そもそも届かなかった）とタイムアウトだけを「圏外」とみなす。
+    // 4xx/5xx はサーバーが生きている証拠なので、オフライン扱いにしない ──
+    // メンテナンス中に「通信が要ります」と出すのは嘘になる。
+    noteServerReachable(!(err && (err.status === 0 || err.timeout)));
+  }
 }
 
 // Keep the poll countdown ticking between status polls.
@@ -1623,28 +1631,200 @@ if (location.search.includes('purchase=success')) {
 }
 
 // ---------------------------------------------------------------------------
-// 📴 通信が切れたとき
+// 📴 オフラインでも遊べるようにする
 //
-// これまでは圏外になっても画面はまったく変わらず、次に何かを押したときに
-// はじめて失敗のトーストが出ていた（＝理由が分からない）。トップバーに
-// 小さな印を出して、押す前に気づけるようにする。
+// このゲームの中身（engine.js / game.js / ai.js）は全部ブラウザ側にあるので、
+// 1人用モードは本来サーバーが要らない。要るのは2つだけ:
+//   1. 起動一式が端末に控えてあること           → public/sw.js（第5波で作り直した）
+//   2. サーバーへの問い合わせが落ちても止まらないこと → ここ
+//
+// メニューの配線はモジュール本体の同期実行で全部済んでいて、サーバーを見る
+// 呼び出し（pollStatus / refreshMe / /api/news）はすべて catch 付きの非同期。
+// つまり**メニューは元から出る**。足りなかったのは「押す前に分かること」で、
+// これまでは圏外でもボタンが普段どおり光っていて、押してはじめて
+// 「サーバーに接続できません」と言われていた。
+//
+// ■ オフライン中の記録をどうするか（決めたこと）
+//   **自動再送も「つながったら送る」ボタンも入れない。端末にだけ残す。**
+//   理由: POST /api/game/result には冪等キーが無く、同じ回を2回受けると
+//   2回ぶん加算する（modes.js の submitResult も同じ理由で再送しない）。
+//   溜めて後から送る仕組みは、その二重加算を「事故のとき」から「毎回」へ
+//   格上げしてしまううえ、localStorage を書き換えるだけで報酬を捏造できる
+//   経路にもなる。だからここでは、遊べること・記録が端末に残ること・
+//   ランキングには載らないことを**先に正直に伝える**。
+//   （サーバー側に冪等キーが入ったら、この判断は見直してよい。）
 // ---------------------------------------------------------------------------
-function updateOfflineTag(announce) {
-  const tag = $('#offlineTag');
-  if (!tag) return;
-  const off = navigator.onLine === false;
-  // 絵文字ではなく icons.js のアイコン。読み上げには名前が要るので、
-  // 絵は aria-hidden のまま「オフライン」の文字だけを残す。
-  tag.replaceChildren(iconEl('offline', { size: 14 }),
-    document.createTextNode(' ' + t('オフライン', 'Offline')));
-  tag.classList.toggle('hidden', !off);
-  if (!announce) return;
-  if (off) toast(t('通信が切れました。つながると自動で元に戻ります', 'You are offline — everything resumes once the connection is back'), 'err', 4000);
-  else toast(t('通信が戻りました', 'Back online'), 'ok', 2200);
+
+// サーバーに実際に届いたかどうか。null = まだ分からない。
+// navigator.onLine は「Wi-Fiにつながっているか」しか見ないので、サーバーが
+// 落ちている・寝ている（無料枠のコールドスタート）ときは嘘をつく。
+let serverReachable = null;
+
+/** いま「通信が要る操作ができない」状態か。 */
+function netDown() {
+  return navigator.onLine === false || serverReachable === false;
 }
-window.addEventListener('offline', () => updateOfflineTag(true));
-window.addEventListener('online', () => updateOfflineTag(true));
-updateOfflineTag(false);
+
+// 最後に知らせた状態。null = まだ一度も知らせていない。
+// 「変わったときだけ知らせる」ためだけに持つ ── 30秒ごとの pollStatus で
+// 毎回トーストが出てはたまらないし、起動した瞬間の1回目は変化ではない。
+let lastAnnouncedDown = null;
+
+/** いまの状態を画面に反映する。状態が反転したときだけ知らせる。 */
+function syncOffline() {
+  const off = netDown();
+  const announce = lastAnnouncedDown !== null && lastAnnouncedDown !== off;
+  lastAnnouncedDown = off;
+  updateOfflineTag(announce);
+}
+
+// pollStatus() から呼ばれる。※この関数は宣言なので巻き上げられており、
+// 先に書いてある pollStatus() から呼んでも問題ない（await のあとに実行される
+// ＝モジュール本体の評価が終わってからしか動かない）。
+function noteServerReachable(ok) {
+  const next = !!ok;
+  if (serverReachable === next) return;
+  serverReachable = next;
+  syncOffline();
+}
+
+// ---- 通信が要る入口 -------------------------------------------------------
+//
+// 分類はソースを追って決めたもので、勘ではない:
+//   ・btnBoss      … このファイルの openBossSelect() が /api/bosses を読む
+//   ・btnWeekly    … /api/weekly     ・btnDaily … /api/daily
+//   ・btnBlueprint … modes.js が /api/daily/blueprint を読む
+//   ・btnWorkshop  … /api/workshop/*  ・btnOnline … WebSocket
+//   ・ナビは「遊び方」以外すべて screens.js が /api/* を読む
+// 逆に、ソロ・AI対戦・ダンジョン・タイムアタック・サバイバル・メルトダウン・
+// キメラ工房・連鎖カスケード・パズル遺跡・採掘場・幽霊屋敷は
+// api() を1回も呼ばない＝オフラインで最後まで遊べる。
+const NET_MODE_BTNS = ['btnBoss', 'btnWeekly', 'btnDaily', 'btnBlueprint', 'btnWorkshop', 'btnOnline'];
+const NET_NAV_BTNS = ['btnMissions', 'btnFriends', 'btnGuild', 'btnNews', 'btnLeaderboard',
+  'btnInventory', 'btnShop', 'btnGacha', 'btnGemShop', 'btnBattlePass', 'btnAdmin', 'btnHallOfFame'];
+
+// 印の付け外し。style.css は担当外なので、見た目は inline style で作る。
+function markNetButton(btn, off, withBadge) {
+  if (!btn) return;
+  btn.dataset.netRequired = '1';
+  const had = btn.querySelector('.net-req-badge');
+  if (off) {
+    btn.style.opacity = '.42';
+    btn.style.filter = 'grayscale(.75)';
+    btn.setAttribute('aria-disabled', 'true');
+    if (withBadge && !had) {
+      const i = document.createElement('i');
+      i.className = 'net-req-badge';
+      i.style.cssText = 'display:block;margin-top:3px;font-size:11px;font-style:normal;'
+        + 'font-weight:800;opacity:.95;letter-spacing:.02em';
+      i.textContent = t('通信が必要', 'Needs a connection');
+      btn.appendChild(i);
+    }
+  } else {
+    btn.style.opacity = '';
+    btn.style.filter = '';
+    btn.removeAttribute('aria-disabled');
+    if (had) had.remove();
+  }
+}
+
+// メニュー上部の説明。器は index.html に無いのでここで作る（担当外のため）。
+// 出すものが無い間は DOM も作らない。
+function offlineNoticeEl(create) {
+  let el = document.getElementById('offlineNotice');
+  if (el || !create) return el;
+  const host = $('#eventBanner');
+  if (!host || !host.parentNode) return null;
+  el = document.createElement('div');
+  el.id = 'offlineNotice';
+  el.className = 'event-banner';                 // 既存のクラスを借りる
+  el.setAttribute('role', 'status');
+  // 開催中イベントの赤紫とは別物だと分かるように、色だけ上書きする。
+  el.style.cssText = 'animation:none;background:rgba(255,93,93,0.14);'
+    + 'border-color:var(--red);font-weight:700;font-size:12.5px;line-height:1.6;'
+    + 'text-align:left;margin-bottom:8px';
+  host.insertAdjacentElement('beforebegin', el);  // ロゴのすぐ下＝最初に目に入る
+  return el;
+}
+
+function updateOfflineNotice(off) {
+  const el = offlineNoticeEl(off);
+  if (!el) return;
+  if (!off) { el.classList.add('hidden'); return; }
+  el.replaceChildren();
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:center;gap:7px;font-weight:900;font-size:13px';
+  head.append(iconEl('offline', { size: 16 }),
+    document.createTextNode(t('オフラインです — 通信の要らないモードだけ遊べます',
+      'You are offline — only the modes that need no connection can be played')));
+  const body = document.createElement('div');
+  body.style.cssText = 'margin-top:4px;opacity:.9';
+  // ⚠️ ここは「記録がどうなるか」を先に言う場所。あとから
+  //    「送信できませんでした」と言われるより、先に知っているほうがよい。
+  body.textContent = t(
+    'うすくなっているボタンは通信が戻ると使えます。いま遊んだぶんの記録はこの端末にだけ残り、ランキング・コイン・ミッションには反映されません。',
+    'The dimmed buttons come back with your connection. Runs you play now stay on this device only — no ranking, coins or missions.');
+  el.append(head, body);
+  el.classList.remove('hidden');
+}
+
+/** トップバーの印・メニューの説明・ボタンの印を、まとめて今の状態に合わせる。 */
+function updateOfflineTag(announce) {
+  const off = netDown();
+  const tag = $('#offlineTag');
+  if (tag) {
+    // 絵文字ではなく icons.js のアイコン。読み上げには名前が要るので、
+    // 絵は aria-hidden のまま「オフライン」の文字だけを残す。
+    tag.replaceChildren(iconEl('offline', { size: 14 }),
+      document.createTextNode(' ' + t('オフライン', 'Offline')));
+    tag.classList.toggle('hidden', !off);
+  }
+  try {
+    for (const id of NET_MODE_BTNS) markNetButton($('#' + id), off, true);
+    for (const id of NET_NAV_BTNS) markNetButton($('#' + id), off, false);
+    // 💬 全体チャットは常時WSなので、圏外では開いても何も来ない。
+    markNetButton($('#chatToggle'), off, false);
+    updateOfflineNotice(off);
+  } catch { /* 印が付けられなくても、遊べること自体は変わらない */ }
+  if (!announce) return;
+  if (off) {
+    // 「端末が圏外」と「端末はつながっているがサーバーに届かない」は、
+    // プレイヤーにとって直せる相手がまるで違う（機内モードを切ればいいのか、
+    // 待つしかないのか）。同じ文言で済ませない。
+    const head = navigator.onLine === false
+      ? t('通信が切れました。', 'You are offline. ')
+      : t('サーバーに接続できません。', "Can't reach the server. ");
+    toast(head + t('ソロプレイなどはこのまま遊べます（記録は端末にだけ残ります）',
+      'Solo modes still work — but results stay on this device only'), 'err', 5000);
+  } else {
+    toast(t('通信が戻りました', 'Back online'), 'ok', 2200);
+  }
+}
+
+// 押す前に分かるようにしたうえで、それでも押されたときの受け皿。
+// capture で捕まえるので、ボタン自身の onclick までは届かない
+// （＝「押す → 通信して失敗 → エラー」という遠回りをしない）。
+document.addEventListener('click', ev => {
+  if (!netDown()) return;
+  const btn = ev.target && ev.target.closest ? ev.target.closest('[data-net-required="1"]') : null;
+  if (!btn) return;
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+  audio.click();
+  toast(t('これは通信が必要です。つながると使えるようになります',
+    'This one needs a connection — it comes back when you are online'), 'err', 3000);
+}, true);
+
+window.addEventListener('offline', () => { serverReachable = false; syncOffline(); });
+window.addEventListener('online', () => {
+  // 端末が「つながった」と言っても、サーバーに届くとは限らない
+  // （自分だけWi-Fiに戻った・サーバーが寝ている）。楽観的に戻したうえで、
+  // すぐ問い合わせて確定させる。届かなければ数百ms後にまた暗くなる。
+  serverReachable = null;
+  syncOffline();
+  pollStatus();
+});
+syncOffline();
 
 // ---- Service Worker ----
 // ホーム画面から起動するインストール型（manifest は display:standalone）なので、
@@ -1655,6 +1835,19 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   // 起動直後の通信と取り合わないよう、読み込みが済んでから登録する。
   const registerSw = () => {
     navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+      .then(() => navigator.serviceWorker.ready)
+      .then(reg => {
+        // 🔧 いちばん確実な補修点。
+        //   SW は load で登録されるので、**初回訪問のモジュール取得は1本も
+        //   SW を通らない**。しかも install の事前キャッシュが電波の悪い瞬間に
+        //   当たると、install は二度と走らないので永久に控えを持たない
+        //   （実測で、初回訪問だけの人の控えは4件しか無かった）。
+        //   ここまで来た＝このページは現に起動できている＝一式は取得できる、
+        //   と分かっているので、SW に「いまのうちに控えておいて」と頼む。
+        //   sw.js 側は既にそろっていれば何もしない。
+        const sw = reg.active || navigator.serviceWorker.controller;
+        if (sw) sw.postMessage({ type: 'bba-warm' });
+      })
       .catch(() => { /* 未対応・非HTTPS なら今までどおり動くだけ */ });
   };
   if (document.readyState === 'complete') registerSw();

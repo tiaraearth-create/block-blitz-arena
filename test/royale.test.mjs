@@ -19,7 +19,10 @@ import { freePort } from './_port.mjs';
 // ポート固定をやめた理由は test/_port.mjs を参照（他人のサーバーを
 // 自分のものと誤認して、緑のまま嘘をつく可能性があった）。
 const PORT = await freePort();
-const DIR = path.join(os.tmpdir(), 'bba-royale-test');
+// 保存先にポートを混ぜる。固定名だと、run-all が同時に2つ走ったときに
+// 両方が同じフォルダを使い、片方の rmSync がもう片方の db.json を消す
+// （並列開発では実際に踏む）。理由の詳細は test/battle.test.mjs を参照。
+const DIR = path.join(os.tmpdir(), `bba-royale-test-${PORT}`);
 // 30 is the server's own floor (Math.max(30, ...)), so asking for less is
 // silently clamped — match it rather than assert a value that cannot happen.
 const ROYALE_SECS = 30;

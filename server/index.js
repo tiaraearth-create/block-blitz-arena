@@ -19,7 +19,7 @@ import { initBattle } from './battle.js';
 import {
   hashPassword, verifyPassword, issueToken, revokeToken, revokeAllTokens,
   authMiddleware, requireAuth, requireAdmin, userFromToken, SESSIONS_PERSIST,
-  sweepRevoked,
+  sweepRevoked, recordLogin,
 } from './auth.js';
 import {
   SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED, BOOST_ITEMS,
@@ -650,6 +650,12 @@ function newUser(username, password, role = 'user') {
   return user;
 }
 
+// 在席区間（stats.online）の保険の頭打ち。理由は migrateUser の中を参照。
+// 本来の上限は backup.js の ONLINE_SPANS_MAX（既定30・環境変数でも200まで）。
+// ここはその倍以上に置く ── 正常に動いている記録側のデータを、こちらが
+// 黙って削ってしまわないため。
+const ONLINE_SPANS_HARD_MAX = 400;
+
 // Bring accounts created before a feature shipped up to the current shape.
 // Cheap and idempotent — called from publicUser + every progression path.
 function migrateUser(user) {
@@ -682,7 +688,25 @@ function migrateUser(user) {
     // （achievements.js の ach_champ1 / ach_champ10）はこれを毎回読み直して
     // 判定するので、遡及解除がそのまま効く。
     championWins: 0,
+    // 🔑 ログインの回数と、最後にログインした時刻（auth.js の recordLogin）。
+    // 📊 プレイヤー統計が並べ替えの鍵に使うので、欄が無いレコードが混ざると
+    // undefined と 0 が並んで並び順が壊れる。ここで 0 にそろえる
+    // （0 は「まだ数え始める前のアカウント」で、画面は「—」と出し分ける）。
+    logins: 0, lastLoginAt: 0,
+    // 🕒 在席区間の本数（積むのは別の担当）。同じ理由で欄だけそろえる。
+    sessions: 0,
   })) if (s[k] === undefined) s[k] = v;
+  // 🕒 在席区間 stats.online = [{at, ms}] の保険の頭打ち。
+  //
+  // 積むのは battle.js（noteOnlineArrival / closeOnlineSpan）、本来の上限は
+  // backup.js の ONLINE_SPANS_MAX。ここに置いてあるのは「積む側と合流側の
+  // どちらかが将来上限を落としたときに db.json が無限に伸びるのを止める」
+  // ためだけの二重の底で、わざと高くしてある（低く置くと、正しく動いている
+  // 記録側のデータをこちらが黙って削ってしまう）。
+  // db.json は保存のたびに丸ごと書き出されるので、伸びる配列は1本でも致命的。
+  if (Array.isArray(s.online) && s.online.length > ONLINE_SPANS_HARD_MAX) {
+    s.online = s.online.slice(-ONLINE_SPANS_HARD_MAX);
+  }
   // 📈 段位の昇格を「どこまで全体告知したか」の印（battle.js が書く / 読む）。
   // 既存アカウントは、いま到達している帯を『告知ずみ』として始める ── 0 から
   // 始めると、この機能が入った日に上位帯の人が次の1戦で全員もう一度告知される。
@@ -2004,6 +2028,11 @@ app.post('/api/login', (req, res) => {
     return res.status(503).json({ error: 'メンテナンス中です。しばらくお待ちください' });
   }
   const token = issueToken(user.id);
+  // 🔑 「いつオンラインになったか」を残せる唯一の場所。ここを通らなかった
+  // ぶん（登録直後・保存済みトークンでの再訪）は数えない ── 数えたいのは
+  // 「戻ってきた回数」なので、混ぜると意味が薄まる。auth.js に置いた理由と
+  // 「なぜ issueToken の中でやらないか」は recordLogin のコメントに書いた。
+  recordLogin(user);
   const dailyBonus = grantDaily(user);
   res.json({ token, user: publicUser(user), dailyBonus });
 });

@@ -116,6 +116,15 @@ adminRouter.get('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
     id: u.id, username: u.username, role: u.role, banned: u.banned, muted: !!u.muted,
     coins: u.coins, gems: u.gems, level: levelOf(u.xp),
     stats: u.stats, createdAt: u.createdAt,
+    // 🕒 既にレコードに入っているのに、どこからも返していなかった2つ。
+    //   lastSeen  … 最後の接続が切れた時刻（battle.js が書く）
+    //   lastDaily … ログインボーナスを最後に受け取った日
+    // 「この人は最近来ているのか」を知るのに管理画面がいちばん欲しい値なのに、
+    // 一覧にも編集画面にも出ていなかったので、運営は db.json を直接開くしか
+    // 確かめる方法が無かった。集計は /api/admin/playerstats（下）が持つが、
+    // 既存の一覧からも読めるようにしておく。
+    lastSeen: Number(u.lastSeen) || 0,
+    lastDaily: u.lastDaily || null,
   }));
   res.json({ users });
 });
@@ -138,6 +147,11 @@ function adminUserView(u) {
     badges: u.badges || [], achievements: u.achievements || [],
     battlePass: u.battlePass || null,
     createdAt: u.createdAt,
+    // 🕒 一覧と同じ2つ。編集画面は「事故の後にこの人を元へ戻す」ための面なので、
+    // 最後に来た日と、ログインボーナスをどこまで受け取ったかが読めないと
+    // 「いつの状態へ戻せばいいのか」が決められない。
+    lastSeen: Number(u.lastSeen) || 0,
+    lastDaily: u.lastDaily || null,
     guildId: u.guildId || null,
     guildName: u.guildId && db.guilds[u.guildId] ? db.guilds[u.guildId].name : null,
     stats: u.stats,
@@ -190,6 +204,17 @@ const EDITABLE_STATS = [
   // 👑 王者撃破の回数。称号 crownfeller/summittaker と実績 ach_champ1/10 が
   // これを毎回読み直して判定するので、事故で消えたときに手で戻せる口が要る。
   { key: 'championWins', label: '王者撃破', max: 1_000_000 },
+  // 📊 プレイヤー統計（/api/admin/playerstats）が並べ替えの鍵に使う4つ。
+  // 画面に出す数字は、事故で消えたときに運営が戻せないと「表に出したのに
+  // 直せない」状態になる ── 出す側と直す側は必ず同時に足すこと。
+  // どれも「積み上がるだけのカウンター」で、他の値から計算し直せない
+  // （＝derived ではない）ので、ここに置いてよい種類のもの。
+  { key: 'logins', label: 'ログイン回数', max: 10_000_000 },
+  { key: 'playSecs', label: '累計プレイ時間（秒）', max: 1_000_000_000 },
+  { key: 'dailyLogins', label: 'ログインした日数', max: 36_500 },
+  { key: 'loginStreak', label: '連続ログイン（現在）', max: 3650 },
+  { key: 'totalWins', label: '総勝利数', max: 1_000_000 },
+  { key: 'aiWins', label: 'AI戦勝利', max: 1_000_000 },
 ];
 
 // ADMIN_KNOWN_BADGES（サーバーが配りうるバッジの全一覧）は index.js に置いたまま
@@ -468,6 +493,376 @@ adminRouter.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) =
   res.json({ ok: true, user: adminUserView(target) });
 });
 
+// ---------------------------------------------------------------------------
+// 📊 プレイヤー統計 — 「誰が・いつオンラインだったか」を運営が読む面
+// ---------------------------------------------------------------------------
+//
+// 記録そのものは前からあった。lastSeen（最後に接続が切れた時刻）も
+// playSecs（累計プレイ秒）も stats.history（直近40戦）も db.json には入って
+// いて、ただ **どこからも返していなかった**。運営が「最近この人来てる？」を
+// 確かめる手段が db.json を直接開くことしか無い、という状態だったので、
+// 集計と一覧をここに1本まとめる。
+//
+// ⚠ この章の3つの約束
+//  1. 全部 /api/admin/* に置き、requireAuth → requireAdmin の順で通す。
+//     /api/admin/* は sanitize.js の関門を**経路ごとバイパス**する
+//     （secrecyMiddleware の bypass）ので、ここに載せた値は素のまま出る。
+//     裏を返すと、この章のハンドラを1本でも /api/admin の外へ動かすと、
+//     住人の内訳まで丸ごと非管理者へ漏れる。動かさないこと。
+//  2. 住人（AI）と実プレイヤーは **入れ物ごと分ける**。同じ配列に混ぜて
+//     行ごとのフラグで区別する形にすると、次に誰かが1行足したときに
+//     区別が消える。summary.players / summary.residents の2箱に分ける。
+//  3. 一度に全員を返さない。db.users は上限なしに増える（復元の上限だけで
+//     8,000件）ので、必ず offset / limit で切る。
+//
+// 「在席区間」(stats.online = [{at, ms}]) と stats.sessions を積むのは別の
+// 担当。まだ入っていない機体でも壊れないよう、読む側は必ず配列かどうかから
+// 確かめる。
+
+const PS_LIMIT_DEFAULT = 50;
+const PS_LIMIT_MAX = 200;          // 1リクエストで返す行の上限
+const PS_ONLINE_KEEP = 120;        // 個人の詳細で返す在席区間の本数
+const PS_TREND_DAYS = 14;          // 推移グラフの日数
+const PS_MODES_KEEP = 16;          // モード別の内訳で返す行数
+const PS_REPORTS_KEEP = 30;        // 個人の詳細に添える通報／バグ報告の件数
+const PS_LOG_KEEP = 30;            // 同上・運営の操作ログ
+const PS_DAY_MS = 24 * 60 * 60 * 1000;
+
+// JST の日付（'YYYY-MM-DD'）。jstDay() は「JSTの日」の通し番号を返すので、
+// その番号 × 1日 を UTC の 0 時として読むと、そのまま JST の日付になる。
+function psDayLabel(dayNum) {
+  return new Date(dayNum * PS_DAY_MS).toISOString().slice(0, 10);
+}
+
+// 在席区間 [{at, ms}] を安全に読む。記録するのは別の担当なので
+// 「まだ無い」「壊れている」の両方で落ちない形にしておく。
+function psOnlineSpans(u) {
+  const raw = u && u.stats && u.stats.online;
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const s of raw) {
+    if (!s || typeof s !== 'object') continue;
+    const at = Number(s.at);
+    if (!Number.isFinite(at) || at <= 0) continue;
+    out.push({ at, ms: Math.max(0, Number(s.ms) || 0) });
+  }
+  out.sort((a, b) => a.at - b.at);
+  return out;
+}
+
+// 「最後にオンラインだった時刻」。
+//
+// user.lastSeen は battle.js が **最後の接続が切れたとき** に書く値なので、
+// いま繋ぎっぱなしの人は 0 のままでも不思議ではない（一度も切断していない）。
+// ログインした時刻・在席区間の終わり・直近の結果送信も突き合わせて、
+// いちばん新しいものを採る。これをしないと「今まさに遊んでいる人」や
+// 「ログインしただけで一度も遊んでいない人」が一覧の最下段に落ちる。
+function psLastOnline(u, spans) {
+  const s = (u && u.stats) || {};
+  let t = Math.max(
+    Number(u.lastSeen) || 0,
+    Number(s.lastResultAt) || 0,
+    Number(s.lastLoginAt) || 0,
+  );
+  const last = spans.length ? spans[spans.length - 1] : null;
+  if (last) t = Math.max(t, last.at + last.ms);
+  return t;
+}
+
+// 履歴（stats.history の1件）を読む。index.js の書き込みは
+// `{ t, m, s, w }`（時刻／モード／スコア／勝ったか）。
+function psHistoryRow(h) {
+  if (!h || typeof h !== 'object') return null;
+  const t = Number(h.t);
+  if (!Number.isFinite(t) || t <= 0) return null;
+  return {
+    t,
+    mode: String(h.m || '?').slice(0, 16),
+    score: Math.max(0, Number(h.s) || 0),
+    won: !!h.w,
+  };
+}
+
+// 一覧の1行。数字は全部 Number() を通す ── 復元されたレコードには
+// 文字列や undefined が混ざりうるので、並べ替えの鍵に生値を使うと
+// 「なぜかこの人だけ先頭に来る」が起きる。
+//
+// ⚠ ここでは migrateUser を **呼ばない**。一覧は全アカウントぶん回るので、
+//    1リクエストで数千件を補修することになる（しかも読むだけの画面が
+//    db.users を書き換える）。上の Number() で欠けた欄は全部埋まるので、
+//    補修は個人の詳細（1件だけ）に任せる。
+function psRow(u, onlineIds) {
+  const s = u.stats || {};
+  const spans = psOnlineSpans(u);
+  return {
+    id: u.id,
+    username: u.username,
+    role: u.role,
+    banned: !!u.banned,
+    muted: !!u.muted,
+    createdAt: Number(u.createdAt) || 0,
+    lastOnline: psLastOnline(u, spans),
+    lastSeen: Number(u.lastSeen) || 0,
+    lastLoginAt: Number(s.lastLoginAt) || 0,
+    lastDaily: u.lastDaily || null,
+    lastResultAt: Number(s.lastResultAt) || 0,
+    playSecs: Math.max(0, Number(s.playSecs) || 0),
+    gamesPlayed: Math.max(0, Number(s.gamesPlayed) || 0),
+    // ログイン回数は v2.37 から数え始めた（server/auth.js の recordLogin）。
+    // それ以前からのアカウントは 0 のまま ＝「まだ数えていない」なので、
+    // 画面では「—」と出して 0 回と区別すること。
+    logins: Math.max(0, Number(s.logins) || 0),
+    dailyLogins: Math.max(0, Number(s.dailyLogins) || 0),
+    loginStreak: Math.max(0, Number(s.loginStreak) || 0),
+    loginStreakBest: Math.max(0, Number(s.loginStreakBest) || 0),
+    sessions: Math.max(0, Number(s.sessions) || 0),
+    spans: spans.length,
+    rating: Math.max(0, Number(s.rating) || 0),
+    level: levelOf(Number(u.xp) || 0),
+    // 「いま繋いでいるか」は保存された値ではなく生の接続から。
+    online: onlineIds.has(u.id),
+  };
+}
+
+// いま実際に繋いでいる実プレイヤーの userId。battle がまだ立ち上がって
+// いない／livePlayers を持たない機体でも空集合で通す。
+function psOnlineIds() {
+  const ids = new Set();
+  try {
+    for (const p of (battleReady && battle.livePlayers ? battle.livePlayers() : [])) {
+      if (p && p.userId) ids.add(p.userId);
+    }
+  } catch { /* 接続の集計が取れないだけ。統計そのものは返す */ }
+  return ids;
+}
+
+// 並べ替えの鍵。ここに無い名前が来たら既定（最終オンライン）に落とす
+// ── 任意の文字列でレコードの中を覗けるようにはしない。
+//
+// ⚠ 素のオブジェクトではなく Map。`?sort=__proto__` を投げられると、
+//    オブジェクトの添字引きは Object.prototype（真）を返すので
+//    「知らない鍵なのに既定へ落ちない」→ 関数でない値を呼んで 500、になる。
+//    Map は継承した名前を持たないので、この一群の事故を形ごと断てる。
+const PS_SORTS = new Map([
+  ['lastOnline', r => r.lastOnline],
+  ['playSecs', r => r.playSecs],
+  ['games', r => r.gamesPlayed],
+  ['logins', r => r.logins],
+  ['streak', r => r.loginStreakBest],
+  ['rating', r => r.rating],
+  ['createdAt', r => r.createdAt],
+  ['level', r => r.level],
+  ['name', r => r.username.toLowerCase()],
+]);
+
+adminRouter.get('/api/admin/playerstats', requireAuth, requireAdmin, (req, res) => {
+  const now = Date.now();
+  const q = String(req.query.q || '').trim().toLowerCase().slice(0, 32);
+  const sortKey = PS_SORTS.has(String(req.query.sort || '')) ? String(req.query.sort) : 'lastOnline';
+  const asc = String(req.query.order || '') === 'asc';
+  const limit = Math.max(1, Math.min(PS_LIMIT_MAX, Math.floor(Number(req.query.limit)) || PS_LIMIT_DEFAULT));
+  const offsetRaw = Math.floor(Number(req.query.offset));
+  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+
+  const onlineIds = psOnlineIds();
+  const all = Object.values(db.users);
+
+  // 集計は「全員ぶん」で採る（ページを送っても数字が動かないように）。
+  // 行の組み立ては絞り込んだあとだけにしたいが、集計にも同じ値が要るので
+  // ここで1回だけ作って使い回す。8,000件 × 履歴40件でも一瞬で終わる。
+  const rows = all.map(u => psRow(u, onlineIds));
+
+  const dayNow = Math.floor((now + 9 * 3600000) / PS_DAY_MS);
+  const signupsByDay = new Map();
+  const activeByDay = new Map();     // day -> Set(userId)
+  const modeAgg = new Map();         // mode -> { plays, wins, best, total }
+  let totalPlaySecs = 0, totalGames = 0, totalLogins = 0;
+  let activeToday = 0, activeWeek = 0, activeMonth = 0;
+  let newToday = 0, newWeek = 0, newMonth = 0;
+  let banned = 0, muted = 0, admins = 0, mods = 0;
+
+  const bump = (map, key) => {
+    if (!map.has(key)) map.set(key, new Set());
+    return map.get(key);
+  };
+
+  for (let i = 0; i < all.length; i++) {
+    const u = all[i], r = rows[i];
+    totalPlaySecs += r.playSecs;
+    totalGames += r.gamesPlayed;
+    totalLogins += r.logins;
+    if (r.banned) banned++;
+    if (r.muted) muted++;
+    if (r.role === 'admin') admins++;
+    else if (r.role === 'mod') mods++;
+    const sinceSeen = now - r.lastOnline;
+    if (r.lastOnline > 0) {
+      if (sinceSeen < PS_DAY_MS) activeToday++;
+      if (sinceSeen < 7 * PS_DAY_MS) activeWeek++;
+      if (sinceSeen < 30 * PS_DAY_MS) activeMonth++;
+    }
+    if (r.createdAt > 0) {
+      const age = now - r.createdAt;
+      if (age < PS_DAY_MS) newToday++;
+      if (age < 7 * PS_DAY_MS) newWeek++;
+      if (age < 30 * PS_DAY_MS) newMonth++;
+      const d = Math.floor((r.createdAt + 9 * 3600000) / PS_DAY_MS);
+      if (dayNow - d < PS_TREND_DAYS) signupsByDay.set(d, (signupsByDay.get(d) || 0) + 1);
+    }
+    // 日別のアクティブ人数と、モード別の人気。どちらも stats.history が
+    // 出どころ（直近40戦しか残っていないので「直近2週間の傾向」までが読める
+    // 上限。それ以上を出したいなら履歴の保持数から変えること）。
+    const hist = Array.isArray(u.stats && u.stats.history) ? u.stats.history : [];
+    for (const raw of hist) {
+      const h = psHistoryRow(raw);
+      if (!h) continue;
+      const d = Math.floor((h.t + 9 * 3600000) / PS_DAY_MS);
+      if (dayNow - d < PS_TREND_DAYS && d <= dayNow) bump(activeByDay, d).add(u.id);
+      const m = modeAgg.get(h.mode) || { id: h.mode, plays: 0, wins: 0, best: 0, total: 0 };
+      m.plays++;
+      if (h.won) m.wins++;
+      if (h.score > m.best) m.best = h.score;
+      m.total += h.score;
+      modeAgg.set(h.mode, m);
+    }
+    // 在席区間があるなら、そちらも「その日いた人」に数える（遊ばずに
+    // ログインしただけの日を落とさないため）。
+    for (const sp of psOnlineSpans(u)) {
+      const d = Math.floor((sp.at + 9 * 3600000) / PS_DAY_MS);
+      if (dayNow - d < PS_TREND_DAYS && d <= dayNow) bump(activeByDay, d).add(u.id);
+    }
+  }
+
+  const trend = [];
+  for (let d = dayNow - (PS_TREND_DAYS - 1); d <= dayNow; d++) {
+    trend.push({
+      day: psDayLabel(d),
+      signups: signupsByDay.get(d) || 0,
+      actives: (activeByDay.get(d) || new Set()).size,
+    });
+  }
+
+  const modes = [...modeAgg.values()]
+    .sort((a, b) => b.plays - a.plays)
+    .slice(0, PS_MODES_KEEP);
+
+  // 🎭 住人（AI）。**実プレイヤーとは別の箱**に入れる。運営には
+  // 区別が要る（にぎわいの数字と実際の客足を取り違えると判断を誤る）が、
+  // 混ぜて1つの数にすると二度と分けられない。
+  const roster = rosterView(now);
+  const residents = {
+    total: roster.length,
+    online: roster.filter(r => r.online).length,
+    // 実プレイヤーと当たったぶんの記録を持っている住人の数と、その通算。
+    withRecord: roster.filter(r => r.record).length,
+    wins: roster.reduce((a, r) => a + (r.record ? r.record.w : 0), 0),
+    losses: roster.reduce((a, r) => a + (r.record ? r.record.l : 0), 0),
+  };
+
+  const filtered = q ? rows.filter(r => r.username.toLowerCase().includes(q)) : rows;
+  const pick = PS_SORTS.get(sortKey);
+  const sorted = filtered.slice().sort((a, b) => {
+    const av = pick(a), bv = pick(b);
+    let c = typeof av === 'string' ? av.localeCompare(bv) : (av - bv);
+    if (!c) c = a.username.localeCompare(b.username);   // 同点の並びを固定する
+    return asc ? c : -c;
+  });
+
+  res.json({
+    at: now,
+    sort: sortKey, order: asc ? 'asc' : 'desc', q,
+    offset, limit, limitMax: PS_LIMIT_MAX,
+    total: rows.length,
+    matched: sorted.length,
+    users: sorted.slice(offset, offset + limit),
+    summary: {
+      // 実プレイヤー（db.users にレコードがある人）だけの数。
+      players: {
+        total: rows.length, banned, muted, admins, mods,
+        online: onlineIds.size,
+        activeToday, activeWeek, activeMonth,
+        newToday, newWeek, newMonth,
+        totalPlaySecs, totalGames, totalLogins,
+      },
+      residents,
+      modes,
+      trend,
+      trendDays: PS_TREND_DAYS,
+      // 履歴は1人40戦までしか残らない。集計の読み方を画面が間違えないよう、
+      // 「どこまで遡れるのか」を数字で添える。
+      historyKeep: 40,
+    },
+  });
+});
+
+adminRouter.get('/api/admin/playerstats/:id', requireAuth, requireAdmin, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'ユーザーが見つかりません' });
+  migrateUser(u);
+  const now = Date.now();
+  const s = u.stats || {};
+  const onlineIds = psOnlineIds();
+  const spans = psOnlineSpans(u);
+
+  // モード別の内訳（この人ぶん）。全体のと同じ形にそろえておくと、
+  // 画面が1つの描画関数を使い回せる。
+  const modeAgg = new Map();
+  const history = [];
+  for (const raw of (Array.isArray(s.history) ? s.history : [])) {
+    const h = psHistoryRow(raw);
+    if (!h) continue;
+    history.push(h);
+    const m = modeAgg.get(h.mode) || { id: h.mode, plays: 0, wins: 0, best: 0, total: 0 };
+    m.plays++;
+    if (h.won) m.wins++;
+    if (h.score > m.best) m.best = h.score;
+    m.total += h.score;
+    modeAgg.set(h.mode, m);
+  }
+  history.reverse();   // 新しい順
+
+  // 🐛 この人が出した通報／バグ報告。db.bugreports は
+  // バグ報告・工房通報・パーティー通報が全部落ちる1本の箱で、
+  // 送り主は表示名（by）で入っている。
+  const reports = (Array.isArray(db.bugreports) ? db.bugreports : [])
+    .filter(b => b && b.by === u.username)
+    .slice(-PS_REPORTS_KEEP).reverse()
+    .map(b => ({ id: b.id, at: b.at, status: b.status, text: String(b.text || '').slice(0, 300) }));
+
+  // 🧾 運営がこの人に対して何をしたか（adminLog の target は表示名）。
+  const adminActions = (Array.isArray(db.meta.adminLog) ? db.meta.adminLog : [])
+    .filter(l => l && l.target === u.username)
+    .slice(-PS_LOG_KEEP).reverse()
+    .map(l => ({ at: l.at, by: l.by, action: l.action, detail: l.detail }));
+
+  res.json({
+    at: now,
+    user: adminUserView(u),
+    live: {
+      online: onlineIds.has(u.id),
+      lastOnline: psLastOnline(u, spans),
+      lastSeen: Number(u.lastSeen) || 0,
+      lastLoginAt: Number(s.lastLoginAt) || 0,
+      lastResultAt: Number(s.lastResultAt) || 0,
+      lastDaily: u.lastDaily || null,
+      playSecs: Math.max(0, Number(s.playSecs) || 0),
+      logins: Math.max(0, Number(s.logins) || 0),
+      sessions: Math.max(0, Number(s.sessions) || 0),
+      dailyLogins: Math.max(0, Number(s.dailyLogins) || 0),
+      loginStreak: Math.max(0, Number(s.loginStreak) || 0),
+      loginStreakBest: Math.max(0, Number(s.loginStreakBest) || 0),
+    },
+    // 在席区間（いつからいつまで居たか）。新しい順に PS_ONLINE_KEEP 本まで。
+    // 記録が始まる前のアカウントでは空配列で来る ── 画面は「0件」ではなく
+    // 「まだ記録がありません」と出すこと（無いのと居なかったのは別）。
+    online: spans.slice(-PS_ONLINE_KEEP).reverse(),
+    onlineTotal: spans.length,
+    history,
+    modes: [...modeAgg.values()].sort((a, b) => b.plays - a.plays),
+    reports,
+    adminActions,
+  });
+});
 
 adminRouter.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   const target = userById(req.params.id);

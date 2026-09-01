@@ -31,7 +31,11 @@ import { danAt, DAN as ZERO_DAN } from './zero.js';
 import { createParties } from './party.js';
 import { getSchedule as getAeSchedule, liveSlotFor as aeLiveSlotFor,
   ensureRun as aeEnsureRun, slotCounts as aeSlotCounts, entrantCount as aeEntrantCount,
-  SHARD as AE_SHARD, recordThrone as aeRecordThrone } from './adminevent.js';
+  SHARD as AE_SHARD, recordThrone as aeRecordThrone, jstDayKey } from './adminevent.js';
+// 🕒 在席区間ログの上限。記録するのはこのファイル、合流するのは backup.js。
+// 2箇所で違う数を持つと復元のたびに件数が動くので、定数は1つだけ持つ
+// （どちらに置くかの理由は backup.js の ONLINE_SPANS_MAX のコメント）。
+import { ONLINE_SPANS_MAX } from './backup.js';
 import { translateChat, translateLocal, detectLang } from './translate.js';
 import { isOpen as pollIsOpen, vote as pollVote, residentChoice, residentVoteAt, isSwingVoter } from './polls.js';
 // 住人の正体を隠す共通の関門（詳しい理由は server/sanitize.js の冒頭）。
@@ -57,6 +61,47 @@ const COOP_MAX_SECS = Number(process.env.COOP_MAX_SECS) || 600;
 const coopBotWait = () => 6000 + Math.random() * 5000;
 // Bot strength rises with the round: QF easy/normal, SF normal/hard, F hard/oni.
 const TOURNEY_BOT_LEVELS = [['easy', 'normal'], ['normal', 'hard'], ['hard', 'oni']];
+
+// 環境変数から数を読む。`Number(x) || def` だと "0" が def に化けるので、
+// テストが 0 を渡せるようにここで分けておく。
+function envNum(name, def) {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) ? v : def;
+}
+
+// ---------------------------------------------------------------------------
+// 🔌 再接続の猶予 — 「切断＝即敗北」をやめる
+// ---------------------------------------------------------------------------
+// これまでは WS が閉じた瞬間に forfeit だった。電車がトンネルに入る・
+// Wi-Fi が切り替わる・スマホが画面を消す、それだけでレートが落ちる。
+// これがある限り、シーズンランクも BO3 も「登る気にならない階段」になる。
+//
+// ⚠ 猶予のあいだも試合の時計は**止めない**。止めると
+//   ・相手が何もできない空白ができる（切断が時間稼ぎの道具になる）
+//   ・「残り30秒」の意味が人によって変わる
+// ので、提供するのは「戻ってきたら続きから遊べる」だけ。戻らなければ
+// 従来どおり負ける（逃げ得にしない）。
+const RECONNECT_GRACE_MS = Math.max(1000, Math.min(60_000, envNum('RECONNECT_GRACE_MS', 25_000)));
+// 猶予を開くのに最低限必要な残り時間。あと1秒の試合に猶予を出しても
+// 誰も戻ってこられないので、その場合は従来どおりその場で決着させる。
+const RECONNECT_GRACE_MIN_MS = 2000;
+// 1日（JST）に猶予を受けられる回数。超えた人は従来どおり即敗北 ──
+// 「不利になったら切る」を戦術にさせないための唯一の歯止め。
+// 数えるのは「猶予を開いた回数」で、戻ってきたかどうかは問わない
+// （相手を待たせたという事実のほうが、こちらの都合より重い）。
+const RECONNECT_GRACE_PER_DAY = Math.max(0, Math.min(50, envNum('RECONNECT_GRACE_PER_DAY', 3)));
+
+// ---------------------------------------------------------------------------
+// 🕒 在席区間ログ — 「誰がいつオンラインだったか」
+// ---------------------------------------------------------------------------
+// user.lastSeen は「最後に見かけた時刻」の1点しか持たないので、
+// 「いつからいつまで居たか」は答えられなかった。区間で残す。
+// ⚠ 記録するところまで。読み出す API は別担当（表示は管理者だけ）。
+//
+// 短すぎる区間を積まない理由: リロード・画面遷移・対戦画面に入るたびの
+// 2本目の接続で、数秒の区間がいくらでも生える。30件の輪バッファが
+// 「さっきのリロード30回」で埋まると、ログとして何の役にも立たない。
+const ONLINE_SPAN_MIN_MS = Math.max(0, envNum('ONLINE_SPAN_MIN_MS', 20_000));
 
 export function initBattle(server, deps) {
   const { db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, MATCH_DURATION } = deps;
@@ -197,6 +242,14 @@ export function initBattle(server, deps) {
   const connRejects = { total: 0, max: 0, perIp: 0, perUser: 0, lastAt: null };
   const noteReject = kind => { connRejects[kind]++; connRejects.total++; connRejects.lastAt = Date.now(); };
   const matches = new Map();               // matchId -> match
+  // 🔌 猶予中の席。userId -> { matchId, slot, until, timer }
+  // 鍵が userId なのは意図的 ── 復帰を許すのは「同じアカウント」だけで、
+  // 名前でもゲスト名でも socket でもない（下の resumeMatch のコメント参照）。
+  const dcHolds = new Map();
+  // 🕒 いま在席が始まっている人。userId -> 開始時刻。
+  // メモリにしか持たない ── サーバーが落ちれば開きっぱなしの区間は捨てる。
+  // 「終わりの分からない区間」を db に残すほうが、記録として質が悪い。
+  const onlineSince = new Map();
   const rooms = new Map();                 // code -> room
   const tourneys = new Map();              // id -> tournament
   const royales = new Map();               // id -> battle royale
@@ -1116,6 +1169,9 @@ export function initBattle(server, deps) {
         // pvpLosses を丸ごと回避（別 token なら他アカウントへ付け替え）できた。
         userId: (!e.sock.isBot && e.sock.user) ? e.sock.user.id : null,
         score: 0, lines: 0, maxCombo: 0, finished: false, forfeited: false,
+        // 🔌 再接続の猶予中だけ入る札（openReconnectGrace / clearHold）。
+        // 送信するフレームには載せないこと（タイマーを抱えている）。
+        dc: null,
       })),
     };
     // Co-op: ONE board, alternating turns, refereed by the server.
@@ -1638,6 +1694,20 @@ export function initBattle(server, deps) {
     clearInterval(match.coopTick);
     clearInterval(match.landTick);
     matches.delete(match.id);
+    // 🔌 猶予の途中で試合が終わったら、そこで打ち切る。
+    // ⚠ 「戻ってこなかった」と同じ扱い（forfeited）にすること。ここを素通しに
+    //   すると、勝っている側が終了直前に切れば **点数で勝ったまま**終われる
+    //   ── 切断＝敗北という元の規則が守っていた「逃げ得にしない」が、猶予の
+    //   導入で丸ごと外れてしまう。
+    //   例外は 'shutdown' だけ。あれは誰のせいでもないので必ず引き分けにする
+    //   （下の winTeam = -1 と揃える。切れていた人だけ敗北、にはしない）。
+    for (const p of match.players) {
+      if (!p.dc) continue;
+      clearHold(p);
+      if (reason === 'shutdown') continue;
+      p.forfeited = true;
+      p.finished = true;
+    }
     for (const p of match.players) if (p.sock.isBot) p.sock.stop();
     // 👀 観戦室（カスタムルームの観戦席）を畳んで、ふつうの部屋に戻す。
     // 1秒ごとの specTick も同じ判定で畳むが、そちらは最大1秒遅れるので
@@ -2989,6 +3059,253 @@ export function initBattle(server, deps) {
 
 
   // -------------------------------------------------------------------------
+  // 🔌 再接続の猶予 / 🕒 在席区間ログ
+  // -------------------------------------------------------------------------
+
+  // stats の入れ物。index.js の migrateUser が作る形に頼らず、無ければ作る
+  // （復元で流れ込んだ古いレコードには stats が無いことがある）。
+  const statsOf = u => (u.stats && typeof u.stats === 'object' ? u.stats : (u.stats = {}));
+
+  // 猶予をあと1回使えるか。使えるならその場で回数を1つ進めて true を返す。
+  //
+  // 数えるのは「猶予を開いた回数」であって「戻ってこられた回数」ではない。
+  // 相手を待たせたという事実は、戻ってきたかどうかと関係なく発生するし、
+  // 「戻らなかったぶんは数えない」にすると、切って捨てるのがいちばん安く
+  // なってしまう（それは対策したい行為そのもの）。
+  function takeGraceQuota(user) {
+    if (RECONNECT_GRACE_PER_DAY <= 0) return false;
+    const st = statsOf(user);
+    const day = jstDayKey();
+    const rec = (st.dcGrace && typeof st.dcGrace === 'object' && !Array.isArray(st.dcGrace))
+      ? st.dcGrace : (st.dcGrace = { day, n: 0, total: 0 });
+    if (rec.day !== day) { rec.day = day; rec.n = 0; }
+    const n = Math.max(0, Math.floor(Number(rec.n) || 0));
+    if (n >= RECONNECT_GRACE_PER_DAY) return false;   // 常習者：猶予なし
+    rec.n = n + 1;
+    rec.total = Math.max(0, Math.floor(Number(rec.total) || 0)) + 1;
+    saveDb();
+    return true;
+  }
+
+  // 試合が必ず終わる時刻。createMatch の match.timer と同じ式を組み立てる
+  // （数字を写すとどちらかを直したときに黙ってズレる）。
+  const matchHardEndAt = m => m.startedAt + (COUNTDOWN + m.duration + 12) * 1000;
+
+  // 猶予を開く。開けたら true（＝この切断ではまだ負けにしない）。
+  function openReconnectGrace(match, p) {
+    if (!match || match.ended || !p || p.finished || p.forfeited || p.dc) return false;
+    // 協力プレイは切断しても負けにならない（サーバーが代打する）ので対象外。
+    if (match.mode === 'coop') return false;
+    // ⚠ ゲストには猶予を出さない。
+    //   戻ってきた人が同じ人だと確かめる手段が userId しか無いのに、
+    //   ゲストは名乗った名前しか持たない。名前で復帰を許すと
+    //   「負けそうになったら切って、同じ名前のゲストで入り直す」が通り、
+    //   battle.js が hello の名乗り直しを禁じている理由（敗北・Elo 回避）を
+    //   自分で開け直すことになる。
+    if (!p.userId) return false;
+    const user = db.users[p.userId];
+    if (!user || user.banned) return false;
+    // 残り時間が無い試合に猶予を出しても戻ってこられない。
+    const until = Math.min(Date.now() + RECONNECT_GRACE_MS, matchHardEndAt(match));
+    if (until - Date.now() < RECONNECT_GRACE_MIN_MS) return false;
+    // 回数の判定は、表をいじる前に済ませる（断るときに古い席の後始末を
+    // 壊さないため）。
+    if (!takeGraceQuota(user)) return false;
+    // 同じ人が別の試合で猶予中、は起こらないはず（1人1試合）だが、
+    // 残っていたら古いほうを畳んでから開く（表に2つ入ると復帰先が決まらない）。
+    const old = dcHolds.get(p.userId);
+    if (old) clearTimeout(old.timer);
+
+    const hold = { userId: p.userId, matchId: match.id, slot: p.slot, until, timer: null };
+    hold.timer = setTimeout(() => {
+      dcHolds.delete(hold.userId);
+      p.dc = null;
+      if (match.ended) return;
+      forfeitPlayer(match, p);          // 戻ってこなかった＝従来どおりの敗北
+    }, Math.max(0, until - Date.now()));
+    // タイマーがイベントループを掴んで、終了時にプロセスが落ちないのを防ぐ。
+    if (hold.timer.unref) hold.timer.unref();
+    dcHolds.set(p.userId, hold);
+    p.dc = hold;
+
+    // 相手への知らせ。⚠ 正体に触れない文言にすること（誰が切れたかは slot
+    // だけで足り、「人間だから切れた」と読める言い方をしない）。
+    // 既知の割り切り: 住人は切断しないので、この知らせが出た相手は実プレイヤー
+    // だと分かる。逆（出ない＝住人）は言えないうえ、実際の切断はごく稀なので、
+    // 再接続を諦めるほどの漏れ方ではないと判断した。
+    for (const q of match.players) {
+      if (q === p || q.sock.isBot) continue;
+      // 第5波の統合で modes.js に onOppUnstable() の受け口が付いたので、
+      // ここに添えていた「つなぎ」の announce は外した（残すと同じことを
+      // 帯とトーストが二重に言う）。
+      send(q.sock, { type: 'opp_unstable', slot: p.slot, sec: Math.ceil((until - Date.now()) / 1000) });
+    }
+    return true;
+  }
+
+  // 猶予を畳む（復帰・試合終了・作り直しの共通後始末）。
+  function clearHold(p) {
+    if (!p || !p.dc) return;
+    clearTimeout(p.dc.timer);
+    if (dcHolds.get(p.dc.userId) === p.dc) dcHolds.delete(p.dc.userId);
+    p.dc = null;
+  }
+
+  // 切断・棄権をその場で確定させる。close ハンドラが直接書いていた処理を
+  // 関数にしたもの（猶予切れのタイマーからも同じ判定を通したいため）。
+  function forfeitPlayer(match, p) {
+    if (!match || match.ended || !p || p.finished) return;
+    clearHold(p);
+    p.forfeited = true;
+    p.finished = true;
+    const otherHumans = match.players.filter(q => q !== p && !q.sock.isBot && !q.forfeited);
+    // 🚩 陣取りも1対1なので、抜けたらその場で終わり（残った人の勝ち）。
+    if ((match.mode === 'duel' || match.mode === 'attack' || match.mode === 'land')
+        && match.players.length === 2 && otherHumans.length === 1) {
+      endMatch(match, 'forfeit');
+    } else if (otherHumans.length === 0) {
+      endMatch(match, 'abandoned');
+    } else if (match.players.every(q => q.finished)) {
+      endMatch(match, 'finished');
+    }
+  }
+
+  // 猶予中の試合へ戻る。hello から呼ぶ。
+  //
+  // ⚠ 許可の条件は「userId の完全一致」ひとつだけ。hello の名乗り直し禁止
+  //   （ws.matchId があるソケットは hello を無視する）は緩めていない ──
+  //   復帰するのは**新しいソケット**で、そちらは matchId を持たないので
+  //   あの門とは無関係。ゲスト・別アカウントでは dcHolds に鍵が無いので
+  //   ここまで来ても何も起きない。
+  //
+  // ⚠ 呼ぶのは hello に `resume:true` と `role:'battle'` の両方が付いていた
+  //   ときだけ（呼び出し側で判定）。理由は2つとも実害がある:
+  //   ・role を見ないと、同じ人の**チャット用ソケット**が先に再接続した
+  //     ときに席を奪ってしまう（盤面の更新がチャット側へ流れ、対戦画面は
+  //     何も届かないまま固まる）。回線が切れると2本とも落ちて2本とも
+  //     戻ってくるので、これは珍しい事故ではない。
+  //   ・resume を見ないと、いったんメニューへ戻ってから新しく対戦を始めた
+  //     人が、開いた瞬間に前の試合へ引き戻される（本人は待ち合わせ画面の
+  //     つもりなので、何も起きないまま固まったように見える）。
+  function resumeMatch(ws, userId) {
+    const hold = dcHolds.get(userId);
+    // 猶予の札が無いときの保険。電波が消えた端末は FIN を送らないので、
+    // 心拍が死んだ socket を掃除する（30秒×2＝最大60秒）まで close が
+    // 届かず、その間 dcHolds には何も入らない。本人が先に戻ってくるほうが
+    // 普通なので、生きている席を userId で直接引き当てて拾う。
+    // ⚠ こちらは猶予の札を通っていないので、ここで回数を1つ使う
+    //   （使わないと「FIN を出さずに切る」が回数制限のすり抜けになる）。
+    if (!hold) return adoptLiveSeat(ws, userId);
+    const match = matches.get(hold.matchId);
+    const p = match && !match.ended ? match.players[hold.slot] : null;
+    // 席がすり替わっていないか（試合開始時に固定した userId で照合する）。
+    if (!match || !p || p.userId !== userId || p.finished || p.forfeited) {
+      clearTimeout(hold.timer);
+      dcHolds.delete(userId);
+      if (p) p.dc = null;
+      return false;
+    }
+    if (Date.now() > hold.until) {
+      // 期限切れ。タイマーが先に走っているはずだが、念のため同じ結末にする。
+      clearHold(p);
+      forfeitPlayer(match, p);
+      return false;
+    }
+    clearHold(p);
+    return seatSocket(match, p, ws);
+  }
+
+  // close がまだ届いていない席を、同じ userId の新しいソケットで引き継ぐ。
+  function adoptLiveSeat(ws, userId) {
+    for (const match of matches.values()) {
+      if (match.ended) continue;
+      const p = match.players.find(q => q.userId === userId);
+      if (!p || p.sock === ws || p.finished || p.forfeited) continue;
+      const user = db.users[userId];
+      if (!user || !takeGraceQuota(user)) return false;   // 常習者はここも通さない
+      const stale = p.sock;
+      const ok = seatSocket(match, p, ws);
+      // 取り残された古いソケットは畳む。放っておくと同時接続の上限
+      // （MAX_SOCKETS_PER_USER）を食い続け、心拍が来るまで消えない。
+      try { stale.close(); } catch { /* もう閉じている */ }
+      return ok;
+    }
+    return false;
+  }
+
+  // 席の socket を差し替えて、両者に知らせる。
+  function seatSocket(match, p, ws) {
+    // 以後 broadcastState も result も新しい方へ届く。
+    p.sock = ws;
+    ws.matchId = match.id;
+    // 復帰した本人へ「いまどうなっているか」。クライアントは自分の盤面を
+    // ローカルで回し続けているので、必要なのは残り時間と席の情報だけ。
+    send(ws, {
+      type: 'match_resumed',
+      matchId: match.id, mode: match.mode, seed: match.seed,
+      duration: match.duration,
+      // 時計は止めていないので、経過ぶんを渡して続きから合わせてもらう。
+      elapsedMs: Math.max(0, Date.now() - match.startedAt),
+      countdown: COUNTDOWN,
+      boss: match.boss || null,
+      you: { slot: p.slot, team: p.team },
+      players: match.players.map(q => ({
+        slot: q.slot, team: q.team, name: sockName(q.sock),
+        level: sockLevel(q.sock), rating: sockRating(q.sock),
+        score: q.score, isYou: q === p,
+      })),
+    });
+    for (const q of match.players) {
+      if (q === p || q.sock.isBot) continue;
+      // opp_unstable と同じ理由で、つなぎの announce は外した
+      // （modes.js の onOppBack() が受ける）。
+      send(q.sock, { type: 'opp_back', slot: p.slot });
+    }
+    return true;
+  }
+
+  // ---- 🕒 在席区間 ---------------------------------------------------------
+  //
+  // 同時接続数が 0 → 1 になった瞬間に開き、1 → 0 になった瞬間に閉じる。
+  // ⚠ 1本閉じるたびに区間を切ってはいけない。1人が最大6本つなぐ設計で
+  //   （チャット用＋対戦用、PC＋スマホ）、対戦画面は入退室のたびに2本目を
+  //   開け閉めするので、socket 単位で数えると「3時間の在席」が
+  //   「数分の区間20本」に砕けて、ログとして読めなくなる。
+  function noteOnlineArrival(userId) {
+    if (!userId || onlineSince.has(userId)) return;
+    onlineSince.set(userId, Date.now());
+    const u = db.users[userId];
+    if (!u) return;
+    const st = statsOf(u);
+    st.sessions = Math.max(0, Math.floor(Number(st.sessions) || 0)) + 1;
+    saveDb();
+  }
+
+  function closeOnlineSpan(userId) {
+    const at = onlineSince.get(userId);
+    if (!at) return;
+    onlineSince.delete(userId);
+    const ms = Date.now() - at;
+    // 短すぎる区間は積まない（リロードのたびに輪バッファが埋まる）。
+    if (ms < ONLINE_SPAN_MIN_MS) return;
+    const u = db.users[userId];
+    if (!u) return;
+    const st = statsOf(u);
+    if (!Array.isArray(st.online)) st.online = [];
+    st.online.push({ at, ms });
+    // ⚠ 上限は必ず要る。db.json は保存のたびに丸ごと書き出されるので、
+    //   伸び続ける配列を1本入れると保存がイベントループを止める。
+    // 別名（const arr = st.online）越しに切り詰めないこと ──
+    // test/persist-registry.test.mjs の E-3 は「stats 配下の push に
+    // 切り詰めが付いているか」を素の名前で探すので、別名にすると
+    // 見えない＝検査されない配列になる。
+    if (st.online.length > ONLINE_SPANS_MAX) {
+      st.online.splice(0, st.online.length - ONLINE_SPANS_MAX);
+    }
+    saveDb();
+  }
+
+  // -------------------------------------------------------------------------
   // Socket lifecycle
   // -------------------------------------------------------------------------
 
@@ -3116,6 +3433,9 @@ export function initBattle(server, deps) {
             // 5分に1回だけ書く。毎回書くと接続のたびにディスクを叩く。
             const live = db.users[user.id];
             if (live && Date.now() - (live.lastSeen || 0) > 300_000) { live.lastSeen = Date.now(); saveDb(); }
+            // 🕒 いま何本つないでいるか（trackSocket 済みなので自分も入る）。
+            // 0→1 になった今回だけが「来た」＝区間の始まり。
+            if (socketsOf(user.id).length === 1) noteOnlineArrival(user.id);
           }
           send(ws, {
             type: 'hello_ok',
@@ -3131,6 +3451,11 @@ export function initBattle(server, deps) {
           if (!ws.greeted && !ws.secondary) { ws.greeted = true; maybeGreet(ws); }
           // 再接続でもパーティーは続いている（所属は socket ではなく人に付く）。
           if (ws.user) party.socketArrived(ws.user.id);
+          // 🔌 猶予中の試合があれば、そこへ戻す（許可は userId の完全一致だけ）。
+          // hello_ok のあとに送るのは、クライアントが hello_ok で
+          // connect() を解決してから受け口を張るため。
+          // resume / role の2条件が要る理由は resumeMatch のコメント。
+          if (user && msg.resume === true && ws.secondary) resumeMatch(ws, user.id);
           break;
         }
         case 'queue': {
@@ -3759,7 +4084,12 @@ export function initBattle(server, deps) {
       // socketsOf は readyState で絞るので、閉じたこの socket は数えない。
       if (ws.user) {
         const live = db.users[ws.user.id];
-        if (live && socketsOf(ws.user.id).length === 0) { live.lastSeen = Date.now(); saveDb(); }
+        if (socketsOf(ws.user.id).length === 0) {
+          if (live) { live.lastSeen = Date.now(); saveDb(); }
+          // 🕒 最後の1本が閉じたときだけ在席区間を閉じる。
+          // （タブを1つ閉じるたびに切ると、ログが意味を失う）
+          closeOnlineSpan(ws.user.id);
+        }
       }
       // パーティーの所属はここでは落とさない。1人が最大6本つなぐし、
       // 対戦用の socket は試合から抜けるたびに閉じる。落とすと点滅する。
@@ -3802,18 +4132,9 @@ export function initBattle(server, deps) {
       if (match && !match.ended) {
         const p = match.players.find(q => q.sock === ws);
         if (p && !p.finished) {
-          p.forfeited = true;
-          p.finished = true;
-          const otherHumans = match.players.filter(q => q !== p && !q.sock.isBot && !q.forfeited);
-          // 🚩 陣取りも1対1なので、抜けたらその場で終わり（残った人の勝ち）。
-          if ((match.mode === 'duel' || match.mode === 'attack' || match.mode === 'land')
-              && match.players.length === 2 && otherHumans.length === 1) {
-            endMatch(match, 'forfeit');
-          } else if (otherHumans.length === 0) {
-            endMatch(match, 'abandoned');
-          } else if (match.players.every(q => q.finished)) {
-            endMatch(match, 'finished');
-          }
+          // 🔌 まず猶予を試す。開けたらこの切断ではまだ負けにしない
+          //（時計は動いたまま。戻らなければ猶予切れで下と同じ結末になる）。
+          if (!openReconnectGrace(match, p)) forfeitPlayer(match, p);
         }
       }
     });
@@ -3957,7 +4278,11 @@ export function initBattle(server, deps) {
           return {
             ...p,
             minutes: Math.max(0, Math.round((now - p.since) / 60000)),
-            level: u ? levelOf(u).level : null,
+            // ⚠ levelOf は index.js の `levelOf(xp)` で **数値そのもの** を返す
+            // （オブジェクトではない）。`levelOf(u).level` と書いていたため
+            // NaN.level = undefined になり、JSON では欄ごと落ちて管理者パネルの
+            // 『実プレイヤー一覧』が全員レベル空欄だった。xp を渡すのが正しい。
+            level: u ? levelOf(u.xp) : null,
             rating: u && u.stats ? (u.stats.rating || null) : null,
             games: u && u.stats ? (u.stats.gamesPlayed || 0) : null,
             admin: !!(u && u.role === 'admin'),

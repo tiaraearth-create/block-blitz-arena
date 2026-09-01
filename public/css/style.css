@@ -758,6 +758,15 @@ body {
    いなかった。どの幅でも折り返し、1本あたりの下限を決めておく。 */
 .modal-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 .modal-buttons .btn { flex: 1 1 96px; min-width: 96px; }
+/* 狭い画面で、結果画面の3本並び（メニュー／再戦／もう一戦）が毎回2行に
+   折れて高さ 74px の縦長ボタンになっていた。実測: 375px 幅では容器 313px
+   ÷3 = 1本 98px なのに、ラベル「もう一戦」は 16px×4文字 ＋ 左右 22px の
+   余白で 108px 要る。折り返しの逃げ場（.modal-buttons の flex-wrap）は
+   あるので画面は壊れないが、押しにくく読みにくい形で固定されていた。
+   狭いときだけ余白と字を詰める ── 3本でも1行に収まる（78px < 98px）。 */
+@media (max-width: 420px) {
+  .modal-buttons .btn { flex-basis: 84px; min-width: 84px; padding-left: 10px; padding-right: 10px; font-size: 14.5px; }
+}
 
 /* ============ Toasts ============ */
 /* 試合中の置き場所について（v2.34 で作り直し）
@@ -3375,4 +3384,345 @@ body:has(#replayBar) #partyDock { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .lb-row.lb-flash { animation: none; box-shadow: 0 0 0 3px rgba(255,215,94,0.6); }
+}
+
+/* ===========================================================================
+   ⚔️ オンライン対戦の見える化（第5波）
+   ===========================================================================
+   modes.js の「オンライン対戦を『見える』ようにする」節が作る要素の見た目。
+   3つとも **盤面の高さを削らない** ことを最優先に組んである ── 375x667 では
+   盤面がすでに 210〜260px しかなく、ここで1行ぶん取ると遊びにくくなる。
+     ・対戦カード   … position:fixed（3-2-1 の裏。通常フローに一切入らない）
+     ・攻撃の帯     … 1行 16px。アタック戦にだけ生える
+     ・リアクション … 結果モーダルの中（そのとき盤面はもう見えていない）
+   =========================================================================== */
+
+/* ---------------------------------------------------------------------------
+   1. 対戦カード（.vs-card）
+   z-index は 39 ── dom.js の .countdown-overlay(40) の**下**。3-2-1 の数字を
+   カードの上に出したいので、この上下関係は動かさないこと。
+   pointer-events:none は必須。カードは3秒以上出たままなので、拾ってしまうと
+   その間 ✕ もリロールも押せない画面になる。
+   --------------------------------------------------------------------------- */
+.vs-card {
+  position: fixed; inset: 0; z-index: 39;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: radial-gradient(90% 60% at 50% 50%, rgba(8,10,24,0.62), rgba(8,10,24,0.86));
+  animation: vscIn .32s cubic-bezier(.2,1.3,.4,1);
+}
+.vs-card.out { animation: vscOut .35s ease forwards; }
+@keyframes vscIn { from { opacity: 0; } }
+@keyframes vscOut { to { opacity: 0; } }
+
+.vsc-inner {
+  display: flex; flex-direction: column; align-items: center;
+  width: 100%; max-width: 420px;
+}
+/* モードの名前（rules.js の onlineModeName）。「いま何の試合か」を1語で。
+   .vsc-head が「全幅の行」、.vsc-mode がその中で中央に置く丸バッジ。
+   2枚に分けてあるのは横持ち対策 ── バッジ自身を全幅の flex アイテムに
+   すると、枠だけが画面いっぱいに伸びて帯に見える。 */
+.vsc-head { width: 100%; display: flex; justify-content: center; }
+.vsc-mode {
+  display: inline-block; font-size: 12px; font-weight: 900; letter-spacing: 0.12em;
+  color: var(--cyan); text-transform: uppercase;
+  border: 1px solid rgba(67,217,232,0.5); border-radius: 999px;
+  padding: 4px 14px; margin-bottom: 10px;
+  background: rgba(67,217,232,0.10);
+}
+
+/* 🔒 .vsc-foe と .vsc-me は**同じ規則**で描く。片方だけ豪華にすると、
+   情報の少ない側が「住人かもしれない」に見えてしまう（秘匿の要）。
+   違うのは見出しの色だけ。 */
+.vsc-side {
+  width: 100%;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: linear-gradient(165deg, rgba(22,28,58,0.96), rgba(13,16,38,0.96));
+  border: 1px solid var(--line); border-radius: 16px;
+  padding: 10px 14px;
+  box-shadow: 0 14px 34px rgba(0,0,0,0.5);
+  animation: vscSlide .38s cubic-bezier(.2,1.2,.4,1) both;
+}
+.vsc-foe { border-color: rgba(255,93,93,0.55); --vsc-accent: var(--red); }
+.vsc-me { border-color: rgba(91,139,255,0.55); --vsc-accent: var(--blue); animation-delay: .08s; }
+@keyframes vscSlide { from { opacity: 0; transform: translateY(14px) scale(0.96); } }
+
+.vsc-who {
+  font-size: 10px; font-weight: 900; letter-spacing: 0.16em;
+  color: var(--vsc-accent);
+}
+.vsc-name {
+  font-size: 20px; font-weight: 900; line-height: 1.2;
+  max-width: 100%; text-align: center;
+  overflow-wrap: anywhere;
+  /* 名前は2行まで。長い名前でカードの高さが上下で変わると、並べた意味が薄れる。 */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+.vsc-rank { font-size: 13px; font-weight: 800; }
+.vsc-unranked { color: var(--muted); font-size: 12.5px; font-weight: 700; }
+.vsc-meta {
+  display: flex; gap: 14px; font-size: 12px; font-weight: 700; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.vsc-meta b { color: var(--text); font-size: 13.5px; }
+/* 任意の欄（称号・ギルド・戦績）。サーバーが載せてくれた日に自動で出る。 */
+.vsc-extra {
+  display: flex; gap: 8px; align-items: baseline;
+  font-size: 11.5px; font-weight: 700; color: var(--muted);
+  max-width: 100%;
+}
+.vsc-extra b { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 真ん中の空き。ここに 3-2-1 の数字（120px）が落ちてくるので、
+   高さはその数字が両カードにかぶらないぶんを確保する。
+   VS の字は数字が消えている一瞬にだけ見える控えの飾り。 */
+.vsc-gap {
+  height: 148px; display: flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+}
+.vsc-vs {
+  font-size: 26px; font-weight: 900; letter-spacing: 0.18em;
+  color: rgba(255,255,255,0.16);
+}
+
+@media (max-height: 720px) {
+  .vsc-side { padding: 8px 12px; gap: 2px; }
+  .vsc-name { font-size: 17px; }
+  .vsc-gap { height: 128px; }
+  .vsc-mode { margin-bottom: 6px; }
+}
+/* 横持ち: 縦に積むと3枚（相手・数字・自分）が 540px に収まらない。
+   左右に並べ、真ん中の空きを数字ぶんの幅にする。 */
+@media (orientation: landscape) and (max-height: 540px) {
+  .vsc-inner { flex-direction: row; flex-wrap: wrap; justify-content: center; max-width: 620px; }
+  .vsc-head { flex: 0 0 100%; }
+  .vsc-mode { margin-bottom: 6px; }
+  .vsc-side { width: auto; flex: 1 1 200px; max-width: 240px; }
+  .vsc-gap { height: auto; width: 130px; flex: 0 0 130px; }
+  .vsc-name { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vs-card, .vsc-side { animation: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   2. 攻撃の駆け引きの帯（.atk-strip）
+   #oppPanel の最後の子として生える1行。ふだんは「送った／受けた」の集計で、
+   お邪魔が飛んできた瞬間だけ赤く光って予告に化ける。
+   高さを 16px に固定してあるのは、中身が入れ替わっても #oppPanel が伸び縮み
+   しないため ── 伸び縮みすると .game-canvas-wrap が再採寸され、その1フレーム
+   だけ盤面が真っ白になる（.opp-combo の長いコメント参照）。
+   --------------------------------------------------------------------------- */
+.atk-strip {
+  width: 100%; height: 16px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 11px; font-weight: 800; line-height: 1;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+  border-radius: 999px; padding: 0 6px;
+  transition: background .18s, color .18s;
+}
+.atk-strip .as-out, .atk-strip .as-in { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }
+.atk-strip .as-out b { color: var(--yellow); font-size: 12px; }
+.atk-strip .as-in b { color: var(--red); font-size: 12px; }
+/* 押しているときだけ「送った」側を強調する。ずっと光らせると意味が薄れる。 */
+.atk-strip.as-lead .as-out b { color: var(--gold); text-shadow: 0 0 10px rgba(255,215,94,0.55); }
+.atk-strip .as-warn {
+  flex: 1 1 auto; min-width: 0; text-align: center;
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  position: relative; overflow: hidden;
+}
+.atk-strip .as-warn b { color: #fff; font-size: 12.5px; }
+.atk-strip .as-warn small { font-size: 10px; font-weight: 700; opacity: 0.85; }
+/* 予告中。帯そのものが赤くなるので、盤面から目を離さなくても気づける。 */
+.atk-strip.incoming {
+  background: rgba(255,93,93,0.20);
+  box-shadow: 0 0 14px rgba(255,93,93,0.35) inset;
+  color: #ffd9d9;
+  animation: atkPulse .28s ease-in-out 2 alternate;
+}
+@keyframes atkPulse { to { background: rgba(255,93,93,0.42); } }
+/* 着弾までの導火線。幅が 100% → 0% に縮んで「あと何秒か」を出す
+   （animation-duration は modes.js が予告時間から入れる）。 */
+.atk-strip .as-fuse {
+  position: absolute; left: 0; bottom: -1px; height: 2px;
+  background: var(--red); border-radius: 2px;
+  animation-name: atkFuse; animation-timing-function: linear; animation-fill-mode: forwards;
+}
+@keyframes atkFuse { from { width: 100%; } to { width: 0%; } }
+@media (prefers-reduced-motion: reduce) {
+  .atk-strip.incoming { animation: none; }
+  .atk-strip .as-fuse { animation: none; width: 100%; }
+}
+/* 横持ちでは相手パネルが幅 190px の縦帯になる。1行に3つは入らないので折る。 */
+@media (orientation: landscape) and (max-height: 540px) {
+  .atk-strip { height: auto; flex-wrap: wrap; justify-content: center; row-gap: 2px; }
+}
+
+/* ---------------------------------------------------------------------------
+   3. 決着後のリアクション（.react-bar）
+   結果モーダルの中、報酬欄とボタン列のあいだ。文字入力は無く、定型5つだけ。
+   --------------------------------------------------------------------------- */
+.react-bar {
+  margin-top: 12px; padding: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  animation: rxIn .3s cubic-bezier(.2,1.3,.4,1);
+}
+.react-bar.out { animation: rxOut .35s ease forwards; }
+@keyframes rxIn { from { opacity: 0; transform: translateY(8px); } }
+@keyframes rxOut { to { opacity: 0; transform: translateY(-6px); } }
+.rx-title {
+  font-size: 11px; font-weight: 900; letter-spacing: 0.1em;
+  color: var(--muted); text-align: center; margin-bottom: 6px;
+}
+/* 吹き出しの置き場。相手が上・自分が下（チャットの並びと同じ向き）。
+   min-height を決めておかないと、返事が来た瞬間にモーダルの高さが跳ねる。 */
+.rx-lanes { display: flex; flex-direction: column; gap: 4px; min-height: 42px; margin-bottom: 8px; }
+.rx-lane { display: flex; gap: 6px; min-height: 19px; }
+.rx-lane.rx-foe { justify-content: flex-start; }
+.rx-lane.rx-me { justify-content: flex-end; }
+.rx-bubble {
+  display: inline-flex; align-items: center; gap: 5px;
+  border-radius: 999px; padding: 3px 10px;
+  font-size: 12px; font-weight: 800;
+  background: rgba(255,255,255,0.08); border: 1px solid var(--line);
+  animation: rxPop .32s cubic-bezier(.2,1.5,.4,1);
+  max-width: 100%;
+}
+.rx-lane.rx-me .rx-bubble { background: rgba(91,139,255,0.18); border-color: rgba(91,139,255,0.45); }
+.rx-lane.rx-foe .rx-bubble { background: rgba(255,93,93,0.14); border-color: rgba(255,93,93,0.40); }
+.rx-bubble span { font-size: 16px; line-height: 1; }
+.rx-bubble small { font-size: 11.5px; font-weight: 800; white-space: nowrap; }
+@keyframes rxPop { from { opacity: 0; transform: scale(0.6); } }
+
+.rx-btns { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.rx-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: rgba(255,255,255,0.06); border: 1px solid var(--line);
+  border-radius: 999px; padding: 6px 11px;
+  color: var(--text); font-family: inherit; cursor: pointer;
+  /* 5つをモーダルの幅に収める都合で高さは 34px。横は余白で稼いである。 */
+  min-height: 34px;
+  transition: transform .12s, background .12s, opacity .12s;
+}
+.rx-btn:hover:not(:disabled) { background: rgba(255,255,255,0.13); transform: translateY(-1px); }
+.rx-btn:active:not(:disabled) { transform: scale(0.94); }
+.rx-btn:disabled { opacity: 0.4; cursor: default; }
+.rx-emoji { font-size: 17px; line-height: 1; }
+.rx-btn small { font-size: 11.5px; font-weight: 800; white-space: nowrap; }
+@media (max-width: 380px) {
+  .rx-btn { padding: 5px 9px; min-height: 32px; }
+  .rx-btn small { font-size: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .react-bar, .rx-bubble { animation: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   4. 結果画面の段位・レート・連勝（modes.js の resultRankBlock）
+   以前はレート変動が .rs-row の1行に埋もれ、昇格に気づかないまま次の試合へ
+   行く人がいた。見出しの直下に、勝敗の次に大きい字で置く。
+   --------------------------------------------------------------------------- */
+.result-tier {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  margin: 10px 0 4px; padding: 10px 12px; border-radius: 14px;
+  border: 1px solid var(--line); background: rgba(255,255,255,0.05);
+  animation: winPop .5s cubic-bezier(.2,1.6,.4,1);
+}
+.result-tier.up {
+  border-color: rgba(255,215,94,0.55); background: rgba(255,215,94,0.10);
+  box-shadow: 0 0 26px -6px rgba(255,215,94,0.7);
+}
+.result-tier.down { border-color: rgba(154,163,199,0.45); background: rgba(154,163,199,0.08); }
+.rt-word { font-size: 13px; font-weight: 900; letter-spacing: 0.22em; }
+.result-tier.up .rt-word { color: var(--gold); }
+.result-tier.down .rt-word { color: var(--muted); }
+.rt-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.rt-from, .rt-to { display: inline-flex; align-items: center; gap: 5px; font-weight: 900; }
+.rt-from { font-size: 12.5px; color: var(--muted); opacity: 0.8; }
+.rt-to { font-size: 19px; }
+.result-tier.up .rt-to { color: var(--gold); text-shadow: 0 0 20px rgba(255,215,94,0.5); }
+.rt-arrow { font-size: 14px; font-weight: 900; }
+.result-tier.up .rt-arrow { color: var(--green); }
+.result-tier.down .rt-arrow { color: var(--red); }
+
+/* レート変動そのもの。段位が動かなかった試合ではこれが主役になる。 */
+.result-delta {
+  text-align: center; margin: 8px 0 0;
+  font-size: 30px; font-weight: 900; line-height: 1;
+  font-variant-numeric: tabular-nums;
+  animation: winPop .45s cubic-bezier(.2,1.6,.4,1);
+}
+.result-delta.up { color: var(--green); text-shadow: 0 0 22px rgba(94,232,110,0.45); }
+.result-delta.down { color: var(--red); }
+.result-delta small {
+  display: block; font-size: 10px; letter-spacing: 0.2em;
+  color: var(--muted); margin-top: 3px; text-shadow: none;
+}
+
+.result-streak {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin: 8px auto 0; width: fit-content; max-width: 100%;
+  padding: 5px 14px; border-radius: 999px;
+  font-size: 13.5px; font-weight: 900; color: #ffb27a;
+  background: rgba(255,138,92,0.14); border: 1px solid rgba(255,138,92,0.5);
+}
+
+@media (max-width: 380px) {
+  .result-delta { font-size: 26px; }
+  .rt-to { font-size: 17px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .result-tier, .result-delta { animation: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   🔌 接続が切れているあいだの帯（第5波・統合フェーズ）
+   ---------------------------------------------------------------------------
+   modes.js の showNetBanner / flashNetBanner が #screen-game に1本だけ生やす。
+   トーストではなく帯なのは、状態が続いているあいだ出しっぱなしにする必要が
+   あるため（トーストは数秒で消えるので「まだ切れている」のか「もう戻った」
+   のかが読めない）。
+
+   ⚠ 重なり順（実測して決めた値。写経ではない）:
+   最初 36 に置いたところ、2行になったときに相手パネルへ潜り込んで
+   2行目が読めなかった。原因は .opp-panel の素の z-index が 4 でも、
+   **初回対戦のガイド（maybeStartVersusTutorial）が指し示すために 110 まで
+   持ち上げる**こと ── ガイドが出る初回だけ隠れる、という一番気づきにくい
+   出方をしていた。ガイドの吹き出し(#tutTip = 150)より下、持ち上げられた
+   相手パネル(110)より上に置く。
+   結果モーダルと重なる心配は要らない: onResult の先頭と clearBattleUi() の
+   両方で必ず畳んでいるので、暗幕が出るころには帯は消えている。 */
+.net-banner {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  z-index: 120;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  max-width: min(94vw, 420px);
+  padding: 7px 14px; border-radius: 12px;
+  text-align: center; line-height: 1.35;
+  pointer-events: none;          /* 盤面の操作を1pxも奪わない */
+  background: rgba(28,16,10,0.92);
+  border: 1px solid rgba(255,170,80,0.55);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+  animation: netBannerIn .22s ease-out;
+}
+.net-banner b {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 900; color: #ffc47a;
+}
+.net-banner span { font-size: 11.5px; color: var(--muted); }
+.net-banner.ok {
+  background: rgba(12,30,16,0.92);
+  border-color: rgba(94,232,110,0.55);
+}
+.net-banner.ok b { color: var(--green); }
+
+@keyframes netBannerIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .net-banner { animation: none; }
 }

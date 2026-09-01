@@ -23,7 +23,10 @@ import { freePort } from './_port.mjs';
 // 自分のものと誤認して、緑のまま嘘をつく可能性があった）。
 const PORT = await freePort();
 const BASE = `http://localhost:${PORT}`;
-const DIR = path.join(os.tmpdir(), 'bba-shutdown-test');
+// 保存先にポートを混ぜる。固定名だと、run-all が同時に2つ走ったときに
+// 両方が同じフォルダを使い、片方の rmSync がもう片方の db.json を消す
+// （並列開発では実際に踏む）。理由の詳細は test/battle.test.mjs を参照。
+const DIR = path.join(os.tmpdir(), `bba-shutdown-test-${PORT}`);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const results = [];

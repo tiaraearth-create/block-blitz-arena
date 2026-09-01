@@ -133,6 +133,25 @@ const DAILY_REPLAY_DAYS = 2;              // index.js の DAILY_REPLAY_DAYS
 // （細工したファイルで配列を無限に伸ばさせない、が目的）。
 const PUZ_WIN_DAY_KEEP = 200;
 
+// 🕒 在席区間ログ（user.stats.online = [{ at, ms }]）が覚えておく件数の上限。
+//
+// なぜ**この**ファイルに置いてあるのか:
+//   記録するのは server/battle.js（hello / close）、合流するのはここ。
+//   2箇所で違う数を持つと「復元のたびに件数が増える／減る」になるので、
+//   ひとつの定数を両方から読みたい。逆向き（battle.js に置いて backup.js が
+//   読む）にすると、backup.js を単体で import しているテスト
+//   （test/dbsafety.test.mjs）が WebSocket サーバーごと読み込むことになる。
+//   battle.js → backup.js の向きなら循環もしない（backup.js が引くのは
+//   fs / db.js / guilds.js / residents.js だけ）。
+//
+// db.json は保存のたびに丸ごと書き出されるので、ここは**必ず**上限が要る。
+// 1人30件（1件あたり2つの数値）なら1万人でも数MB以内に収まる。
+// 環境変数はテスト用（上限そのものを外せないよう 5〜200 に丸める）。
+export const ONLINE_SPANS_MAX = (() => {
+  const v = Number(process.env.ONLINE_SPANS_MAX);
+  return Number.isFinite(v) ? Math.max(5, Math.min(200, Math.floor(v))) : 30;
+})();
+
 // 共有コードが空いているものを引く（衝突した作品の引っ越し先）。
 function freeWorkshopCode(stages) {
   for (let tries = 0; tries < 200; tries++) {
@@ -628,6 +647,83 @@ function mergeEarned(winner, loser) {
       for (const s of ['daily', 'weekly']) {
         wc[s] = Math.max(Math.floor(Number(wc[s]) || 0), Math.floor(Number(lc[s]) || 0), 0);
       }
+    }
+  }
+
+  // 🕒 在席の記録（battle.js の hello / close）。
+  //   stats.sessions … 通算セッション数
+  //   stats.online   … 直近の在席区間 [{ at, ms }]（上限 ONLINE_SPANS_MAX）
+  // どちらも「その人がいつ来ていたか」を運営が読むための材料で、進行度では
+  // 決まらない。合流で落とすと、ディスクが飛んでから復元するまでの窓で1回
+  // つないだだけの新しいレコードが勝った瞬間に、それ以前の在席の記録が
+  // 丸ごと消える（＝復元したのに履歴が無い、がいちばん困る使い方）。
+  //   ・sessions は大きいほう（回数は減らない性質のもの）
+  //   ・online は開始時刻 at で和集合 → 時系列に並べ替えて新しいほうから上限件
+  const lonSt = loser.stats;
+  if (isPlainObj(lonSt)) {
+    const ls2 = Number(lonSt.sessions);
+    if (Number.isFinite(ls2) && ls2 > 0) {
+      const wst8 = winner.stats || (winner.stats = {});
+      wst8.sessions = Math.max(Math.floor(Number(wst8.sessions) || 0), Math.floor(ls2));
+    }
+    if (Array.isArray(lonSt.online) && lonSt.online.length) {
+      const wst9 = winner.stats || (winner.stats = {});
+      const cur = Array.isArray(wst9.online) ? wst9.online : [];
+      // 開始時刻を鍵に重複を落とす。同じ区間が両側にあるときは長いほうを採る
+      // （片方だけ close を取りこぼしていた、を拾える）。
+      const by = new Map();
+      for (const sp of [...cur, ...lonSt.online]) {
+        if (!isPlainObj(sp)) continue;
+        const at = Math.floor(Number(sp.at) || 0);
+        const ms = Math.floor(Number(sp.ms) || 0);
+        if (at <= 0 || ms <= 0) continue;             // 壊れた行は持ち込まない
+        const prev = by.get(at);
+        if (!prev || ms > prev.ms) by.set(at, { at, ms });
+      }
+      wst9.online = [...by.values()].sort((a, b) => a.at - b.at).slice(-ONLINE_SPANS_MAX);
+    }
+    // 🔑 ログインの記録（auth.js の recordLogin）。stats.sessions とまったく
+    // 同じ理由で合流が要る ── ディスクが飛んでから復元するまでの窓で1回
+    // ログインしただけの新しいレコードが勝つと、それ以前のログイン回数と
+    // 最終ログイン時刻が丸ごと消える。どちらも「増えるだけ／新しいほど正しい」
+    // 種類の値なので、大きいほうを採る。
+    //   ・logins      … 通算回数（減らない）
+    //   ・lastLoginAt … 最後にログインした時刻（進むだけ）
+    const ll = Math.floor(Number(lonSt.logins) || 0);
+    if (ll > 0) {
+      const wst11 = winner.stats || (winner.stats = {});
+      wst11.logins = Math.max(Math.floor(Number(wst11.logins) || 0), ll);
+    }
+    const lla = Math.floor(Number(lonSt.lastLoginAt) || 0);
+    if (lla > 0) {
+      const wst12 = winner.stats || (winner.stats = {});
+      wst12.lastLoginAt = Math.max(Math.floor(Number(wst12.lastLoginAt) || 0), lla);
+    }
+  }
+
+  // 🔌 再接続の猶予を使った回数（battle.js の RECONNECT_GRACE_PER_DAY）。
+  // user.stats.dcGrace = { day:'YYYY-MM-DD', n, total }。
+  // 「切断を戦術に使う人には猶予を出さない」を止めているのは n だけなので、
+  // 落とすと復元した日だけ回数がまるごと1本ぶん戻る。他の日付つきの止め金
+  // （grindDay / shopGiftDay …）とまったく同じ扱いにする:
+  //   ・同じ日なら多いほう（迷ったら閉じる）
+  //   ・勝った側に無ければ負けた側のものを引き継ぐ
+  //   ・日が違うときは新しい日のほう（古い日は次の切断で作り直される）
+  //   ・total は通算なので常に大きいほう
+  const ldg = loser.stats && loser.stats.dcGrace;
+  if (isPlainObj(ldg) && okDay(ldg.day)) {
+    const wst10 = winner.stats || (winner.stats = {});
+    const wdg = wst10.dcGrace;
+    const n = Math.max(0, Math.floor(Number(ldg.n) || 0));
+    const tot = Math.max(0, Math.floor(Number(ldg.total) || 0));
+    if (!isPlainObj(wdg) || !okDay(wdg.day) || String(ldg.day) > String(wdg.day)) {
+      wst10.dcGrace = {
+        day: String(ldg.day), n,
+        total: Math.max(tot, Math.max(0, Math.floor(Number(wdg && wdg.total) || 0))),
+      };
+    } else {
+      if (String(wdg.day) === String(ldg.day)) wdg.n = Math.max(Math.floor(Number(wdg.n) || 0), n);
+      wdg.total = Math.max(Math.floor(Number(wdg.total) || 0), tot);
     }
   }
 }

@@ -17,6 +17,10 @@ import { equippedUlt, setGuestUlt, ghostUnlocked } from './modes.js';
 // 「絶対防御」と、☄️ が「天変地異」と重複したままになる。色だけ借りる。
 import { ultColor } from './skills.js';
 import { showYouTubeStudio } from './ytexport.js';
+// 📊 プレイヤー統計（誰がいつオンラインだったか）。admintools.js が持つ画面を
+// 管理者パネルの正式なボタンから開く ── 以前は admintools.js 側が DOM に
+// ボタンを差し込む「つなぎ」で代替していた（index.html が担当外だったため）。
+import { showPlayerStats } from './admintools.js';
 
 // ---------------------------------------------------------------------------
 // 英語UIに日本語の約物を出さないための小さなヘルパ。
@@ -4185,6 +4189,9 @@ export function bindAdminActions() {
 
   $('#btnRestore').onclick = () => showRestoreModal();
   $('#btnBugReports').onclick = () => { audio.click(); showBugReportsAdminModal(); };
+  // 📊 index.html に正式な枠を置いたので、admintools.js の
+  // mountPlayerStatsButton() は「既に #btnPlayerStats がある」と見て何もしない。
+  $('#btnPlayerStats').onclick = () => { audio.click(); showPlayerStats(); };
 
   // ⚠️ クライアントエラーのボタンは 🐛 の隣。index.html 側にまだ無いので
   // 無ければここで足す（後から生えたら、それを拾うだけで二重にしない）。
@@ -5111,7 +5118,15 @@ async function showCrowdModal(tab = 'basic') {
             <span class="cast-dot" style="color:${r.online ? 'var(--green)' : 'var(--dim)'}">●</span>
             <span class="cast-name">${escapeHtml(r.name)}${r.custom ? ' <small class="muted">(追加)</small>' : ''}</span>
             <span class="cast-arch">${escapeHtml(r.archLabel)}</span>
-            <span class="cast-meta">${r.lang === 'en' ? 'EN' : 'JA'} ${r.registered ? `R${r.rating} Lv${r.level}` : 'ゲスト'} ・ ${r.hours[0]}時〜${r.hours[1] % 24}時</span>
+            <span class="cast-meta">${r.lang === 'en' ? 'EN' : 'JA'} ${r.registered ? `R${r.rating} Lv${r.level}` : 'ゲスト'} ・ ${r.hours[0]}時〜${r.hours[1] % 24}時
+              ${/* 🗒 実プレイヤーと当たった記録（server/residents.js の台帳）。
+                    record:null は「まだ誰とも当たっていない」で、0勝0敗とは
+                    意味が違うので必ず書き分ける ── 同じ文にすると「実際に
+                    10回当たって全部負けた住人」と「一度も出ていない住人」が
+                    見分けられなくなる。 */''}
+              ・ ${r.record
+                ? `実対戦 ${r.record.w}勝${r.record.l}敗 / レート ${r.record.rd > 0 ? '+' : ''}${r.record.rd}`
+                : '<span class="muted">実対戦の記録なし</span>'}</span>
             <button class="btn btn-sm btn-ghost" data-rm="${escapeHtml(r.id)}" title="この住人を引退させる">${ic('close', 14)}</button>
           </div>`).join('')}
       </div>

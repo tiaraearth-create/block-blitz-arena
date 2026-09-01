@@ -386,4 +386,57 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
   check('全バッジが管理画面から付与できる', noAdmin.length === 0, noAdmin.join(', '));
 }
 
+// --- 8. サーバーが送るWSフレームに、画面側の受け口があるか ---
+//
+// 並列開発でいちばん確実に抜けるのがここ。第5波では実際に、サーバー
+// （server/battle.js）と通信層（public/js/net.js）だけが再接続に対応していて、
+// **画面側（modes.js）に受け口が1つも無い**まま4フレームが宙に浮いていた
+// （opp_unstable / opp_back / match_resumed / reconnecting）。
+// 型としては正しいので構文検査も型検査も通り抜けるし、サーバー側のテストも
+// 全部緑になる ── 「送っているのに誰も聞いていない」は動かしてみるまで
+// 分からないので、機械で見張る。
+{
+  const battle = read('server/battle.js');
+  const clientSrc = ['modes.js', 'net.js', 'chat.js', 'screens.js', 'main.js',
+    'party.js', 'friends.js', 'adminevent.js']
+    .map(f => read(`public/js/${f}`)).join('\n');
+
+  const sent = new Set([...battle.matchAll(/type:\s*'([a-z_0-9]+)'/g)].map(m => m[1]));
+  // 受け口の書き方は3通りある（BattleClient の .on / net.js 内の直接判定 /
+  // chat.js の switch）。どれか1つでもあれば「聞いている」とみなす。
+  const handled = new Set([
+    ...[...clientSrc.matchAll(/\.on\(\s*'([a-z_0-9]+)'/g)].map(m => m[1]),
+    ...[...clientSrc.matchAll(/msg\.type\s*===\s*'([a-z_0-9]+)'/g)].map(m => m[1]),
+    ...[...clientSrc.matchAll(/case\s*'([a-z_0-9]+)'/g)].map(m => m[1]),
+  ]);
+
+  // 受け口が要らないもの。**理由を書いてから**足すこと ── 理由を書けないなら
+  // それは受け口の書き忘れなので、ここではなく画面側を直す。
+  const NO_HANDLER_NEEDED = new Set([
+    'finish',      // クライアント→サーバー。battle.js 側は受ける側なので送らない
+    'watch',       // 同上（観戦の申し込み）
+    'pong',        // 心拍の返事。net.js はブラウザの標準機能に任せていて読まない
+    'party_error', // パーティーの失敗は party.js が汎用の error 表示で拾う
+    'room_left',   // 退室は room_update が続けて来るので、そちらで画面が直る
+  ]);
+
+  const orphan = [...sent].filter(t => !handled.has(t) && !NO_HANDLER_NEEDED.has(t)).sort();
+  check('サーバーが送るWSフレームに画面側の受け口がある',
+    orphan.length === 0,
+    orphan.length ? `受け口が無い: ${orphan.join(', ')}` : `${sent.size}種を照合`);
+
+  // 再接続の4フレームは名指しで見張る。上の照合は「どのファイルでもいいから
+  // 誰かが聞いていれば通る」ので、net.js だけが聞いていて画面が聞いていない
+  // ——という第5波でまさに起きた形は、そちらでは捕まらない。
+  const modes = read('public/js/modes.js');
+  for (const f of ['opp_unstable', 'opp_back', 'match_resumed', 'reconnecting']) {
+    check(`  └ modes.js が ${f} を受けている`,
+      new RegExp(`\\.on\\(\\s*'${f}'`).test(modes), '');
+  }
+  // 逆に、受け口ができたあとも「つなぎ」の announce を残すと同じことを
+  // 二重に言う（帯とトーストが両方出る）。消し忘れをここで止める。
+  check('  └ 猶予の「つなぎ」announce が消えている',
+    !/相手の接続が不安定です/.test(battle) && !/相手が戻ってきました/.test(battle), '');
+}
+
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

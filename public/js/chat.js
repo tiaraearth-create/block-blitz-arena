@@ -12,6 +12,9 @@ let open = false;
 let unread = 0;
 let retryMs = 3000;
 let retryTimer = null;   // 再接続待ちのタイマー。張り直すときは必ず取り消す。
+// 一度でも connect() を通ったか。圏外から戻ったときの再接続を、
+// チャットが始まる前に先走らせないための門（下の 'online' が見る）。
+let chatStarted = false;
 
 // ---------------------------------------------------------------------------
 // Live feed: a ticker on the menu showing what is happening around the arena
@@ -344,6 +347,7 @@ function dropSocket(sock) {
 }
 
 function connect() {
+  chatStarted = true;
   // 張り直す前に、前のソケットと再接続待ちのタイマーを必ず畳む。
   // これをしないと「切断→再接続待ちの3秒間にログイン／ログアウト」で
   // ws が上書きされ、前のソケットが誰にも閉じられないまま OPEN で生き残る。
@@ -454,8 +458,36 @@ function scheduleReconnect() {
   // 別経路から呼ばれてもこのタイマーを止められず、あとから発火して2本目を
   // 張ってしまっていた。
   clearTimeout(retryTimer);
+  retryTimer = null;
+  // 📴 圏外のあいだは叩きに行かない。
+  // 以前は上限30秒で永久に叩き続けていたので、機内モードや電波の無い場所で
+  // 30秒に1回ずつ `WebSocket connection failed` がコンソールに積まれ、
+  // そのぶん無線を起こして電池を食っていた（実測: オフラインのまま放置で
+  // 出続けることを確認）。navigator.onLine は「本当に繋がるか」までは
+  // 見ないので、これは**確実に無駄なとき**を1つ省くだけの判定
+  // ── false は「繋がらない」と言い切れるが、true は保証ではないので、
+  // true のときは今までどおり叩いて失敗させる。
+  if (navigator.onLine === false) return;   // 復帰は下の 'online' が受ける
   retryTimer = setTimeout(connect, retryMs);
   retryMs = Math.min(30000, retryMs * 1.5);
+}
+
+// 通信が戻ったらすぐ張り直す（上で予約を止めているので、これが無いと
+// 圏外から戻っても常時接続だけ死んだままになる）。
+// main.js も同じ 'online' を見ているが、あちらが触るのはメニューの見た目で、
+// 常時接続の面倒は見ていない。
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    // まだ一度も繋ぎに行っていない＝チャットが始まっていない。ここで
+    // 先走ると、DOM の配線が済む前にソケットだけ開くことになる。
+    if (!chatStarted) return;
+    if (ws && ws.readyState === WebSocket.OPEN) return;   // もう繋がっている
+    // 圏外で伸びきったバックオフを戻す ── 戻った直後の1回は即座に試したい。
+    retryMs = 3000;
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    connect();
+  });
 }
 
 function sendChat() {

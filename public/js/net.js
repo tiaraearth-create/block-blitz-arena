@@ -124,20 +124,63 @@ export async function refreshMe() {
 // Battle WebSocket
 // ---------------------------------------------------------------------------
 
+// 🔌 自動再接続の刻み（ms）。指数バックオフ＋ゆらぎ。
+//
+// 合計は約15秒。サーバー側の猶予（server/battle.js の RECONNECT_GRACE_MS
+// ＝25秒）の**内側**に収まるようにしてある ── 猶予が切れてから叩いても
+// 席はもう無いので、そこから先は繰り返すだけ無駄になる。
+// ゆらぎを混ぜるのは、サーバーが落ちて全員が同時に切れたとき、全員が
+// 同じ瞬間に叩き直して復帰そのものを妨げないため。
+const RECONNECT_STEPS_MS = [300, 700, 1500, 3000, 5000, 5000];
+// 繋ぎ直せたのに試合が返ってこないとき、いつまで待つか。
+// （猶予切れ・別端末が先に席を取った等。結果フレームは閉じた古いソケットへ
+//  送られてしまっているので、待ち続けても何も来ない）
+const RESUME_WAIT_MS = 3000;
+
 export class BattleClient {
   constructor() {
     this.ws = null;
     this.handlers = {};
     this.connected = false;
+    // ---- 自動再接続 ----
+    this.guestName = undefined;
+    // match_found 〜 result のあいだだけ true。
+    // 繋ぎ直してよいのは**試合中だけ**にしている ── マッチング待ちで切れた
+    // 場合、サーバー側の待ち行列は切断で消えているので、黙って繋ぎ直すと
+    // 動かない検索画面の前に置き去りにするだけになる（そこは今までどおり
+    // 'close' を上げて modes.js にメニューへ戻してもらう）。
+    this.inMatch = false;
+    this.closing = false;     // 自分で close() した＝繋ぎ直さない
+    this.retry = 0;
+    this.retryTimer = null;
+    this.resumeTimer = null;
   }
 
   on(type, fn) { this.handlers[type] = fn; return this; }
   emit(type, msg) { if (this.handlers[type]) this.handlers[type](msg); }
 
   connect(guestName) {
+    this.guestName = guestName;
+    this.closing = false;
+    this.retry = 0;
+    return this._open(false);
+  }
+
+  // resume=true のときだけ、hello に復帰の申告を添える。
+  // サーバーは resume と role の両方が揃ったときにしか席を返さない
+  // （でないと同じ人のチャット用ソケットが席を奪う）。
+  _open(resume) {
     return new Promise((resolve, reject) => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      let ws;
+      try { ws = new WebSocket(`${proto}://${location.host}/ws`); }
+      catch {
+        // 繋ぎ直しの途中でここに落ちると onclose が来ないので、次の刻みは
+        // 自分で積む（積めなければ、いつもどおり切断として上げる）。
+        if (resume && !this._scheduleReconnect()) this.emit('close', {});
+        reject(new Error(trServer('サーバーに接続できません')));
+        return;
+      }
       this.ws = ws;
       // connect() の Promise は一度だけ解決する。hello_ok 前にサーバーが
       // error 送信→close（メンテ中・凍結・接続上限など）で切ってきた場合、
@@ -150,16 +193,38 @@ export class BattleClient {
       ws.onopen = () => {
         // 対戦用のこのソケットは、chat.js が常時つないでいるソケットと
         // 同じ人の2本目。role を申告して人数に二重計上されないようにする。
-        ws.send(JSON.stringify({ type: 'hello', token: session.token, guestName, role: 'battle' }));
+        ws.send(JSON.stringify({
+          type: 'hello', token: session.token, guestName: this.guestName, role: 'battle',
+          ...(resume ? { resume: true } : {}),
+        }));
       };
       ws.onmessage = ev => {
         let msg;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.type === 'hello_ok' && !this.connected) {
           this.connected = true;
+          this.retry = 0;
           clearTimeout(timeout);
           settled = true;
           resolve(msg);
+          // 復帰のつもりで繋いだのに試合が返ってこないなら、そこで諦めて
+          // いつもの切断あつかいにする（結果画面の待ち状態に置き去りにしない）。
+          if (resume && this.inMatch) {
+            clearTimeout(this.resumeTimer);
+            this.resumeTimer = setTimeout(() => {
+              // close() を通す（＝ソケットも畳む）。'close' の発火は
+              // そちらの onclose に1回だけ任せる ── ここで emit も足すと
+              // 同じ切断が2回流れる。
+              if (this.inMatch) this.close();
+            }, RESUME_WAIT_MS);
+          }
+        }
+        if (msg.type === 'match_found' || msg.type === 'match_resumed') {
+          this.inMatch = true;
+          clearTimeout(this.resumeTimer);
+          this.resumeTimer = null;
+        } else if (msg.type === 'result') {
+          this.inMatch = false;
         }
         // hello 処理中の切断理由（メンテ中・凍結など）を握っておき、
         // 続く onclose の reject に添える。
@@ -173,6 +238,8 @@ export class BattleClient {
           settled = true;
           reject(new Error(lastError || trServer('接続が切断されました')));
         }
+        // 🔌 試合中に切れたら、すぐ諦めずに繋ぎ直す。
+        if (this._scheduleReconnect()) return;
         this.emit('close', {});
       };
       ws.onerror = () => {
@@ -183,6 +250,28 @@ export class BattleClient {
         }
       };
     });
+  }
+
+  // 繋ぎ直しを予約できたら true（＝'close' を上げない）。
+  _scheduleReconnect() {
+    if (this.closing) return false;
+    // 席を返してもらう鍵は userId なので、ログインしていない人は繋ぎ直しても
+    // 試合には戻れない（サーバー側でゲストの復帰は塞いである）。
+    if (!session.token) return false;
+    if (!this.inMatch) return false;
+    if (this.retry >= RECONNECT_STEPS_MS.length) return false;
+    const base = RECONNECT_STEPS_MS[this.retry++];
+    const wait = base + Math.floor(Math.random() * (base / 2));
+    this.emit('reconnecting', { attempt: this.retry, waitMs: wait });
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      if (this.closing) return;
+      // 失敗しても onclose からまた予約される。ここで拾わないと
+      // 「未処理の Promise 拒否」になるだけなので、握って捨ててよい。
+      this._open(true).catch(() => { /* onclose が次の刻みを積む */ });
+    }, wait);
+    return true;
   }
 
   send(msg) {
@@ -202,6 +291,12 @@ export class BattleClient {
   startRoom() { this.send({ type: 'room_start' }); }
 
   close() {
+    // 自分で閉じたときは繋ぎ直さない。ここを立てずに閉じると、
+    // 予約済みの再接続が「もう捨てた画面」のために叩き続ける。
+    this.closing = true;
+    this.inMatch = false;
+    clearTimeout(this.retryTimer); this.retryTimer = null;
+    clearTimeout(this.resumeTimer); this.resumeTimer = null;
     if (this.ws) { try { this.ws.close(); } catch {} }
     this.ws = null;
     this.connected = false;

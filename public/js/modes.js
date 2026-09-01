@@ -21,7 +21,9 @@ import { icon, itemIconName, bossIconName, medalIconName } from './icons.js';
 // 攻撃の量の式。サーバー（server/battle.js の attackCells）と同じものを
 // rules.js が持っている ── 試合中に「何個送ったか」を先に見せるために引く。
 // 数字をここへ書き写さない（写した瞬間、サーバーとズレても誰も気づけなくなる）。
-import { attackCellsFor } from './rules.js';
+// onlineModeName は試合前の対戦カードが「いま何の試合か」を1語で出すために引く。
+// 表の名前を画面側で手書きすると、選択画面（rules.js）と食い違う。
+import { attackCellsFor, onlineModeName } from './rules.js';
 // ultIcon（絵文字）はもう引かない ── 奥義の絵は icons.js の ult_* から出す。
 import { fireUlt, ultColor, ultExists, DEFAULT_ULT } from './skills.js';
 // 常時つながっているチャットの socket に相乗りするための口。
@@ -106,7 +108,9 @@ function afterCountdown(mode, fn) {
 //    自分から止まる」作りになったので、remove() だけで鳴り切らない。
 //    確実に止めたいときは dom.js の cancelCountdowns() を呼んでもよい。
 function clearIntroOverlays() {
-  for (const el of document.querySelectorAll('.countdown-overlay, .oni-intro, .kami-intro')) el.remove();
+  // .vs-card は 3-2-1 に重ねて出す対戦カード（第5波）。同じ寿命のものなので
+  // 同じ掃除機に入れる ── 別々にすると、片方だけメニューの上に残る。
+  for (const el of document.querySelectorAll('.countdown-overlay, .oni-intro, .kami-intro, .vs-card')) el.remove();
 }
 
 function guestBest() { return Number(localStorage.getItem('bba_best') || 0); }
@@ -4951,6 +4955,12 @@ class OnlineMode extends VersusBase {
       })
       // OnlineMode には error の受け口が無く、サーバーが送っても無反応だった。
       .on('error', m => { if (m.error) toast(trServer(m.error), 'err', 3000); })
+      // 🔌 再接続まわりの4フレーム。第4波までサーバー（battle.js）と net.js
+      // だけが実装されていて、画面側の受け口が丸ごと無かった。
+      .on('reconnecting', m => this.onReconnecting(m))
+      .on('match_resumed', m => this.onMatchResumed(m))
+      .on('opp_unstable', m => this.onOppUnstable(m))
+      .on('opp_back', m => this.onOppBack(m))
       .on('coop_state', msg => this.onCoopState(msg))
       .on('coop_reject', msg => this.onCoopReject(msg))
       // 🚩 陣取りデュエル（協力プレイと同じサーバー権威の1盤面）
@@ -6277,6 +6287,11 @@ class OnlineMode extends VersusBase {
     if (this.ended && !revive) return;
     this.ended = false;
     closeModal();                             // clear the bracket between rounds
+    // 💬 前の試合のリアクション欄を必ず閉じる。
+    // 「再戦」は destroy を通らない（WSを保ったまま次の試合に入る）ので、
+    // ここで閉じないと reactState が開いたまま次の試合に持ち越され、
+    // 試合中のエモートが盤面ではなく**消えたモーダルの中**へ吸い込まれる。
+    clearReactionBar();
     this.inMatch = true;
     this.matchInfo = msg;
     this.matchMode = msg.mode;
@@ -6296,6 +6311,21 @@ class OnlineMode extends VersusBase {
     this.setupHud(msg.duration || MATCH_SECONDS);
     showItemBar(false);   // no boosters in PvP
     this.buildPanels(others);
+    // ⚔️ 攻撃の駆け引きの帯。アタック戦だけ（他のモードにお邪魔は飛ばないので、
+    // 出すと「0 / 0」が動かないまま盤面の高さだけ削ることになる）。
+    // buildPanels のあと・getView() の前に生やすのが肝心 ── #oppPanel の高さが
+    // 変わるので、canvas の採寸（下の getView()）より先でないと1回ぶんズレる。
+    this.atkSent = 0;
+    this.atkTaken = 0;
+    // 前のラウンド（トーナメントは destroy を挟まずに次の match_found が来る）で
+    // 予告中だったお邪魔を、配列ごと差し替えて取りこぼさない。
+    this.clearGarbageTimers();
+    if (this.matchMode === 'attack') {
+      mountAtkStrip();
+      updateAtkStrip(0, 0);
+    } else {
+      clearAtkStrip();
+    }
     if (this.isTeam) {
       $('#teamTotals').classList.remove('hidden');
       this.refreshTeamHud();
@@ -6324,13 +6354,23 @@ class OnlineMode extends VersusBase {
     updateAutoBtn();
     v.start();
     audio.playTrack(this.isRaid ? 'boss' : 'battle');
-    toast(this.isRaid ? t(`レイド開始！${this.raidBoss ? this.raidBoss.name : ''}を倒せ！`, `Raid start! Take down ${this.raidBoss ? catName(this.raidBoss) : 'the boss'}!`)
-      : this.isTeam ? t('チーム戦スタート！', 'Team battle start!') : t('マッチしました！', 'Match found!'), 'ok');
 
     // Emotes: quick reactions relayed to everyone in the match.
     const emoteBtn = $('#btnEmote');
     emoteBtn.classList.remove('hidden');
     emoteBtn.onclick = () => this.toggleEmotePicker();
+
+    // 🪪 対戦カード。3-2-1 の裏に重ねる（数字が前に出るように z-index を下げてある）。
+    // 1対1のときだけ出る ── 中で players.length を見て自分で決める。
+    const cardShown = showVersusCard(msg);
+    // 「マッチしました！」のトーストは、カードが出たときだけ**出さない**。
+    // トーストの置き場所は盤面の上端（＝カードの相手側のちょうど上）なので、
+    // 重ねると2.6秒のあいだ相手の名前が読めなくなる ── いちばん見せたいものを
+    // 自分で隠すことになる。カードは同じことを、もっと詳しく言っている。
+    if (!cardShown) {
+      toast(this.isRaid ? t(`レイド開始！${this.raidBoss ? this.raidBoss.name : ''}を倒せ！`, `Raid start! Take down ${this.raidBoss ? catName(this.raidBoss) : 'the boss'}!`)
+        : this.isTeam ? t('チーム戦スタート！', 'Team battle start!') : t('マッチしました！', 'Match found!'), 'ok');
+    }
 
     countdownOverlay(msg.countdown || 3, afterCountdown(this, () => {
       // カウントダウン中に不戦勝などで終わった試合を蘇らせない（タイマー/interval漏れ防止）
@@ -6367,7 +6407,90 @@ class OnlineMode extends VersusBase {
     setTimeout(() => picker.remove(), 6000);
   }
 
+  // ---- 🔌 再接続（server/battle.js の猶予 ＋ public/js/net.js の繋ぎ直し）----
+  //
+  // 4つとも「試合中にしか意味が無い」ので、まず inMatch / ended で門を閉める。
+  // 結果画面まで来てから遅れて届いたぶんが、閉じた盤面の上に帯を残さないため。
+
+  /** 自分が繋ぎ直しに行っている（net.js が刻みごとに1回ずつ上げる）。 */
+  onReconnecting(msg) {
+    if (this.ended || !this.inMatch) return;
+    // 何回目かは出さない。「3回目」と言われても人にできることは無く、
+    // 数字が増えるほど見捨てられた気持ちになるだけなので、状態だけを言う。
+    // 盤面は動いたままなので「置き続けてよい」ことも一緒に伝える
+    // ── ここで手を止めると、戻れたときに数十秒ぶん損をする。
+    showNetBanner(
+      `${ic('warn', 14)} <b>${t('接続が切れました', 'Connection lost')}</b>`
+      + `<span>${t('つなぎ直しています… そのまま置いて大丈夫です', 'Reconnecting… keep playing, your board is safe')}</span>`,
+      'warn'
+    );
+  }
+
+  /** 自分が試合に戻れた。 */
+  onMatchResumed(msg) {
+    if (this.ended || !this.inMatch) return;
+    flashNetBanner(`${ic('check', 14)} <b>${t('接続が戻りました', 'Back online')}</b>`);
+    audio.pickup();
+    // ⏱ 時計の合わせ直し。サーバーは猶予のあいだも試合の時計を止めていない
+    // ので、こちらの endAt がズレていたら**サーバーが正しい**。
+    // msg.elapsedMs は match.startedAt（＝match_found を送った瞬間）からの
+    // 経過で、本当の終わりは startedAt + (countdown + duration) 秒。
+    const cd = Number(msg.countdown);
+    const dur = Number(msg.duration);
+    const el = Number(msg.elapsedMs);
+    if (Number.isFinite(cd) && Number.isFinite(dur) && Number.isFinite(el)) {
+      const remain = (cd + dur) - el / 1000;
+      // すでに時間切れなら触らない ── timeUp() が自分で走って結果を待つ。
+      // 動いている時計（timerInt）があるときだけ差し替える。カウントダウン中に
+      // 復帰した場合は startTimer がまだ呼ばれておらず、endAt を書いても
+      // そのあとの startTimer が this.timeLeft から引き直して上書きするため。
+      if (remain > 0 && this.timerInt) {
+        this.timeLeft = remain;
+        this.endAt = Date.now() + remain * 1000;
+        this.updateTimerHud();
+      }
+    }
+    // 相手の点は猶予のあいだ届いていない。復帰のフレームが今の点を持って
+    // いるので、パネルをその場で合わせておく（次の opp_state を待つと、
+    // 相手が置くまで古い点が出たままになる）。
+    if (Array.isArray(msg.players)) {
+      for (const p of msg.players) {
+        if (p.isYou || typeof p.score !== 'number') continue;
+        // grid / combo は載っていないので、点だけを渡す。updateOpp は
+        // 欠けた欄には触らない（盤面のミニ表示は次の opp_state で埋まる）。
+        this.updateOpp(p.slot, { score: p.score });
+      }
+      // 2v2 の合計欄は updateOpp では動かない（onOppState が別に呼んでいる）。
+      // ここで呼ばないと、味方の点だけ猶予に入る前の数字で止まって見える。
+      if (!this.isRaid) this.refreshTeamHud();
+    }
+  }
+
+  /** 相手が猶予に入った（＝いま繋ぎ直しに行っている）。 */
+  onOppUnstable(msg) {
+    if (this.ended || !this.inMatch) return;
+    // ⚠ 秘匿: 相手が誰なのかには触れない。席と残り秒だけ。
+    const sec = Math.max(0, Math.floor(Number(msg.sec) || 0));
+    showNetBanner(
+      `${ic('warn', 14)} <b>${t('相手の接続が不安定です', 'Opponent’s connection is unstable')}</b>`
+      + `<span>${sec > 0
+        ? t(`${sec}秒ほど待ちます。戻らなければあなたの勝ちです`, `Waiting about ${sec}s — if they don’t return, you win`)
+        : t('少しだけ待っています…', 'Waiting a moment…')}</span>`,
+      'warn'
+    );
+  }
+
+  /** 相手が戻ってきた。 */
+  onOppBack(msg) {
+    if (this.ended || !this.inMatch) return;
+    flashNetBanner(`${ic('check', 14)} <b>${t('相手が戻ってきました', 'Opponent is back')}</b>`);
+  }
+
   showEmote(slot, emoji) {
+    // 決着後のリアクション欄が開いている間は、盤面の上に浮かせるのではなく
+    // そちらの吹き出しに入れる（結果モーダルが盤面を覆っているので、
+    // 浮かせても暗幕の裏で誰にも見えない）。
+    if (reactionIncoming(emoji)) return;
     this.floatEmote(emoji, slot);
     audio.pickup();
   }
@@ -6445,6 +6568,14 @@ class OnlineMode extends VersusBase {
       v.addFloatText(v.boardX + v.boardSize / 2, v.boardY + v.boardSize * 0.18 + v.cell,
         t(`お邪魔 +${cells}`, `+${cells} garbage`), '#ffd75e', 1.05);
       attackLesson('sent', { lines: result.lineCount, cells });
+      // 常設の帯にも足す。フロートテキストは1秒で消えるので「この試合で
+      // どれだけ押しているのか」は数えていないと分からなかった。
+      // ⚠️ ここで数えているのは**自己申告ぶん**。サーバーは捏造攻撃よけの
+      //    バジェット（atkCellsCap）で削ることがあるので、相手に本当に
+      //    届いた数と一致しない回がありうる。それでも出すのは
+      //    「まとめて消すほど強い」を体で覚えるための目安だから。
+      this.atkSent = (this.atkSent || 0) + cells;
+      updateAtkStrip(this.atkSent, this.atkTaken || 0);
       audio.combo(2);
     }
   }
@@ -6488,9 +6619,35 @@ class OnlineMode extends VersusBase {
   }
 
   // 💥 アタック戦: 相手からのお邪魔ブロックが降ってくる
+  //
+  // 以前はこのフレームを受けた瞬間に盤面へ積んでいたので、遊んでいる側からは
+  // 「突然ブロックが増えた」としか見えなかった（原因も量も画面に出ない）。
+  // 受信 → **予告** → 着弾 の3段に割り、予告の一瞬だけ帯を光らせる。
+  //
+  // ⚠️ 量を決めるのはサーバー。ここは受け取った cells をそのまま運ぶだけで、
+  //    rules.js の attackCellsFor は一切使わない（使うと二重の真実になる）。
   onGarbage(msg) {
     if (this.matchMode !== 'attack' || this.ended || !this.inMatch || !this.engine || !view) return;
-    const cells = this.engine.addGarbage(Math.max(1, Math.min(9, Number(msg.cells) || 2)));
+    const cells = Math.max(1, Math.min(9, Number(msg.cells) || 2));
+    const lines = Math.max(0, Math.min(8, Number(msg.lines) || 0));
+    flashIncoming(cells, lines, GARBAGE_TELEGRAPH_MS);
+    // 予告の音。エラー音・ボス攻撃音とは別の「近づいてくる」音にしておかないと、
+    // 着弾（audio.bossAttack）と区別が付かない。
+    audio.tone({ freq: 230, dur: 0.13, type: 'square', vol: 0.08, sweep: -50 });
+    this.garbageTimers = this.garbageTimers || [];
+    const id = setTimeout(() => {
+      this.garbageTimers = (this.garbageTimers || []).filter(x => x !== id);
+      this.landGarbage(cells, lines);
+    }, GARBAGE_TELEGRAPH_MS);
+    this.garbageTimers.push(id);
+  }
+
+  // 着弾。予告のあいだに試合が終わっていたら**降らせない**（もう関係ない盤面に
+  // 積むと、結果モーダルの裏でブロックが増えて見えるだけになる）。
+  landGarbage(cellCount, lines) {
+    clearIncoming();
+    if (this.ended || !this.inMatch || !this.engine || !view) return;
+    const cells = this.engine.addGarbage(cellCount);
     audio.bossAttack();
     for (const [r, c] of cells) {
       view.spawnAnim.set(r * 8 + c, view.time);
@@ -6499,13 +6656,22 @@ class OnlineMode extends VersusBase {
     view.shake = 10;
     view.addFloatText(view.boardX + view.boardSize / 2, view.boardY + view.boardSize * 0.3,
       t(`妨害 +${cells.length}！`, `+${cells.length} garbage!`), '#ff5d5d', 1.5);
+    this.atkTaken = (this.atkTaken || 0) + cells.length;
+    updateAtkStrip(this.atkSent || 0, this.atkTaken);
     // 何をされたのか（相手が何ラインまとめて消したのか）を最初の数回だけ教える。
     // 個数からの逆算は原理的にできない（3ライン＋コンボ6 と 4ライン はどちらも
     // 6個）ので、サーバーの 'garbage' が lines を載せている。載っていない古い
     // サーバーが相手なら 0 で来て「2ライン以上」までしか言わない（嘘は教えない）。
-    attackLesson('taken', { lines: Number(msg.lines) || 0, cells: cells.length });
+    attackLesson('taken', { lines, cells: cells.length });
     this.pushState();
     if (this.engine.over) this.onTopOut();
+  }
+
+  // 予告中のお邪魔を全部捨てる。試合が終わる／離脱する経路から必ず呼ぶこと。
+  clearGarbageTimers() {
+    for (const id of (this.garbageTimers || [])) clearTimeout(id);
+    this.garbageTimers = [];
+    clearIncoming();
   }
 
   onTopOut() {
@@ -6576,6 +6742,10 @@ class OnlineMode extends VersusBase {
 
   onResult(msg) {
     if (this.ended) return;
+    // 🔌 接続の帯は「試合が続いているあいだ」の話なので、決着したら必ず畳む。
+    // destroy() の clearBattleUi() まで待つと、再戦（destroy を通らない経路）
+    // では結果モーダルの上に前の試合の警告が残ったままになる。
+    clearNetBanner();
 
     // Tournament round won (not the final): stay in — the bracket and the
     // next match arrive from the server momentarily.
@@ -6605,6 +6775,8 @@ class OnlineMode extends VersusBase {
     clearTimeout(this.resultTimeout);
     clearInterval(this.stateInt);
     clearInterval(this.landInt);
+    // 予告中のお邪魔は捨てる（結果画面の裏で盤面が動くのを防ぐ）。
+    this.clearGarbageTimers();
     this.stopTimer();
     getView().inputLocked = true;
     if (msg.user) { session.user = msg.user; updateTopbar(); }
@@ -6615,14 +6787,18 @@ class OnlineMode extends VersusBase {
     // 「帯」を付けたままだと『ゴールド II帯に昇格！！』という日本語にならない
     // 文になるので落とす。帯だけが要るときは to.band.name を見ること。
     // 英語面（Promoted to Gold II!!）はもともと正しいのでそのまま。
+    //
+    // ⚠️ 昇格/降格の**トーストは出さない**（第5波で外した）。
+    //   結果モーダルの見出し直下に resultRankBlock() が「ゴールド III ▲
+    //   ゴールド II 昇格」を大きく出すようになったので、同じことを言う
+    //   トーストは重複するだけでなく、置き場所（盤面の上端＝モーダルの
+    //   ちょうど真ん中あたり）が **レート変動の数字に丸かぶり** していた。
+    //   祝いの紙吹雪と音は残す ── 気づかせる役はそちらで足りる。
     if (msg.tierChange && msg.tierChange.up) {
       setTimeout(() => {
         confettiBurst(80);
         audio.levelUp();
-        toast(t(`${msg.tierChange.to.name}に昇格！！`, `Promoted to ${msg.tierChange.to.nameEn}!!`), 'announce', 5000);
       }, 700);
-    } else if (msg.tierChange) {
-      setTimeout(() => toast(t(`${msg.tierChange.to.name}に降格…`, `Demoted to ${msg.tierChange.to.nameEn}…`), 'err', 3500), 700);
     }
     // 👑 王者撃破のお祝い。段位の昇格と重なっても潰し合わないよう、
     // 少し後ろにずらす（toast は同時3〜4件で頭打ちになる）。
@@ -6695,12 +6871,22 @@ class OnlineMode extends VersusBase {
 
     const myRating = msg.user && msg.user.stats ? msg.user.stats.rating : null;
     const tier = myRating != null ? rankOf(myRating) : null;
-    const ratingRow = msg.ratingDelta
-      ? `<div class="rs-row"><span>${t('レート変動', 'Rating')}</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}${tier ? ` ${rankBadge(myRating)}` : ''}</b></div>`
-      : '';
+    // 増減そのものは resultRankBlock() が見出しの下に大きく出すようになったので、
+    // この行は「いまいくつなのか」を出す ── 絶対値はどこにも出ていなかった数字で、
+    // 「あと何点で次の段か」を考えるにはこちらが要る。
+    // 段位が取れないとき（ゲスト・古いサーバー）だけ、従来どおり増減を出す。
+    const ratingRow = !msg.ratingDelta ? ''
+      : myRating != null
+      ? `<div class="rs-row"><span>${t('現在のレート', 'Your rating')}</span><b>${fmt(myRating)}${tier ? ` ${rankBadge(myRating)}` : ''}</b></div>`
+      : `<div class="rs-row"><span>${t('レート変動', 'Rating')}</span><b style="color:${msg.ratingDelta >= 0 ? 'var(--green)' : 'var(--red)'}">${msg.ratingDelta >= 0 ? '+' : ''}${msg.ratingDelta}</b></div>`;
 
     const m = showModal(`
       <div class="result-banner ${msg.outcome}">${banners[msg.outcome]}</div>
+      ${/* 📈 段位が動いた／レートが動いた／連勝している、を見出しのすぐ下に
+            大きく出す。以前はレート変動が .rs-row 1行に埋もれていて、
+            昇格したことに気づかないまま次の試合に行く人がいた
+            （昇格トーストは0.7秒後に出るが、同時に3〜4件出ると押し出される）。 */''}
+      ${resultRankBlock(msg)}
       ${reasonNote}
       ${championNote}
       <div class="result-stats">
@@ -6713,6 +6899,11 @@ class OnlineMode extends VersusBase {
         ${msg.rematchId && (msg.mode === 'duel' || msg.mode === 'attack') ? `<button class="btn btn-gold" id="rRematch">${t('再戦', 'Rematch')}</button>` : ''}
         <button class="btn btn-primary" id="rAgain">${this.kind === 'custom' ? t('ルームへ', 'To room') : t('もう一戦', 'Play again')}</button>
       </div>`, { dismissable: false, peekable: true });
+    // 💬 決着後のリアクション。対戦カードを出したのと同じ「向かい合う2人」の
+    // 試合だけ（レイドは味方同士、2v2は宛先が2人いて誰への一言か決まらない）。
+    if (VS_CARD_MODES.has(msg.mode) && Array.isArray(msg.players) && msg.players.length === 2) {
+      mountReactionBar(m, emoji => this.client.send({ type: 'emote', emoji }));
+    }
     m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
     m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline(this.kind); };
     const rBtn = m.querySelector('#rRematch');
@@ -6783,6 +6974,10 @@ class OnlineMode extends VersusBase {
     clearInterval(this.stateInt);
     clearInterval(this.coopInt);
     clearInterval(this.landInt);
+    // ⚔️ 第5波の表示物。予告中のお邪魔（setTimeout）を残すと、次のモードの
+    // 盤面に前の試合のブロックが降る。カード・帯・リアクション欄も畳む。
+    this.clearGarbageTimers();
+    clearBattleUi();
     if (this.landOverlay) { this.landOverlay.destroy(); this.landOverlay = null; }
     clearTimeout(this.resultTimeout);
     const dl = $('#zeroDeal'); if (dl) dl.remove();
@@ -8316,6 +8511,7 @@ function endToMenu() {
   stopAutopilot();
   stopTutorial();   // 🎓 コーチマークをメニューへ持ち越さない
   clearAtkLesson(); // 💥 攻撃の実地レッスンの帯も持ち越さない
+  clearBattleUi();  // ⚔️ 対戦カード・攻撃の帯・リアクション欄（第5波）
   // どのモードでも、3-2-1 の途中で抜けるとオーバーレイだけがメニューの上に
   // 残っていた（countdownOverlay は中断できないため）。ここで必ず片付ける。
   clearIntroOverlays();
@@ -8912,6 +9108,520 @@ function attackLesson(dir, info) {
       : t('攻撃された！ 2ライン以上まとめて消すと撃ち返せる',
         'You were attacked! Clear 2+ lines at once to strike back'), 'announce', 3000);
   }
+}
+
+// ===========================================================================
+// ⚔️ オンライン対戦を「見える」ようにする（第5波）
+// ===========================================================================
+// 遊んでいる人の側から見て、オンライン対戦は次の3つが画面に出ていなかった。
+//   ① 誰と戦っているのか … 相手パネルに「名前 (段位 R1234)」の1行だけ
+//   ② 何が飛んできたのか … お邪魔が予告なく降る（量も原因も分からない）
+//   ③ 何が起きたのか     … 結果画面がレート変動の1行で終わる
+// この節はその3つぶんの**表示だけ**を持つ。守っている約束:
+//   ・進行に触らない（engine / view.onPlace のフックを奪わない）
+//   ・サーバーへ新しいフレームを作らない（既存の 'emote' に相乗りするだけ）
+//   ・要素はすべて自分で片付ける（endToMenu の clearBattleUi が最後の砦）
+//
+// 🔒 住人の秘匿 — この節でいちばん大事なこと
+//   相手の情報を増やすほど「情報が少ない側＝住人」という手がかりになる。
+//   対戦カードは match_found の players[] に来た欄しか描かず、任意の欄
+//   （称号・ギルド・戦績）は **カードに並ぶ全員がその欄を持つときだけ** 出す。
+//   片方にしか無い欄は、値ではなく**行の有無そのもの**が正体を明かすため。
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 1. 対戦カード（3-2-1 の裏で「誰と戦うのか」を見せる）
+// ---------------------------------------------------------------------------
+
+// 任意の欄。サーバーが載せてくれた日に**勝手に出る**ように書いてある
+// （今の match_found には無いので、いまは1つも出ない）。
+// value() は必ず「文字だけ」を返すこと ── 描く直前に escapeHtml を通すので、
+// アイコン(SVG)を混ぜるとタグがそのまま画面に出る。
+const VS_CARD_EXTRAS = [
+  {
+    label: () => t('称号', 'Title'),
+    // 称号はサーバー側の既存の形（index.js の titleOf / residents.js のどちらも
+    // { id, name, color }）をそのまま受けられるようにしておく。id が付いていれば
+    // catName が英語名まで引ける ── 文字列だけで来ても壊れない。
+    value: p => {
+      const v = p.title;
+      if (typeof v === 'string') return v || null;
+      if (v && typeof v === 'object' && typeof v.name === 'string') return catName(v) || v.name;
+      return null;
+    },
+  },
+  {
+    label: () => t('ギルド', 'Guild'),
+    // ギルドはタグ（🛡️の4文字）でも名前でも来うる。文字列だけを受ける。
+    value: p => {
+      const v = p.guild;
+      if (typeof v === 'string') return v || null;
+      if (v && typeof v === 'object' && typeof v.tag === 'string') return v.tag || null;
+      return null;
+    },
+  },
+  {
+    label: () => t('直近', 'Recent'),
+    // { w, l } で来る想定。数字以外が来たら**出さない**（欄が壊れて片方だけ
+    // 消えると、それがそのまま正体の手がかりになる）。
+    value: p => {
+      const r = p.record;
+      if (!r || typeof r !== 'object') return null;
+      const w = Number(r.w), l = Number(r.l);
+      if (!Number.isFinite(w) || !Number.isFinite(l)) return null;
+      return t(`${w}勝 ${l}敗`, `${w}W ${l}L`);
+    },
+  },
+];
+
+// カードを出してよい対戦。「向かい合う2人がいて、勝敗が付く」形のものだけ。
+//   raid  … 2人でも**味方**同士（1体のボスを削る協力戦）。「対戦相手」と
+//           書いたら嘘になるので必ず外す
+//   team  … 4人なので下の players.length で落ちるが、意図を名前で残す
+//   coop / land … onMatchFound の手前で別の setup へ抜けるのでここには来ない
+const VS_CARD_MODES = new Set(['attack', 'duel', 'tourney']);
+
+let vsCardTimers = [];
+
+/** 対戦カードを畳む（3-2-1 の中断・離脱・メニュー復帰のどこからでも呼べる）。 */
+function clearVersusCard() {
+  for (const id of vsCardTimers) clearTimeout(id);
+  vsCardTimers = [];
+  for (const el of document.querySelectorAll('.vs-card')) el.remove();
+}
+
+// カード1枚ぶん。**両者まったく同じ関数から作る**のが肝心で、
+// 「自分の側だけ豪華」にすると相手側の情報の少なさが目立ってしまう。
+function vsCardSideHtml(p, extras, side) {
+  const rating = Number.isFinite(p.rating) ? p.rating : null;
+  const level = Number.isFinite(p.level) ? p.level : null;
+  // レートが無いのはゲスト。段位の欄を消すのではなく「―」で埋める ──
+  // 行が消えると、カードの高さが左右で変わって不揃いになる。
+  const rank = rating != null
+    ? rankBadge(rating)
+    : `<span class="vsc-unranked">${t('段位なし', 'Unranked')}</span>`;
+  return `
+    <div class="vsc-side vsc-${side}">
+      <div class="vsc-who">${side === 'me' ? t('あなた', 'YOU') : t('対戦相手', 'OPPONENT')}</div>
+      <div class="vsc-name">${escapeHtml(String(p.name == null ? '?' : p.name))}</div>
+      <div class="vsc-rank">${rank}</div>
+      <div class="vsc-meta">
+        <span>Lv <b>${level != null ? level : '―'}</b></span>
+        <span>R <b>${rating != null ? rating : '―'}</b></span>
+      </div>
+      ${extras.map(x => `<div class="vsc-extra"><span>${x.label()}</span><b>${escapeHtml(String(x.value(p)))}</b></div>`).join('')}
+    </div>`;
+}
+
+/**
+ * 試合開始の 3-2-1 に重ねて、両者を並べたカードを出す。
+ *
+ * @param {object} msg  match_found のフレームそのもの
+ * @returns {boolean}   出したかどうか
+ *
+ * 3人以上（2v2・レイド・トーナメントの観客込み）では出さない。並べる相手が
+ * 増えるほど1枚が小さくなり、375x667 では読めない大きさになるため
+ * ── そちらは従来どおり相手パネルの担当。
+ *
+ * 置き場所は body 直下の position:fixed。dom.js の countdownOverlay は
+ * z-index 40 の別要素なので、こちらを 39 にして数字を前に出す。カードの
+ * 真ん中は数字のために空けてある（.vsc-gap）。
+ */
+function showVersusCard(msg) {
+  clearVersusCard();
+  if (!VS_CARD_MODES.has(msg && msg.mode)) return false;
+  const players = Array.isArray(msg && msg.players) ? msg.players : [];
+  if (players.length !== 2) return false;
+  const me = players.find(p => p.isYou) || players[0];
+  const foe = players.find(p => p !== me);
+  if (!foe) return false;
+  // 🔒 全員が持っている欄だけを出す（節の冒頭のコメント参照）。
+  const extras = VS_CARD_EXTRAS.filter(x => players.every(p => {
+    const v = x.value(p);
+    return v != null && v !== '';
+  }));
+  const modeName = onlineModeName(msg.mode);
+
+  const el = document.createElement('div');
+  el.className = 'vs-card';
+  el.innerHTML = `
+    <div class="vsc-inner">
+      ${/* 見出しは必ず「全幅の行 → その中で中央寄せの丸バッジ」の2枚重ねにする。
+            バッジ自身を全幅の flex アイテムにすると、横持ち（左右に並べる指定）で
+            枠だけが画面いっぱいに伸びて帯に見えてしまう。 */''}
+      ${modeName ? `<div class="vsc-head"><span class="vsc-mode">${escapeHtml(modeName)}</span></div>` : ''}
+      ${vsCardSideHtml(foe, extras, 'foe')}
+      <div class="vsc-gap"><span class="vsc-vs">VS</span></div>
+      ${vsCardSideHtml(me, extras, 'me')}
+    </div>`;
+  document.body.appendChild(el);
+
+  // 3-2-1 と同じ長さで消す。countdownOverlay は「数字 n 回 × 900ms ＋ GO! 600ms」
+  // なので、GO! と入れ違いに消えるよう終わりから少し手前でフェードを始める。
+  const n = Math.max(1, Math.min(10, Number(msg.countdown) || 3));
+  const life = n * 900;
+  vsCardTimers.push(setTimeout(() => el.classList.add('out'), Math.max(300, life - 250)));
+  vsCardTimers.push(setTimeout(() => el.remove(), life + 450));
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// 2. 攻撃の駆け引きの帯（.atk-strip）
+// ---------------------------------------------------------------------------
+// アタック戦だけに出る1行。ふだんは「撃った数／受けた数」を数えているだけで、
+// お邪魔が飛んできた瞬間だけ**予告**に化ける。1つの帯に兼ねさせたのは高さの
+// ため ── 375x667 では盤面が 210〜260px しかなく、帯を2本足すと盤面が縮む。
+
+// 着弾までの猶予。予告は「読む時間」と「身構える時間」の両方が要るので、
+// 短すぎると点滅にしか見えず、長すぎると自分の盤面とサーバーの認識がずれる。
+// ⚠️ これは**表示のための遅延**であって、量を決めるのはサーバー。
+//    猶予の間に試合が終わったら、そのお邪魔は落とさずに捨てる（もう関係ない）。
+const GARBAGE_TELEGRAPH_MS = 700;
+
+function atkStripEl() { return document.querySelector('.atk-strip'); }
+
+function clearAtkStrip() {
+  const el = atkStripEl();
+  if (el) el.remove();
+}
+
+/**
+ * 帯を相手パネルの中に生やす。#oppPanel は index.html の持ち物なので、
+ * 中身を作り替えるのではなく**子を1つ足すだけ**にしてある
+ *（buildPanels が触るのは #oppCards の innerHTML だけなので衝突しない）。
+ */
+function mountAtkStrip() {
+  clearAtkStrip();
+  const panel = $('#oppPanel');
+  if (!panel) return null;
+  const el = document.createElement('div');
+  el.className = 'atk-strip';
+  el.innerHTML = `
+    <span class="as-out" title="${t('送ったお邪魔', 'Garbage sent')}">${ic('relic_atk', 12)} <b>0</b></span>
+    <span class="as-warn" aria-live="polite"></span>
+    <span class="as-in" title="${t('受けたお邪魔', 'Garbage taken')}">${ic('rubble', 12)} <b>0</b></span>`;
+  panel.appendChild(el);
+  return el;
+}
+
+/** 累計の書き換え（sent / taken はモード側が持っている）。 */
+function updateAtkStrip(sent, taken) {
+  const el = atkStripEl();
+  if (!el) return;
+  const o = el.querySelector('.as-out b');
+  const i = el.querySelector('.as-in b');
+  if (o) o.textContent = sent;
+  if (i) i.textContent = taken;
+  el.classList.toggle('as-lead', sent > taken);
+}
+
+/**
+ * 予告を灯す。ms のあいだだけ帯が赤く光り、内側のバーが縮んで着弾を数える。
+ * lines は「相手が何ラインまとめて消したか」（サーバーが載せてくれた場合のみ）。
+ */
+function flashIncoming(cells, lines, ms) {
+  const el = atkStripEl();
+  if (!el) return;
+  const warn = el.querySelector('.as-warn');
+  if (!warn) return;
+  el.classList.add('incoming');
+  // 個数からライン数は逆算できない（3ライン＋コンボ6 と 4ライン はどちらも
+  // 6個）。載っていないときは量だけを言う ── 嘘は教えない。
+  warn.innerHTML = `${ic('warn', 12)} <b>+${cells}</b>${lines >= 2 ? ` <small>${t(`${lines}ライン`, `${lines} lines`)}</small>` : ''}
+    <i class="as-fuse" style="animation-duration:${ms}ms"></i>`;
+}
+
+/** 着弾（または試合終了）で予告を消す。 */
+function clearIncoming() {
+  const el = atkStripEl();
+  if (!el) return;
+  el.classList.remove('incoming');
+  const warn = el.querySelector('.as-warn');
+  if (warn) warn.innerHTML = '';
+}
+
+// ---------------------------------------------------------------------------
+// 3. 決着後のリアクション
+// ---------------------------------------------------------------------------
+// 文字入力は置かない（暴言対策）。定型5つだけ、しかも短い時間だけ開く。
+//
+// ■ 既存のエモートに相乗りする
+//   試合中のエモート（#btnEmote → client.send({type:'emote'})）がそのまま
+//   使える…と思ったが、server/battle.js の case 'emote' は
+//   `if (!match || match.ended || !me) return;` で**決着後を弾く**。
+//   つまり今のサーバーでは、送っても相手には届かない（捨てられるだけで、
+//   レート制限にも当たらないので害はない）。それでも送るのは、サーバーが
+//   決着後の中継を開いた日に**クライアントを直さずそのまま繋がる**ため。
+//   → 中継してほしい旨は forOthers に出してある。
+//
+// ■ 相手の返事について（正直に書いておく）
+//   住人（server/battle.js の scheduleEmote）も match.ended で止まるので、
+//   いまは誰からも返事が来ない。それでは「送っても無反応」で終わるので、
+//   **返事が来なかったときだけ**クライアントが返す。
+//   ⚠️ ここで大事なのは「相手が誰であっても同じ確率・同じ間で返る」こと。
+//      クライアントは相手が住人かどうかを知らない（知ってはいけない）ので、
+//      この作りは構造的に秘匿を破れない。逆に「住人にだけ返事を用意する」
+//      実装にすると、その瞬間に返事の有無が正体の手がかりになる。
+const POST_REACTIONS = [
+  // emoji は server/battle.js の EMOJIS ホワイトリストの中から選ぶこと
+  // （外れた絵文字は '👍' に丸められて、意味が変わってしまう）。
+  { emoji: '👍', label: () => t('ナイス！', 'Nice!') },
+  { emoji: '🔥', label: () => t('つよい…', 'Too strong…') },
+  { emoji: '😭', label: () => t('惜しい！', 'So close!') },
+  { emoji: '🎉', label: () => t('またやろう', 'GG, again!') },
+  { emoji: '👏', label: () => t('ありがとう', 'Thanks!') },
+];
+
+// 開いている時間。長すぎると結果画面が「返事待ち」の場になってしまうので、
+// ひと呼吸ぶんだけ。
+const REACT_WINDOW_MS = 14000;
+// 連打よけ。サーバーのレート制限（5秒に3回）より内側に置く。
+const REACT_COOLDOWN_MS = 2000;
+
+let reactState = null;   // { root, timers:[], gotReply, closed }
+
+function clearReactionBar() {
+  if (!reactState) return;
+  for (const id of reactState.timers) clearTimeout(id);
+  reactState = null;
+  for (const el of document.querySelectorAll('.react-bar')) el.remove();
+}
+
+/** リアクション欄が開いているか（試合中のエモート表示と行き先を分けるため）。 */
+function reactionBarOpen() { return !!(reactState && !reactState.closed); }
+
+/** 吹き出しを1つ置く。who は 'me' か 'foe'。 */
+function reactionBubble(who, emoji, text) {
+  if (!reactState) return;
+  const lane = reactState.root.querySelector(`.rx-lane.rx-${who}`);
+  if (!lane) return;
+  const b = document.createElement('div');
+  b.className = 'rx-bubble';
+  // emoji は POST_REACTIONS 由来か、サーバーのホワイトリスト由来の1文字。
+  // それでも textContent で入れる（将来ここに別の経路がつながっても安全なように）。
+  const span = document.createElement('span');
+  span.textContent = emoji;
+  b.appendChild(span);
+  if (text) {
+    const s = document.createElement('small');
+    s.textContent = text;
+    b.appendChild(s);
+  }
+  lane.appendChild(b);
+  while (lane.children.length > 2) lane.firstChild.remove();
+}
+
+/** 相手から本当に届いたリアクション（サーバーが中継を開いた日に効く）。 */
+function reactionIncoming(emoji) {
+  if (!reactionBarOpen()) return false;
+  reactState.gotReply = true;
+  const known = POST_REACTIONS.find(r => r.emoji === emoji);
+  reactionBubble('foe', emoji, known ? known.label() : '');
+  audio.pickup();
+  return true;
+}
+
+/**
+ * 結果モーダルの中にリアクション欄を作る。
+ * @param {HTMLElement} modal   showModal が返した要素
+ * @param {(emoji:string)=>void} send  実際の送信（モード側が client を持っている）
+ */
+function mountReactionBar(modal, send) {
+  clearReactionBar();
+  if (!modal) return null;
+  const root = document.createElement('div');
+  root.className = 'react-bar';
+  root.innerHTML = `
+    <div class="rx-title">${t('相手にひとこと', 'Say something')}</div>
+    <div class="rx-lanes"><div class="rx-lane rx-foe"></div><div class="rx-lane rx-me"></div></div>
+    <div class="rx-btns"></div>`;
+  const btns = root.querySelector('.rx-btns');
+  for (const r of POST_REACTIONS) {
+    const b = document.createElement('button');
+    b.className = 'rx-btn';
+    b.type = 'button';
+    // 絵文字＋定型文。textContent で組むので、文言に何が入っても HTML にならない。
+    const e = document.createElement('span');
+    e.className = 'rx-emoji';
+    e.textContent = r.emoji;
+    const l = document.createElement('small');
+    l.textContent = r.label();
+    b.appendChild(e);
+    b.appendChild(l);
+    b.onclick = () => {
+      if (!reactState || reactState.closed) return;
+      audio.click();
+      try { send(r.emoji); } catch (err) { console.warn('reaction send failed:', err && err.message); }
+      reactionBubble('me', r.emoji, r.label());
+      reactState.lastSent = r.emoji;
+      // 連打よけ。押せない見た目にしておかないと「効いていない」と思われる。
+      for (const x of btns.querySelectorAll('.rx-btn')) x.disabled = true;
+      reactState.timers.push(setTimeout(() => {
+        if (!reactState || reactState.closed) return;
+        for (const x of btns.querySelectorAll('.rx-btn')) x.disabled = false;
+      }, REACT_COOLDOWN_MS));
+      scheduleReactionReply();
+    };
+    btns.appendChild(b);
+  }
+  // 報酬欄の下（＝ボタン列の手前）に差し込む。結果の数字より前に出すと、
+  // いちばん見たいもの（勝敗とレート）がリアクションに押し下げられる。
+  const anchor = modal.querySelector('.modal-buttons');
+  if (anchor) anchor.parentNode.insertBefore(root, anchor);
+  else modal.appendChild(root);
+
+  reactState = { root, timers: [], gotReply: false, closed: false, lastSent: null };
+  // 受付終了。畳むだけで、結果画面そのものはそのまま残る。
+  reactState.timers.push(setTimeout(() => {
+    if (!reactState) return;
+    reactState.closed = true;
+    root.classList.add('out');
+    reactState.timers.push(setTimeout(() => { if (reactState) reactState.root.remove(); }, 400));
+  }, REACT_WINDOW_MS));
+  return root;
+}
+
+// 返事。**本物が来ていないときだけ**返す（節の冒頭のコメント参照）。
+// 間と確率を散らすのは、毎回同じ 1.2 秒で同じ絵が返ると仕掛けが見えるから。
+function scheduleReactionReply() {
+  if (!reactState) return;
+  const delay = 800 + Math.random() * 1600;
+  const id = setTimeout(() => {
+    if (!reactionBarOpen() || reactState.gotReply) return;
+    if (Math.random() >= 0.8) return;   // いつも返るとかえって嘘くさい
+    // 送ったものと**同じ**は返さない。オウム返しは会話に見えないうえ、
+    // 「送った絵がそのまま返ってくる」＝仕掛けが一目で分かってしまう。
+    const pool = POST_REACTIONS.filter(x => x.emoji !== reactState.lastSent);
+    const r = pool[Math.floor(Math.random() * pool.length)];
+    if (!r) return;
+    reactState.gotReply = true;
+    reactionBubble('foe', r.emoji, r.label());
+    audio.pickup();
+  }, delay);
+  reactState.timers.push(id);
+}
+
+// ---------------------------------------------------------------------------
+// 4. 結果画面の「大きく見せる」ぶん
+// ---------------------------------------------------------------------------
+
+/**
+ * 段位が動いた／レートが動いた／連勝している、を結果の見出しの直下に置く。
+ * 出典はすべて result フレーム:
+ *   msg.tierChange … { up, from, to }（from/to は { min, icon, name, nameEn }）
+ *   msg.ratingDelta … 符号つきの増減
+ *   msg.rewards.streak … 連勝数（server/index.js の applyGameResult が返す）
+ * どれも来ない試合（フレンド戦・トーナメント途中）では空文字を返す。
+ */
+function resultRankBlock(msg) {
+  const tc = msg.tierChange;
+  const delta = Number(msg.ratingDelta) || 0;
+  const streak = Math.max(0, Math.floor(Number(msg.rewards && msg.rewards.streak) || 0));
+  let out = '';
+
+  if (tc && tc.to) {
+    const up = !!tc.up;
+    // アイコン名はサーバーが ranks.js の band.icon をそのまま送ってくる。
+    const face = (tier, size) => `${tier && tier.icon ? icon(tier.icon, { size }) : ''}<span>${escapeHtml(t(tier && tier.name || '', tier && tier.nameEn || ''))}</span>`;
+    out += `
+      <div class="result-tier ${up ? 'up' : 'down'}">
+        <div class="rt-word">${up ? t('昇格', 'PROMOTED') : t('降格', 'DEMOTED')}</div>
+        <div class="rt-line">
+          <span class="rt-from">${face(tc.from, 20)}</span>
+          <span class="rt-arrow">${up ? '▲' : '▼'}</span>
+          <span class="rt-to">${face(tc.to, 34)}</span>
+        </div>
+      </div>`;
+  }
+
+  if (delta) {
+    out += `<div class="result-delta ${delta >= 0 ? 'up' : 'down'}">${delta >= 0 ? '+' : ''}${delta}<small>${t('レート', 'RATING')}</small></div>`;
+  }
+
+  // 連勝は「勝った回」にしか意味がない（負けた回の streak は 0 に戻っている）。
+  if (streak >= 2) {
+    out += `<div class="result-streak">${ic('fire', 16)} ${t(`${streak}連勝中`, `${streak} wins in a row`)}</div>`;
+  }
+  return out;
+}
+
+// メニューへ戻るときに、この節が作ったものを全部畳む。
+// position:fixed のカードと、#oppPanel に生やした帯は、放っておくと次の
+// 画面の上に残る（結果モーダルの中のリアクション欄は closeModal で消えるが、
+// タイマーは残るので必ずここも通す）。
+function clearBattleUi() {
+  clearVersusCard();
+  clearAtkStrip();
+  clearReactionBar();
+  clearNetBanner();
+}
+
+// ===========================================================================
+// 🔌 接続が切れているあいだの見え方（第5波・統合フェーズ）
+// ===========================================================================
+// サーバーは「切断＝即敗北」をやめ、猶予（server/battle.js の
+// RECONNECT_GRACE_MS = 25秒）のあいだ席を残すようになった。net.js も
+// そのあいだ黙って繋ぎ直す。ところが**画面側に受け口が1つも無かった**ので、
+// 本人には何も起きていないように見えていた ── 盤面はローカルで回り続けるため、
+//   ・置いた手がサーバーに届いていないこと
+//   ・戻ってこられたのか、もう負けているのか
+// のどちらも分からないまま最大15秒が過ぎる。相手側だけが battle.js の
+// 「つなぎ」の announce でトーストを見ている、という片側だけの状態だった。
+//
+// ここで4つのフレームを受ける:
+//   reconnecting  {attempt, waitMs} … net.js。自分が繋ぎ直しに行っている
+//   match_resumed {elapsedMs, ...}  … battle.js。自分が試合に戻れた
+//   opp_unstable  {slot, sec}       … battle.js。相手が猶予に入った
+//   opp_back      {slot}            … battle.js。相手が戻ってきた
+//
+// ⚠ 住人の秘匿: 文言に「人間だから切れた」と読める言い方をしない
+//   （battle.js 側の同じ注意書きと対）。出すのは席（slot）と残り秒だけで、
+//   相手が誰なのかには一切触れない。
+const NET_BANNER_ID = 'netBanner';
+
+function netBannerEl() { return document.getElementById(NET_BANNER_ID); }
+
+/**
+ * 盤面の上端に細い帯を1本出す。トーストではなく帯なのは、状態が続いている
+ * あいだ**出しっぱなしにする**必要があるため（トーストは数秒で消えるので、
+ * 「まだ切れている」のか「もう戻った」のかが読めない）。
+ * kind: 'warn'（切れている・待っている） / 'ok'（戻った）
+ */
+function showNetBanner(html, kind = 'warn') {
+  const host = $('#screen-game');
+  if (!host) return null;
+  let el = netBannerEl();
+  if (!el) {
+    el = document.createElement('div');
+    el.id = NET_BANNER_ID;
+    el.className = 'net-banner';
+    el.setAttribute('aria-live', 'polite');
+    host.appendChild(el);
+  }
+  el.classList.toggle('ok', kind === 'ok');
+  el.innerHTML = html;
+  return el;
+}
+
+function clearNetBanner() {
+  const el = netBannerEl();
+  if (el) el.remove();
+  clearTimeout(netBannerTimer);
+  netBannerTimer = null;
+}
+let netBannerTimer = null;
+
+/** 少しだけ出してから自分で消える帯（「戻りました」用）。 */
+function flashNetBanner(html, ms = 2600) {
+  showNetBanner(html, 'ok');
+  clearTimeout(netBannerTimer);
+  netBannerTimer = setTimeout(() => {
+    netBannerTimer = null;
+    const el = netBannerEl();
+    // 消すのは「自分が出したものがまだ出ているとき」だけ。あいだに
+    // 新しい警告（また切れた）が来ていたら、それを消してはいけない。
+    if (el && el.classList.contains('ok')) el.remove();
+  }, ms);
 }
 
 // ===========================================================================

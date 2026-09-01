@@ -83,6 +83,38 @@ export function issueToken(userId) {
   return `v2.${payload}.${sign(payload)}`;
 }
 
+// 🔑 ログイン回数と、最後にログインした時刻。
+//
+// これまで「いつオンラインになったか」を示す値はどこにも無かった。
+// user.lastSeen は battle.js が **最後の接続が切れたとき** に書くので、
+// 繋ぎっぱなしの人は 0 のまま／落ちた人は落ちた時刻、という「終わり」しか
+// 残らない。始まりの側が1つも無いと、管理画面は「最近来ていない人」しか
+// 判定できず、「今日来た人」を数えられない。
+//
+// ■ なぜ issueToken の中で数えないのか
+// issueToken は /api/login と /api/register の両方から呼ばれる。中で数えると
+// 登録が必ずログイン1回として混ざり、「登録初日は必ず1回多い」ズレが全員に
+// 入る（しかも後から分離できない）。数えたいのは『戻ってきた回数』なので、
+// 呼ぶ側＝/api/login の成功枝だけから明示的に呼ぶ。
+//
+// ■ 上限
+// 増えるのは数値2つだけで、配列は持たない（在席区間の履歴は別の担当が
+// stats.online に積む）。db.json は保存のたびに丸ごと書き出されるので、
+// ここに「ログインの一覧」を足してはいけない。
+export function recordLogin(user) {
+  if (!user) return 0;
+  // 復元直後や旧スキーマのレコードには stats が無いことがある。
+  // ここで作っておかないと `s.logins` の代入で落ちる（＝ログインできない）。
+  const s = user.stats || (user.stats = {});
+  const prev = Number(s.logins);
+  s.logins = (Number.isFinite(prev) && prev > 0 ? Math.floor(prev) : 0) + 1;
+  s.lastLoginAt = Date.now();
+  // 呼び出し側の grantDaily は「今日ぶんを既に配った」ときに保存せず返るので、
+  // ここで保存しないと2回目以降のログインが数えられたまま消える。
+  saveDb();
+  return s.logins;
+}
+
 // Verify a v2 token's signature and age. Returns { userId, createdAt } or null.
 export function parseToken(token) {
   if (typeof token !== 'string' || !token.startsWith('v2.')) return null;

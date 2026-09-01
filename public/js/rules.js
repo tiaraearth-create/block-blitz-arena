@@ -108,8 +108,11 @@ export const ONLINE_MODES = [
     kind: 'royale',
     icon: 'mode_royale',
     name: () => t('バトルロイヤル（100人）', 'Battle Royale (100 players)'),
-    line: () => t('100人で最後の1人を目指す。ここも2ライン同時消しで誰かを攻撃できる。',
-      '100 players, last one standing. Clearing 2+ lines attacks someone here too.'),
+    // 脱落しても観戦に移れる（server/battle.js の royale_result が
+    // spectate:true を返し、生き残りの盤面が royale_state で届き続ける）。
+    // 「脱落＝画面が終わる」と思って抜けてしまう人がいたので1行に足す。
+    line: () => t('100人で最後の1人を目指す。2ライン同時消しで誰かを攻撃できる。脱落してもそのまま観戦できる。',
+      '100 players, last one standing. Clearing 2+ lines attacks someone here too — and you can keep watching after you are out.'),
     rated: false,
   },
   {
@@ -132,8 +135,12 @@ export const ONLINE_MODES = [
     kind: 'custom',
     icon: 'mode_room',
     name: () => t('カスタムルーム', 'Custom Room'),
-    line: () => t('4文字の合言葉で友達と対戦。ルールはホストが決める。',
-      'Play with friends using a 4-letter code. The host picks the rules.'),
+    // 定員は server/battle.js の ROOM_MAX（=8）。対戦席（1v1なら2・2v2なら4）
+    // からあふれた人は観戦席に座る ── 以前は対戦席ぶんしか入れず、5人で
+    // 集まると3人が入室すらできなかった。ここは「何人で集まれるか」を
+    // 知りたくて読む行なので、席の内訳より先に定員を書く。
+    line: () => t('4文字の合言葉で最大8人まで集合。対戦席からあふれた人は観戦席で見られる。ルールはホストが決める。',
+      'Gather up to 8 friends with a 4-letter code. Anyone past the playing seats watches from the stands. The host picks the rules.'),
     rated: false,
   },
 ];
@@ -141,6 +148,21 @@ export const ONLINE_MODES = [
 export function onlineModeLine(kind) {
   const m = ONLINE_MODES.find(x => x.kind === kind);
   return m ? m.line() : '';
+}
+
+/**
+ * プレイヤーに見せるモード名（内部名 → 表の名前）。
+ *
+ * 試合前の対戦カード（modes.js の showVersusCard）が「いま何の試合なのか」を
+ * 1語で出すために引く。名前を画面側で手書きすると、ここの表と2つになった
+ * 瞬間に「選択画面ではクラシック、試合前はデュエル」という食い違いが出る
+ * ── 内部名 'duel' がそのまま出ていたのが元の状態だった。
+ * 知らない kind（AI戦の 'ai' など）では空文字を返すので、呼ぶ側は
+ * 「あれば出す」で書けばよい。
+ */
+export function onlineModeName(kind) {
+  const m = ONLINE_MODES.find(x => x.kind === kind);
+  return m ? m.name() : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -221,8 +243,51 @@ export function rulesSections() {
           'Every 3 combo adds one more block, up to +3. A single hit sends at most 9.'),
         t('お邪魔ブロックは消せません。消えるのは、それを含む列を8マスすべて埋めたときだけです。',
           'Garbage blocks cannot be removed on their own — only by completing a full line that contains them.'),
+        // 第5波で足した予告帯（modes.js の warnIncoming / .atk-strip）の説明。
+        // 画面に出るものは、遊び方にも書いておかないと「何の帯？」で終わる。
+        t('相手が撃つと、着弾の直前に盤面の上の帯で「お邪魔 +N」と予告が出ます。撃った数・受けた数もその帯で数えています。',
+          'When your opponent fires, a strip above the board warns you (“+N garbage”) just before it lands. The same strip tallies what you have sent and taken.'),
         t('「クラシック」と「2v2」には攻撃がありません。同じピースが配られる純粋なスコア勝負です。',
           'Classic and 2v2 have no attacks — same pieces for everyone, highest score wins.'),
+      ],
+    },
+    // -----------------------------------------------------------------------
+    // オンライン対戦まわりの「知らないと損をする」話
+    //
+    // ルール（何をすると点が入るか）ではなく**場の作法**をここにまとめる。
+    // 第3波・第4波で作りが変わったのに、変わったことがどこにも書かれて
+    // いなかった3件が入り口:
+    //   ・脱落／あふれても観戦できるようになった（前は画面が終わるだけ）
+    //   ・カスタムルームが8人になった（前は対戦席ぶんしか入れなかった）
+    //   ・通信が切れても席が少し残るようになった
+    // -----------------------------------------------------------------------
+    {
+      id: 'online',
+      icon: 'spectate',
+      title: t('オンライン対戦の作法', 'Playing online'),
+      rows: [
+        // 出典: server/battle.js の royale_result（spectate）と
+        //       roomWatchExtra（watch / watchable）
+        t('バトルロイヤルは脱落しても終わりではありません。そのまま残った人の盤面を観戦できます。',
+          'Getting knocked out of Battle Royale is not the end — you keep watching the survivors play.'),
+        // 出典: server/battle.js の ROOM_MAX（=8）と reseat()
+        t('カスタムルームは1部屋8人まで。対戦席（1v1なら2人・2v2なら4人）からあふれた人は観戦席に座り、試合をそのまま見られます。',
+          'A custom room holds 8. Anyone past the playing seats (2 for 1v1, 4 for 2v2) sits in the stands and watches the match live.'),
+        t('ホストは席をいつでも入れ替えられます。交代で遊ぶときは、待っている人が観戦席で見ていられます。',
+          'The host can move people between seats at any time, so whoever is waiting their turn can watch instead of sitting out.'),
+        // ⚠️ 再接続の猶予は別担当の実装。**入らなかった場合に嘘にならない**
+        //    書き方にすること、という取り決めがあるので、
+        //      ・変わらない土台（離脱＝敗北／戻らなければ敗北）を先に断言し、
+        //      ・救済は「〜できる場合があります」＋条件つき
+        //      ・運営が切っていることがある（RECONNECT_GRACE_PER_DAY=0 で
+        //        本当に無効化できる env なので、これは方便ではなく事実）
+        //    の3段で書く。こうしておけば、機能が無い環境でも文が嘘にならない。
+        t('自分から抜けるのは敗北です（相手の不戦勝）。これは変わりません。',
+          'Leaving on purpose is a loss and hands your opponent the win. That never changes.'),
+        t('回線が落ちただけなら、すぐ戻れば同じ試合に復帰できる場合があります。アカウントでログインしているときだけで、待てる時間にも1日の回数にも上限があり、間に合わなければ従来どおり敗北です（この救済は運営の設定で無効になっていることがあります）。',
+          'If you merely drop offline, you may be able to rejoin the same match — signed-in accounts only, with a short hold and a daily limit. Miss the window and it is still a loss. (Operators can turn this rescue off entirely.)'),
+        t('猶予のあいだも試合の時計は止まりません。戻ったときには、その間に進んだぶんの差がついています。',
+          'The match clock keeps running while you are away, so you come back to whatever gap opened up.'),
       ],
     },
     {
