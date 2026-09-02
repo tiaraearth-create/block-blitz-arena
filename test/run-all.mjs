@@ -67,6 +67,12 @@ const TESTS = [
   // rules と同じくサーバー不要の安い組に置く。
   'ranks.test.mjs',
   'workshop.test.mjs',
+  // 📴 圏外でもアカウントが残って見えること／その控えで管理者になれないこと。
+  // サーバーを立てず、localStorage と最小の DOM を用意して dom.js を実際に
+  // 動かすだけなので、安い組に置く（offline.test.mjs は本物のサーバーと
+  // 本物の sw.js を回すので重い組。見ているものも別: あちらは「起動一式が
+  // 控えにあるか」、こちらは「自分の情報の控えと、その権限の扱い」）。
+  'offlineauth.test.mjs',
   'viewresize.test.mjs',
   'i18n.test.mjs',
   'clientwiring.test.mjs',
@@ -79,6 +85,10 @@ const TESTS = [
   'zero-session.test.mjs',
   'crowd.test.mjs',
   'ranking-ai.test.mjs',
+  // 🌍 世界の辻褄（表示オンライン人数 ↔ ランキングの行数 ↔ にぎわいの札 ↔
+  // 発言の速さ）。ranking-ai が「1人ぶんの数字が生きているか」を見るのに対し、
+  // こちらは「人数と他の数字が食い違っていないか」を見る。サーバー不要の安い組。
+  'worldconsistency.test.mjs',
   // 🗒 住人の戦績が「実際に起きたこと」を映すか（人間が勝つと本当に敗が増える）。
   // ranking-ai と表裏なので隣に置く ── あちらは「計算で作る基準値」が生きて
   // いることを、こちらは「その上に乗る実記録」を見る。サーバー不要の安い組。
@@ -96,6 +106,10 @@ const TESTS = [
   'gacha.test.mjs',
   'inventory.test.mjs',
   'useredit.test.mjs',
+  // 🔓 隠し要素（神／創造神／幽霊屋敷）の解放。誤爆しない合図（純ロジック）＋
+  // アカウント保存・端末またぎ・復元の合流をサーバーで通す。復元まで見るので
+  // persist / useredit と同じ組に置く。
+  'unlocks.test.mjs',
   'security.test.mjs',
   // 🔌 切断の猶予（戻れる／戻らなければ従来どおり負ける／別人は席を取れない）。
   // 「敗北とEloの回避」を塞いだ門を再接続の名目で開け直していないかを見るので、
@@ -108,6 +122,11 @@ const TESTS = [
   // 間違えると個人の行動履歴の流出になるので、security / secrecy と同じ組に置く
   // ── どれも「返してはいけないものを返していないか」を見るテスト。
   'adminstats.test.mjs',
+  // 👀 いま誰がオンラインか（/api/admin/online）。名前つきの現在地そのものなので、
+  // 見せてよい相手を間違えたら即流出。adminstats の隣に置く ── あちらが
+  // 「いつオンラインだったか（履歴）」を、こちらが「いま誰が居るか」を見る。
+  // 実WSで数人つないで対戦が始まるまで待つので、実時間で20秒ほどかかる。
+  'adminonline.test.mjs',
   // 「ソロを押してすぐ終了」の連投で稼げないこと＋1日の上限。
   // security と同じく「配ってはいけないものを配っていないか」を見るので隣に置く。
   'farming.test.mjs',

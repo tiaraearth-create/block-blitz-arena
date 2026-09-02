@@ -627,6 +627,9 @@ function newUser(username, password, role = 'user') {
       //（1 にしておくと初日だけ2回ぶん数えてしまう）。
       dailyLogins: 0,
       history: [],
+      // 🔓 隠し要素（神／創造神／幽霊屋敷）の解放。文字列の配列なのは
+      // sanitize.js が 'ghost' という**キー**を落とすため（UNLOCK_IDS 参照）。
+      unlocks: [],
     },
     owned: [...DEFAULT_OWNED],
     // スターターのブースター。ゲスト（modes.js）は item_mini を含む4種を持って
@@ -655,6 +658,53 @@ function newUser(username, password, role = 'user') {
 // ここはその倍以上に置く ── 正常に動いている記録側のデータを、こちらが
 // 黙って削ってしまわないため。
 const ONLINE_SPANS_HARD_MAX = 400;
+
+// ---------------------------------------------------------------------------
+// 🔓 隠し要素の解放（user.stats.unlocks）
+// ---------------------------------------------------------------------------
+//
+// これまで解放状態は localStorage（bba_kami / bba_souzou / bba_ghost）にしか
+// 無く、**端末を変えると消えていた**。PCで隠しコマンドを打った人がスマホで
+// 遊ぶと 神/創造神/幽霊屋敷 がまた消える ── 一度きりの発見が端末ごとに
+// リセットされるのは、隠し要素としていちばん残念な壊れ方だった。
+// ログインしている人はアカウント側に持たせて、どの端末でも開いたままにする。
+//
+// ■ なぜ「配列」で、オブジェクトではないのか（重要・踏むと必ずハマる）
+// server/sanitize.js の SECRET_KEYS に **'ghost' が入っている**。あれは
+// 住人（ゴーストギルド等）の正体を隠すための関門で、非管理者へ返す JSON から
+// `ghost` という **キー** を丸ごと削る。だから
+//     stats.unlocks = { kami:true, ghost:true }
+// と書くと、幽霊屋敷の解放だけが送信直前に消える（しかも管理者では再現しない）。
+// 値は見られないので、`['kami','souzou','ghost']` という **文字列の配列** なら
+// 関門を素通りする。
+//
+// ■ 上限
+// 一覧に無い id は normalizeUnlocks が落とすので、長さは必ず UNLOCK_IDS 以下。
+// db.json はユーザー数ぶん膨らむので、伸びうる入れ物を作らないこと。
+const UNLOCK_IDS = ['kami', 'souzou', 'ghost'];
+
+// 一覧に無いもの・重複・壊れた値を落として、順序も一定にする。
+// 呼ばれるのは migrateUser（＝publicUser のたび）なので安く保つ。
+function normalizeUnlocks(stats) {
+  const cur = stats.unlocks;
+  if (!Array.isArray(cur)) { stats.unlocks = []; return stats.unlocks; }
+  // 既に正規形なら作り直さない（毎回 3 要素の配列を捨てるのはもったいない）。
+  let ok = cur.length <= UNLOCK_IDS.length;
+  if (ok) for (let i = 0; i < cur.length; i++) if (!UNLOCK_IDS.includes(cur[i]) || cur.indexOf(cur[i]) !== i) { ok = false; break; }
+  if (!ok) stats.unlocks = UNLOCK_IDS.filter(id => cur.includes(id));
+  return stats.unlocks;
+}
+
+/** 解放を1つ付ける。**新しく付いたときだけ** true（速報や通知はこれで1回に絞る）。 */
+function grantUnlock(user, id) {
+  if (!UNLOCK_IDS.includes(id)) return false;
+  const s = user.stats || (user.stats = {});
+  const list = normalizeUnlocks(s);
+  if (list.includes(id)) return false;
+  list.push(id);
+  normalizeUnlocks(s);   // 並びを UNLOCK_IDS の順に戻す
+  return true;
+}
 
 // Bring accounts created before a feature shipped up to the current shape.
 // Cheap and idempotent — called from publicUser + every progression path.
@@ -722,6 +772,9 @@ function migrateUser(user) {
   if (user.guildId && !(db.guilds && db.guilds[user.guildId])) user.guildId = null;
   if (!s.sprint || typeof s.sprint !== 'object') s.sprint = {};
   if (!Array.isArray(s.history)) s.history = [];
+  // 🔓 隠し要素の解放。復元ファイルや手編集で壊れた値が入っていても、ここで
+  // 必ず「UNLOCK_IDS のうち持っているものだけ」の形に丸める（＝上限も兼ねる）。
+  normalizeUnlocks(s);
   if (!Array.isArray(user.achievements)) user.achievements = [];
   if (!Array.isArray(user.rankRewards)) user.rankRewards = [];   // pending ランキング報酬
   if (typeof user.gachaPity !== 'number') user.gachaPity = 0;    // ガチャ天井カウンター
@@ -1363,6 +1416,24 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     user.badges.push('souzou');
     badge = 'souzou';
   }
+  // 🔓 「実力で開く」隠し難易度。
+  //
+  // 隠しコマンドはキーボードが要る（＝スマホでは打てない）ので、コマンドを
+  // 知らない人・打てない人のための道をここに置く: **鬼に勝てば神が現れ、
+  // 神に勝てば創造神が現れる**。梯子の形なので順番を飛ばせず、いま解放されて
+  // いる中でいちばん強い相手を倒したときだけ次が開く。
+  //
+  // ここに置いてある理由は、ロゴ13連打（幽霊屋敷）と**構造的に混ざらない**から。
+  // 入口がタップ回数ですらないので、13回目の途中で誤爆しようがない。
+  //
+  // ⚠ 正直に言うと、この won は AI 対戦のクライアント申告で、細工した送信なら
+  //   名乗れる。ただし **同じ申告で既に 'kami' / 'souzou' バッジが取れる**
+  //   （すぐ上の行）ので、この解放が新しい権限を増やしているわけではない。
+  //   解放そのものは通貨も順位も動かさない（より強い相手が選べるようになる
+  //   だけ）ので、ここを厳しくしても守れるものが無い。
+  const unlocked = [];
+  if (mode === 'ai_oni' && won && grantUnlock(user, 'kami')) unlocked.push('kami');
+  if (mode === 'ai_kami' && won && grantUnlock(user, 'souzou')) unlocked.push('souzou');
   // Boss rush: clear all bosses back-to-back for a badge + one-time gems.
   if (mode === 'boss_rush' && won && !user.badges.includes('rush')) {
     user.badges.push('rush');
@@ -1735,6 +1806,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     eventCoins, eventGems,
     guildPts, guildBonus,
     daily,
+    // 🔓 この1戦で新しく開いた隠し要素（無ければ空配列）。画面はここを見て
+    // 「◯◯が現れた」を1回だけ出せる。解放そのものは user.stats.unlocks に
+    // 入っていて、同じ応答の publicUser にも載っている。
+    unlocked,
   };
 }
 
@@ -2123,7 +2198,9 @@ const GUEST_BEST_LIMITS = {
   sprint60: 200_000, sprint180: 400_000,
   survivalWave: 999, digDepth: 9999, dungeonMax: 100, rushDepth: 100, bossMax: 12,
 };
-const GUEST_UNLOCK_KEYS = ['kami', 'souzou', 'ghost'];
+// 隠し要素の解放は上の UNLOCK_IDS が唯一の正解。ここで並べ直すと、片方に
+// 足したのにもう片方を忘れる（このリポジトリで最も多い事故の形）。
+const GUEST_UNLOCK_KEYS = UNLOCK_IDS;
 
 app.post('/api/me/import-guest', requireAuth, maintenanceGuard, (req, res) => {
   if (!rateLimit(`gimport:${req.user.id}`, 5, 60 * 60 * 1000)) {
@@ -2152,10 +2229,18 @@ app.post('/api/me/import-guest', requireAuth, maintenanceGuard, (req, res) => {
     if (n > 0) items[def.id] = n;
   }
 
-  // 🔓 隠し難易度の解放フラグ（真偽値だけ）。
-  const unlocks = {};
-  const usrc = (b.unlocks && typeof b.unlocks === 'object' && !Array.isArray(b.unlocks)) ? b.unlocks : {};
-  for (const k of GUEST_UNLOCK_KEYS) if (usrc[k]) unlocks[k] = true;
+  // 🔓 隠し要素の解放フラグ（真偽値だけ）。
+  // 受け取りの形は今までどおり { kami:true, … } でも ['kami', …] でも通す
+  // （クライアントの持ち方が localStorage の3つのキーなので、どちらにもなりうる）。
+  //
+  // ⚠ 控えの持ち方は **文字列の配列**。オブジェクト（{ ghost:true }）にすると
+  //   sanitize.js の SECRET_KEYS が 'ghost' という**キー**を落とすので、
+  //   非管理者へ返す JSON から幽霊屋敷の1件だけが黙って消える（しかも
+  //   管理者アカウントでは再現しないので気づけない）。stats.unlocks と
+  //   同じ形に揃えておけば、この罠を二度と踏まない。
+  const usrc = (b.unlocks && typeof b.unlocks === 'object') ? b.unlocks : {};
+  const hasU = Array.isArray(usrc) ? (k => usrc.includes(k)) : (k => !!usrc[k]);
+  const unlocks = GUEST_UNLOCK_KEYS.filter(hasU);
 
   // 🏅 各モードの自己ベスト（表示用）。
   const bests = {};
@@ -2172,6 +2257,10 @@ app.post('/api/me/import-guest', requireAuth, maintenanceGuard, (req, res) => {
     user.items[id] = (user.items[id] || 0) + n;
     itemsGiven += n;
   }
+  // 🔓 解放フラグは「表示用の控え」ではなく**実際に効く**ほうへ入れる。
+  // これまで guestImport.unlocks に置くだけで誰も読んでいなかったので、
+  // ゲスト時代に開けた隠し要素は引き継いでも開かなかった。
+  for (const k of unlocks) grantUnlock(user, k);
   s.guestImport = { at: Date.now(), puzzleStage, stars, unlocks, bests, items };
   s.guestImportedAt = Date.now();
   saveDb();
@@ -2180,6 +2269,65 @@ app.post('/api/me/import-guest', requireAuth, maintenanceGuard, (req, res) => {
     imported: { puzzleStage, stars, unlocks, bests, items, itemsGiven },
     user: publicUser(user),
   });
+});
+
+// ---------------------------------------------------------------------------
+// 🔓 POST /api/me/unlocks — 隠し要素の解放をアカウントに残す
+// ---------------------------------------------------------------------------
+//
+// 申告は2種類あり、**歯止めの掛け方が違う**。
+//
+//   from:'hidden' … 「いま隠しコマンドを入力した」。サーバーには検証しようが
+//     ない（合図はブラウザの中だけで完結する）ので、申告を受け入れるかわりに
+//     レート上限を掛ける。解放は生涯で高々3つなので、1日3回あれば正直な人が
+//     詰まることはなく、機械的な連打はここで止まる。
+//
+//   from:'local' … 「この端末の localStorage に解放が残っている（＝この
+//     アカウントを作る前に開けていた）」。**1アカウント1回だけ**通す
+//     （import-guest と同じ形。印は stats.unlockImportedAt）。ログインのたびに
+//     叩かれる口を無制限に開けておく理由が無いため。
+//
+// ■ 「クライアントが勝手に解放を名乗れるなら隠しの意味が無いのでは」
+// そのとおりだが、この口は**新しい権限を1つも増やしていない**:
+//   ・解放は通貨・順位・持ち物を1つも動かさない。AI対戦の相手として
+//     神／創造神が選べるようになり、幽霊屋敷の扉が出るだけ。
+//   ・その先の報酬（kami/souzou バッジ）は元から /api/game/result の
+//     `mode:'ai_kami', won:true` という申告だけで取れる ── つまり細工した
+//     クライアントは、この口が無くても同じところへ行ける。
+//   ・逆に検証できる道（鬼→神→創造神を実際に倒す）は applyGameResult 側に
+//     用意してあり、正直に遊ぶ人はそちらだけで到達できる。
+// 守れないものを守るふりをするより、レート上限と1回制限という「壊れない
+// 歯止め」を置いて、判断を明示しておくほうが後から読む人に親切だと判断した。
+const UNLOCK_CLAIM_PER_DAY = 3;
+
+app.post('/api/me/unlocks', requireAuth, maintenanceGuard, (req, res) => {
+  migrateUser(req.user);
+  const user = req.user;
+  const s = user.stats;
+  const b = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
+  const src = Array.isArray(b.unlocks) ? b.unlocks : [];
+  const want = UNLOCK_IDS.filter(id => src.includes(id));
+  const fromLocal = b.from === 'local';
+
+  if (fromLocal) {
+    if (s.unlockImportedAt) {
+      return res.status(409).json({
+        error: 'この端末からの引き継ぎは1アカウント1回だけです（すでに実行済み）',
+        at: s.unlockImportedAt, unlocks: s.unlocks,
+      });
+    }
+    // 中身が空でも印は立てる。「1回だけ」の意味を『実際に何か増えた回』に
+    // すると、空申告を繰り返して口を開けたままにできてしまう。
+    s.unlockImportedAt = Date.now();
+  } else if (!rateLimit(`unlock:${user.id}`, UNLOCK_CLAIM_PER_DAY, 24 * 60 * 60 * 1000)) {
+    return res.status(429).json({ error: '解放の申告が多すぎます。しばらく待ってください' });
+  }
+
+  const added = want.filter(id => grantUnlock(user, id));
+  // db.json は保存のたびに丸ごと書き出される。何も変わっていない申告
+  // （＝もう全部開いている人の再送）でディスクを叩かない。
+  if (added.length || fromLocal) saveDb();
+  res.json({ ok: true, added, unlocks: s.unlocks, user: publicUser(user) });
 });
 
 // Delete own account (password confirmation required).

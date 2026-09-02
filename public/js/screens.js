@@ -1,6 +1,6 @@
 // Sub-screens: auth modal, leaderboard, shop, battle pass, admin panel.
 import { session, api, setToken, refreshMe } from './net.js';
-import { $, $$, showScreen, showModal, closeModal, popModal, toast, fmt, updateTopbar, confettiBurst, rankOf, rankBadge, staffUiOn, setStaffUi, staffExtras } from './dom.js';
+import { $, $$, showScreen, showModal, closeModal, popModal, toast, fmt, updateTopbar, confettiBurst, rankOf, rankBadge, staffUiOn, setStaffUi, staffExtras, usingCachedUser } from './dom.js';
 import { getSkin, BOARDS, PALETTE } from './themes.js';
 // 独自SVGアイコン。絵文字は端末ごとに絵が変わるうえ、**別々の商品に同じ絵を
 // 当てても誰も止めてくれない**（実際にエフェクト15品のうち8品が ✨ だった）。
@@ -239,11 +239,20 @@ function badgeName(id) {
   return info ? tr(info.ja, info.en) : String(id || '');
 }
 
+// 📴 「いま出ている数字は最後に受け取った値です」の断り書き。
+// トップバーには印が出ている（dom.js）が、プロフィールと戦績は数字だらけなので
+// ここでも言う ── コインもハイスコアもレートも、オフラインのあいだは
+// 「最後に見た値」であって今の値ではない。
+const staleNote = () => (usingCachedUser()
+  ? `<p class="center" style="margin:-4px 0 10px;font-size:12px;font-weight:700;color:var(--red)">${ic('offline', 13)} ${tr('オフラインのため、最後に受け取った情報を表示しています', 'Offline — showing the last information we received')}</p>`
+  : '');
+
 function showProfileModal() {
   const u = session.user;
   const m = showModal(`
     <h2>${ic(u.role === 'admin' ? 'admin' : u.role === 'mod' ? 'mod' : 'user', 20)} ${u.guild ? `<span class="lb-tag">[${escapeHtml(u.guild.tag)}]</span>` : ''}${u.username}</h2>
     ${u.equippedTitle ? `<p class="center" style="margin:-8px 0 10px;font-weight:800;font-size:14px">《 ${escapeHtml(titleName(u.equippedTitle))} 》</p>` : ''}
+    ${staleNote()}
     <div class="result-stats">
       <div class="rs-row"><span>${tr('レベル', 'Level')}</span><b>Lv.${u.level}</b></div>
       <div class="rs-row"><span>${tr('ハイスコア', 'High score')}</span><b>${fmt(u.stats.bestScore)}</b></div>
@@ -362,6 +371,7 @@ function showStatsModal() {
 
   const m = showModal(`
     <h2>${ic('leaderboard', 20)} ${tr('戦績ダッシュボード', 'Stats Dashboard')}</h2>
+    ${staleNote()}
     <div class="stat-lv">
       <div class="stat-lv-row"><b>Lv.${u.level}</b><span class="muted">${fmt(xpInLevel)} / 1,000 XP</span></div>
       <div class="ms-bar"><div style="width:${(xpInLevel / 1000) * 100}%"></div></div>
@@ -740,7 +750,7 @@ export function showSettingsModal() {
   m.querySelector('#setResetLocal').onclick = () => {
     const c = showModal(`
       <h2>${tr('ローカルデータをリセット', 'Reset local data')}</h2>
-      <p class="muted center" style="margin-bottom:14px">${tr('設定・ゲストのベストスコア・隠し難易度の解放状態を消去します。', 'This clears your settings, guest best score and hidden-difficulty unlocks.')}<br>${tr('アカウントのデータ（コイン・スコア等）は残ります。', 'Your account data (coins, scores, etc.) is kept.')}</p>
+      <p class="muted center" style="margin-bottom:14px">${tr('設定・ゲストのベストスコア・隠し難易度の解放状態を消去します。', 'This clears your settings, guest best score and hidden-difficulty unlocks.')}<br>${tr('アカウントのデータ（コイン・スコア等）は残ります。', 'Your account data (coins, scores, etc.) is kept.')}${session.user ? `<br>${tr('※ アカウントに保存済みの隠し要素は残り、次回の読み込みで戻ります。', 'Note: hidden content saved to your account stays, and returns on the next load.')}` : ''}</p>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rlNo">${tr('やめる', 'Cancel')}</button>
         <button class="btn btn-ai" id="rlYes">${tr('リセットする', 'Reset')}</button>
@@ -4338,11 +4348,28 @@ export function bindAdminActions() {
     } catch (err) { toast(err.message, 'err'); }
   };
 
-  $('#btnUnlockHidden').onclick = () => {
+  // 🔓 管理者の「神・創造神を解放」。
+  //
+  // 以前は localStorage に直書きするだけだったので、**同じ管理者が別の端末で
+  // 開くと消えていた**（スマホで解放してPCで見ると閉じている）。解放は
+  // v2.39 からアカウント側（user.stats.unlocks）に残るので、そちらへも通す。
+  // 端末側の印は先に立てて即座に効かせ、通信は後追い（圏外でもこの回は遊べる）。
+  $('#btnUnlockHidden').onclick = async () => {
     localStorage.setItem('bba_kami', '1');
     localStorage.setItem('bba_souzou', '1');
     audio.kamiDescend();
-    toast('「神」「創造神」を解放しました（この端末のみ）', 'announce', 3500);
+    // ログインしていないと保存先が無いので、その場合だけ従来の文言に落とす。
+    if (!session.user) {
+      toast('「神」「創造神」を解放しました（この端末のみ）', 'announce', 3500);
+      return;
+    }
+    try {
+      await api('/api/me/unlocks', { method: 'POST', body: { unlocks: ['kami', 'souzou'], from: 'hidden' } });
+      toast('「神」「創造神」を解放しました（アカウントに保存）', 'announce', 3500);
+    } catch {
+      // 429（申告の回数上限）や圏外。端末側では既に開いているので実害は無い。
+      toast('「神」「創造神」を解放しました（この端末のみ）', 'announce', 3500);
+    }
   };
 
   $('#btnEvent').onclick = () => showEventModal();

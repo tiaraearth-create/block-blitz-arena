@@ -19,7 +19,20 @@ import {
   residentLine, residentById, residentByName,
   ambientOnline, ambientMatches, ambientQueue, crowdMood, chooseReplies, chatPaceFactor, chatFloorMs, getRoster,
   toggles, isQuietNow, popFactor, worldCtx,
+  // 🧮 人数と辻褄を合わせる係数。ambient.js が「世界の大きさ」の唯一の
+  //    出どころなので、発言の速さも席が埋まる速さもそこから貰う。
+  //    詳しい理由は ambient.js の crowdPace / matchWaitMs のコメント。
+  crowdPace, matchWaitMs,
 } from './ambient.js';
+
+// 群衆の勢いで割るときの除数。
+//
+// ⚠ crowdPace() は **にぎわいOFF（×0）のとき 0 を返す**。0 で割ると gap が
+//   Infinity になり、setTimeout は Infinity を「1ms」に丸めるので（Node の
+//   TimeoutOverflowWarning）、静かにするつもりのスイッチが逆に毎ミリ秒の
+//   空回りを生む。置き換え前の `Math.max(0.5, Math.min(4, popFactor()))` は
+//   下限 0.5 で clamp していたのでこの穴が無かった。同じ下限をここで残す。
+const crowdDiv = () => Math.max(0.5, crowdPace());
 // 🗒 住人の戦績の差分（実際に起きたことの記録）。置き場は db.meta で、
 // residents.js は db を知らないので読み口をここから渡す。
 import { setResidentRecordSource, recordResidentMatch } from './residents.js';
@@ -48,8 +61,15 @@ import { scrubFor } from './sanitize.js';
 const COUNTDOWN = 3;
 // ms alone in queue before an AI player fills the seat (randomized per entry
 // so joins don't feel mechanical)
-const duelBotWait = () => 4000 + Math.random() * 5000;
-const teamBotWait = () => 5000 + Math.random() * 5000;
+// 🧮 人数に見合った速さで埋まるように ambient.js の matchWaitMs に寄せた。
+//    以前は倍率に関係なく 4〜9秒 / 5〜10秒 / 6〜11秒 の固定で、メニューに
+//    「待機中 18,640人」と出ている世界でも毎回きっちり数秒待たされた
+//    ── これだけ並んでいる列が数秒かかるなら、人数のほうが嘘だと言っている
+//    のと同じ。×1 の世界では従来と1msも変わらない（matchWaitMs の除数が 1）。
+//    下限 1200ms は秘匿の要求（0秒で成立すると席が用意されていたと分かる）。
+const duelBotWait = () => matchWaitMs(4000, 5000);
+// 🏆 バトルロイヤルもこれを使う（下の queueInfo は royale を team 側に流す）。
+const teamBotWait = () => matchWaitMs(5000, 5000);
 const DURATIONS = [60, 120, 180];
 
 // Online tournament: 8 entrants, 3 knockout rounds. TOURNEY_SECS env
@@ -62,7 +82,7 @@ const COOP_TURN_MS = Number(process.env.COOP_TURN_MS) || 15000;
 const COOP_BOT_THINK_MS = 1800;
 // Hard stop so a run can't hang forever (env-overridable for tests).
 const COOP_MAX_SECS = Number(process.env.COOP_MAX_SECS) || 600;
-const coopBotWait = () => 6000 + Math.random() * 5000;
+const coopBotWait = () => matchWaitMs(6000, 5000);
 // Bot strength rises with the round: QF easy/normal, SF normal/hard, F hard/oni.
 const TOURNEY_BOT_LEVELS = [['easy', 'normal'], ['normal', 'hard'], ['hard', 'oni']];
 
@@ -789,7 +809,12 @@ export function initBattle(server, deps) {
   let lastDialogueAt = 0;
   const directChat = () => {
     // Absolute floor keeps a ×100 crowd lively without a broadcast storm.
-    const gap = Math.max(chatFloorMs(2500), (20000 + Math.random() * 50000) / chatPaceFactor() / Math.max(0.5, Math.min(4, popFactor())));
+    // 🧮 popFactor は内部で 4 に張り付くので、×20 以上はどれだけ人数を増やしても
+    //    発言間隔が 11.3秒 で固定だった（37万人でも150万人でも 1時間に320発）。
+    //    しかも高倍率では深夜も上限4に届くため、午前4時のロビーが21時と
+    //    同じ速さで喋っていた。crowdPace は「時間帯の起伏 × 世界の大きさ」なので
+    //    人数で伸び続け、夜は必ず静かになる（×1 は従来と完全に同値）。
+    const gap = Math.max(chatFloorMs(2500), (20000 + Math.random() * 50000) / chatPaceFactor() / crowdDiv());
     setTimeout(() => {
       try {
         if (crowdOn('chat')) {
@@ -818,7 +843,8 @@ export function initBattle(server, deps) {
     return entry;
   }
   const directFeed = () => {
-    const gap = Math.max(chatFloorMs(6000), (25000 + Math.random() * 60000) / chatPaceFactor() / Math.max(0.5, Math.min(4, popFactor())));
+    // 🧮 ライブフィードも発言と同じ理由で crowdPace に寄せる（上の directChat のコメント参照）。
+    const gap = Math.max(chatFloorMs(6000), (25000 + Math.random() * 60000) / chatPaceFactor() / crowdDiv());
     setTimeout(() => {
       try {
         if (crowdOn('feed')) {
@@ -4447,6 +4473,186 @@ export function initBattle(server, deps) {
           };
         })
         .sort((a, b) => a.since - b.since);
+    },
+
+    // 👀 いま誰がオンラインで、何をしているか（**運営専用**）。
+    //
+    // ■ livePlayers() との違い
+    //   livePlayers() の状態は playing / queue / menu の3値しかない。
+    //   運営が知りたいのは「1on1で対戦中」「チーム戦のマッチング待ち42秒」
+    //   「合言葉ルーム ABCD で待機」「ロイヤルで落ちて観戦中」「断罪の席」
+    //   ── ここまでの粒度なので、socket が持っている手掛かり
+    //   （matchId / royaleId / tourneyId / zeroId / roomCode とキューの中身）を
+    //   全部読んで1行にまとめる。livePlayers() は既に別の画面（/api/admin/stats・
+    //   /api/admin/playerstats の online 判定）が使っているので**触らない**。
+    //
+    // ■ 分からないこと（画面にもそう出すこと）
+    //   ソロ・タイムアタック・工房などの1人用は、遊んでいる最中に何も送って
+    //   こない（サーバーが知るのは POST /api/result の1回だけ）。つまり
+    //   「メニュー」と「ソロで遊んでいる」は原理的に区別できない。
+    //   secondary（対戦画面の2本目）が開いているかだけは分かるので、
+    //   act:'online' として区別しておく。
+    //
+    // ■ 絶対に公開APIへ出さないこと
+    //   queueBreakdown と同じ理由。seats（住人が座っている席）が同じ応答に
+    //   入っている時点で正体に直結する。出してよいのは
+    //   /api/admin/online（requireAuth + requireAdmin）だけ。
+    //   ⚠ /api/admin/* は server/sanitize.js の関門を経路ごとバイパスするので、
+    //     ここに足した欄は削られずにそのまま出る。
+    onlineBreakdown: () => {
+      const now = Date.now();
+
+      // socket 1本ぶんの「いま何をしているか」。act は画面の言葉に直す前の id で、
+      // 言葉と重み付け（人単位にまとめるときの優先順）は routes/admin.js が持つ。
+      const activityOf = (ws) => {
+        // 👁️ 断罪（管理者イベント）の席。落ちた人はそのまま観戦に回る。
+        if (ws.zeroId) {
+          const sess = zeroSessions.get(ws.zeroId);
+          if (sess && !sess.ended) {
+            const e = sess.entrants.find(x => x.ws === ws);
+            return { act: e && !e.alive ? 'zero_watch' : 'zero', mode: 'zero' };
+          }
+        }
+        // 🏆 バトルロイヤル。脱落しても部屋には残る（観戦）。
+        if (ws.royaleId) {
+          const r = royales.get(ws.royaleId);
+          if (r && !r.ended) {
+            const e = r.entrants.find(x => x.ws === ws);
+            return {
+              act: e && !e.alive ? 'royale_watch' : 'match', mode: 'royale',
+              secs: Math.max(0, Math.round((now - r.startedAt) / 1000)),
+              alive: !!(e && e.alive),
+            };
+          }
+        }
+        // ⚔️ ふつうの試合。トーナメントの1回戦も実体はこれ。
+        if (ws.matchId) {
+          const m = matches.get(ws.matchId);
+          if (m && !m.ended) {
+            return {
+              act: 'match', mode: m.mode, tourney: !!m.tourney,
+              secs: Math.max(0, Math.round((now - m.startedAt) / 1000)),
+            };
+          }
+        }
+        // 🏅 トーナメントの合間（次の組み合わせ待ち）。試合中は上で拾われる。
+        if (ws.tourneyId) {
+          const t = tourneys.get(ws.tourneyId);
+          if (t && !t.ended) return { act: 'tourney', mode: 'tourney', round: (t.round || 0) + 1 };
+        }
+        // 🚪 合言葉ルーム。room.matchId が立っていれば、その部屋は観戦室。
+        if (ws.roomCode) {
+          const room = rooms.get(ws.roomCode);
+          if (room) {
+            const watch = room.watch && room.watch.has(ws);
+            return {
+              act: room.matchId ? 'room_watch' : 'room',
+              room: room.code,
+              host: room.players[0] === ws,
+              seat: watch ? 'watch' : 'play',
+              mode: room.settings ? room.settings.mode || (room.settings.team ? 'team' : 'duel') : null,
+            };
+          }
+        }
+        // 🎯 マッチング待ち。待ち時間はキューの entry が持っている。
+        for (const [mode, q] of Object.entries(queues)) {
+          const e = q.find(x => x && x.ws === ws);
+          if (e) return { act: 'queue', mode, waited: Math.max(0, Math.round((now - e.since) / 1000)) };
+        }
+        // それ以外。2本目（対戦画面）が開いているかどうかだけは分かる。
+        return { act: ws.secondary ? 'online' : 'menu' };
+      };
+
+      // --- 実プレイヤー（人単位。同じ人の複数タブ／端末は1行にまとめる） ---
+      const byKey = new Map();
+      for (const c of clients) {
+        if (c.isBot) continue;                    // clients に bot は入らないが念のため
+        const name = sockName(c);
+        if (!name) continue;                      // まだ名乗っていない接続
+        // ゲストは userId を持たないので名前で束ねる（同名ゲストは1人に見えるが、
+        // hello の重複名チェックで同名は基本作られない）。
+        const key = c.user ? 'u:' + c.user.id : 'g:' + name;
+        const since = c._since || now;
+        const a = activityOf(c);
+        let row = byKey.get(key);
+        if (!row) {
+          const u = c.user ? db.users[c.user.id] : null;
+          row = {
+            name,
+            userId: c.user ? c.user.id : null,
+            guest: !c.user,
+            role: u ? u.role || 'user' : null,
+            admin: !!(u && u.role === 'admin'),
+            level: u ? levelOf(u.xp) : null,
+            rating: u && u.stats ? (u.stats.rating || null) : null,
+            games: u && u.stats ? (u.stats.gamesPlayed || 0) : null,
+            conns: 0,
+            since,
+            acts: [],
+          };
+          byKey.set(key, row);
+        }
+        row.conns++;
+        if (since < row.since) row.since = since;   // いちばん古い接続＝その人の滞在開始
+        row.acts.push(a);
+      }
+      const players = [...byKey.values()].map(r => ({
+        ...r,
+        ms: Math.max(0, now - r.since),
+      }));
+
+      // --- 住人が座っている席（**運営専用**。実プレイヤーとは器を分ける） ---
+      // 「接続時間」は無い ── 住人は socket を持たないので、分かるのは
+      // 「いまどの試合に座っているか」と「その試合が始まってから何秒か」だけ。
+      //
+      // ⚠ 上限を付ける理由。players は clients（＝ MAX_SOCKETS 本）が天井なので
+      //   放っておいても膨らまないが、席のほうは天井が無い ── ロイヤルは1本
+      //   あたり最大 ROYALE_SIZE 席で、その大半が住人。同時に何本も走ると
+      //   数千行の配列を5秒ごとに組むことになる。切り詰めても本当の数は
+      //   seatTotal で返すので、画面は「N席中M席を表示」と正しく言える。
+      const SEAT_CAP = 2000;
+      const seats = [];
+      let seatTotal = 0;
+      const seatPush = (name, a) => {
+        if (!name) return;
+        seatTotal++;
+        if (seats.length < SEAT_CAP) seats.push({ name, ...a });
+      };
+      // 試合に座っている席の実体（Bot インスタンス）を控える。トーナメントの
+      // t.alive には同じ Bot がそのまま入っているので、これが無いと1回戦の
+      // あいだ同じ住人が「対戦中」と「トーナメント」で二重に並ぶ。
+      // ⚠ Bot は matchId を持たない（createMatch は isBot をスキップする）ので、
+      //   `!s.matchId` では弾けない ── 参照そのもので照合する。
+      const seated = new Set();
+      for (const m of matches.values()) {
+        if (!m || m.ended) continue;
+        const secs = Math.max(0, Math.round((now - m.startedAt) / 1000));
+        for (const p of m.players) {
+          if (p.sock && p.sock.isBot) { seated.add(p.sock); seatPush(p.sock.name, { act: 'match', mode: m.mode, secs }); }
+        }
+      }
+      for (const r of royales.values()) {
+        if (!r || r.ended) continue;
+        const secs = Math.max(0, Math.round((now - r.startedAt) / 1000));
+        for (const e of r.entrants) {
+          if (!e.human) seatPush(e.name, { act: e.alive ? 'match' : 'royale_watch', mode: 'royale', secs, alive: !!e.alive });
+        }
+      }
+      for (const t of tourneys.values()) {
+        if (!t || t.ended) continue;
+        for (const s of t.alive) {
+          // 試合中の席は上の matches 側で既に拾っている（二重に並べない）。
+          if (s && s.isBot && !seated.has(s)) seatPush(s.name, { act: 'tourney', mode: 'tourney', round: (t.round || 0) + 1 });
+        }
+      }
+      for (const sess of zeroSessions.values()) {
+        if (!sess || sess.ended) continue;
+        for (const e of sess.entrants) {
+          if (!e.human && !e.left) seatPush(e.name, { act: e.alive ? 'zero' : 'zero_watch', mode: 'zero' });
+        }
+      }
+
+      return { at: now, sockets: clients.size, players, seats, seatTotal };
     },
     // 🔌 接続の上限まわり。断った回数が増え始めたら、上限そのものを見直す合図。
     connStats: () => ({

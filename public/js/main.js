@@ -1,5 +1,5 @@
 // App bootstrap: wire menu, session restore, global buttons.
-import { session, api, refreshMe, setToken, queuedResultCount } from './net.js';
+import { session, api, refreshMe, setToken, queuedResultCount, UNLOCK_LS_KEYS } from './net.js';
 import { $, $$, showScreen, showModal, closeModal, popModal, toast, updateTopbar, fmt, staffExtras , goBack, initHistory } from './dom.js';
 import { audio } from './audio.js';
 import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked, tutorialDone } from './modes.js';
@@ -273,24 +273,150 @@ $('#btnVsAi').onclick = () => {
   });
 };
 
-// ---- secret command (Konami code) unlocks 神 ----
-function unlockKami() {
-  if (localStorage.getItem('bba_kami') === '1') return;
-  localStorage.setItem('bba_kami', '1');
-  audio.kamiDescend();
-  confettiBurst(50);
-  toast(t('天から声が聞こえる……隠し難易度「神」が解放された', 'A voice echoes from the heavens… hidden difficulty "Kami" unlocked!'), 'announce', 5000);
+// ===========================================================================
+// 🔓 隠し要素の解放（神 / 創造神 / 幽霊屋敷）
+// ===========================================================================
+//
+// ■ 解放される道は3つある。どれも入口の形がまったく違うので混ざらない。
+//   1. 実力で開く（いちばん自然でスマホでも通る道）
+//        鬼に勝つ → 神が現れる ／ 神に勝つ → 創造神が現れる
+//      判定するのはサーバー（server/index.js の applyGameResult）で、
+//      解放はアカウントに入って返ってくる。クライアントは何も申告しない。
+//   2. 隠しコマンド（PC）… ↑↑↓↓←→←→BA ／ その続きに BABA↓↑↓↑
+//   3. 隠しコマンド（スマホ）… ロゴを**長押し**して出る紋のパッドを叩く（下）
+//   （幽霊屋敷だけは従来どおりロゴの13連打。1〜3のどれとも混ざらない）
+//
+// ■ 保存
+//   ログイン中はアカウント（user.stats.unlocks）に残る＝端末を変えても消えない。
+//   ゲストは今までどおり localStorage だけ。読む側（AI対戦の一覧・幽霊屋敷の扉・
+//   modes.js の ghostUnlocked）は **localStorage しか見ない** ままでよい ──
+//   サーバーの一覧は net.js が localStorage へ映してくれる（片道／消さない）。
+// ===========================================================================
+
+// 起動した時点で既に開いていたもの。あとから届いた解放だけを祝うために要る
+// （毎回の再訪でお祝いが鳴ったらただの騒音）。
+const unlockedAtBoot = new Set(
+  Object.entries(UNLOCK_LS_KEYS).filter(([, k]) => {
+    try { return localStorage.getItem(k) === '1'; } catch { return false; }
+  }).map(([id]) => id));
+
+function hasUnlock(id) {
+  try { return localStorage.getItem(UNLOCK_LS_KEYS[id]) === '1'; } catch { return false; }
+}
+function markUnlockLocally(id) {
+  try { localStorage.setItem(UNLOCK_LS_KEYS[id], '1'); } catch { /* 保存できなくてもこの回は遊べる */ }
 }
 
-function unlockSouzou() {
-  if (localStorage.getItem('bba_souzou') === '1') return;
-  localStorage.setItem('bba_souzou', '1');
-  localStorage.setItem('bba_kami', '1');
-  audio.kamiDescend();
-  audio.bossAttack();
-  confettiBurst(80);
-  toast(t('宇宙の彼方から視線を感じる……真の隠し難易度「創造神」が姿を現した', 'Something watches from beyond the cosmos… the true hidden difficulty "Creator God" has appeared!'), 'announce', 6000);
+// 解放をアカウントへ送る。ゲスト（未ログイン）は何もしない。
+// 失敗しても握りつぶす ── 端末側には既に印が付いているので、次にログインした
+// ときの引き継ぎ（carryOverLocalUnlocks）が拾い直す。
+function pushUnlock(id) {
+  const u = session.user;
+  if (!u) return;
+  const have = (u.stats && u.stats.unlocks) || [];
+  if (have.includes(id)) return;
+  api('/api/me/unlocks', { method: 'POST', body: { unlocks: [id], from: 'hidden' } })
+    .catch(() => { /* 圏外・レート上限。次のログインで引き継がれる */ });
 }
+
+// お祝いの演出。解放の記録（localStorage / サーバー）とは切り離してある ──
+// 「他の端末で開けたぶんが届いた」ときにも同じ演出を使い回すため。
+function celebrateUnlock(id) {
+  if (id === 'kami') {
+    audio.kamiDescend();
+    confettiBurst(50);
+    toast(t('天から声が聞こえる……隠し難易度「神」が解放された', 'A voice echoes from the heavens… hidden difficulty "Kami" unlocked!'), 'announce', 5000);
+  } else if (id === 'souzou') {
+    audio.kamiDescend();
+    audio.bossAttack();
+    confettiBurst(80);
+    toast(t('宇宙の彼方から視線を感じる……真の隠し難易度「創造神」が姿を現した', 'Something watches from beyond the cosmos… the true hidden difficulty "Creator God" has appeared!'), 'announce', 6000);
+  } else if (id === 'ghost') {
+    document.body.classList.add('ghost-flicker');
+    setTimeout(() => document.body.classList.remove('ghost-flicker'), 3500);
+    audio.gameOver();
+    setTimeout(() => audio.kamiDescend(), 900);
+    toast(t('……見つかってしまった。メニューに「幽霊屋敷」への扉が現れた', '…it has noticed you. A door to the Haunted House has appeared on the menu'), 'announce', 6000);
+  }
+}
+
+// 端末で解放が起きたときの共通の入口。すでに開いていれば何もしない（＝
+// 二度目のコマンド入力で演出が二重に鳴らない）。
+function unlockHere(id) {
+  if (hasUnlock(id)) return false;
+  markUnlockLocally(id);
+  celebrateUnlock(id);
+  pushUnlock(id);
+  updateGhostButton();
+  return true;
+}
+
+function unlockKami() { unlockHere('kami'); }
+
+function unlockSouzou() {
+  // 創造神は神の上位。神を飛ばして開くと AI対戦の一覧に穴が空くので、
+  // 先に神を（演出なしで）そろえてから開ける。
+  if (!hasUnlock('kami')) { markUnlockLocally('kami'); pushUnlock('kami'); }
+  unlockHere('souzou');
+}
+
+// ---------------------------------------------------------------------------
+// 🔓 アカウント側との橋渡し
+// ---------------------------------------------------------------------------
+// (a) サーバー → 端末 … net.js が localStorage へ映して 'bba:unlocks-changed'
+//     を出す。ここではそれを受けて、扉を塗り直し、届いたぶんを祝う。
+// (b) 端末 → サーバー … ログインした人がこの端末で既に開けていたぶんを
+//     1回だけ引き継ぐ（PCで開けた人がスマホでも開いた状態になる）。
+// ---------------------------------------------------------------------------
+
+// 「他の端末ぶんの復元」は静かに知らせるだけにする。そこで盛大に鳴らすと、
+// 新しい端末で開くたびに幽霊屋敷の画面がちらつく。逆に「いま鬼を倒した」は
+// 本番の演出（音・紙吹雪・天からの声）でなければ、隠し要素を自力で開けた
+// 手応えが丸ごと消える。
+//
+// ⚠ 見分けを「この画面で1回目かどうか」でやってはいけない。
+//   復元は起動直後の refreshMe() から来るが、**解放を1つも持っていない
+//   アカウントでは起動時に何も届かない**（net.js は空の一覧では合図を出さない）。
+//   その人が鬼を倒すと、それが画面の1回目になり、いちばん盛り上がる場面で
+//   「別の端末で解放した隠し要素を引き継ぎました」と出ていた ── 新規
+//   アカウントほど確実に踏む。
+//
+// 届いた時刻で分ける。復元は起動処理の一部なので必ず数秒以内に来る。
+// 対戦は最短でも1分はかかるので、両者が重なることはない。
+const UNLOCK_BOOT_SYNC_MS = 15000;
+const bootAt = Date.now();
+window.addEventListener('bba:unlocks-changed', e => {
+  updateGhostButton();
+  const ids = (e.detail && Array.isArray(e.detail.unlocks)) ? e.detail.unlocks : [];
+  const fresh = ids.filter(id => UNLOCK_LS_KEYS[id] && !unlockedAtBoot.has(id));
+  for (const id of fresh) unlockedAtBoot.add(id);   // 同じものを二度祝わない
+  if (!fresh.length) return;
+  if (Date.now() - bootAt < UNLOCK_BOOT_SYNC_MS) {
+    toast(t('別の端末で解放した隠し要素を引き継ぎました', 'Hidden content you unlocked on another device has been restored'), 'ok', 4000);
+  } else {
+    for (const id of fresh) celebrateUnlock(id);
+  }
+});
+
+// この画面で引き継ぎを試したユーザー。session-changed は上部バーの更新の
+// たびに飛んでくるので、送るのは1人につき1回にする（サーバー側も
+// 1アカウント1回しか受け付けない）。
+const unlockCarried = new Set();
+
+function carryOverLocalUnlocks() {
+  const u = session.user;
+  if (!u || !u.stats) return;                      // ゲストは localStorage だけ
+  if (u.stats.unlockImportedAt) return;            // このアカウントは引き継ぎ済み
+  if (unlockCarried.has(u.id)) return;
+  const have = u.stats.unlocks || [];
+  const ids = Object.keys(UNLOCK_LS_KEYS).filter(id => hasUnlock(id) && !have.includes(id));
+  if (!ids.length) return;                         // 送るものが無いなら1回きりの枠を使わない
+  unlockCarried.add(u.id);
+  api('/api/me/unlocks', { method: 'POST', body: { unlocks: ids, from: 'local' } })
+    .then(() => toast(t('この端末で解放した隠し要素をアカウントに保存しました', 'Your hidden unlocks on this device are now saved to your account'), 'ok', 4000))
+    .catch(() => { /* 409（もう済み）も圏外も、放っておいてよい */ });
+}
+window.addEventListener('bba:session-changed', carryOverLocalUnlocks);
 
 // ---- 👻 幽霊屋敷: メニューのロゴを13回連続タップで解放 ----
 function updateGhostButton() {
@@ -301,20 +427,26 @@ function updateGhostButton() {
 // 出す合図に乗せてあるので、ログインの導線が増えてもここは直さなくてよい。
 window.addEventListener('bba:session-changed', updateGhostButton);
 
-function unlockGhost() {
-  if (localStorage.getItem('bba_ghost') === '1') return;
-  localStorage.setItem('bba_ghost', '1');
-  document.body.classList.add('ghost-flicker');
-  setTimeout(() => document.body.classList.remove('ghost-flicker'), 3500);
-  audio.gameOver();
-  setTimeout(() => audio.kamiDescend(), 900);
-  toast(t('……見つかってしまった。メニューに「幽霊屋敷」への扉が現れた', '…it has noticed you. A door to the Haunted House has appeared on the menu'), 'announce', 6000);
-  updateGhostButton();
-}
+function unlockGhost() { unlockHere('ghost'); }
 
+// ---------------------------------------------------------------------------
+// ロゴの13連打（幽霊屋敷）と、ロゴの長押し（神・創造神の紋）は同じ要素に
+// 乗っているが、**入口が「押した時間」で分かれている**ので混ざらない。
+//   ・13連打 … click（1回あたり100ms前後の短い当たり）を数える
+//   ・紋     … pointerdown から指を離さずに LOGO_HOLD_MS 経つ
+// 長押しが成立した回の click は数に入れない（下の suppressLogoClick）。
+// 入れてしまうと「長押し1回＝13連打の1歩」になり、意図せず数が進む。
+// ---------------------------------------------------------------------------
+const LOGO_HOLD_MS = 700;
 let ghostTaps = 0;
 let ghostTapTimer = null;
-document.querySelector('.logo').addEventListener('click', () => {
+let suppressLogoClick = false;
+let logoHoldTimer = null;
+
+const logoEl = document.querySelector('.logo');
+logoEl.addEventListener('click', () => {
+  // 長押しで紋を出した回。ここで数えると13連打側が意図せず進む。
+  if (suppressLogoClick) { suppressLogoClick = false; return; }
   ghostTaps++;
   clearTimeout(ghostTapTimer);
   ghostTapTimer = setTimeout(() => { ghostTaps = 0; }, 2000);   // 2秒空いたらリセット
@@ -322,6 +454,109 @@ document.querySelector('.logo').addEventListener('click', () => {
   if (ghostTaps >= 10 && ghostTaps < 13) audio.putback();
   if (ghostTaps === 13) { ghostTaps = 0; unlockGhost(); }
 });
+
+// 長押しの検出。pointer 系はマウスも指もペンも同じ道を通るので1組で足りる。
+const cancelLogoHold = () => { clearTimeout(logoHoldTimer); logoHoldTimer = null; };
+logoEl.addEventListener('pointerdown', () => {
+  // 前の押下の取りこぼしを引きずらない。長押しでモーダルが被さると、
+  // 指を離したときの click はロゴではなく背景側で起きるので、
+  // 「この click は数えない」の印が消えないまま残ることがある ──
+  // そのままだと**次の本物のタップが1回ぶん消える**（13連打が14回必要になる）。
+  suppressLogoClick = false;
+  cancelLogoHold();
+  logoHoldTimer = setTimeout(() => {
+    logoHoldTimer = null;
+    // 押したまま13連打には**絶対にならない**（連打は指を離す動作）。
+    // ここまで来たら、この押下の click は数えない。
+    suppressLogoClick = true;
+    ghostTaps = 0;
+    clearTimeout(ghostTapTimer);
+    openSigilPad();
+  }, LOGO_HOLD_MS);
+});
+for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+  logoEl.addEventListener(ev, cancelLogoHold);
+}
+// 長押しでスマホの選択メニュー（コピー／共有）が割り込むと、紋が出る前に
+// 指が奪われる。ロゴは文字なので選択もハイライトも要らない。
+// ⚠ CSS ファイルは別担当なので、ここは属性スタイルで閉じる（CSP は
+//    style-src に 'unsafe-inline' を許しているので属性は効く）。
+logoEl.style.userSelect = 'none';
+logoEl.style.webkitUserSelect = 'none';
+logoEl.style.webkitTouchCallout = 'none';
+logoEl.addEventListener('contextmenu', e => e.preventDefault());
+
+// ---------------------------------------------------------------------------
+// ✦ 紋のパッド ── スマホ用の隠しコマンド
+// ---------------------------------------------------------------------------
+//
+// なぜ「もう1つのタップ回数」にしなかったか:
+//   ユーザーの指摘どおり、回数を数える入口を増やすと13連打と必ず混ざる。
+//   ここは **順番** を見る（同じものを何回叩いても永久に一致しない）ので、
+//   構造的に誤爆しない ── 実際 test/unlocks.test.mjs が「同じ印だけを
+//   30回叩く」「13連打相当の列」を全部通して、一度も開かないことを見ている。
+//
+// 並びはキーボードのコマンドの写し。◉ が B と A の両方を兼ねる:
+//   ↑↑↓↓←→←→ B A          → ▲▲▼▼◀▶◀▶◉◉            （神）
+//   …の続きに B A B A ↓↑↓↑  → …の続きに ◉◉◉◉▼▲▼▲    （創造神）
+// 長さも 10 / 18 でキーボードと同じ。
+const PAD_KAMI = ['up', 'up', 'down', 'down', 'left', 'right', 'left', 'right', 'orb', 'orb'];
+const PAD_SOUZOU = [...PAD_KAMI, 'orb', 'orb', 'orb', 'orb', 'down', 'up', 'down', 'up'];
+// 覚えておく打鍵の上限。押しっぱなしにされても伸びないようにする。
+const PAD_MEMORY = PAD_SOUZOU.length + 4;
+
+/**
+ * 叩いた順番（末尾）がどの合図に一致するかを返す。純粋関数。
+ * パッドに無いトークン（ロゴの 'logo' など）は一致しようがないので、
+ * 13連打をそのまま流し込んでも null のまま。
+ */
+function matchPadSecret(taps) {
+  const endsWith = pat => taps.length >= pat.length
+    && pat.every((v, i) => taps[taps.length - pat.length + i] === v);
+  if (endsWith(PAD_SOUZOU)) return 'souzou';
+  if (endsWith(PAD_KAMI)) return 'kami';
+  return null;
+}
+
+function openSigilPad() {
+  audio.putback();
+  const taps = [];
+  const cell = (dir, glyph, label) =>
+    `<button class="btn btn-ghost" data-pad="${dir}" aria-label="${label}"
+       style="min-width:0;padding:12px 0;font-size:20px;line-height:1">${glyph}</button>`;
+  const m = showModal(`
+    <h2 style="letter-spacing:.3em">✦</h2>
+    <p class="muted center" style="margin-bottom:14px">
+      ${t('天と地の順を、そらんじよ。', 'Recite the order of heaven and earth.')}
+    </p>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:240px;margin:0 auto">
+      <span></span>${cell('up', '▲', t('上', 'up'))}<span></span>
+      ${cell('left', '◀', t('左', 'left'))}${cell('orb', '◉', t('印', 'orb'))}${cell('right', '▶', t('右', 'right'))}
+      <span></span>${cell('down', '▼', t('下', 'down'))}<span></span>
+    </div>
+    <p class="center" id="padTrace" style="min-height:18px;margin-top:12px;letter-spacing:.35em;opacity:.55"></p>`);
+  const trace = m.querySelector('#padTrace');
+  m.querySelectorAll('[data-pad]').forEach(btn => {
+    btn.onclick = () => {
+      audio.click();
+      taps.push(btn.dataset.pad);
+      if (taps.length > PAD_MEMORY) taps.shift();
+      // 「何手目まで積んだか」だけを出す。並びそのものは映さない
+      // （肩越しに見ている人へ答えを教えないため）。
+      trace.textContent = '·'.repeat(Math.min(taps.length, 18));
+      const hit = matchPadSecret(taps);
+      if (!hit) return;
+      if (hit === 'kami' && !hasUnlock('kami')) {
+        // 神が開いた時点では閉じない ── ここから続けて創造神へ行けるので、
+        // 扉を閉めてしまうと「続きがある」ことに永久に気づけない。
+        unlockKami();
+      } else if (hit === 'souzou') {
+        unlockSouzou();
+        closeModal();
+      }
+    };
+  });
+}
 
 $('#btnGhost').onclick = () => {
   audio.click();

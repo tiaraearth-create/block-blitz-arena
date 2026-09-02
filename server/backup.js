@@ -528,6 +528,41 @@ function mergeEarned(winner, loser) {
     }
   }
 
+  // 🔓 隠し要素の解放（index.js の user.stats.unlocks = ['kami','souzou','ghost']）。
+  //
+  // これは「稼いだもの」なので、進行度で負けたコピーが持っていても落とさない
+  // ── 和集合を採る。落とすと、再デプロイのたびに 神／創造神／幽霊屋敷 が
+  // 閉じ直り、隠しコマンドをもう一度打たされる（しかもスマホの人は打てない）。
+  //
+  // ⚠ **オブジェクトではなく文字列の配列**であることに意味がある。
+  //   sanitize.js の SECRET_KEYS が 'ghost' という**キー**を落とすので、
+  //   { ghost:true } の形にすると幽霊屋敷の解放だけが送信時に消える。
+  //   ここで形を変えてはいけない。
+  //
+  // 上限: 一覧に無い id は index.js の normalizeUnlocks が落とすが、復元は
+  // 外から来たファイルを読むので、こちら側でも必ず頭を押さえる（ここを
+  // 素通しにすると、細工したバックアップ1本で全ユーザーの stats を
+  // 好きなだけ太らせられる ── db.json は保存のたびに丸ごと書き出される）。
+  const UNLOCK_KEEP = 8;   // index.js の UNLOCK_IDS（3件）より少し広い保険
+  const lun = loser.stats && loser.stats.unlocks;
+  if (Array.isArray(lun) && lun.length) {
+    const wst14 = winner.stats || (winner.stats = {});
+    const a = Array.isArray(wst14.unlocks) ? wst14.unlocks : (wst14.unlocks = []);
+    for (const id of lun) {
+      if (typeof id !== 'string' || !id || id.length > 24) continue;
+      if (a.includes(id) || a.length >= UNLOCK_KEEP) continue;
+      a.push(id);
+    }
+  }
+  // 「localStorage からの引き継ぎは1アカウント1回」の止め金。
+  // 二重取り防止の印なので、片方でも使っていれば使用済みに倒す（迷ったら
+  // 閉じる ── guestImportedAt とまったく同じ性格）。
+  const lui = loser.stats && loser.stats.unlockImportedAt;
+  if (lui) {
+    const wst15 = winner.stats || (winner.stats = {});
+    if (!wst15.unlockImportedAt || lui < wst15.unlockImportedAt) wst15.unlockImportedAt = lui;
+  }
+
   // 📕 図鑑の「1日1セット受け取り枠」(catalog.js collectionQuota / claimCollection)。
   // user.collectionClaims = { day:'YYYY-MM-DD', n } で、その日に何セット受け取った
   // かを持つ。二重受取を止めているのは n だけなので、落とすと復元後にその日ぶんを

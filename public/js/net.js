@@ -15,6 +15,44 @@ export function setToken(token) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
+// ---------------------------------------------------------------------------
+// 🔓 隠し要素の解放をアカウントから端末へ映す
+// ---------------------------------------------------------------------------
+//
+// 解放を**読む**側は3か所に散っている（main.js のAI対戦と幽霊屋敷の扉、
+// modes.js の ghostUnlocked、screens.js のローカルリセット）。全部に
+// 「session.user.stats.unlocks も見る」を書き足して回るより、
+// **サーバーの一覧を localStorage に写す**ほうが確実で、読む側は1行も
+// 変えなくてよい ── 端末をまたいで消えるという本題はこれで解ける。
+//
+// ここ（net.js）に置いてあるのは、session.user が差し替わる箇所が
+// このファイルにしか無いから。api() の応答・refreshMe・ログイン・登録・
+// 試合結果まで、どの経路から来ても必ず通る。
+//
+// 消す向きには**絶対に倒さない**。サーバー側に無いものを閉じてしまうと、
+// ゲストのまま開けた人がログインした瞬間に扉を失う（引き継ぎは main.js が
+// 別途 POST する）。ここは「開ける」だけの片道。
+export const UNLOCK_LS_KEYS = { kami: 'bba_kami', souzou: 'bba_souzou', ghost: 'bba_ghost' };
+
+function mirrorUnlocksToDevice(user) {
+  try {
+    const list = user && user.stats && user.stats.unlocks;
+    if (!Array.isArray(list) || !list.length) return;
+    let changed = false;
+    for (const id of list) {
+      const key = UNLOCK_LS_KEYS[id];
+      if (!key || localStorage.getItem(key) === '1') continue;
+      localStorage.setItem(key, '1');
+      changed = true;
+    }
+    // 画面（幽霊屋敷の扉）が塗り直せるように合図を出す。net.js は表示を
+    // 持たないので、ここでは知らせるだけ。
+    if (changed && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('bba:unlocks-changed', { detail: { unlocks: [...list] } }));
+    }
+  } catch { /* プライベートモード等で localStorage が使えなくても遊べる */ }
+}
+
 // レスポンスの user を「自分のアカウント」として採用してよいかどうか。
 // 見分けは2つとも要る:
 //  ・social を持つのは publicUser（＝自分用の形）だけ。他人を返す friendRow
@@ -252,7 +290,7 @@ export async function api(path, { method = 'GET', body, timeout, queueOffline = 
   // TypeError で開けなくなり、管理者の「💰自分にコイン付与」は直前に編集画面を
   // 開いた相手のほうへ飛ぶ。検索が空振り（user:null）だとゲスト扱いに落ちて、
   // リロードするまで戻らなかった。
-  if (isMyUser(data.user)) session.user = data.user;
+  if (isMyUser(data.user)) { session.user = data.user; mirrorUnlocksToDevice(session.user); }
   if (data.season) session.season = data.season;
   // 📴 1本でも通ったなら通信は生きている。控えてある結果があれば送る。
   if (queueOffline) scheduleResultFlush();
@@ -263,6 +301,9 @@ export async function refreshMe() {
   const data = await api('/api/me');
   session.user = data.user;
   session.season = data.season;
+  // api() の中の代入は isMyUser() を通すので、ここで素通しに入れ直した user は
+  // まだ端末へ映っていないことがある。念のためもう一度通す（冪等）。
+  mirrorUnlocksToDevice(session.user);
   return data;   // { user, season, dailyBonus }
 }
 

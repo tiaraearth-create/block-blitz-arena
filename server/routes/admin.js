@@ -1442,6 +1442,195 @@ adminRouter.get('/api/admin/matchmaking', requireAuth, requireAdmin, (_req, res)
   });
 });
 
+// ---------------------------------------------------------------------------
+// 👀 いま誰がオンラインか（管理者専用）
+//
+// ■ なぜ要るのか
+// これまで運営が見られたのは「オンライン人数」という数字だけで、しかもそれは
+// 住人（にぎわい）を足した表示用の数だった。実際に誰が来ているのか・その人が
+// 何をしているのかは、どの画面からも分からなかった。
+//
+// ■ 出すもの（ユーザーの指定）
+//   ・名前 … 実プレイヤーと住人の別も（**管理者にだけ**）
+//   ・接続してからの時間 … いつ繋いだか（since）と経過（ms）
+//   ・いま何をしているか … メニュー／マッチング待ち（モード・待ち秒）／
+//     対戦中（モード・経過秒）／ルームで待機（合言葉）／観戦中／断罪の席
+//
+// ■ 分からないこと（画面にもそう書く）
+//   ソロ・タイムアタック・工房などの1人用は、遊んでいる最中にサーバーへ
+//   何も送らない（知るのは POST /api/result の1回だけ）。だから
+//   「メニュー」と「ソロで遊んでいる」は原理的に区別できない。
+//   対戦画面の2本目（role:'battle'）が開いているかだけは分かるので、
+//   そこは「対戦画面」として別に出す。
+//
+// ■ 絶対に管理者以外へ出さないこと
+//   ・requireAuth + requireAdmin を必ず付ける（他の /api/admin/* と同じ並び）。
+//   ・/api/admin/* は server/sanitize.js の関門を経路ごとバイパスする。
+//     つまりここで返した値は一切削られない。
+//   ・住人の席は players と**別の入れ物**（residents）に入れる。混ぜた1本の
+//     配列にすると、この行を誰かが非管理者の画面へ持って行った瞬間に
+//     正体ごと漏れる（プレイヤー統計が summary.players / summary.residents を
+//     分けているのと同じ理由）。
+// ---------------------------------------------------------------------------
+
+// 一度に返す行数。人数が増えたときに応答が膨れないよう必ず頭を押さえる。
+const ONLINE_LIMIT_DEFAULT = 100;
+const ONLINE_LIMIT_MAX = 500;
+
+// act（battle.js が返す状態の id）→ 画面の言葉と、人単位にまとめるときの重み。
+// 重みが大きいほど「具体的」── 同じ人が複数タブで繋いでいるとき、いちばん
+// 具体的な状態をその人の状態にする（チャット用の1本が menu でも、もう1本が
+// 対戦中なら「対戦中」と出す）。
+const ONLINE_ACTS = new Map([
+  ['menu', { w: 0, label: 'メニュー' }],
+  ['online', { w: 1, label: '対戦画面' }],
+  ['queue', { w: 2, label: 'マッチング待ち' }],
+  ['room', { w: 3, label: 'ルームで待機' }],
+  ['room_watch', { w: 4, label: 'ルームで観戦中' }],
+  ['royale_watch', { w: 4, label: '観戦中（脱落）' }],
+  ['zero_watch', { w: 4, label: '断罪を観戦中' }],
+  ['tourney', { w: 5, label: 'トーナメント進行中' }],
+  ['match', { w: 6, label: '対戦中' }],
+  ['zero', { w: 6, label: '断罪の席' }],
+]);
+
+// モード id → 画面の言葉。MM_MODES に無いもの（ルーム発の陣取り・断罪）も拾う。
+const ONLINE_MODE_LABEL = new Map([
+  ...MM_MODES,
+  ['land', '陣取り'], ['zero', '断罪'], ['boss', 'ボス'], ['dungeon', 'ダンジョン'],
+]);
+const onlineModeLabel = m => (m ? ONLINE_MODE_LABEL.get(String(m)) || String(m) : null);
+
+// battle.js が返す1件を、画面がそのまま出せる形に直す。
+// ⚠ 知らない act は「不明」に落とす（勝手に埋めない）── 運営が
+//    「分かっていないこと」と「メニューに居ること」を取り違えないため。
+function onlineActView(a) {
+  if (!a || typeof a !== 'object') return { act: 'unknown', label: '不明', detail: '' };
+  const meta = ONLINE_ACTS.get(String(a.act));
+  if (!meta) return { act: 'unknown', label: '不明', detail: '' };
+  const mode = onlineModeLabel(a.mode);
+  const bits = [];
+  if (mode) bits.push(mode);
+  if (a.act === 'queue' && Number.isFinite(Number(a.waited))) bits.push(`${Math.max(0, Math.round(Number(a.waited)))}秒待機`);
+  if (a.act === 'match' && Number.isFinite(Number(a.secs))) bits.push(`経過${Math.max(0, Math.round(Number(a.secs)))}秒`);
+  if (a.tourney) bits.push('トーナメント戦');
+  if (a.room) bits.push(`合言葉 ${String(a.room).slice(0, 12)}`);
+  if (a.host) bits.push('ホスト');
+  if (a.seat === 'watch') bits.push('観戦席');
+  if (Number.isFinite(Number(a.round))) bits.push(`${Math.max(1, Math.round(Number(a.round)))}回戦`);
+  return { act: String(a.act), label: meta.label, mode: a.mode || null, detail: bits.join(' ・ ') };
+}
+
+// 数字の欄。「無い（ゲストなのでアカウントが無い）」と「0」を混ぜない。
+const onlineNum = v => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
+
+// 同じ人の複数接続から「いちばん具体的な状態」を1つ選ぶ。
+function pickAct(acts) {
+  let best = null, bestW = -1;
+  for (const a of Array.isArray(acts) ? acts : []) {
+    const meta = ONLINE_ACTS.get(String(a && a.act));
+    const w = meta ? meta.w : -1;
+    if (w > bestW) { bestW = w; best = a; }
+  }
+  return onlineActView(best);
+}
+
+adminRouter.get('/api/admin/online', requireAuth, requireAdmin, (req, res) => {
+  const now = Date.now();
+  const q = String(req.query.q || '').trim().toLowerCase().slice(0, 32);
+  const limit = Math.max(1, Math.min(ONLINE_LIMIT_MAX, Math.floor(Number(req.query.limit)) || ONLINE_LIMIT_DEFAULT));
+  // 住人は既定で「試合に座っている席」だけ出す。ロビーで喋っているだけの住人は
+  // にぎわい倍率しだいで数百人になるので、見たいときだけ crowd=1 で足す。
+  const withCrowd = String(req.query.crowd || '') === '1';
+  // 実プレイヤーだけを見たいとき（人数が多いときの絞り込み）。
+  const only = ['players', 'residents'].includes(String(req.query.only || '')) ? String(req.query.only) : 'all';
+
+  let raw = null;
+  if (battleReady && battle && typeof battle.onlineBreakdown === 'function') {
+    try { raw = battle.onlineBreakdown(); } catch { raw = null; }
+  }
+  // battle がまだ立ち上がっていない機体でも 200 で通す（画面が落ちない）。
+  const src = raw || { at: now, sockets: 0, players: [], seats: [] };
+
+  const hit = name => !q || String(name || '').toLowerCase().includes(q);
+
+  const allPlayers = (src.players || []).filter(Boolean).map(p => {
+    const a = pickAct(p.acts);
+    return {
+      name: String(p.name || '—').slice(0, 24),
+      userId: p.userId || null,
+      guest: !!p.guest,
+      role: p.role || null,
+      admin: !!p.admin,
+      // ⚠ null を Number() に通さないこと。Number(null) は 0 なので
+      //    Number.isFinite が真になり、アカウントの無いゲストが
+      //    「Lv.0 ・ R0」と表示される（＝レベル0・レート0の人が居るように見える）。
+      //    無いものは無いまま null で返し、画面が欄ごと出さないようにする。
+      level: onlineNum(p.level),
+      rating: onlineNum(p.rating),
+      games: onlineNum(p.games),
+      // 接続本数（同じ人の複数タブ／端末をまとめた数）。
+      conns: Math.max(1, Number(p.conns) || 1),
+      // 接続してからの時間。since は「その人のいちばん古い接続」。
+      since: Number(p.since) || null,
+      ms: Math.max(0, Number(p.ms) || 0),
+      ...a,
+    };
+  });
+  const players = allPlayers.filter(p => hit(p.name)).sort((a, b) => a.since - b.since);
+
+  // --- 住人（**運営だけに見せる**） -----------------------------------------
+  // 席に座っている住人。接続時間は無い（socket を持たないので、そもそも
+  // 「いつ繋いだか」が存在しない）。画面では「—」と出す。
+  const seatRows = (src.seats || []).filter(Boolean).map(s => ({
+    name: String(s.name || '—').slice(0, 24),
+    ...onlineActView(s),
+    since: null, ms: null, conns: null,
+  }));
+  // ロビーに居るだけの住人（にぎわい）。crowd=1 のときだけ。
+  const lobbyRows = withCrowd ? (() => {
+    try {
+      const seatedNames = new Set(seatRows.map(r => r.name));
+      return activeResidents(now)
+        .filter(r => r && !seatedNames.has(r.name))
+        .map(r => ({ name: String(r.name).slice(0, 24), act: 'menu', label: 'ロビー', mode: null, detail: '', since: null, ms: null, conns: null }));
+    } catch { return []; }
+  })() : [];
+  const allResidents = [...seatRows, ...lobbyRows];
+  const residentRows = allResidents.filter(r => hit(r.name));
+
+  res.json({
+    at: now,
+    // 実際に開いている WebSocket の本数（人数ではない）。
+    sockets: Number(src.sockets) || 0,
+    // 内訳が取れたか。false のときは画面に「まだ取れない」と出す
+    // ── 0人と「分からない」を同じ顔で出さないため。
+    detailed: !!raw,
+    totals: {
+      // 人単位。ゲストも含む実プレイヤー。
+      people: allPlayers.length,
+      guests: allPlayers.filter(p => p.guest).length,
+      conns: allPlayers.reduce((a, p) => a + p.conns, 0),
+      // ⚠ 住人の数は実プレイヤーと足さない。別のキーのまま出す。
+      // battle 側は席の配列に上限を掛けているので、本当の席数は seatTotal から。
+      residentSeats: Number.isFinite(Number(src.seatTotal)) ? Number(src.seatTotal) : seatRows.length,
+      residentLobby: lobbyRows.length,
+      crowdActive: (() => { try { return battle.crowd ? battle.crowd.activeCount() : 0; } catch { return 0; } })(),
+    },
+    // 絞り込み前の件数（「200人中50人を表示」と出せるように）。
+    matched: { players: players.length, residents: residentRows.length },
+    limit, q, crowd: withCrowd, only,
+    players: only === 'residents' ? [] : players.slice(0, limit),
+    residents: only === 'players' ? [] : residentRows.slice(0, limit),
+    // 画面に出す注意書き。「分からないこと」を運営が読み違えないように、
+    // 文面もサーバー側に置いて1か所にしておく。
+    caveats: [
+      'ソロ・タイムアタックなどの1人用は、遊んでいる最中にサーバーへ何も送らないので「メニュー」と区別できません。',
+      '住人（AI）に接続時間はありません（socket を持たないため）。',
+    ],
+  });
+});
+
 adminRouter.post('/api/admin/broadcast', requireAuth, requireAdmin, async (req, res) => {
   const message = String(req.body.message || '').slice(0, 200);
   if (!message) return res.status(400).json({ error: 'メッセージが空です' });

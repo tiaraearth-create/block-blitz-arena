@@ -28,9 +28,14 @@ export const POP_SCALE = process.env.POP_SCALE === undefined ? 1 : Math.max(0, N
 // 表示人数の倍率上限。×2000 でピーク時（21時台）に約136万人まで出せる。
 // 100万人台を出したいという運営の要望で 500 から引き上げた。
 //
-// 上げても増えるのは **表示の数字だけ**。住人の実数は MAX_ROSTER=600 で
-// 頭打ちなので、チャットの流量も王座の計算量もここから先は一切増えない
-// （＝サーバーの負荷は ×88 のときと変わらない）。
+// 上げても増えるのは、ほぼ **表示の数字だけ**。住人の実数（＝顔ぶれ）は
+// MAX_ROSTER=600 で頭打ちなので、王座の計算量はここから先は増えない。
+//
+// ⚠ v2.39 で1つだけ例外ができた: **発言の速さ**（crowdPace）は倍率の log で
+//   伸び続ける。×88 で 6.9秒に1発、×2000 で 4.8秒に1発（JST21時・標準設定）。
+//   人数だけ23倍になってロビーの流量が同じだと嘘が見えるので意図的にそうした。
+//   ただし対数なうえ chatFloorMs の下限があるので、最悪でも 1.25秒に1回の
+//   ブロードキャスト（宛先は最大 MAX_SOCKETS=400）── 負荷としては誤差。
 export const MAX_LIVE_SCALE = 2000;
 
 let liveScale = 1;
@@ -543,25 +548,141 @@ export function ambientOnline(now = Date.now()) {
   return Math.max(0, Math.round(base * (1 + wobble(now)) * weekdayFactor(now) * eventFactor() * surge(now) * scale));
 }
 
+// その世界の「いちばんにぎわう時間」の人数 ＝ 世界の大きさ。
+//
+// ambientOnline(now) は「時計の山 × 週末係数 × イベント × ゆらぎ × 倍率」なので、
+// 倍率を固定すれば人数は時刻だけで決まる。逆に時刻を山の頂点に固定すれば、
+// 残るのは倍率 ＝ 世界の大きさそのものになる。
+//
+// ⚠ 「人数に見合った数」を出すときは、いまの瞬間の ambientOnline(now) ではなく
+//   **こちら** を使うこと。ランキングの行数を今の人数で決めると、同じ日の
+//   うちに行が増減して住人がボードから消える（champion.test.mjs の
+//   C-3「同じ日ならボードの顔ぶれも変わらない」が見張っている約束が壊れる）。
+const PEAK_ONLINE_X1 = Math.max(...HOURLY) * 1.25;   // ×1 の世界のピーク ≒ 850人
+export function peakOnline() { return Math.round(PEAK_ONLINE_X1 * effectiveScale()); }
+
 export function ambientMatches(now = Date.now()) {
   return Math.round(ambientOnline(now) * 0.17 * (1 + 0.05 * Math.sin(now / 97000)));
 }
 
 // People sitting in matchmaking right now.
+//
+// 🔎 旧: `ambientOnline × 0.045` ── 「常に人口の4.5%が待機列に居る」という
+//    決め打ちで、対戦の回転数と食い違っていた。リトルの法則 L = λW で検算:
+//      ×500 … 同時対戦 62,472本 × 2人 ÷ 平均120秒 = 毎秒 1,041人が席に着く。
+//              待機列 18,640人 ÷ 1,041人/秒 = **1人あたり17.9秒待っている**
+//              ことになるが、実際の席埋めは 4〜9秒（battle.js の duelBotWait）。
+//      ×1   … 34人待ち ÷ 2.1人/秒 = 16.3秒。同じくらいズレる。
+//    「これだけ並んでいるのに数秒で埋まる」＝ 列の長さか待ち時間のどちらかが嘘。
+//
+// 直すなら「人口の何%」ではなく **待ち時間から出す**のが筋。L = λW をそのまま
+// 書けば、人数・同時対戦数・待ち時間の3つが常に1つの式でつながり、どれを
+// 動かしても残りが追随する。
+//
+// ⚠ W は matchWaitMs（席が埋まるまで）＝ この関数が「待ち時間の唯一の出どころ」。
+//   battle.js の duelBotWait / teamBotWait / coopBotWait も **同じ matchWaitMs を
+//   通している**（v2.39 の統合で接続済み）。つまり「列の長さ」と「実際に待つ
+//   時間」が1つの式から出ているので、どちらかだけを直すと辻褄が崩れる。
+//   片方を触るときは必ずもう片方も見ること。
+const AVG_MATCH_SECONDS = 120;   // DURATIONS(60/120/180)の真ん中＋カウントダウンと結果
 export function ambientQueue(now = Date.now()) {
-  return Math.round(ambientOnline(now) * 0.045 * (1 + 0.3 * Math.sin(now / 41000)));
+  const perSec = ambientMatches(now) * 2 / AVG_MATCH_SECONDS;    // λ: 毎秒 席に着く人数
+  const waitSec = matchWaitMs(4000, 5000, () => 0.5) / 1000;     // W: 席が埋まるまで（平均）
+  return Math.max(0, Math.round(perSec * waitSec * (1 + 0.3 * Math.sin(now / 41000))));
 }
 
 // How lively the arena is versus its own daily peak.
+//
+// 🔎 v2.34 までの基準ピークは `HOURLY最大 × 1.25 × scale^0.7` だった。倍率が
+//    小さかった頃の「倍率を上げたら mood も party 寄りに動いてほしい」という
+//    意図だが、MAX_LIVE_SCALE を 2000 まで広げた結果 **倍率が分子（人数）ほど
+//    分母に効かず、mood が party に貼り付いた**。実測（JST 各時刻）:
+//      ×1    … 深夜 calm / 夕方 busy / 20〜22時 party（＝設計どおりの1日の起伏）
+//      ×500  … calm が1時間も出ず、24時間のうち19時間が party
+//      ×2000 … calm が **一度も出ない**（22時間 party）
+//    オンライン人数の表示は深夜に 1/10 まで落ちるのに、その真横のバッジは
+//    「大盛況」のまま固まる ── 数字と札が食い違う。
+//
+// 直し方は2段構え:
+//   ① 基準は **その世界自身のピーク人数**（peakOnline）。倍率が分子と分母で
+//      約分されるので、ratio は時計と週末係数だけで決まる ＝ 人数表示と同じ
+//      リズムで動く。×1 の挙動はこの時点で従来と完全に一致する（PEAK_ONLINE_X1
+//      は従来式の scale=1 のときの値そのもの）。
+//   ② それだけだと ×500 の午前4時（＝10万人オンライン）が「まったり」になる。
+//      これは逆向きの食い違いなので、世界の大きさぶんの下駄を足す。
+//      log10 なので ×10 で +0.10、×500 で +0.27、×2000 で +0.33。
+//      大きい世界ほど「静まりかえる時間」が短くなり、×2000 では calm が
+//      出なくなる ── 1.5M人の世界に閑散時間が無いのは、むしろ正しい。
+const MOOD_SIZE_BONUS_MAX = 0.34;
 export function crowdMood(now = Date.now()) {
   const scale = effectiveScale();
   if (!scale) return { id: 'off', ratio: 0 };
-  // Reference peak grows slower than the scale (^0.7), so cranking the
-  // multiplier genuinely shifts the mood toward "party" instead of the scale
-  // cancelling itself out of the ratio.
-  const peak = Math.max(...HOURLY) * 1.25 * Math.max(1, Math.pow(scale, 0.7));
-  const ratio = Math.min(3, ambientOnline(now) / peak);
+  const peak = Math.max(1, peakOnline());
+  const rhythm = ambientOnline(now) / peak;                  // 時計のリズム（0.07〜1.1）
+  const size = Math.min(MOOD_SIZE_BONUS_MAX, 0.1 * Math.log10(Math.max(1, scale)));
+  const ratio = Math.min(3, rhythm + size);
   return { id: ratio > 0.72 ? 'party' : ratio > 0.38 ? 'busy' : 'calm', ratio: Math.round(ratio * 100) / 100 };
+}
+
+// ---------------------------------------------------------------------------
+// 🧮 人数と辻褄を合わせるための係数（battle.js 用の口）
+// ---------------------------------------------------------------------------
+// ⚠ ここの2つは **server/battle.js が実際に呼んでいる**（v2.39 の統合で接続。
+//   crowdPace → ロビーの発言・ライブフィードの間隔、matchWaitMs →
+//   duelBotWait / teamBotWait / coopBotWait）。数式をここに集めてあるのは、
+//   人数（ambientOnline）と同じ倍率から出さないと「人数だけ増えて世界の
+//   動きが変わらない」という矛盾がまた生まれるため。battle.js 側に式を
+//   書き戻さないこと。
+//
+// ⚠ crowdPace() は ×0（にぎわいOFF）で 0 を返す。**割り算の除数に使うときは
+//   必ず下限を噛ませること**（battle.js の crowdDiv() が Math.max(0.5, …) を
+//   かけている）。素で割ると gap が Infinity → setTimeout が 1ms に丸めて
+//   タイマーが空回りする。
+
+// 発言・フィード・投票の速さ。popFactor の置き換え用。
+//
+// 🔎 いまの battle.js は `Math.max(0.5, Math.min(4, popFactor()))` で割っている。
+//    popFactor は内部で ambientOnline/320 を見るので **倍率が上がると即座に
+//    上限4へ張り付く**。実測（JST21時・chatPace 標準）:
+//      ×1 … 20.5秒に1発 ／ ×20 … 11.3秒 ／ ×88 … 11.3秒 ／ ×500 … 11.3秒 ／
+//      ×2000 … 11.3秒（＝ 37万人でも150万人でも 1時間に320発で同じ）
+//    さらに popFactor は倍率が高いと **深夜でも上限4** に届くので、×500 では
+//    午前4時のロビーが21時とまったく同じ速さで喋る（時間帯の起伏が消える）。
+//
+// crowdPace は2つを分けて掛ける:
+//   ① 時間帯の起伏 … 倍率を割り戻して「×1 の世界なら何人か」で見る。
+//      深夜 0.3 / 夕方 0.8 / 夜のピーク 2.2。倍率をいくつにしても夜は静か。
+//   ② 世界の大きさ … 1 + log10(倍率)。×1 で 1.0、×10 で 2.0、×500 で 3.7。
+//      人数は ×500 だが速さは ×3.7 ── 対数なのは、読めない速さにしないため。
+// ×1 のときは ①×②＝popFactor と同じ値になるので、既定の世界の体感は変わらない。
+export const MAX_CROWD_PACE = 18;   // これ以上速いと読む前に流れる（chatFloorMs と同じ思想）
+export function crowdPace(now = Date.now()) {
+  const scale = effectiveScale();
+  if (!scale) return 0;
+  const perX1 = ambientOnline(now) / scale;                       // 55〜850人（時計だけ）
+  const rhythm = Math.max(0.3, Math.min(2.2, perX1 / 320));
+  const size = 1 + Math.log10(Math.max(1, scale));
+  // 下限 0.5 は battle.js が今かけている clamp と同じ値。ここに入れておけば
+  // `Math.max(0.5, Math.min(4, popFactor()))` をそのまま crowdPace() に
+  // 置き換えられる（×1 の世界は深夜も含めて現状と1msも変わらない）。
+  return Math.max(0.5, Math.min(MAX_CROWD_PACE, rhythm * size));
+}
+
+// 席が埋まるまでの待ち時間（ms）。battle.js の duelBotWait / teamBotWait /
+// coopBotWait 用。
+//
+// 🔎 いまは人口と無関係の固定値（対戦 4〜9秒 / チーム 5〜10秒 / 協力 6〜11秒）。
+//    ×500 のメニューには「待機中 18,640人」と出ているのに、キューに入ると
+//    毎回きっかり数秒待たされる ── 18,640人が並んでいる列で数秒かかるのは、
+//    人数のほうが嘘だと言っているのと同じ。
+// 倍率の 0.35 乗で割る（×1 で 1.0 ＝ 従来どおり、×20 で 2.9倍速、×500 以上は
+// 下限 1.2秒に張り付く）。下限を残すのは、0秒で成立すると「用意されていた席」
+// だと分かるため ── 秘匿のほうが優先。
+export const MATCH_WAIT_FLOOR_MS = 1200;
+export function matchWaitMs(baseMs = 4000, spanMs = 5000, rnd = Math.random) {
+  const scale = effectiveScale();
+  const speed = scale > 0 ? Math.max(0.5, Math.min(8, Math.pow(scale, 0.35))) : 1;
+  return Math.max(MATCH_WAIT_FLOOR_MS, Math.round((baseMs + rnd() * spanMs) / speed));
 }
 
 // ---------------------------------------------------------------------------
@@ -612,7 +733,49 @@ export function chooseReplies(text, now = Date.now(), forcedName = null) {
 // topped up with weekly-reseeded randoms when the board wants more.
 // ---------------------------------------------------------------------------
 
+// ×1 の世界（ピーク ≒850人）で、その板が何行埋まるか。板ごとの人気の差
+// ── ハイスコアは全員が持つ／ウィークリーは今週やった人だけ ── を持っている。
 const GHOST_COUNT = { score: 40, rating: 30, dungeon: 24, weekly: 18, sprint: 22, daily: 20 };
+// 公開ランキングは100行で切られる。それ以上は作っても捨てられる。
+export const BOARD_MAX_ROWS = 100;
+
+// 板の行数が「人数に見合っている」ようにするための伸び率。
+//
+// 🔎 v2.33 まで: `Math.min(100, GHOST_COUNT[board] * Math.min(scale, 2.5))`
+//    倍率は ×2.5 で頭打ちだった。表示オンライン人数は ×2000 まで伸びるのに
+//    行数だけ ×2.5 で止まるので、**人が増えるほど矛盾が広がる**式だった。
+//    実測（既定の ×500 / 表示オンライン 37万人・ユーザー報告時は5万人）:
+//      ハイスコア100行 ／ レート75 ／ ダンジョン60 ／ タイムアタック55 ／
+//      デイリー50 ／ **ウィークリー45行**
+//    「5万人オンラインなのに45位までしか居ない」＝ 一目で分かる嘘。
+//
+// 新しい式は「その世界のピーク人数（peakOnline）が ×1 の世界の何倍か」を
+// 0.7乗で効かせる:
+//   ・0乗ではない … 倍率を1に落としたら行数も落ちる（＝小さい世界は板もスカスカ）
+//   ・1乗ではない … 人数に正比例させると ×3 で全板が満杯になり、板ごとの
+//     人気差（GHOST_COUNT）が意味を失う。0.7 だといちばん過疎な
+//     ウィークリー（基準18行）が満杯になるのが ×12 前後 ＝ ピーク1万人の世界。
+//     「1万人いるのに100位が埋まらない」は起きず、「850人の世界で全板満杯」
+//     という逆の嘘も起きない。
+//   ・×1 では 1.0 ＝ 従来とまったく同じ行数（既存テストの前提を動かさない）。
+//
+// ⚠ 引数に now を取らないのは意図的。ambientOnline(now) で決めると深夜に
+//   行が減り、同じ日のうちに住人がボードから消える。peakOnline は倍率だけで
+//   決まるので1日じゅう安定する（champion.test.mjs C-3 の約束）。
+export function boardFill() {
+  const scale = effectiveScale();
+  if (!scale) return 0;
+  return Math.pow(peakOnline() / PEAK_ONLINE_X1, 0.7);
+}
+
+// そのボードに並べる行数。にぎわいOFF（scale 0）なら 0。
+export function boardRowCount(board) {
+  const fill = boardFill();
+  if (!fill) return 0;
+  // 1行以上は必ず出す。ここが0になると、にぎわいONなのにボードだけ空という
+  // 中途半端な状態ができ、王者の常設（boardResidents の先頭固定）も無意味になる。
+  return Math.max(1, Math.min(BOARD_MAX_ROWS, Math.round((GHOST_COUNT[board] || 24) * fill)));
+}
 
 // `taken`: Set of real usernames — ghosts never shadow a real player.
 // The stable weekly subset of registered residents shown on a given board.
@@ -622,7 +785,7 @@ const GHOST_COUNT = { score: 40, rating: 30, dungeon: 24, weekly: 18, sprint: 22
 export function boardResidents(board, weekId, now = Date.now()) {
   const scale = effectiveScale();
   if (!scale || !custom.toggles.ghosts) return [];
-  const count = Math.min(100, Math.round((GHOST_COUNT[board] || 24) * Math.min(scale, 2.5)));
+  const count = boardRowCount(board);
   // 📅 デイリーは「今日挑戦した住人」の顔ぶれ — 週ではなくJST日で入れ替わる。
   const bucket = board === 'daily' ? `D${jstDay(now)}` : weekId;
   const registered = getRoster().filter(r => r.registered);
@@ -649,7 +812,7 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
   const scale = effectiveScale();
   if (!scale || !custom.toggles.ghosts) return [];
   // The public board is sliced to 100 rows — never generate more than that.
-  const count = Math.min(100, Math.round((GHOST_COUNT[board] || 24) * Math.min(scale, 2.5)));
+  const count = boardRowCount(board);
   const used = new Set(taken);
   const rows = [];
 

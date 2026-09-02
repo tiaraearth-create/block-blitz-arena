@@ -1,5 +1,5 @@
 // Small DOM helpers: screen router, toasts, modals, top bar.
-import { session } from './net.js';
+import { session, refreshMe } from './net.js';
 import { t } from './i18n.js';
 // 段位のしきい値は ranks.js が唯一の正解、絵は icons.js。
 import { rankOf as rankTier } from './ranks.js';
@@ -823,6 +823,172 @@ export function countdownOverlay(n, onDone, audio) {
 export function fmt(n) { return Number(n).toLocaleString('ja-JP'); }
 
 // ---------------------------------------------------------------------------
+// 📴 オフラインでも「ログインしたまま」に見せるための控え
+//
+// ■ なぜ要るか
+//   session.token は通信が落ちても捨てない（失敗経路は net.js の setToken(null)
+//   を通らない）ので、つながれば自動でログイン状態に戻る ── そこは元から
+//   正しかった。問題はその手前で、起動時の refreshMe()（/api/me）が通らない
+//   あいだ session.user は null のままで、updateTopbar() がそれを「未ログイン」
+//   として描いていた。結果、名前は「ゲスト」、コインとジェムは 0、レベルは
+//   非表示。しかも起動時は 9秒×6回＝**約54秒**粘るので、圏外の人は1分近く
+//   「勝手にログアウトさせられた画面」を見せられていた。
+//   そこで、通信が取れているあいだに表示用の写しを控えておき、トークンが
+//   あるのに本物がまだ無いときは、待たずに控えで描く。
+//
+// ■ 控えは「表示」にしか使わない（ここが肝心）
+//   localStorage は本人がいくらでも書き換えられる。だから控えから戻した
+//   ユーザーには3つの縛りを掛けてある:
+//     1. role は保存時にも復元時にも必ず 'player' に落とす。管理者UIの
+//        出し分けは全部 role を見ているので、ここで潰しておけば
+//        「localStorage に role:'admin' と書くだけで管理画面のボタンが並ぶ」
+//        が起きない。
+//     2. staffExtras() は usingCachedUser() が真のあいだ必ず false。role を
+//        見ていない将来の権限判定も、この一段で止まる（守りは2枚）。
+//     3. rankRewards（受け取り待ちのランキング報酬）は控えない。控えの中身
+//        から「受け取る」入口が生えるのは、サーバーが弾くとしても筋が悪い。
+//   API はどれもサーバー側で 401/403 を返すので実害は元から出ないが、
+//   押しても何も起きないボタンを並べないための行儀の話。
+//
+// ■ 「いま控えを描いているか」の見分け方
+//   localStorage に書いた目印は見ない ── 書き換えられた瞬間に嘘になる
+//   （＝控えなのに本物だと名乗れる）。restoreCachedUser() が作った **その
+//   object そのもの** と session.user が同一かどうかで見る。本物が届けば
+//   別の object に差し替わるので、判定は自然に外れる。
+// ---------------------------------------------------------------------------
+
+const USER_CACHE_KEY = 'bba_me_cache';
+// 控えの寿命。サーバーのセッションは1年（server/auth.js の V2_TTL）なので、
+// その内側に収める。トークンがまだ生きているのに控えだけ切れていると、
+// また「ゲスト」に落ちる時間ができてしまうので短くしすぎない。
+const USER_CACHE_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+// 控えに写す欄。丸ごと保存にしないのは、あとから publicUser に欄が増えたときに
+// 「知らないものを勝手に端末へ平文で置く」ことになるから。増やすときはここへ。
+// ⚠️ role と rankRewards は**わざと入っていない**（上の 1. と 3.）。
+const USER_CACHE_FIELDS = [
+  'id', 'username', 'level', 'xp', 'coins', 'gems', 'shards',
+  'stats', 'social', 'owned', 'equipped', 'items', 'badges',
+  'achievements', 'equippedTitle', 'guild', 'battlePass', 'thrones',
+];
+// つながり直したかを見に行く間隔。起動直後は main.js が 9秒×6回で粘っている
+// ので、その裏で二重に叩かないようゆっくり回す。
+const CACHE_RETRY_MS = 30000;
+
+// restoreCachedUser() が session.user に入れた当の object。
+let cachedUserObj = null;
+// 控えからの復元は**起動時の1回だけ**。何度も戻すと、main.js の
+// waitForRestore()（復元待ちの見張り）が「session.user があるなら終わり」と
+// 判断して止まってしまう ── あちらは session.user = null を合図にしている。
+let cacheRestoreTried = false;
+
+/** いま画面に出ている自分の情報が「控え」か（＝本物がまだ取れていない）。 */
+export function usingCachedUser() {
+  return !!cachedUserObj && session.user === cachedUserObj;
+}
+
+function hasCachedUser() {
+  try { return localStorage.getItem(USER_CACHE_KEY) != null; } catch { return false; }
+}
+
+/**
+ * 表示用の写しを控える。**通信が取れているとき（＝本物の user）だけ**呼ぶこと。
+ * net.js の refreshMe() から呼んでもらってもよい（forOthers 参照）。当面は
+ * updateTopbar() が本物を描くたびに自分で控える。
+ */
+export function cacheSessionUser(u) {
+  if (!u || typeof u !== 'object' || !u.id || typeof u.username !== 'string') return;
+  if (u === cachedUserObj) return;                 // 控えを控え直さない
+  const copy = {};
+  for (const k of USER_CACHE_FIELDS) if (u[k] !== undefined) copy[k] = u[k];
+  copy.role = 'player';                            // 🔒 権限は控えない
+  const write = body => localStorage.setItem(USER_CACHE_KEY, JSON.stringify(body));
+  try { write({ v: 1, at: Date.now(), user: copy }); }
+  catch {
+    // 容量いっぱい／プライベートモード。いちばん重いのは戦績の履歴なので、
+    // それだけ落としてもう一度だけ試す（控えられなくても遊べる）。
+    try {
+      if (copy.stats && typeof copy.stats === 'object') copy.stats = { ...copy.stats, history: [] };
+      write({ v: 1, at: Date.now(), user: copy });
+    } catch { /* あきらめる。次のログインでまた試す */ }
+  }
+}
+
+/** 控えを捨てる。ログアウト（＝トークンが消えた）ときに呼ぶ。 */
+export function clearCachedUser() {
+  cachedUserObj = null;
+  cacheRestoreTried = false;
+  try { localStorage.removeItem(USER_CACHE_KEY); } catch { /* ignore */ }
+}
+
+/**
+ * 控えを session.user に戻す。戻せたら true。
+ * ⚠️ ここを通ったユーザーは「表示専用」。権限は必ず剥がして返す。
+ */
+export function restoreCachedUser() {
+  if (session.user || !session.token) return false;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(USER_CACHE_KEY) || 'null'); }
+  catch { return false; }
+  const u = saved && typeof saved === 'object' ? saved.user : null;
+  if (!u || typeof u !== 'object' || !u.id || typeof u.username !== 'string') return false;
+  if (!(Number(saved.at) > Date.now() - USER_CACHE_TTL_MS)) return false;
+  // 戦績が入っていない控えは、こちらが書いたものではない（＝手で作られた）。
+  // 空の器を渡すと画面のあちこちが fmt(undefined) で「NaN」になるので、
+  // 中途半端に直さず丸ごと使わない。
+  if (!u.stats || typeof u.stats !== 'object' || Array.isArray(u.stats)) return false;
+  const me = { ...u };
+  // 名前は端末から来る文字列。screens.js の showProfileModal() は見出しへ
+  // **生のまま**差し込むので、記号を落として長さも切っておく
+  // （サーバー側の名前は2〜16文字の英数字・日本語しか通らない）。
+  me.username = String(u.username).replace(/[<>&"'`\\]/g, '').trim().slice(0, 16);
+  if (!me.username) return false;
+  // 🔒 書き換えられていても、ここで必ず落とす。role を見ている判定
+  //    （updateTopbar の管理ボタン・設定の運営トグル・modes.js のアイテム棚）は
+  //    これだけで全部 false になる。
+  me.role = 'player';
+  // 受け取り待ちの報酬は復活させない（控えから付与の入口を作らない）。
+  me.rankRewards = [];
+  // 形が欠けていると screens.js / main.js が u.owned.map などで落ちる。
+  // 控えは手で書き換えられる前提なので、型もここで揃える。
+  for (const k of ['owned', 'badges', 'achievements', 'thrones']) {
+    if (!Array.isArray(me[k])) me[k] = [];
+  }
+  for (const k of ['items', 'equipped', 'social']) {
+    if (!me[k] || typeof me[k] !== 'object') me[k] = {};
+  }
+  for (const k of ['coins', 'gems', 'xp', 'shards']) me[k] = Number(me[k]) || 0;
+  me.level = Number(me.level) || 1;
+  cachedUserObj = me;
+  session.user = me;
+  startCachedUserWatch();
+  return true;
+}
+
+// 通信が戻ったら本物で上書きする。
+// net.js / main.js は担当外なので、見張りはここに置いてある（本来は
+// refreshMe() の側に寄せたい ── forOthers に依頼を書いた）。
+// 機内モード中は叩かない（必ず失敗するのに30秒ごとに fetch を投げるだけ）。
+let cacheWatchTimer = null;
+function stopCachedUserWatch() {
+  if (cacheWatchTimer) { clearInterval(cacheWatchTimer); cacheWatchTimer = null; }
+}
+function retryCachedUser() {
+  if (!usingCachedUser()) { stopCachedUserWatch(); return; }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  refreshMe()
+    .then(() => { stopCachedUserWatch(); updateTopbar(); })
+    .catch(() => { /* まだ届かない。次の刻みで */ });
+}
+function startCachedUserWatch() {
+  if (cacheWatchTimer || typeof setInterval !== 'function') return;
+  cacheWatchTimer = setInterval(retryCachedUser, CACHE_RETRY_MS);
+}
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  // 端末が「つながった」と言った直後は、次の刻みを待たずに一度だけ試す。
+  window.addEventListener('online', () => setTimeout(retryCachedUser, 600));
+}
+
+// ---------------------------------------------------------------------------
 // Staff-only UI switch
 //
 // Admins get extras normal players never see (chaos access outside events,
@@ -838,6 +1004,11 @@ export function setStaffUi(on) { localStorage.setItem(STAFF_UI_KEY, on ? '1' : '
 // True when the current user is staff AND wants to see staff-only controls.
 export function staffExtras() {
   const u = session.user;
+  // 🔒 控え（オフラインで復元した表示用の写し）では絶対に真にしない。
+  //    権限は「通信が取れているとき」だけ有効 ── localStorage を書き換えて
+  //    管理者UIを引き出せる状態にはしない。restoreCachedUser() が role を
+  //    剥がしたうえで、ここでももう一度止めている（守りは2枚）。
+  if (usingCachedUser()) return false;
   return !!u && (u.role === 'admin') && staffUiOn();
 }
 
@@ -898,8 +1069,51 @@ export function confettiBurst(count = 40) {
   setTimeout(() => root.remove(), 3600);
 }
 
+// 「いま出ているのは控えです」の印。#userChip の中、レベルの隣に置く。
+// main.js の #offlineTag（＝回線そのものの印）とは別物 ── あちらは「いま
+// つながっていない」を、こちらは「出ている数字が最後に見た値だ」を言う。
+// 器は index.html に無い（担当外）ので、必要になったときだけここで作る。
+function syncStaleTag(stale, title) {
+  let tag = document.getElementById('staleTag');
+  if (!tag) {
+    if (!stale) return;
+    const host = $('#userChip');
+    if (!host) return;
+    tag = document.createElement('span');
+    tag.id = 'staleTag';
+    tag.setAttribute('role', 'status');
+    // style.css は担当外なので、見た目は inline で作る。
+    tag.style.cssText = 'display:inline-flex;align-items:center;gap:3px;margin-left:5px;'
+      + 'padding:1px 5px;border-radius:6px;font-size:10.5px;font-weight:800;'
+      + 'background:rgba(255,93,93,.16);color:var(--red);white-space:nowrap';
+    host.appendChild(tag);
+  }
+  tag.classList.toggle('hidden', !stale);
+  if (!stale) return;
+  tag.title = title;
+  tag.replaceChildren();
+  tag.insertAdjacentHTML('beforeend', icon('offline', { size: 11 }));
+  tag.append(t('前回の情報', 'Last seen'));
+}
+
 export function updateTopbar() {
+  // 📴 トークンはあるのに本物がまだ無い（起動直後・圏外）なら、54秒待たずに
+  //    控えで描く。ここに置くのは、session.user が差し替わる経路すべてが
+  //    必ず updateTopbar() を通るから ── 起動時の1回目もここを通る。
+  if (!cacheRestoreTried && !session.user && session.token) {
+    cacheRestoreTried = true;
+    restoreCachedUser();
+  }
+  // ログアウト（＝トークンが消えた）なら控えも捨てる。残すと、次にこの端末を
+  // 開いた人の画面に前の人の名前と残高が出る。
+  if (!session.token && hasCachedUser()) clearCachedUser();
+
   const u = session.user;
+  // 控えを描いているあいだは true。権限も残高も、そのまま信じさせない。
+  const stale = usingCachedUser();
+  // 本物が取れているときだけ控えを更新する。
+  if (u && !stale) cacheSessionUser(u);
+
   $('#userName').textContent = u ? u.username : t('ゲスト', 'Guest');
   // 顔の絵も icons.js に寄せる。4つの状態（未ログイン / プレイヤー / モデレーター /
   // 運営）がそれぞれ別の絵であることに意味があるので、1つに丸めない。
@@ -914,8 +1128,20 @@ export function updateTopbar() {
   $('#userAvatar').innerHTML = icon(avatarName, { size: 20, label: avatarLabel });
   // Admins run on infinite money.
   const inf = u && u.role === 'admin';
-  $('#coinsLabel').textContent = inf ? '∞' : fmt(u ? u.coins : 0);
-  $('#gemsLabel').textContent = inf ? '∞' : fmt(u ? u.gems : 0);
+  // 控えの残高は「最後に見た値」。~ を付けて、そのまま今の残高だと読ませない。
+  const approx = stale ? '~' : '';
+  const coinsEl = $('#coinsLabel');
+  const gemsEl = $('#gemsLabel');
+  coinsEl.textContent = inf ? '∞' : approx + fmt(u ? u.coins : 0);
+  gemsEl.textContent = inf ? '∞' : approx + fmt(u ? u.gems : 0);
+  const staleTitle = t('オフラインのため、最後に受け取った値を表示しています',
+    'Offline — showing the last values we received');
+  for (const el of [coinsEl, gemsEl]) {
+    if (stale) el.setAttribute('title', staleTitle);
+    else el.removeAttribute('title');
+    el.style.opacity = stale ? '.72' : '';
+  }
+  syncStaleTag(stale, staleTitle);
   const lvl = $('#userLevel');
   if (u) { lvl.classList.remove('hidden'); lvl.textContent = `Lv.${u.level}`; }
   else lvl.classList.add('hidden');

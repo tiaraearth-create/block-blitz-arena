@@ -373,7 +373,8 @@ export function quickAutopilot() {
 //
 // 「誰がいつオンラインになったのか」を運営が読む面。出どころは
 // /api/admin/playerstats（一覧＋全体サマリ）と /api/admin/playerstats/:id
-// （個人の詳細）と /api/admin/residents（住人の名簿）の3本だけで、どれも
+// （個人の詳細）と /api/admin/residents（住人の名簿）と
+// /api/admin/online（**いま**誰が繋いでいるか）の4本だけで、どれも
 // requireAuth + requireAdmin で守られている。
 //
 // ■ なぜ admintools.js に置くのか
@@ -429,6 +430,9 @@ const countText = (n, unit) => (n > 0 ? `${fmt(n)}${unit}` : '—');
 
 const PS_TABS = [
   ['summary', '全体', 'leaderboard'],
+  // 👀 いま誰が繋いでいるか。他の3つが「記録」なのに対してここだけ「実況」で、
+  // 数秒ごとに勝手に更新される（下の OL_REFRESH_MS）。
+  ['online', 'オンライン', 'mode_online'],
   ['players', 'プレイヤー', 'user'],
   ['residents', '住人', 'mask'],
 ];
@@ -459,7 +463,8 @@ export async function showPlayerStats(tab = ps.tab) {
   });
   const body = modal.querySelector('#psBody');
   try {
-    if (ps.tab === 'residents') renderResidentsTab(body, await api('/api/admin/residents'));
+    if (ps.tab === 'online') await renderOnlineTab(body);
+    else if (ps.tab === 'residents') renderResidentsTab(body, await api('/api/admin/residents'));
     else renderStatsTab(body, await api(psQuery()), modal);
   } catch (err) {
     // 403 は「管理者ではない」。サーバー側の requireAdmin が最終判断なので、
@@ -634,10 +639,173 @@ function renderResidentsTab(body, data) {
       : '<p class="muted center" style="font-size:12px">名簿が空です</p>'}`;
 }
 
-// 個人の詳細。閉じたら一覧へ戻れるように showModal の back を渡す。
-export async function showPlayerDetail(id) {
+// ---------------------------------------------------------------------------
+// 👀 いま誰がオンラインか（/api/admin/online）
+// ---------------------------------------------------------------------------
+//
+// ■ 他のタブとの違い
+// 全体／プレイヤー／住人は「記録」なので開いたときの1回で足りる。ここだけは
+// 「実況」なので、数秒ごとに勝手に描き直す。ただし **一覧の部分だけ** を
+// 差し替える ── 全部を innerHTML で捨てると、検索欄に打っている途中の文字と
+// カーソル位置が5秒ごとに消える。
+//
+// ■ 止め方
+// タイマーはモーダルが消えたら自分で止まる（描画先が DOM から外れたことを
+// 毎回確かめる）。タブを切り替えるときはモーダルごと開き直すので、これで
+// 二重に走ることはない。
+//
+// ■ 人数が多いときのために
+// 上限（limit）と名前の絞り込み（q）と「実プレイヤーだけ／住人だけ」の
+// 切り替えを付けてある。ロビーに居るだけの住人はにぎわい倍率しだいで数百人に
+// なるので、既定では出さない（crowd のスイッチで足す）。
+//
+// ■ 住人と実プレイヤー
+// サーバーが入れ物ごと分けて返す（players / residents）。画面でも節を分け、
+// 住人の節には「運営だけに見えます」と必ず書く。
+
+const OL_REFRESH_MS = 5000;
+// 開き直しても条件が残るように、状態はモジュールに置く（ps と同じ作法）。
+const ol = { q: '', crowd: false, only: 'all', limit: 100 };
+let olTimer = null;
+
+function olQuery() {
+  const p = new URLSearchParams({ limit: String(ol.limit), only: ol.only });
+  if (ol.q) p.set('q', ol.q);
+  if (ol.crowd) p.set('crowd', '1');
+  return `/api/admin/online?${p.toString()}`;
+}
+
+// 状態の見出しに色を付ける。.live-tag は既にあるクラスなので CSS を足さない。
+// user＝遊んでいる／admin＝待っている／guest＝それ以外、と割り当てる。
+const OL_TAG = { match: 'user', zero: 'user', tourney: 'user', room_watch: 'admin', royale_watch: 'admin', zero_watch: 'admin', queue: 'admin', room: 'admin' };
+
+// 1行ぶん。実プレイヤーは押すと第5波の個人詳細（在席区間の履歴）へ飛べる。
+// 住人は押せない（詳細に当たるものが無い）ので div のまま。
+function olRow(r, { clickable }) {
+  const tag = OL_TAG[r.act] || 'guest';
+  const marks = [
+    r.admin ? '<span class="live-tag admin">管理</span>' : '',
+    r.role === 'mod' ? '<span class="live-tag admin">モデ</span>' : '',
+    r.guest ? '<span class="live-tag guest">ゲスト</span>' : '',
+    r.conns > 1 ? `<span class="live-tag user">${fmt(r.conns)}接続</span>` : '',
+  ].join('');
+  // 住人には接続時間が無い（socket を持たないので、そもそも存在しない）。
+  const stay = r.since
+    ? `<span title="${esc(whenFull(r.since))}">接続 ${esc(spanText(r.ms))}（${esc(whenText(r.since))}から）</span>`
+    : '<span class="muted">接続時間なし</span>';
+  const meta = [
+    r.level != null ? `Lv.${fmt(r.level)}` : '',
+    r.rating != null ? `R${fmt(r.rating)}` : '',
+  ].filter(Boolean).join(' ・ ');
+  const inner = `
+      <span class="live-name">${esc(r.name)}${marks}</span>
+      <span class="live-tag ${tag}">${esc(r.label || '不明')}</span>
+      <span class="live-sub" style="grid-column:1/-1;white-space:normal">${stay}${r.detail ? ` ・ ${esc(r.detail)}` : ''}${meta ? ` ・ ${meta}` : ''}</span>`;
+  const style = 'display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;width:100%;text-align:left;background:rgba(255,255,255,.04);border:0;border-radius:8px;padding:6px 10px;color:inherit;font:inherit';
+  return clickable && r.userId
+    ? `<button data-uid="${esc(r.userId)}" style="${style};cursor:pointer">${inner}</button>`
+    : `<div style="${style}">${inner}</div>`;
+}
+
+function olListHtml(d) {
+  const t = d.totals || {};
+  const card = (v, label, title = '') => `<div class="stat-card"${title ? ` title="${esc(title)}"` : ''}><b>${v}</b><span>${esc(label)}</span></div>`;
+  const players = (d.players || []).map(r => olRow(r, { clickable: true })).join('');
+  const residents = (d.residents || []).map(r => olRow(r, { clickable: false })).join('');
+  const m = d.matched || {};
+  const more = (n, shown) => (n > shown ? `<p class="muted" style="font-size:11px;margin:4px 0 0">${fmt(n)}人中 ${fmt(shown)}人を表示（上限 ${fmt(d.limit)}件・絞り込みで減らせます）</p>` : '');
+  return `
+    <div class="admin-stats" style="margin-bottom:8px">
+      ${card(fmt(t.people || 0), 'いま接続中', '実プレイヤーの人数（複数タブは1人）')}
+      ${card(fmt(t.guests || 0), 'うちゲスト')}
+      ${card(fmt(t.conns || 0), '接続本数', '同じ人が対戦画面に入ると2本になります')}
+      ${card(fmt(d.sockets || 0), 'WS総数', 'まだ名乗っていない接続も含む生の本数')}
+    </div>
+    ${/* ⚠ 住人の数は実プレイヤーと必ず別の箱に出す。足した数を1つ出すと、
+          この画面を見た運営が「実際に何人来ているか」を二度と読めなくなる。 */''}
+    <p class="live-head">${ic('user', 14)} 実プレイヤー
+      <span class="muted" style="font-weight:400;font-size:11px">（押すと在席の履歴が開きます）</span></p>
+    ${players ? `<div class="live-list" style="max-height:min(38vh,320px)">${players}</div>`
+    : '<p class="muted center" style="font-size:12px">いま繋いでいる実プレイヤーはいません</p>'}
+    ${more(m.players || 0, (d.players || []).length)}
+    <p class="live-head" style="margin-top:10px">${ic('mask', 14)} 住人（AI・運営だけに見えます）
+      <span class="muted" style="font-weight:400;font-size:11px">席 ${fmt(t.residentSeats || 0)}${d.crowd ? ` ・ ロビー ${fmt(t.residentLobby || 0)}` : ''}</span></p>
+    ${residents ? `<div class="live-list" style="max-height:min(30vh,240px)">${residents}</div>`
+    : `<p class="muted" style="font-size:12px">${d.crowd ? '住人はどこにも居ません（にぎわい倍率が0かもしれません）' : '試合に座っている住人はいません（ロビーの住人は「ロビーの住人も出す」で表示）'}</p>`}
+    ${more(m.residents || 0, (d.residents || []).length)}
+    ${(d.caveats || []).length ? `<p class="muted" style="font-size:11px;margin:8px 0 0;white-space:normal">
+      ${ic('warn', 12)} ${(d.caveats || []).map(c => esc(c)).join('<br>')}</p>` : ''}`;
+}
+
+async function renderOnlineTab(body) {
   if (!psAdmin()) return;
-  const back = () => showPlayerStats('players');
+  clearInterval(olTimer); olTimer = null;
+  body.innerHTML = `
+    <div class="settings-row" style="margin-bottom:6px">
+      <input id="olSearch" type="text" maxlength="24" placeholder="名前で絞り込み…" value="${esc(ol.q)}" style="flex:1;min-width:130px">
+      <button class="btn btn-sm btn-primary" id="olSearchGo">${ic('search')} 絞り込み</button>
+    </div>
+    <div class="tabs" style="flex-wrap:wrap;gap:4px;margin-bottom:6px">
+      ${[['all', 'ぜんぶ'], ['players', '実プレイヤーだけ'], ['residents', '住人だけ']]
+    .map(([id, l]) => `<button class="tab ${ol.only === id ? 'active' : ''}" data-only="${id}" style="font-size:11px;padding:4px 8px">${esc(l)}</button>`).join('')}
+      <button class="tab ${ol.crowd ? 'active' : ''}" id="olCrowd" style="font-size:11px;padding:4px 8px">ロビーの住人も出す</button>
+    </div>
+    <p class="muted" style="font-size:11px;margin:0 0 6px" id="olStamp">読み込み中…</p>
+    <div id="olList"><p class="muted center">読み込み中…</p></div>`;
+
+  const list = body.querySelector('#olList');
+  const stamp = body.querySelector('#olStamp');
+  const search = body.querySelector('#olSearch');
+
+  // 一覧だけを描き直す。描画先がもう DOM に無い＝モーダルが閉じた／タブが
+  // 変わった、なのでタイマーごと畳む（放っておくと裏で叩き続ける）。
+  const tick = async () => {
+    if (!document.body.contains(list)) { clearInterval(olTimer); olTimer = null; return; }
+    let d;
+    try { d = await api(olQuery()); }
+    catch (err) {
+      if (document.body.contains(list)) stamp.innerHTML = `${ic('warn', 12)} ${esc(err.message)}`;
+      return;
+    }
+    if (!document.body.contains(list)) return;   // 待っているあいだに閉じられた
+    list.innerHTML = olListHtml(d);
+    stamp.textContent = `${new Date(d.at).toLocaleTimeString('ja-JP')} 時点 ・ ${Math.round(OL_REFRESH_MS / 1000)}秒ごとに自動更新`;
+    list.querySelectorAll('[data-uid]').forEach(b => {
+      b.onclick = () => { audio.click(); showPlayerDetail(b.dataset.uid); };
+    });
+  };
+
+  const go = () => { ol.q = search.value.trim(); tick(); };
+  search.addEventListener('keydown', ev => { if (ev.key === 'Enter') go(); ev.stopPropagation(); });
+  body.querySelector('#olSearchGo').onclick = () => { audio.click(); go(); };
+  body.querySelectorAll('[data-only]').forEach(b => {
+    b.onclick = () => {
+      audio.click();
+      ol.only = b.dataset.only;
+      body.querySelectorAll('[data-only]').forEach(x => x.classList.toggle('active', x === b));
+      tick();
+    };
+  });
+  const crowdBtn = body.querySelector('#olCrowd');
+  crowdBtn.onclick = () => {
+    audio.click();
+    ol.crowd = !ol.crowd;
+    crowdBtn.classList.toggle('active', ol.crowd);
+    tick();
+  };
+
+  olTimer = setInterval(tick, OL_REFRESH_MS);
+  await tick();
+}
+
+// 個人の詳細。閉じたら一覧へ戻れるように showModal の back を渡す。
+// ⚠ 戻り先は「開いたときのタブ」。決め打ちで 'players' に戻していたので、
+//    👀オンラインの行から開いて戻ると別のタブに落ちていた（自分が押した行が
+//    どこにも無い画面に出るので、戻ったつもりが迷子になる）。
+export async function showPlayerDetail(id, from = ps.tab) {
+  if (!psAdmin()) return;
+  const tab = PS_TABS.some(([t]) => t === from) && from !== 'summary' ? from : 'players';
+  const back = () => showPlayerStats(tab);
   const modal = showModal(`<h2>${ic('user', 20)} プレイヤーの記録</h2>
     <div id="psdBody"><p class="muted center">読み込み中…</p></div>
     <div class="modal-buttons"><button class="btn btn-ghost" id="psdClose">閉じる</button></div>`, { back });
