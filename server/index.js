@@ -2908,6 +2908,43 @@ const SEED_NEWS = [
       '[Eight new stages] Deep Sea, Desert Night, Mint Forest, Midnight, Ruby, Matrix, Sunrise and Nebula. Paired with a skin, the same board can feel like a different game.\n' +
       '[Four new clear effects] Snow, Leaf, Prism and Foam.\n' +
       '[One more thing] The strongest player in the arena is <b>ちゃちゃまる</b>. They are waiting at the top of the ranking — come and take the crown.' },
+  { id: 'seed-v239-play', pinned: true,
+    title: '大型アップデート（1/3）遊びやすさを作り直しました',
+    titleEn: 'Big update (1 of 3): the game got a lot easier to play',
+    body: '【通知が手札と盤面をふさがなくなりました】お知らせの帯が手札のブロックに重なって「何を掴もうとしているのか見えない」状態になっていました。盤面の下とブロックの上のあいだへ移し、同時に出る数も抑えたので、どちらもふさぎません。\n' +
+      '【AI対戦のちらつきを直しました】相手がコンボを決めるたびに画面が一瞬消える不具合がありました。難易度が高いほど頻発していて、鬼なら1試合に30回以上。原因を突き止めて直しています。\n' +
+      '【「遊び方」を追加しました】メニューから開けます。得点の入り方、コンボの倍率、そして<b>2ライン同時消しで相手を攻撃できる</b>こと ── 今まで説明する場所がどこにもありませんでした。モードを選ぶ画面にも1行の説明が付きます。\n' +
+      '【見た目を全部作り直しました】アイコンを専用のデザインに一新しました。同じ絵が別の商品に使われていて見分けが付かないところがあったので、ひとつずつ描き分けています。',
+    bodyEn: '[Notifications no longer cover your hand or the board] Toasts used to land right on top of your pieces, so you could not see what you were grabbing. They now sit in the gap between the board and your hand, and fewer show at once.\n' +
+      '[Fixed the flicker in AI battles] The screen briefly blanked every time your opponent hit a combo, over 30 times a match on the harder levels. Root cause found and fixed.\n' +
+      '[Added a How to Play screen] Open it from the menu. Scoring, combo multipliers, and the big one: <b>clearing 2 or more lines at once attacks your opponent</b>. There was nowhere to learn that before. Every mode now has a one-line explanation too.\n' +
+      '[A whole new look] Every icon has been redrawn. Some items used to share the same picture and were impossible to tell apart. Now each one is its own.' },
+  { id: 'seed-v239-battle', pinned: true,
+    title: '大型アップデート（2/3）対戦とランキング',
+    titleEn: 'Big update (2 of 3): battles and rankings',
+    body: '【1v1ランクマッチが殴り合いになりました】2ライン以上をまとめて消すと、相手の盤面にお邪魔ブロックが降ります。3ラインなら4個、4ラインなら6個、コンボが乗ればさらに増えます。攻撃なしで静かに競いたい方には<b>クラシック</b>を残しました。\n' +
+      '【通信が切れても、すぐには負けになりません】25秒以内に戻ってくれば同じ試合に復帰できます（1日3回まで）。電車で圏外に入っただけで負ける、ということが無くなりました。\n' +
+      '【観戦が見やすくなりました】バトルロイヤルで脱落したあとの観戦が、隅の小さな窓から<b>自分が遊ぶときと同じ大きさ</b>の盤面になりました。誰を見るかも選べます。\n' +
+      '【カスタムルームが8人になりました】対戦席からあふれた人は観戦席で試合を見られます。誰を出すかはホストが決められます。\n' +
+      '【段位が24段になりました】ブロンズからレジェンドまでの8つの帯を、それぞれ III・II・I に分けました。次の段まであと何ポイントかも出ます。いまの段位が下がることはありません。\n' +
+      '【レイドボスの強さを調整しました】倒すのに必要な火力を実際に測って引き直しています。',
+    bodyEn: '[1v1 Ranked is now a real fight] Clear 2 or more lines at once and garbage blocks rain onto your opponent: 4 blocks for a triple, 6 for a quad, more with combos. Prefer a quiet score contest? <b>Classic</b> keeps the old rules.\n' +
+      '[Losing connection no longer means losing] Come back within 25 seconds and you rejoin the same match (up to 3 times a day). No more losing because a train went through a tunnel.\n' +
+      '[Spectating is worth watching now] After you are knocked out of Battle Royale, the board shows at <b>the same size you play at</b> instead of a tiny corner window, and you choose who to watch.\n' +
+      '[Custom rooms hold 8 people] Anyone past the playing seats watches from the stands, and the host decides who plays.\n' +
+      '[24 ranks] The eight tiers from Bronze to Legend are each split into III, II and I, and you can see how far the next step is. Nobody drops a tier from this change.\n' +
+      '[Raid bosses rebalanced] We measured the damage a party can actually put out and set their health from that.' },
+  { id: 'seed-v239-misc',
+    title: '大型アップデート（3/3）オフライン対応と、たくさんの修正',
+    titleEn: 'Big update (3 of 3): offline play and a lot of fixes',
+    body: '【圏外でも遊べます】通信が無くても、ソロプレイをはじめとする1人用モードが遊べるようになりました。一度オンラインで開いておけば、次からは圏外でも起動します。通信が要るモードは押す前に分かります。\n' +
+      '【隠し難易度がスマホでも開けます】これまでキーボードが必要でした。タイトルのロゴを長押しすると入力パッドが出ます。解放はアカウントに保存されるので、端末を変えても消えません。\n' +
+      '【ランキングが埋まるようになりました】部門によっては100位まで並んでいませんでした。全部門で100位まで表示されます。自分の順位は、圏外でも出ます。\n' +
+      '【そのほかの修正】試合の終わりぎわに相手の接続が切れると、最後まで遊んだ側が負けになってしまう不具合がありました。ほかにも、報酬が二重に入りうる問題、ショップのプレビューが商品ごとに違って見えない問題など、数十件を修正しています。',
+    bodyEn: '[Play offline] Solo modes now work without a connection. Open the game online once and it will start even when you are offline. Modes that need a connection are marked before you tap them.\n' +
+      '[Hidden difficulties unlock on phones] They used to need a keyboard. Long-press the title logo and an input pad appears. Unlocks are saved to your account, so they survive switching devices.\n' +
+      '[Rankings are full] Some boards did not reach 100th place. Every board now shows a full 100, and your own rank appears even when you are outside it.\n' +
+      '[Other fixes] If your opponent disconnected near the end of a match, the player who stayed could be handed the loss. Fixed. Also fixed double-counted rewards, shop previews that all looked alike, and dozens more.' }
 ];
 
 // ニュース本文の改訂番号。SEED_NEWS の文面を書き直したら1つ増やすと、
@@ -2916,7 +2953,7 @@ const SEED_NEWS = [
 // これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
 // 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
 // v2.11.1 の本文を差し替えるのに必要になった。
-const NEWS_BODY_REV = 11;  // v2.34: お知らせ本文の絵文字を言葉に置き換えた（アイコンは画面側の独自SVGに一本化）
+const NEWS_BODY_REV = 12;  // v2.34: お知らせ本文の絵文字を言葉に置き換えた（アイコンは画面側の独自SVGに一本化）
 
 // id で引いたユーザー。`__proto__` や `constructor` を渡されると
 // Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
@@ -2995,7 +3032,7 @@ function seedNews() {
 //
 // 一度きり（db.meta.newsUnpinned で記録）。管理者があとで📌し直したものを
 // 起動のたびに剥がしてしまわないため。
-const KEEP_PINNED = ['seed-v215', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
+const KEEP_PINNED = ['seed-v239-play', 'seed-v239-battle', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
 function unpinOldReleaseNotes() {
   // KEEP_PINNED を変えたら、もう一度だけ剥がし直す必要がある。
   if (db.meta.newsUnpinned === NEWS_BODY_REV) return;
