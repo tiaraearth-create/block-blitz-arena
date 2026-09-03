@@ -639,6 +639,14 @@ export class GameView {
   tapPlace(x, y) {
     const s = this.sel;
     if (!s || !this.engine) return false;
+    // 🖐 手札の帯に入ったタップは「盤面のタップ」ではない。
+    //    使い終わって空になった枠を叩くと、上の pointerdown は
+    //    `hand[slot]` が無いので掴まずに素通りし、ここへ落ちてくる。
+    //    下の余白の許容（cell×0.75）が帯と重なっているので、そのまま
+    //    最下段へ置かれていた ── 置くつもりのない1手を消費する。
+    //    帯の当たり判定は trayHit が持っているので、そのまま借りる
+    //    （縦持ち・横持ちの違いもあちらが面倒を見ている）。
+    if (this.trayHit(x, y) !== -1) return false;
     const m = this.cell * 0.75;
     if (x < this.boardX - m || x > this.boardX + this.boardSize + m
       || y < this.boardY - m || y > this.boardY + this.boardSize + m) return false;

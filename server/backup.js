@@ -407,6 +407,15 @@ function mergeEarned(winner, loser) {
       winner.items[id] = Math.max(winner.items[id] || 0, Number(n) || 0);
     }
   }
+  // 💰 これまでに持っていた最大コイン（称号《大富豪》の判定）。「一度満たしたら
+  // 自分のもの」の類なので、進行度で負けたコピーのほうが高ければそちらを採る。
+  // 落とすと、復元のたびに称号が消えて二度と付け直せなくなる（判定が
+  // 到達最高だけを見るため）。同じ性質の ratingBest は stats ごと勝った側の
+  // レコードで来るが、こちらは高水位なので明示的に大きいほうを採る。
+  if (loser.stats && typeof loser.stats === 'object') {
+    const ws = winner.stats || (winner.stats = {});
+    ws.coinsBest = Math.max(Number(ws.coinsBest) || 0, Number(loser.stats.coinsBest) || 0);
+  }
   // 👑 管理者イベントの予約は「進行度」に出ないので、進行度で負けたコピーが
   // 持っていると消えてしまう。新しいほうの予約を残す。
   const wr = winner.adminEvent, lr = loser.adminEvent;

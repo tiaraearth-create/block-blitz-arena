@@ -508,7 +508,11 @@ export function earnedTitles(user) {
   if (s.bestScore >= 100000) out.push('score100k');
   if (s.pvpWins >= 10) out.push('pvp10');
   if (Math.max(s.ratingBest || 0, s.rating) >= 1200) out.push('rate1200');
-  if (user.coins >= 10000) out.push('rich');
+  // 💰 到達した最大枚数で判定する（いま持っている枚数ではない）。
+  //    `user.coins >= 10000` だったころは、買い物をした瞬間に称号が剥がれて
+  //    二度と付け直せなくなっていた。高水位は index.js の migrateUser が積む。
+  //    すぐ上の rate1200 が ratingBest を見ているのとまったく同じ考え方。
+  if (Math.max((s.coinsBest || 0), user.coins || 0) >= 10000) out.push('rich');
   if ((s.bossMax || 0) >= 2) out.push('bosshunt');
   if (has('maou')) out.push('maoslayer');
   if (has('rush')) out.push('rushhero');

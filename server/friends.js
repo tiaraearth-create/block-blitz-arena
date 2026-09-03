@@ -99,29 +99,45 @@ export function sendRequest(db, from, toId) {
   if (!to) return { error: REFUSED };
   ensureSocial(from); ensureSocial(to);
 
-  // 以下、断る理由はすべて同じ文言。理由の出し分けはしない。
-  if (eitherBlocks(from, to)) return { error: REFUSED };
-  if (to.social.requests === 'none') return { error: REFUSED };
+  // ===========================================================================
+  // ① 自分側の事情だけで決まる断り ── ここは文言を出し分けてよい
+  // ===========================================================================
+  // 「相手が誰か」に一切依存しないので、詳しい理由を返しても何も漏れない。
+  //
+  // ⚠ **必ず相手側の判定より前に置くこと。** すぐ下の注意書きは元からここに
+  //   書いてあったのに、実装は逆順（ブロック・受け取り拒否・断りの冷却が先、
+  //   自分の上限があと）だった。そのせいで、送信枠を満杯にしてから送るだけで
+  //     ・ブロックされている → 一律の REFUSED
+  //     ・されていない       → 「申請は同時に20件までです」
+  //   と文言が割れ、**相手にブロックされたか／断られたかを1件ずつ調べられた**。
+  //   ブロックも断りも「相手に気づかれない」ことが前提の機能なので、
+  //   このファイルが冒頭で掲げている2つの約束がここで破れていた。
   if (isFriend(from, toId)) return { error: 'すでにフレンドです' };
   if (from.friendReqOut.includes(toId)) return { error: '申請ずみです' };
 
   // すれ違い（相手からも申請が来ていた）はその場で成立させる。
+  // ここに置けるのは「自分の受信箱に相手からの申請がある」＝自分側の事実で、
+  // しかも送信枠を消費しないから（枠の上限より前に見てよい）。
+  // 送り主はその申請が自分の受信箱にあることを既に知っているので、
+  // ここで分岐しても新しい情報は漏れない。
   // 呼び出し側が「申請が届いた」ではなく「フレンドになった」を送れるよう、
   // 成立したことが分かる印を付けて返す。
   if (from.friendReqIn.some(r => r.from === toId)) {
+    if (eitherBlocks(from, to)) return { error: REFUSED };
     const r = acceptRequest(db, from, toId);
     return r.error ? r : { ...r, accepted: true };
   }
 
-  const declinedAt = to.friendDeclines[from.id] || 0;
-  if (declinedAt && Date.now() - declinedAt < DECLINE_COOLDOWN_MS) return { error: REFUSED };
-
-  // 自分側の上限は「相手が誰か」に関係なく決まるので、先に見る。
-  // 相手側の事情（ブロック・受け取り拒否・満杯）より後ろに置くと、
-  // 上限に達した状態で送ったときの文言の違いから、
-  // 相手にブロックされているかどうかを読み取れてしまう。
   if (from.friends.length >= MAX_FRIENDS) return { error: `フレンドは${MAX_FRIENDS}人までです` };
   if (from.friendReqOut.length >= MAX_REQ_OUT) return { error: `申請は同時に${MAX_REQ_OUT}件までです` };
+
+  // ===========================================================================
+  // ② 相手側の事情による断り ── ここから先はすべて同じ文言（REFUSED）
+  // ===========================================================================
+  if (eitherBlocks(from, to)) return { error: REFUSED };
+  if (to.social.requests === 'none') return { error: REFUSED };
+  const declinedAt = to.friendDeclines[from.id] || 0;
+  if (declinedAt && Date.now() - declinedAt < DECLINE_COOLDOWN_MS) return { error: REFUSED };
   if (to.friends.length >= MAX_FRIENDS) return { error: REFUSED };
   // 期限切れ(REQ_EXPIRE_MS超)の申請は受信枠に数えない。定期実行が無く healSocial は
   // 起動/復元時しか走らないので、送信のたびにここで自然に掃除する（さもないと古い申請

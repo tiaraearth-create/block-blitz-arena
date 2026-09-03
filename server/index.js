@@ -734,6 +734,9 @@ function migrateUser(user) {
     chainPlays: 0, chainBest: 0, chainMax: 0,
     blueprintPlays: 0, blueprintClears: 0,
     workshopPlays: 0, workshopClears: 0,
+    // 💰 これまでに持っていた最大コイン。称号《大富豪》の判定に使う。
+    //    詳しい理由は下の高水位の更新のところ。
+    coinsBest: 0,
     // 👑 アリーナ最強の相手を破った回数。積んでいるのは対戦を裁く
     // server/battle.js（endMatch の beatChampion 判定）で、ここは欄をそろえる
     // だけ。称号（catalog.js の crownfeller / summittaker）と実績
@@ -763,6 +766,21 @@ function migrateUser(user) {
   // 既存アカウントは、いま到達している帯を『告知ずみ』として始める ── 0 から
   // 始めると、この機能が入った日に上位帯の人が次の1戦で全員もう一度告知される。
   if (s.rankAnnounced === undefined) s.rankAnnounced = bandOf(s.ratingBest || s.rating || 0).min;
+  // 💰 これまでに持っていた最大コインの高水位。称号《大富豪》の判定に使う。
+  //
+  // 称号は「一度満たしたら自分のもの」で通してある ── 実際、レートの称号は
+  // 同じ事故を踏んだあと rate1200 が ratingBest（到達最高）を見るように
+  // 直してある。ところが《大富豪》だけが `user.coins >= 10000`、つまり
+  // **いま持っている枚数** を見ていた。買い物をした瞬間に剥がれ、一覧では
+  // ロック表示になるのに装備中の表示だけ残り、別の称号に替えると
+  // /api/titles/equip が 403 を返してもう二度と付け直せない
+  // ── 稼いだコインを使いたくなくなる＝ショップとガチャの導線を静かに殺す。
+  //
+  // ここ（migrateUser）に置くのは、publicUser が必ず通る道だから。コインが
+  // 増える経路は20か所以上あるが、どれも同じ応答で publicUser を返すので、
+  // 増えた直後に必ず高水位が更新される。減らす側（買い物）はその後に来る。
+  // ⚠ backup.js の合流にも入れること（落ちると復元のたびに称号が消える）。
+  if ((user.coins || 0) > (s.coinsBest || 0)) s.coinsBest = user.coins || 0;
   if (!s.bossRanks || typeof s.bossRanks !== 'object') s.bossRanks = {};
   // 同じ汚染で stats に増えた永久ゴミキー（'undefined' と 'constructorPrev'
   // のようなプロトタイプ名由来の ~Prev）を落とす。放っておくと db.json が
@@ -1178,7 +1196,14 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 結果に stage code を載せて「同じステージの初回だけ」にすることだが、
   // それはクライアント側の送信を変える必要があるので、暫定として勝利加算に
   // 1時間あたりの上限を置く。正直に色々なステージを遊ぶぶんには当たらない。
-  if (mode === 'workshop' && won && !rateLimit(`wswin:${user.id}`, 10, 60 * 60 * 1000)) won = false;
+  // ⚠ 上限は 10回/時 だった。「正直に色々なステージを遊ぶぶんには当たらない」と
+  //   但し書きがあるのに、1ステージ数十秒のモードなので工房を眺めて回れば普通に
+  //   超える。超えたあとは勝利ぶんの報酬・workshopClears・totalWins・工房系の
+  //   ミッションが**無言で**止まり、プレイヤーには「急にクリアが数えられなくなった」
+  //   としか見えない。40回/時 まで緩め（採掘の連投を止める役目は残る）、
+  //   当たったことは結果画面に出す（下の capped）。
+  let workshopCapped = false;
+  if (mode === 'workshop' && won && !rateLimit(`wswin:${user.id}`, 40, 60 * 60 * 1000)) { won = false; workshopCapped = true; }
 
   // 1回の送信ごとに付く「固定ぶん」（基礎 20🪙/30bpXp/20accXp と勝利ボーナス）は
   // プレイの長さを一切見ていなかった。スコア連動ぶんと違って回数だけで増えるので、
@@ -1812,6 +1837,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     // 「◯◯が現れた」を1回だけ出せる。解放そのものは user.stats.unlocks に
     // 入っていて、同じ応答の publicUser にも載っている。
     unlocked,
+    // 🛠 上限に当たって勝利ぶんが付かなかったとき、その理由。黙って0にすると
+    //    「クリアしたのに数えられない」が原因不明の不具合に見える。
+    //    付かなかったときだけ載せる（false は載せない＝欄の有無も情報にしない）。
+    ...(workshopCapped ? { capped: 'workshop' } : {}),
   };
 }
 

@@ -815,6 +815,23 @@ $('#btnQuit').onclick = () => {
     ${(() => {
       // モードによって「やめたらどうなるか」は全然ちがう。
       // ソロで「引き分け扱い」と言われても、相手がいないので意味が通らない。
+      //
+      // ⚠ まずモード自身に聞くこと。modes.js の quitWarning() は
+      //   「協力プレイの離脱は敗北にならない」「観戦をやめるだけ」
+      //   「ロイヤルで生存中なら最下位扱い」「デイリーはこの1回で確定」を
+      //   出し分けるために書かれていて、コメントにも『読み手は main.js の
+      //   ✕ 確認モーダル』と明記してある。ところがここが一度も呼んでおらず、
+      //   mode だけで決めていた ── OnlineMode は協力・陣取り・レイド・ロイヤル・
+      //   ルーム観戦まで全部 mode='pvp' なので、**実際の裁定と正反対の文面**が
+      //   出ていた（観戦をやめるだけの人に「離脱は敗北」など）。
+      if (cur && typeof cur.quitWarning === 'function') {
+        try {
+          const w = cur.quitWarning();
+          // null は「失うものが無い」＝警告を出さないという意思表示。
+          if (w) return `<p class="muted center">${w}</p>`;
+          return `<p class="muted center">${t('ここでやめても失うものはありません', 'Nothing is lost if you stop here')}</p>`;
+        } catch { /* 壊れていても下の従来どおりの文面に落ちる */ }
+      }
       const online = cur && (cur.mode === 'pvp' || cur.kind);
       return `<p class="muted center">${online
         ? t('離脱は<b style="color:var(--red)">敗北</b>になります', 'Leaving counts as a <b style="color:var(--red)">loss</b>')
@@ -1244,9 +1261,16 @@ const realmIcon = realm => (realm && realm.iconName) || 'mode_dungeon';
 
 function dungeonBest(realm) {
   const local = Number(localStorage.getItem(realm.bestKey) || 0);
-  // Only the classic tower is tracked server-side.
-  const srv = realm.id === 'tower' && session.user && session.user.stats
-    ? Number(session.user.stats.dungeonMax || 0) : 0;
+  // 🗼 サーバーの記録も見る。**4領域とも** 記録されている
+  //    （server/index.js の dungeonMax / underMax / heavenMax / abyssMax）のに、
+  //    ここは長らく塔だけを見ていた。そのせいで地下・天国・深淵は端末を
+  //    またげず、機種変更やブラウザの切り替えで最大60階ぶん登り直しになる。
+  //    しかも深淵は「塔100F制覇」の入場判定だけ塔の記録で通るので、
+  //    **入れるのに A1 からやり直し**という、いちばん腹立たしい形になっていた。
+  //    領域ごとの stat 名は modes.js の DUNGEON_REALMS が statKey として
+  //    持っているので、対応表をここに書き写さないこと。
+  const srv = realm.statKey && session.user && session.user.stats
+    ? Number(session.user.stats[realm.statKey] || 0) : 0;
   return Math.max(local, srv);
 }
 

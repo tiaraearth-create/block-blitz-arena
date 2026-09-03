@@ -363,6 +363,10 @@ function rewardsRows(rewards) {
       ${shareRow()}`;
   }
   return `
+    ${/* 🛠 上限に当たって勝利ぶんが付かなかった回。黙って0にすると
+          「クリアしたのに数えられない」が原因不明の不具合に見える。
+          参加ぶんの報酬（下の行）は入っているので、そこは打ち消さない。 */''}
+    ${rewards.capped === 'workshop' ? `<div class="rs-row"><span>${ic('warn')} ${t('工房のクリア報酬は1時間あたりの上限に達しました', 'Workshop clear rewards have hit the hourly cap')}</span><b class="muted">${t('時間をおくと戻ります', 'It returns after a while')}</b></div>` : ''}
     <div class="rs-row"><span>${ic('coins')} ${t('コイン', 'Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
     ${rewards.streakBonus ? `<div class="rs-row"><span>${ic('fire')} ${t(`${rewards.streak}連勝ボーナス`, `${rewards.streak}-win streak bonus`)}</span><b>+${fmt(rewards.streakBonus)} ${ic('coins', 14)}</b></div>` : ''}
     ${/* サーバーの gems は「初回討伐」だけではない ── イベントの💎ドロップも

@@ -17,6 +17,9 @@ const SCREENS = ['menu', 'game', 'matchmaking', 'room', 'leaderboard', 'shop', '
 // Android では戻るを押すとアプリごと閉じていた（PWA は standalone）。
 const screenStack = [];
 let poppingBack = false;
+// 自分で history.go(-n) して畳んでいる最中。ここに入っている間の popstate は
+// 「利用者が押した戻る」ではないので無視する（showScreen のメニュー復帰を参照）。
+let unwindUntil = 0;
 
 export function screenHistory() { return screenStack.slice(); }
 
@@ -41,7 +44,25 @@ export function showScreen(name, { push = true } = {}) {
   // メニューはいちばん下。ここに来たら積み上げを畳む ── そうしないと
   // 「メニュー→ショップ→メニュー」で戻り先にメニューが溜まっていき、
   // 戻るを何度押してもメニューのまま、という状態になる。
-  if (name === 'menu') screenStack.length = 0;
+  //
+  // ⚠ 端末の履歴も同じだけ巻き戻すこと。下の push は「戻り先」と「履歴」を
+  //   必ず一緒に積むと約束しているのに、**畳む向きだけ**が片手落ちだった。
+  //   画面の積み上げだけ捨てて履歴を残すと、popstate は来るのに戻り先が
+  //   空 ＝ 何も起きない「死んだ戻る」が、遊ぶたびに1〜2回ぶん溜まっていく
+  //   （メニュー→マッチング→対戦 で2つ積まれ、試合後のメニュー復帰で
+  //   ぜんぶ置き去りになる）。プレイヤーからは「戻るが効かない」に見える。
+  if (name === 'menu') {
+    const depth = screenStack.length;
+    screenStack.length = 0;
+    if (depth > 0 && historyReady && !poppingBack) {
+      // go() の popstate は非同期で届く。自分で畳んだぶんを掴まないよう、
+      // 短い時間だけ popstate を素通りさせる（件数を数える方式にすると、
+      // 履歴の先頭で go() が空振りしたときにカウンタが残り、**本物の戻るを
+      // 食べ続ける**ほうの事故になる。時間なら必ず自然に戻る）。
+      unwindUntil = Date.now() + 400;
+      try { history.go(-depth); } catch { unwindUntil = 0; }
+    }
+  }
 
   // 画面が変わったらモーダルの親子関係は捨てる。残しておくと、モーダルの中の
   // ボタンで画面を移したあとに「閉じる」を押した瞬間、新しい画面の上に
@@ -140,6 +161,8 @@ export function initHistory(onGameBack) {
   gameBackHandler = typeof onGameBack === 'function' ? onGameBack : null;
   try { history.replaceState({ bbaScreen: document.body.dataset.screen || 'menu' }, ''); } catch { /* ignore */ }
   window.addEventListener('popstate', () => {
+    // 自分で畳んでいる最中のぶんは、利用者の操作ではないので何もしない。
+    if (Date.now() < unwindUntil) return;
     // モーダルが開いているなら、まずそれを閉じる（いちばん自然な戻り先）。
     // ただし閉じられない印のあるモーダル（結果画面など）は閉じない ──
     // 閉じると動かない盤面に取り残される。

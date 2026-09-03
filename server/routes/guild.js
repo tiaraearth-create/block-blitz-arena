@@ -102,7 +102,18 @@ guildRouter.post('/api/guilds/join', requireAuth, maintenanceGuard, (req, res) =
     }
     return res.status(404).json({ error: b.code ? 'そのコードのギルドは見つかりません' : 'ギルドが見つかりません' });
   }
-  const out = joinGuild(db, req.user, guild, { viaCode: !!b.code });
+  // 🔑 viaCode は「**合言葉で見つけた**」を意味しなければならない。
+  //
+  // ここは長らく `viaCode: !!b.code` だった ── つまり「リクエストに空でない
+  // code が入っていたか」しか見ていない。ところが findGuild は id を優先して
+  // 引くので、`{ id: <ギルドid>, code: 'X' }` と送ると **合言葉を一度も照合
+  // しないまま** viaCode が true になり、joinGuild の
+  // `if (!guild.open && !viaCode)` を素通りできた。
+  // ギルド一覧には id が並んでいるので、招待制の非公開ギルドに誰でも入れる
+  // （満員の20人まで埋めればリーダーは仲間を入れられなくなる）。
+  // 見つけ方に関係なく、**そのギルドの合言葉と一致しているか**だけで決める。
+  const code = String(b.code || '').trim().toUpperCase();
+  const out = joinGuild(db, req.user, guild, { viaCode: !!code && guild.code === code });
   if (out.error) return res.status(409).json({ error: out.error });
   saveDb();
   res.json({ guild: guildView(db, guild, curWeek(), { detailed: true, viewerId: req.user.id, levelOf }), user: publicUser(req.user) });

@@ -280,7 +280,9 @@ function showProfileModal() {
   // 「段位を見ただけ」でプロフィールごと消えたように見える）。
   m.querySelector('#pLadder').onclick = () => showRankLadder(u.stats.rating, { back: () => showProfileModal() });
   m.querySelector('#pStats').onclick = () => showStatsModal();
-  m.querySelector('#pTitles').onclick = () => showTitlesModal();
+  // 段位一覧と同じく back を渡す ── 称号を1つ着け替えるたびにプロフィールごと
+  // 消えていたので、続けて別の称号を試すのにアカウントボタンから開き直す必要があった。
+  m.querySelector('#pTitles').onclick = () => showTitlesModal({ back: () => showProfileModal() });
   m.querySelector('#pRename').onclick = () => showRenameModal();
   m.querySelector('#pLogout').onclick = async () => {
     // 通信が届いたかどうかで文面を変える。届いていないとき、消えたのは
@@ -326,7 +328,10 @@ function showProfileModal() {
 // DOM 側も一緒に空にする ── キャッシュだけ捨てても、既に描いてある HTML は
 // 消えない（showScreen は hidden を付け外しするだけ）。
 export function resetScreenCaches() {
-  titlesCatalog = null;
+  // ⚠ titlesCatalog は **ここで捨てない**。称号の id → 名前・色 の表は
+  //   誰の物でもない共通データで、個人情報を1つも含まない。捨てると
+  //   起動時の loadTitles() が1回きりなので、ログアウト→再ログインのあと
+  //   称号名が空文字になり、図鑑には内部IDがそのまま出ていた。
   hofBoard = null;
   shopItems = null;
   shopDeals = null;
@@ -335,7 +340,9 @@ export function resetScreenCaches() {
   missionsCache = null;
   achCache = null;
   guildData = null;
-  for (const id of ['#lbList', '#invBody', '#shopGrid', '#msBody', '#bpTiers', '#friendsBody', '#guildBody', '#adminUsers']) {
+  // #invSummary（コレクション率）も忘れずに。ここが残ると、次に開いた人の
+  // 画面に前の人の収集率が出たままになる（通信に失敗するとそのまま居座る）。
+  for (const id of ['#lbList', '#invBody', '#invSummary', '#shopGrid', '#msBody', '#bpTiers', '#friendsBody', '#guildBody', '#adminUsers']) {
     const el = $(id);
     if (el) el.innerHTML = '';
   }
@@ -545,12 +552,27 @@ function showCreditsModal() {
 // Title catalog cache (for name lookups in profile / leaderboard)
 // ---------------------------------------------------------------------------
 
+// 称号カタログ（id → 名前・色）。**誰の物でもない共通の表**なので、
+// 持ち主が変わっても捨てない（resetScreenCaches の一覧に入れないこと）。
+// 捨てていたころは、起動時の loadTitles() が1回しか走らないせいで
+// ログアウト→再ログインのあと称号名が空文字になり、図鑑には内部IDが出ていた。
 let titlesCatalog = null;
+let titlesLoading = null;
 export async function loadTitles() {
-  try { titlesCatalog = (await api('/api/titles')).titles; } catch { /* offline */ }
+  // 二重に走らせない（起動時の1回と、下の取り直しが重なることがある）。
+  if (titlesLoading) return titlesLoading;
+  titlesLoading = (async () => {
+    try { titlesCatalog = (await api('/api/titles')).titles; }
+    catch { /* 圏外。次に名前を引くときにまた試す */ }
+    finally { titlesLoading = null; }
+  })();
+  return titlesLoading;
 }
 function titleName(id) {
-  const t = titlesCatalog && titlesCatalog.find(x => x.id === id);
+  // 表が無い（起動時の取得が圏外で失敗した／まだ来ていない）ときは、
+  // 黙って空文字を返しつつ裏で取り直す。次に描いたときには名前が出る。
+  if (!titlesCatalog) { loadTitles(); return ''; }
+  const t = titlesCatalog.find(x => x.id === id);
   return t ? catName(t) : '';
 }
 
@@ -604,7 +626,14 @@ export async function showGemShop() {
 // Titles (称号)
 // ---------------------------------------------------------------------------
 
-export async function showTitlesModal() {
+/**
+ * 称号の一覧。
+ * @param back  別のモーダルから開くときの「戻り先」。渡すと閉じたときにそこへ帰る
+ *              （showRankLadder と同じ作法。dom.js の showModal が面倒を見る）。
+ *              プロフィールから開いたのに閉じるとプロフィールごと消えていたので、
+ *              段位一覧（back 付き）と挙動が食い違っていた。
+ */
+export async function showTitlesModal({ back = null } = {}) {
   let data;
   try {
     data = await api('/api/titles');
@@ -624,14 +653,21 @@ export async function showTitlesModal() {
           <span class="t-desc">${catDesc(t)}</span>
         </button>`;
       }).join('')}
-    </div>`);
+    </div>
+    <div class="modal-buttons"><button class="btn btn-primary" id="tiClose">${back ? tr('戻る', 'Back') : tr('閉じる', 'Close')}</button></div>`,
+  back ? { back } : {});
+  m.querySelector('#tiClose').onclick = closeModal;
   m.querySelectorAll('[data-title]').forEach(btn => {
     btn.onclick = async () => {
       if (!session.user) { showAuthModal(); return; }
+      if (btn.disabled) return;
       try {
         await api('/api/titles/equip', { method: 'POST', body: { id: btn.dataset.title || null } });
         audio.click();
         toast(btn.dataset.title ? tr('称号を装備しました', 'Title equipped') : tr('称号を外しました', 'Title removed'), 'ok', 1500);
+        // 上部バーの称号表示を即座に合わせる（次に /api/me が来るまで待たない）。
+        if (session.user) session.user.equippedTitle = btn.dataset.title || null;
+        updateTopbar();
         closeModal();
       } catch (err) { toast(err.message, 'err'); }
     };
@@ -1833,9 +1869,19 @@ export async function openInventory(tab = invTab) {
       shopGift = normalizeGift(data.gift || data.freeGift);
     }
   } catch (err) {
+    if (invTab !== tab) return;   // 待っている間に別のタブへ移った
     body.innerHTML = `<p class="muted center">${escapeHtml(err.message)}</p>`;
     return;
   }
+  // 🏷 タブ連打のレース。/api/shop を待っている間に別のタブが押されると、
+  //    先に押したほうが**あとから**画面を上書きしていた（選んだタブと中身が
+  //    食い違い、「タブが効かない」ように見える）。
+  //    称号と図鑑の中には viewGen の門があるが、装備・アイテム・バッジは
+  //    同期に書くので素通りだった。ここで一度に塞ぐ。
+  //    ⚠ viewGen も進めておくこと ── 同期のタブへ移ったのに、前の非同期タブの
+  //      応答が gen 一致で通ってしまうのを防ぐ。
+  if (invTab !== tab) return;
+  viewGen++;
   renderInvSummary();
   if (tab === 'gear') renderInvGear();
   else if (tab === 'item') renderInvItems();
@@ -2916,7 +2962,14 @@ function renderAchievements() {
   body.querySelectorAll('[data-cat]').forEach(b => {
     b.onclick = () => { audio.click(); achCat = b.dataset.cat; renderAchievements(); };
   });
-  const claim = async id => {
+  // 🔒 二度押しガード。図鑑の受取（上の claim(id, btn)）には元から btn.disabled が
+  //    あるのに、実績側だけ素通しだった。報酬はサーバーが冪等なので金額は狂わない
+  //    が、2発目は「もう受け取り済み」で 4xx が返るので、成功トーストの直後に
+  //    エラー音＋赤いトーストが出る ──「二重に取ろうとして怒られた／取れていない」
+  //    としか読めない。金色の大きいボタンなので連打されやすい。
+  const claim = async (id, btn) => {
+    if (btn && btn.disabled) return;
+    if (btn) btn.disabled = true;
     try {
       const res = await api('/api/achievements/claim', { method: 'POST', body: { id } });
       achCache = res.achievements;
@@ -2928,13 +2981,16 @@ function renderAchievements() {
       renderAchievements();
       refreshMissionDot();
     } catch (err) {
+      // 失敗したら押せる状態に戻す（成功したときは renderAchievements が
+      // ボタンごと描き直すので、戻す必要が無い）。
+      if (btn) btn.disabled = false;
       audio.error();
       toast(err.message, 'err');
     }
   };
-  body.querySelectorAll('[data-ach]').forEach(b => { b.onclick = () => claim(b.dataset.ach); });
+  body.querySelectorAll('[data-ach]').forEach(b => { b.onclick = () => claim(b.dataset.ach, b); });
   const all = body.querySelector('#achAll');
-  if (all) all.onclick = () => claim('*');
+  if (all) all.onclick = () => claim('*', all);
 }
 
 // 週間ランキング報酬の受け取りダイアログ（pending は /api/me が session.user
