@@ -310,6 +310,61 @@ try {
   const sent3 = await net.flushResultQueue();
   const cOld = walletOf(await meOf(tok3));
   check('C 期限切れの控えは送らない', sent3 === 0 && same(cForged, cOld), '');
+
+  // =========================================================================
+  // D. **次のプレイは必ず別の runId になる**（クライアント側の不変条件）
+  // =========================================================================
+  //
+  // ■ なぜここに要るか
+  //   A で見たとおり、サーバーは同じ runId を「再送」とみなして前回の応答を
+  //   そのまま返す ── これは正しい。だから危ないのは逆側で、**別のプレイなのに
+  //   同じ runId を送ってしまう**こと。そうなるとサーバーは正しく捨てるので、
+  //   コイン・XP・ミッション・自己ベストが1つも入らないのに、結果画面には
+  //   前回の報酬額が出る（api() が応答の user を書き戻すので、残高が増えない
+  //   ことも同時に見える）。エラーは1件も出ない。
+  //
+  // ■ 実際に起きていた
+  //   結果画面の「もう一度」には2つの書き方がある:
+  //     ① closeModal(); this.destroy(); startXxx();      … 作り直す（安全）
+  //     ② closeModal(); this.ended = false; this.start(); … 使い回す（危険）
+  //   ②が6モード（ソロ・メルトダウン・キメラ工房・採掘場・幽霊屋敷・
+  //   パズル工房）にあり、その2回目以降が丸ごと捨てられていた。
+  //
+  // ■ 直し方と、ここで見張るもの
+  //   書き方を全部①に揃えるのは漏れる（モードは増え続ける）。そこで
+  //   submitResult が「送った時点で runId を手放す」ようにした。
+  //   ここでは **その1行が生きていること** と、②の書き方が残っていても
+  //   安全であることを見張る。
+  {
+    const modesSrc = fs.readFileSync(path.join(ROOT, 'public/js/modes.js'), 'utf8');
+
+    // submitResult の中で body を組んだ直後に runId を手放しているか。
+    const sub = modesSrc.slice(modesSrc.indexOf('async function submitResult('));
+    const head = sub.slice(0, sub.indexOf('const firstEver'));
+    check('D-1 submitResult が runId を組み立てている',
+      /const body = \{ runId: currentRunId\(\)/.test(head), '');
+    check('D-1 送った時点で runId を手放している（次のプレイは必ず別の値になる）',
+      /currentMode\.runId = null/.test(head),
+      head.includes('currentMode.runId') ? '' : 'submitResult の中に解放が無い');
+
+    // 「もう一度」の書き方を数える。②が1つでも残っているなら、上の解放は必須。
+    const again = [...modesSrc.matchAll(/#rAgain'\)\.onclick = \(\) => \{([\s\S]{0,240}?)\};/g)].map(m => m[1]);
+    const inPlace = again.filter(b => /this\.start\(\)/.test(b) && !/destroy\(\)/.test(b));
+    const rebuilt = again.filter(b => /destroy\(\)/.test(b));
+    check('D-2 「もう一度」の配線を読み取れた', again.length >= 15, `${again.length}件`);
+    check('D-2 作り直す書き方が主流のまま', rebuilt.length >= 10, `作り直し ${rebuilt.length}件 / 使い回し ${inPlace.length}件`);
+    // 使い回しが残っていること自体は責めない（解放があれば安全）。
+    // ただし「解放が無いのに使い回しがある」だけは絶対に許さない。
+    check('D-3 使い回しの書き方があるなら、必ず解放とセットになっている',
+      inPlace.length === 0 || /currentMode\.runId = null/.test(head),
+      `使い回し ${inPlace.length}件`);
+
+    // 1回のプレイで2回送るモードを作ると、2回目が黙って捨てられる。
+    // いまは全モードが finish() で1回だけ。増えたらここで気づけるようにする。
+    const calls = (modesSrc.match(/const rewards = await submitResult\(/g) || []).length;
+    check('D-4 結果を送るのは各モード1回だけ（1回のプレイで2回送らない）',
+      calls >= 15 && calls <= 30, `${calls}箇所（モード数と一致する見込み）`);
+  }
 } finally {
   await stop();
   fs.rmSync(DIR, { recursive: true, force: true });
