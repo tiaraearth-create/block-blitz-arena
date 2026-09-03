@@ -43,6 +43,7 @@ export function setLiveScale(x) {
   liveScale = Math.max(0, Math.min(MAX_LIVE_SCALE, Number(x)));
   if (!Number.isFinite(liveScale)) liveScale = 1;
   rosterCache = null;   // the roster grows with the scale
+  invalidateBoardRanking();
 }
 export function getLiveScale() { return liveScale; }
 export function effectiveScale() { return POP_SCALE * liveScale; }
@@ -95,6 +96,7 @@ export function setCustom(c = {}) {
   if (typeof c.rosterSeed === 'string' && c.rosterSeed) custom.rosterSeed = c.rosterSeed.slice(0, 32);
   rosterCache = null;
   nameIndex = null;     // seed / removed / extra はどれも名前の並びを変える
+  invalidateBoardRanking();
 }
 
 export function getCustom() {
@@ -799,25 +801,93 @@ export function boardResidents(board, weekId, now = Date.now()) {
   // 並び順（Array.prototype.sort は安定・王座計算も先に見つけたほうが勝つ）で
   // 王者が他の住人の上に来るようにするため。
   const champ = registered.find(isChampion) || null;
-  const pool = champ ? registered.filter(r => r !== champ) : registered;
-  // ⚠ 監査の実験用パッチ（あとで必ず元に戻す）: 無作為抽選 → 成績の上位N人
-  const KEY = {
-    score: r => residentStats(r, now, weekId).bestScore,
-    rating: r => residentStats(r, now, weekId).rating,
-    dungeon: r => residentStats(r, now, weekId).dungeonMax,
-    weekly: r => residentStats(r, now, weekId).weeklyBest,
-    sprint: r => residentStats(r, now, weekId).sprintBest,
-    puzzle: r => residentStats(r, now, weekId).dungeonMax,
-    dig: r => residentStats(r, now, weekId).dungeonMax,
-    daily: r => residentDailyScore(r, now),
-  };
-  const kf = KEY[board] || KEY.score;
-  const rest = pool
-    .map(r => ({ r, k: -kf(r) }))
+  // 🏆 「上位100位」なのだから、**成績の上位から**選ぶ。
+  //
+  // ここは長らく unit(id-board, 週) の一様乱数で並べて先頭 count 件を取っていた。
+  // つまり出していたのは上位100人ではなく **無作為な100人** で、その最弱は
+  // 名簿の底だった。実測（本番相当・登録521人）:
+  //     一様乱数の100人 … #1 676,375 / #50 113,555 / #100 3,396 / Lv最小 1
+  //     成績の上位100人 … #1 895,220 / #50 359,408 / #100 271,439 / Lv最小 9
+  // 表示は「オンライン108万人」なのに100位が3,396点＝Lv.1、では嘘が見える。
+  //
+  // ただし厳密な上位100人に固定すると、毎週まったく同じ顔ぶれになって
+  // 世界が止まって見える。順位そのものに ±(band/2) の揺らぎを足して、
+  // **近い実力どうしの中だけで入れ替わる**ようにする。揺らぎの鍵は週替わり
+  // （デイリーは日替わり）なので、同じ週なら顔ぶれも順序も動かない。
+  const band = Math.max(4, Math.round(count * CHURN_BAND));
+  const rest = boardRanking(board, weekId, now)
+    .filter(x => x.r !== champ)
+    .map((x, i) => ({ r: x.r, k: i + band * (unit(`${x.r.id}-${board}`, bucket) - 0.5) }))
     .sort((a, b) => a.k - b.k)
     .slice(0, champ ? Math.max(0, count - 1) : count)
     .map(x => x.r);
   return champ ? [champ, ...rest] : rest;
+}
+
+// 順位の揺らぎ幅（定員に対する比）。0.5 なら定員100人で ±25位ぶん動く ──
+// 隣の実力帯とは入れ替わるが、名簿の底まで落ちることはない。
+const CHURN_BAND = 0.5;
+
+// 🧩 パズル遺跡と ⛏ 採掘場は、住人ごとの専用の記録を持っていない。塔の到達階
+// （dungeonMax）から出している ── ただし係数を全員 0.55 / 0.75 の固定にすると、
+// **3つのボードの並び順が完全に同じ**になる（塔の順位表を3回見せているだけ）。
+// 住人ごとに得手不得手を散らして、板ごとに顔ぶれが変わるようにする。
+// 係数は seed だけで決まるので「同じ日なら同じ値」「自己ベストは下がらない」は
+// どちらも保たれる。⚠ 王座の計算（index.js の computeThrones）も同じ関数を
+// 通すこと ── 別々に書くと、王冠が付く行と値がずれる。
+export function puzzleStageOf(r, st) {
+  const f = isChampion(r) ? 0.65 : 0.45 + 0.20 * unit(r.id, 'pzApt');
+  return Math.max(1, Math.round((st.dungeonMax || 8) * f));
+}
+export function digDepthOf(r, st) {
+  const f = isChampion(r) ? 0.88 : 0.62 + 0.26 * unit(r.id, 'dgApt');
+  return Math.max(3, Math.round((st.dungeonMax || 8) * f));
+}
+
+// 板 → その板で順位を決める値。ghostRows が行に載せる値と**同じ定義**にすること
+// （ずれると「並び順と表示値が食い違う板」ができる）。
+const BOARD_VALUE = {
+  score: (st) => st.bestScore,
+  rating: (st) => st.rating,
+  dungeon: (st) => st.dungeonMax,
+  weekly: (st) => st.weeklyBest,
+  sprint: (st) => st.sprintBest,
+  puzzle: (st, r) => puzzleStageOf(r, st),
+  dig: (st, r) => digDepthOf(r, st),
+};
+
+let rankMemo = new Map();
+export function invalidateBoardRanking() { rankMemo = new Map(); }
+
+// その板における住人全員の順位表（強い順）。boardResidents はここから選ぶ。
+//
+// 名簿は本番規模で 600人・登録済み 521人。全員ぶんの residentStats を引くと
+// 実測 2.8ms（従来は表示する100人ぶんだけで 0.7ms）なので、板と期間で覚えておく。
+// 期間は週（デイリーだけ日）── 顔ぶれが動くのと同じ刻みなので、覚え直しは
+// 週に1回で足りる。名簿が入れ替わる操作（倍率変更・名簿の編集）は
+// invalidateBoardRanking() で捨てる。
+export function boardRanking(board, weekId, now = Date.now()) {
+  // ⚠ getRoster() を**先に**呼ぶこと。rosterCacheSize は getRoster の中で
+  //   確定するので、鍵を先に組むと初回だけ 0 の鍵で覚えてしまい、
+  //   2回目に別の鍵で引き直す（毎回1回ぶん無駄が出る）。
+  const registered = getRoster().filter(r => r.registered);
+  const day = jstDay(now);
+  const bucket = board === 'daily' ? `D${day}` : weekId;
+  const key = `${board}|${bucket}|${day}|${rosterCacheSize}`;
+  const hit = rankMemo.get(key);
+  if (hit) return hit;
+  const vf = BOARD_VALUE[board] || BOARD_VALUE.score;
+  const val = board === 'daily'
+    ? r => residentDailyScore(r, now)
+    : r => vf(residentStats(r, now, weekId), r);
+  const ranked = registered
+    .map(r => ({ r, v: Number(val(r)) || 0 }))
+    // 同値は id で決める。並びが実行のたびに変わると、同じ日でも顔ぶれが
+    // 動いて見える（worldconsistency が見張っている不変条件）。
+    .sort((a, b) => b.v - a.v || (a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0));
+  if (rankMemo.size > 48) rankMemo = new Map();
+  rankMemo.set(key, ranked);
+  return ranked;
 }
 
 export function ghostRows(board, weekId, taken, now = Date.now()) {
@@ -828,7 +898,7 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
   const used = new Set(taken);
   const rows = [];
 
-  const rowOf = (name, st) => ({
+  const rowOf = (name, st, r) => ({
     username: name,
     level: st.level,
     bestScore: st.bestScore,
@@ -841,8 +911,8 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
     sprint180: st.sprint180,
     // v2.6 boards — derived from tower progress so they track each resident's
     // skill drift without new stat plumbing.
-    puzzleStage: Math.max(1, Math.round((st.dungeonMax || 8) * 0.55)),
-    digDepth: Math.max(3, Math.round((st.dungeonMax || 8) * 0.75)),
+    puzzleStage: puzzleStageOf(r, st),
+    digDepth: digDepthOf(r, st),
     badges: st.badges,
     title: st.title,
   });
@@ -858,7 +928,7 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
   const keyed = boardResidents(board, weekId, now).filter(r => !used.has(r.name));
   for (const r of keyed) {
     used.add(r.name);
-    rows.push(stampDaily(rowOf(r.name, residentStats(r, now, weekId)), r));
+    rows.push(stampDaily(rowOf(r.name, residentStats(r, now, weekId), r), r));
   }
 
   // Top up with anonymous ghosts when the board wants more than the cast.

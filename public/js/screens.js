@@ -1152,7 +1152,7 @@ export async function openLeaderboard(board = 'score') {
       }).join('');
       rewardHead = `<div class="lb-rewards"><b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
     }
-    list.innerHTML = navLinks + lbYouHtml(board, data.rows, ranks) + rewardHead + data.rows.map((r, i) => `
+    list.innerHTML = navLinks + lbYouHtml(board, data.rows, ranks, data.you) + rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
         <div class="lb-rank ${ranks[i] === 1 ? 'top1' : ''}">${lbMedal(ranks[i])}</div>
         <div class="lb-name ${r.crowns ? `crowned${Math.min(3, r.crowns)}` : ''}">${r.throne ? `<span class="lb-crown" title="${tr('現王者', 'Reigning champion')}">${icon('throne', { size: 14, label: tr('現王者', 'Reigning champion') })}</span>` : ''}${r.guildTag ? `<span class="lb-tag">[${escapeHtml(r.guildTag)}]</span>` : ''}${escapeHtml(r.username)}
@@ -1176,7 +1176,7 @@ export async function openLeaderboard(board = 'score') {
 
 // 「あなたは◯位」。今までどこにも出ておらず、100位で切られた人は
 // 自分がランキングに存在しないのか、単に載らなかっただけなのかも分からなかった。
-function lbYouHtml(board, rows, ranks) {
+function lbYouHtml(board, rows, ranks, you) {
   const u = session.user;
   if (!u) {
     return `<div class="lb-you guest">${tr('ログインすると、ここに自分の順位が出ます', 'Log in to see your own place here')}</div>`;
@@ -1196,7 +1196,11 @@ function lbYouHtml(board, rows, ranks) {
       <span class="lb-you-val">${lbValueHtml(board, lbValue(board, r))}</span>
     </button>`;
   }
-  const mine = lbMyStatValue(board, u.stats);
+  // 圏外のときの自分の値。サーバーが返してくれるならそれを使う ──
+  // ウィークリーとデイリーは期限つきの記録で、先週／昨日のぶんを今のものとして
+  // 出さない判定はサーバーしか持っていない（index.js の weeklyBestOf / dailyOf）。
+  // 古いサーバー（you を返さない）では従来どおり自前で出す。
+  const mine = (you && Number.isFinite(you.value)) ? you.value : lbMyStatValue(board, u.stats);
   // 100人に届いていない一覧で「圏外」なのは、順位が足りないのではなく
   // このボードにまだ記録が無いから（サーバーが記録0の人を外している）。
   // 「あと◯点で載る」と書くと嘘になるので、そこは分けて言う。
@@ -1208,7 +1212,7 @@ function lbYouHtml(board, rows, ranks) {
   return `<div class="lb-you out">
     <span class="lb-you-rank">—</span>
     <span class="lb-you-body"><span>${full ? tr('あなたは圏外です', 'You are outside the ranking') : tr('あなたはまだ載っていません', 'You are not on this board yet')}</span><small>${why}</small></span>
-    <span class="lb-you-val">${full && mine ? lbValueText(board, mine) : ''}</span>
+    <span class="lb-you-val">${mine ? lbValueText(board, mine) : ''}</span>
   </div>`;
 }
 

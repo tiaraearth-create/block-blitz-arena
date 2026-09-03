@@ -22,8 +22,12 @@
 //   ③ でも「遊んだ事実」は残る（プレイ回数と参加報酬は入る）
 //   ④ 結果に理由が載る（friendly:'guest'）＝画面が「なぜ0なのか」を説明できる
 //   ⑤ 合言葉ルームの対戦も練習試合（friendly:'room'）
-//   ⑥ 巻き添えが無い ── ふつうのレート戦（相手がボット）では今までどおり
-//      勝ち星もレートも連勝も動く
+//   ⑥ 巻き添えが無い（席が埋まる相手との1戦）── 練習試合の印が付かず、勝敗が残る
+//   ⑦ 巻き添えが無い（登録済み2人の1戦）── 勝敗もレートも連勝も今までどおり動く
+//
+// ⑥と⑦を分けてあるのは、席を埋める相手が **未登録** だった回は Elo が動かないのが
+// 正しいから（battle.js の Bot は未登録の席に rating を持たせない）。引きで落ちる
+// テストにしないため、レートの増減は⑦の実戦だけで見る。
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -230,14 +234,52 @@ try {
     const after = await statsOf(tok);
     const moved = (after.pvpWins || 0) + (after.pvpLosses || 0);
     check('⑥ 勝敗がちゃんと記録される', moved === 1, `${after.pvpWins}勝${after.pvpLosses}敗`);
-    check('⑥ レートも動く', after.rating !== 1000, `rating=${after.rating}`);
-    if ((after.pvpWins || 0) === 1) {
-      check('⑥ 勝ったなら連勝も伸びる', (after.winStreakBest || 0) === 1, `winStreakBest=${after.winStreakBest}`);
-    } else {
-      check('⑥ 負けたときは連勝が伸びない（これも従来どおり）', (after.winStreakBest || 0) === 0,
-        `winStreakBest=${after.winStreakBest}`);
-    }
+    // ⚠ ここでレートの増減までは見ない。席を埋める相手が **未登録** だった回は
+    //   Elo が動かないのが正しい（server/battle.js の Bot は
+    //   `rating = persona.registered ? ... : null` で、null なら endMatch の
+    //   oppRating が null になり Elo を回さない）。引きによって落ちるテストに
+    //   なるので、レートが動くことは下の⑦で **登録済み2人** の実戦で見る。
     solo.ws.close();
+    await sleep(400);
+  }
+
+  // =========================================================================
+  // ⑦ 巻き添えが無い（決定的な版）── 登録済み2人のふつうのレート戦は
+  //    勝ち星もレートも連勝も今までどおり動く。
+  //    ここが落ちたら、練習試合の判定が効きすぎている。
+  //    同じ回線でも **3戦目までは数える**ので、1戦のこのテストは影響を受けない
+  //    （連戦の打ち切りは test/moderation.test.mjs の E で見ている）。
+  // =========================================================================
+  {
+    const p = await j('/api/register', { method: 'POST', body: { username: 'ふつうのＰ', password: 'futsu-p-1234' } });
+    const qy = await j('/api/register', { method: 'POST', body: { username: 'ふつうのＱ', password: 'futsu-q-1234' } });
+    check('⑦ 下ごしらえの2アカウント', !!p.token && !!qy.token, `${p.error || ''} ${qy.error || ''}`);
+
+    const cp = await makeClient(null, p.token); open.push(cp);
+    const cq = await makeClient(null, qy.token); open.push(cq);
+    cp.send({ type: 'queue', mode: 'duel' });
+    cq.send({ type: 'queue', mode: 'duel' });
+    await cp.wait('match_found', 20000);
+    await cq.wait('match_found', 20000);
+
+    await sleep(3500);
+    cp.send({ type: 'state', score: 7000, lines: 9, combo: 3 });
+    await sleep(400);
+    const rp = await cp.wait('result', 25000);
+    check('⑦ 登録済みどうしの1戦に練習試合の印が付かない', !('friendly' in rp), `friendly=${rp.friendly}`);
+    check('⑦ レートの増減が返る', rp.ratingDelta !== 0, `ratingDelta=${rp.ratingDelta}`);
+
+    await sleep(600);
+    const sp = await statsOf(p.token);
+    check('⑦ 勝敗が記録される', (sp.pvpWins || 0) + (sp.pvpLosses || 0) === 1, `${sp.pvpWins}勝${sp.pvpLosses}敗`);
+    check('⑦ レートが動く', sp.rating !== 1000, `rating=${sp.rating}`);
+    if ((sp.pvpWins || 0) === 1) {
+      check('⑦ 勝ったなら連勝も伸びる', (sp.winStreakBest || 0) === 1, `winStreakBest=${sp.winStreakBest}`);
+    } else {
+      check('⑦ 負けたときは連勝が伸びない（これも従来どおり）', (sp.winStreakBest || 0) === 0,
+        `winStreakBest=${sp.winStreakBest}`);
+    }
+    cp.ws.close(); cq.ws.close();
   }
 
   // =========================================================================

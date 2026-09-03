@@ -30,7 +30,9 @@ import { trackMissions } from './missions.js';
 import { ACHIEVEMENTS } from './achievements.js';
 import {
   ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider, setTakenNamesProvider, crowdMood, ambientQueue, isQuietNow, residentByName, activeResidents, residentStats, archetype,
-  boardResidents,
+  // 🧩⛏ パズル遺跡と採掘場の値は ambient.js が唯一の正解（王座の計算と
+  //     ランキングの行で同じ関数を通す ── 別々に書くと値がずれる）。
+  boardResidents, puzzleStageOf, digDepthOf,
 } from './ambient.js';
 // 👑 王者の名前は住人名簿の唯一の正解（residents.js）から取る。速報の文面に
 // 文字列を書き写すと、名簿を差し替えた日に告知だけが古い名前を出し続ける。
@@ -3958,8 +3960,8 @@ function computeThrones() {
       case 'sprint': return st.sprintBest;
       case 'dungeon': return st.dungeonMax;
       case 'weekly': return st.weeklyBest;
-      case 'puzzle': return Math.max(1, Math.round((st.dungeonMax || 8) * 0.55));
-      case 'dig': return Math.max(3, Math.round((st.dungeonMax || 8) * 0.75));
+      case 'puzzle': return puzzleStageOf(r, st);
+      case 'dig': return digDepthOf(r, st);
       default: return 0;
     }
   };
@@ -4343,6 +4345,14 @@ app.get('/api/leaderboard', (req, res) => {
     const g = ghostGuildOfResident(name);
     return g ? g.tag : null;
   };
+  const lbVal = r => board === 'rating' ? r.rating
+    : board === 'dungeon' ? r.dungeonMax
+    : board === 'weekly' ? r.weeklyBest
+    : board === 'sprint' ? (r.sprintBest || 0)
+    : board === 'puzzle' ? (r.puzzleStage || 0)
+    : board === 'dig' ? (r.digDepth || 0)
+    : board === 'daily' ? (r.dailyScore || 0)
+    : r.bestScore;
   const rows = realRows
     .concat(ghostRows(board, week, taken).map(r => ({ ...r, guildTag: ghostTagOf(r.username) })))
     .sort((a, b) => board === 'rating' ? b.rating - a.rating
@@ -4361,7 +4371,24 @@ app.get('/api/leaderboard', (req, res) => {
   for (const t of Object.values(db.meta.thrones || {})) if (t) crownCounts.set(t.username, (crownCounts.get(t.username) || 0) + 1);
   for (const r of rows) { const c = crownCounts.get(r.username); if (c) r.crowns = c; }
   // The weekly board pays prizes at the Monday reset — send the tier table.
-  res.json({ board, rows, throne: throne ? { username: throne.username, since: throne.at } : null, ...(board === 'weekly' ? { rewards: rankRewardsTable() } : {}) });
+  // 🙋 圏外の人へ返す「自分のいまの値」。
+  //
+  // 画面側は今まで自前で user.stats から値を出していた（screens.js の
+  // lbMyStatValue）が、ウィークリーとデイリーは**期限つき**の記録なので、
+  // 先週の記録を今週のものとして出してしまう。サーバーは同じ判定を
+  // weeklyBestOf / dailyOf で既にやっているので、その結果をそのまま渡す。
+  //
+  // ⚠ 「あなたは◯位」という**順位は返さない**。順位を返すには住人名簿の
+  //   全員と比べることになり、その最大値（＝名簿の人数）がそのまま
+  //   「この世界の登録者数」として見えてしまう。表示は「オンライン108万人」
+  //   なので、そこで 520位 と出るほうが嘘に見える。順位の代わりに
+  //   「100位に入るには◯点以上」（画面側が cutoff から出す）で足りる。
+  let you = null;
+  if (req.user && req.user.role !== 'admin' && !req.user.banned) {
+    const mine = realRows.find(r => r.username === req.user.username);
+    if (mine) you = { value: lbVal(mine) };
+  }
+  res.json({ board, rows, you, throne: throne ? { username: throne.username, since: throne.at } : null, ...(board === 'weekly' ? { rewards: rankRewardsTable() } : {}) });
 });
 
 // ---------------------------------------------------------------------------
