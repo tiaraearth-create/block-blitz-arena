@@ -240,8 +240,13 @@ function readGuildQuests(guild, weekId) {
 
 // Progress of one quest. 'points' は週間ptそのものなので guild.weekly から引く
 // （加算で二重に数えない）。
-function questProgress(guild, weekId, q, def) {
-  if (def.track === 'points') return (guild.weekly[weekId] && guild.weekly[weekId].total) || 0;
+// minus: 「この1ゲームで足したぶん」。'points' の“達成前”の値を出すのに使う
+// （詳しくは trackGuildQuests の注記）。
+function questProgress(guild, weekId, q, def, minus = 0) {
+  if (def.track === 'points') {
+    const total = (guild.weekly[weekId] && guild.weekly[weekId].total) || 0;
+    return Math.max(0, total - (minus || 0));
+  }
   return numAt(q.p, def.id);
 }
 
@@ -300,10 +305,20 @@ export function trackGuildQuests(db, user, weekId, event = {}) {
   const q = syncGuildQuests(guild, weekId);
   const contrib = questContributions(event);
   const completed = [];
+  // 🗡 'points' クエストだけは「加算する側」がここではない。呼び出し側
+  //    （index.js）が addGuildPoints を**先に**済ませてから来るので、
+  //    guild.weekly の合計はもう今回のぶんを含んでいる。そのまま before に
+  //    使うと was と after が必ず同じ値になり、`!was && after >= goal` が
+  //    一度も真にならない ＝「ギルドptを15,000ためる」の達成が永久に検出
+  //    されなかった（報酬の受け取りは live 判定なので通るが、達成日時も
+  //    ライブフィードへの告知も出ない ── 3本中いちばん達成しやすい1本で、
+  //    ギルド全体の手柄を世界に知らせる仕組みだけが死んでいた）。
+  //    直前に足したぶんを引いて「達成前」を復元する。
+  const justAdded = Math.max(0, Number(event.points) || 0);
   for (const id of q.ids) {
     const def = questDefOf(id);
     if (!def) continue;
-    const before = questProgress(guild, weekId, q, def);
+    const before = questProgress(guild, weekId, q, def, def.track === 'points' ? justAdded : 0);
     const was = before >= def.goal;
     if (def.track !== 'points') {
       const add = contrib[def.track] || 0;

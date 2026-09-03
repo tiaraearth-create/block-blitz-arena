@@ -832,6 +832,17 @@ export function initBattle(server, deps) {
       if (crowns) entry.crown = crowns;
       chatHistory.push(entry);
     }
+    // ⏱ 必ず時刻順に並べ直す。
+    //
+    //    chatHistory には、この上でディスクから戻した**実プレイヤーの発言**が
+    //    既に入っている（db.meta.chatLog）。そこへ 25分前〜30秒前のシードを
+    //    push しただけだと、古い住人の発言が新しい実発言の**後ろ**に並ぶ。
+    //    クライアント（public/js/chat.js の hello_ok）は配列順にそのまま積むので、
+    //    再起動直後に繋いだ人の画面ではタイムスタンプが逆行し、自分の直前の
+    //    発言が古い発言より上に出る（返信の引用も一緒にずれる）。
+    chatHistory.sort((a, b) => (a.at || 0) - (b.at || 0));
+    // 読み込み時と同じ上限に収め直す（8本足したぶんだけ古い側を落とす）。
+    if (chatHistory.length > 60) chatHistory.splice(0, chatHistory.length - 60);
     void ctx;
   }
 

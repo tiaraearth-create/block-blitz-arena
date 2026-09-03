@@ -807,19 +807,47 @@ export class GameView {
     }
 
     if (this.onPlace) this.onPlace(result);
-    if (result.over) {
-      // Staff "invincible" switch / 絶対防御 item: the board resets instead.
-      if (this.godInvincible || this.godInvincibleUntil > Date.now()) {
-        this.engine.reviveBoard();
-        this.reviveFlash();
-        this.addFloatText(this.boardX + this.boardSize / 2, this.boardY + this.boardSize / 2, 'INVINCIBLE!', '#ffd75e', 1.6);
-        return;
-      }
-      // Autopilot 5.0 guard: a rescue may redraw the hand / clear cells instead.
-      if (this.onRescue && this.onRescue()) return;
-      audio.gameOver();
-      if (this.onGameOver) this.onGameOver();
+    // ⚠ handleOver() を直接呼ばないこと。_checkOver を通すと「一度鳴らした」印
+    //   （_wasOver）が立つので、次のコマの見張りが同じ死を二度鳴らさない。
+    if (result.over) this._checkOver();
+  }
+
+  // 盤面が死んだときの共通処理。置いた直後（applyResult）と、毎コマの見張り
+  // （update の _checkOver）の両方から通る。
+  handleOver() {
+    if (!this.engine) return;
+    // Staff "invincible" switch / 絶対防御 item: the board resets instead.
+    if (this.godInvincible || this.godInvincibleUntil > Date.now()) {
+      this.engine.reviveBoard();
+      this.reviveFlash();
+      this.addFloatText(this.boardX + this.boardSize / 2, this.boardY + this.boardSize / 2, 'INVINCIBLE!', '#ffd75e', 1.6);
+      return;
     }
+    // Autopilot 5.0 guard: a rescue may redraw the hand / clear cells instead.
+    if (this.onRescue && this.onRescue()) return;
+    audio.gameOver();
+    if (this.onGameOver) this.onGameOver();
+  }
+
+  // 🪦 盤面が死んだことに気づく口が、長らく「置いた直後」しか無かった。
+  //
+  // engine.over は place() だけでなく **addGarbage() でも立つ**（engine.js:371）。
+  // ところが onGameOver を鳴らすのは applyResult＝1手置いたときだけなので、
+  // お邪魔で埋まって詰んだ場合は「置けない → applyResult が二度と走らない →
+  // 誰も気づかない」で走行が固まる。お邪魔を受ける経路は11か所あり、
+  // そのうち自前で over を見ていたのは4か所だけだった。
+  //
+  // いちばん重かったのが 👁️断罪 ── サーバー側の席は生きたままなので、
+  // 動けない本人に断罪が飛び続け、斬れないので毎回「落とした」になり、
+  // 段のHPが回復し、住人がその人の名前で処刑されていった。
+  //
+  // 個別に足すと必ず漏れる（モードもお邪魔の経路も増え続ける）ので、
+  // 盤面を見ているここで1回だけ拾う。false→true の変化でだけ鳴らすので、
+  // reviveBoard() で生き返ったあとの2度目もちゃんと鳴る。
+  _checkOver() {
+    const over = !!(this.engine && this.engine.over);
+    if (over && !this._wasOver) { this._wasOver = true; this.handleOver(); }
+    else if (!over) this._wasOver = false;
   }
 
   addFloatText(x, y, text, color, size = 1) {
@@ -891,6 +919,8 @@ export class GameView {
   }
 
   update(dt) {
+    // 置いた以外の理由（お邪魔で埋まる等）で盤面が死んでいないか。詳しくは _checkOver。
+    this._checkOver();
     this.particles.intensity = particleFactor();
     this.particles.update(dt);
     // 💥 揺れの減衰。以前は一律 40/秒だったので、ボス攻撃の 24 は 0.6秒も

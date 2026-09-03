@@ -1315,6 +1315,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     //  側でも realPlay を見るまでは寄与が残る ── coordination に残した）
     const questsDone = trackGuildQuests(db, user, wk, {
       mode, won: !!won && realPlay, realPlay,
+      // 🗡 直前に足した週間pt。'points' クエストは加算済みの合計を読むので、
+      //    「達成前」を復元するのにこの値が要る（渡さないと、いちばん達成
+      //    しやすい pt クエストの達成が一度も検出されない）。
+      points: guildPts,
       lines: realPlay ? lines : 0,
       perfectClears: realPlay ? perfectClears : 0,
       ults: realPlay ? ults : 0,

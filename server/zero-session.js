@@ -182,11 +182,27 @@ export function addHuman(s, ws, deps, run = null) {
   // zero_leave → zero_join が来るので、実際にはこれが通常の経路になる。
   const seat = s.entrants.find(e => e.human && (e.ws === ws || e.name === name));
   if (seat) {
+    // 席を外していた人が戻ってきた＝**新しい走行の始まり**（走行のたびに
+    // zero_leave → zero_join が来る）。ここを見分けてから left を倒す。
+    const rejoining = !!seat.left;
     seat.ws = ws;
     seat.left = false;
-    // トップアウトで落ちている最中の人はそのまま（60秒の上限を回避させない）。
-    // 復帰は tick が downUntil を見て面倒をみる。
-    if (!seat.downUntil) seat.alive = true;
+    if (rejoining) {
+      // 🪦 前の走行のダウンは持ち越さない。
+      //    持ち越すと、新しい走行の**途中**で tick の復帰（zero_revive）が飛び、
+      //    クライアントが reviveBoard() を走らせて盤面が全消しされる。しかも
+      //    それまでの席は alive:false なので applyHumanScore が 0 を返し、
+      //    その走行の点は段のHPに1ミリも入らない ── 何もしていないのに
+      //    盤面が消えて「復帰しました」とだけ出る、という形で見えていた。
+      //    連発の抑止は run.topoutAt（ユーザー単位・60秒）が別に持っているので、
+      //    ここを戻しても回復を稼がれることはない。
+      seat.downUntil = 0;
+      seat.alive = true;
+    } else if (!seat.downUntil) {
+      // 同じ走行の中での座り直し（再接続）。トップアウトで落ちている最中の人は
+      // そのまま（60秒の上限を回避させない）。復帰は tick が downUntil を見る。
+      seat.alive = true;
+    }
     seat.lastSeen = now();
     s.lastState = 0;
     return seat;
@@ -564,18 +580,29 @@ export function topOut(s, run, name, deps, userId = null) {
   const e = s.entrants.find(x => x.human && x.name === name);
   if (!e || !e.alive) return false;
   const t = now();
+  // 🪦 席は **必ず** 倒す。詰んだのは盤面の事実で、ここで断ると復帰を面倒みる
+  //    tick の条件（e.downUntil が立っていること／上の 320行）に一生入らない。
+  //    クライアントは zero_topout を送った時点で入力を止めて
+  //    「60秒後に復帰します」と出すので、断られた人は**その画面のまま最大2分**
+  //    置き去りになる（✕で降りるしか出口が無い）。
+  e.alive = false;
+  e.downUntil = t + REVIVE_SEC * 1000;
+
+  // 断るのは「ゼロの回復」だけにする。
   // クールダウンはユーザー単位で run（世界で1本の共有進捗）に持つ。席単位の
   // e.alive だけだと、zero_leave→zero_join で新セッションの alive:true な席を
   // 即座に得られ、60秒に1回の上限を回避して共有進捗を巻き戻せた（griefing）。
+  // ── 守りたいのはこの巻き戻しであって、本人を動けなくすることではない。
+  let heal = true;
   if (userId) {
     run.topoutAt = run.topoutAt || {};
-    if (t - (run.topoutAt[userId] || 0) < REVIVE_SEC * 1000) return false;
-    run.topoutAt[userId] = t;
+    if (t - (run.topoutAt[userId] || 0) < REVIVE_SEC * 1000) heal = false;
+    else run.topoutAt[userId] = t;
   }
-  e.alive = false;
-  e.downUntil = t + REVIVE_SEC * 1000;
   const danIndex = run.dan | 0;
-  run.dealt = Math.max(0, (run.dealt || 0) - Math.round(danHpFor(danIndex, danBasis(s, run), run) * TOPOUT_HEAL));
+  if (heal) {
+    run.dealt = Math.max(0, (run.dealt || 0) - Math.round(danHpFor(danIndex, danBasis(s, run), run) * TOPOUT_HEAL));
+  }
   if (say) say('revive', danIndex, { you: name, seed: now() });
   return true;
 }
@@ -583,16 +610,27 @@ export function topOut(s, run, name, deps, userId = null) {
 // 住人の処刑。1枠3人・1日9人の上限つき。永久には消さない（翌日戻る）。
 function executeResident(s, run, deps, random) {
   run.fallen = run.fallen || [];
-  s.executed = s.executed || 0;
-  if (s.executed >= EXECUTIONS_PER_SLOT) return null;
+  // 🪦 「1枠3人」の数はセッション（s）ではなく **枠（run.slotStartsAt）** に紐づける。
+  //
+  //    セッションに持たせていたころは、その枠から全員がいなくなると部屋が畳まれ
+  //    （battle.js の「誰も見ていない部屋は畳む」）、次に誰かが入った時点で
+  //    新しいセッションになって s.executed が 0 に戻っていた。つまり
+  //    枠の途中で一度みんなが抜けるだけで、1枠に何人でも処刑できた。
+  //    run は枠をまたいで生きている（世界で1本の共有進捗）ので、そちらに
+  //    「どの枠で何人落ちたか」を刻む。
+  //    ⚠ run.fallen は1日ぶんの記録で、翌日に空にされる（下の日またぎ処理）。
+  //      枠の判別は slotStartsAt（adminevent が書き込む枠の開始時刻）。
+  const slotKey = run.slotStartsAt || 0;
+  const inThisSlot = run.fallen.filter(f => f && (f.slot || 0) === slotKey).length;
+  if (inThisSlot >= EXECUTIONS_PER_SLOT) return null;
   if (run.fallen.length >= EXECUTIONS_PER_DAY) return null;
   const pool = liveBots(s);
   if (pool.length <= MIN_BOT_SEATS) return null;   // 席を空にしすぎない
   const victim = pool[Math.floor(random() * pool.length)];
   victim.executed = true;
   victim.alive = false;
-  s.executed++;
-  run.fallen.push({ name: victim.name, id: victim.residentId || null, at: Date.now() });
+  s.executed = (s.executed || 0) + 1;   // 表示・ログ用（上限の判定には使わない）
+  run.fallen.push({ name: victim.name, id: victim.residentId || null, at: Date.now(), slot: slotKey });
   return victim;
 }
 

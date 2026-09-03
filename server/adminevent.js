@@ -488,6 +488,24 @@ export function virtualRun(occ, entrants) {
 export function ensureRun(db, occ, entrants) {
   let run = getRun(db, occ);
   if (run) {
+    // 🕒 いまが何枠目か。**毎回引き直す。**
+    //
+    // run はその日ぶん（dayKey）で1本なので、slotStartsAt を「作ったとき」に
+    // 一度書くだけだと、2枠目・3枠目になっても1枠目の開始時刻を指したままになる。
+    // 👁️断罪の取引は「枠の20分地点」を run.slotStartsAt からの経過で測るので
+    // （zero-session.js の runDeal）、2枠目以降は席に着いた瞬間にもう20分を
+    // 超えていて、**枠の開始直後に開いて誰も気づかないうちに閉じる**。
+    // 取引は段のHP半減・住人の復活・的の列変更まで動かすので、結果も片寄る。
+    // 枠が変わったら取引の「この段はもう済み」の印も解いて、次の枠でもう一度
+    // 開けるようにする（印は段ごと＝dealDoneFor なので、枠をまたぐと居座る）。
+    const nowMs2 = Date.now();
+    const slot = (occ.slots || []).find(x => nowMs2 >= x.startsAt && nowMs2 < x.endsAt);
+    const startsAt = slot ? slot.startsAt : occ.opensAt;
+    if (run.slotStartsAt !== startsAt) {
+      run.slotStartsAt = startsAt;
+      run.dealDoneFor = undefined;
+      run.deal = null;
+    }
     // Late sign-ups grow the target — but never below what has been dealt.
     if (entrants > (run.entrants || 0)) {
       run.entrants = entrants;

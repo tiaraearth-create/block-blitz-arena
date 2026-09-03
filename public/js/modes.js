@@ -2439,6 +2439,12 @@ class VersusBase {
     this.updateTimerHud();
     this.scores = {};       // slot -> latest score of others
     this.miniBoards = {};   // slot -> MiniBoard
+    // ⚠ 盤面の控えも一緒に捨てること。ここだけ残していたので、再戦と
+    //   トーナメントの次ラウンド（どちらも destroy() を通らず同じ
+    //   OnlineMode を使い続ける）で、相手パネルに **前の試合＝前の相手の盤面**
+    //   がそのまま出ていた。最初の zero_state / opp_state が届くまでの数秒、
+    //   別人の盤面を「いまの相手」として見せることになる。
+    this.lastGrids = {};    // slot -> 直近に届いた盤面（届くまでの見た目に使う）
     this.updateBars(0, 0);
   }
 
@@ -4436,7 +4442,13 @@ class DungeonMode {
     this.engine = new Engine();
     // Checkpoint head start: rough stand-in for the perks a fresh run would
     // have accumulated by this floor.
-    const k = Math.floor((this.startFloor - 1) / 10);
+    // 刻み幅はレルムごと（深淵は bossEvery: 5）。ここだけ 10 の決め打ちだったので、
+    // 深淵で A6〜A10 から再開した人はボーナスが**ゼロ**、以降も2つのチェック
+    // ポイントで同じ強化になっていた。選択画面の「強化ボーナス付き」の表示とも
+    // 食い違う。ボーナスは「そこまでに通ったであろうボスの数」の代わりなので、
+    // そのレルムのボス間隔で数えるのが正しい（深淵はボスが倍あるぶん多く付く）。
+    const step = this.realm.bossEvery || 10;
+    const k = Math.floor((this.startFloor - 1) / step);
     if (k > 0) {
       this.engine.scoreMult = 1 + 0.35 * k;
       this.engine.rerolls += k;
@@ -4452,8 +4464,12 @@ class DungeonMode {
     updateAutoBtn();
     v.start();
     const R = this.realm;
-    toast(k > 0
-      ? t(`${R.prefix}${this.startFloor} から再開！（強化ボーナス付き）`, `Resuming from ${R.prefix}${this.startFloor}! (bonus perks included)`)
+    // 文面は「再開かどうか」で決める（ボーナスの有無ではない）。k で分岐して
+    // いたので、ボーナスが 0 になる階から再開した人には「挑戦開始！」と出て、
+    // 1階からやり直しに見えていた。
+    toast(this.startFloor > 1
+      ? t(`${R.prefix}${this.startFloor} から再開！${k > 0 ? '（強化ボーナス付き）' : ''}`,
+        `Resuming from ${R.prefix}${this.startFloor}!${k > 0 ? ' (bonus perks included)' : ''}`)
       : t(`${R.name}に挑戦開始！${R.prefix}${R.floors}を目指せ！`, `${R.nameEn} begins! Reach ${R.prefix}${R.floors}!`), 'announce', 2600);
     countdownOverlay(3, afterCountdown(this, () => {
       v.inputLocked = false;
@@ -4501,15 +4517,23 @@ class DungeonMode {
   }
 
   updateHpBar() {
+    const blind = this.curse === 'blind';
     const pct = Math.max(0, (this.hp / this.info.hp) * 100);
-    $('#bossHp').style.width = `${pct}%`;
-    $('#bossHpText').textContent = this.curse === 'blind' ? '？？？ / ？？？' : `${fmt(Math.max(0, this.hp))} / ${fmt(this.info.hp)}`;
+    // 🕶 盲目の呪いは「敵のHPが見えない」。数字だけ伏せてバーの長さを正確に
+    //    出していたので、呪いが実質何もしていなかった（バーを見れば残量が
+    //    分かるし、与ダメージのフロート表示を足しても分かる）。
+    //    バーは満タンのまま固定し、フロート表示も伏せる。8種の呪いのうち
+    //    1つが丸ごと機能していない状態を、深淵の売り（毎フロアに呪い）として
+    //    放っておかない。
+    $('#bossHp').style.width = blind ? '100%' : `${pct}%`;
+    $('#bossHpText').textContent = blind ? '？？？ / ？？？' : `${fmt(Math.max(0, this.hp))} / ${fmt(this.info.hp)}`;
   }
 
   damageFloat(dmg, big) {
     const span = document.createElement('span');
     span.className = `dmg-float ${big ? 'big' : ''}`;
-    span.textContent = `-${fmt(dmg)}`;
+    // 呪いで隠しているときは数字も出さない（足せば残量が読めてしまう）。
+    span.textContent = this.curse === 'blind' ? '-???' : `-${fmt(dmg)}`;
     span.style.left = `${30 + Math.random() * 40}%`;
     $('#bossPanel').appendChild(span);
     setTimeout(() => span.remove(), 900);
@@ -5667,12 +5691,23 @@ class OnlineMode extends VersusBase {
   // elimination — so it is told, not asked.
   onRoyaleTopOut() {
     if (this.ended || this.royaleDead) return;
+    // ⚠ 復活の返事を待っている間は二度送らない。
+    //
+    //   1回目のトップアウトを送ってから royale_revive が届くまでの数百ミリ秒、
+    //   盤面はまだ埋まったまま（engine.over が true）。そこへお邪魔が1つ届くと
+    //   onRoyaleGarbage の末尾がもう一度ここを呼び、**2通目の royale_topout**が
+    //   飛ぶ。サーバーは「2回目＝脱落」と決めているので、本人からは
+    //   「復活！」のトーストが出た直後に順位が確定したようにしか見えず、
+    //   順位報酬まで丸ごと変わってしまう。
+    if (this.royaleTopoutPending) return;
+    this.royaleTopoutPending = true;
     this.client.send({ type: 'royale_topout' });
     getView().inputLocked = true;   // unlocked again by royale_revive
   }
 
   onRoyaleRevive(msg) {
     if (this.ended) return;
+    this.royaleTopoutPending = false;
     this.engine.reviveBoard();
     this.engine.score = msg.score;
     getView().reviveFlash();
@@ -6516,9 +6551,14 @@ class OnlineMode extends VersusBase {
   updateLandHud() {
     if (!this.engine) return;
     const el = $('#hudScore');
-    el.textContent = fmt(this.engine.score);
-    applyScoreFit(el, fmt(this.engine.score));
-    bumpScore(el);
+    const sc = this.engine.score;
+    el.textContent = fmt(sc);
+    applyScoreFit(el, fmt(sc));
+    // ⚠ 点が動いたときだけ跳ねさせる。tickLandBar が 0.12秒ごとにここを呼ぶので、
+    //    無条件に bumpScore すると 0.25秒のアニメが頭から再生され続け、
+    //    数字がずっと1.2倍・黄色で震えたままになる ── 「点が入った合図」が
+    //    常時鳴っている状態なので、実際に領土を取った瞬間の合図が埋もれる。
+    if (sc !== this._lastLandScore) { this._lastLandScore = sc; bumpScore(el); }
     const mineCount = this.landCounts[this.mySlot] || 0;
     const foeCount = this.landCounts[1 - this.mySlot] || 0;
     $('#hudSub').textContent = t(`あなた ${mineCount} ・ ${this.oppName} ${foeCount}`,
@@ -7210,7 +7250,26 @@ class OnlineMode extends VersusBase {
       mountReactionBar(m, emoji => this.client.send({ type: 'emote', emoji }));
     }
     m.querySelector('#rMenu').onclick = () => { closeModal(); this.destroy(); endToMenu(); };
-    m.querySelector('#rAgain').onclick = () => { closeModal(); this.destroy(); startOnline(this.kind); };
+    m.querySelector('#rAgain').onclick = () => {
+      closeModal();
+      // 🚪 合言葉ルームの「ルームへ」は、**部屋に残る**のが正しい。
+      //
+      //    ここは長らく destroy() → startOnline('custom') だった ── つまり
+      //    接続を捨てて合言葉の入力画面からやり直させていた。ところが
+      //    サーバーは試合が終わると出場者をちゃんと部屋へ戻して room_update を
+      //    送っている（server/battle.js の endRoomSpectate。コメントも
+      //    「戻さないと1試合ごとに2人が部屋から落ちる」と書いてある）。
+      //    クライアントが自分から抜けていたので、部屋で続けて遊ぶ導線が
+      //    お客さん側から辿れなかった（ホストだけが部屋に残る）。
+      if (this.kind === 'custom') {
+        this.inMatch = false;
+        this.ended = false;
+        showScreen('room');
+        return;
+      }
+      this.destroy();
+      startOnline(this.kind);
+    };
     const rBtn = m.querySelector('#rRematch');
     if (rBtn) rBtn.onclick = () => {
       // 🔁 接続を保ったまま同じ相手に再挑戦（destroyするとWSが切れる）
@@ -7255,14 +7314,22 @@ class OnlineMode extends VersusBase {
   quit() {
     if (this.inMatch && !this.ended) {
       this.ended = true;
+      // ⚠ 何だったのかを **destroy() より前に** 控える。
+      //   destroy() は clearSpectateView() を通って spectatingRoom を false に
+      //   戻すので、下のトーストの分岐をそのまま書くと、観戦をやめただけの人にも
+      //   「対戦から離脱しました（敗北扱い・相手の不戦勝）」の赤いトーストが出る。
+      //   forfeit の判定（すぐ下）は destroy の前にあるので元から正しく、
+      //   **文面だけ**が実際の裁定と食い違っていた。
+      const wasSpectating = this.spectatingRoom;
+      const wasRoyaleDead = this.royaleDead;
       // 🚪 「自分で降りた」ことをサーバーへ伝えてから閉じる。伝えないと
       //    回線事故と同じ扱い（再接続の猶予25秒）になり、相手が待たされる。
       //    観戦をやめるだけの回は試合に出ていないので送らない。
-      if (!this.spectatingRoom && this.client) {
+      if (!wasSpectating && this.client) {
         try { this.client.forfeit(); } catch { /* 閉じかけなら何もしない */ }
       }
       this.destroy();
-      toast(this.spectatingRoom
+      toast(wasSpectating
         // 👀 ルームの観戦席（上の quitWarning と同じ順序で分岐すること）。
         //    観戦をやめるだけなので、敗北でも不戦勝でもない。
         ? t('観戦を終了しました', 'Stopped spectating')
@@ -7272,7 +7339,7 @@ class OnlineMode extends VersusBase {
         // ロイヤルには「相手」がいないので、敗北でも不戦勝でもない。
         // すでに脱落・順位確定して観戦中（royaleDead）なら順位は動かないので、
         // 「最下位扱い」ではなく観戦終了として伝える。生存中の離脱だけが最下位扱い。
-        ? (this.royaleDead
+        ? (wasRoyaleDead
             ? t('観戦を終了しました（順位は確定済みです）',
                 'Stopped spectating (your placement is already final)')
             : t('バトルロイヤルから離脱しました（そのときの生存者の中で最下位扱い）',
@@ -7411,10 +7478,22 @@ class SurvivalMode {
     getView().inputLocked = true;
     const e = this.engine;
     const survived = Math.round((Date.now() - this.startedAt) / 1000);
-    const isBest = e.score > this.best();
-    if (isBest) localStorage.setItem('bba_survival_best', String(e.score));
-    if (this.wave > this.bestWave()) localStorage.setItem('bba_survival_wave', String(this.wave));
-    if (isBest && e.score > 0) confettiBurst();
+    // 🏅 このモードが祝うのは **到達ウェーブ**。画面に出している記録
+    //    （HUDの「BEST W..」・メニューの「最高ウェーブ」・サーバーの
+    //    stats.survivalWave・実績の survivalWave）は全部ウェーブなのに、
+    //    帯の判定と紙吹雪だけが bba_survival_best（どこにも表示されない
+    //    スコア記録）で決まっていた。そのせいで
+    //      ・最高ウェーブを更新しても「生存終了…」のまま祝われない
+    //      ・大した回でなくてもスコアさえ上回れば NEW RECORD! が出る
+    //    という、記録の辻褄が合わない状態になっていた。ソロ・メルトダウン・
+    //    キメラ・タイムアタックはどれも「画面に出している記録＝帯の判定」で
+    //    揃っているので、サバイバルだけ規則が違った。
+    //    ⚠ 書き込む前に読むこと（下の setItem より先に判定する）。
+    const isBest = this.wave > this.bestWave();
+    const scoreBest = e.score > this.best();
+    if (scoreBest) localStorage.setItem('bba_survival_best', String(e.score));
+    if (isBest) localStorage.setItem('bba_survival_wave', String(this.wave));
+    if (isBest && this.wave > 0) confettiBurst();
     audio.gameOver();
     const rewards = await submitResult({
       mode: 'survival', score: e.score, lines: e.linesCleared,
@@ -7427,7 +7506,9 @@ class SurvivalMode {
       <div class="result-stats">
         <div class="rs-row"><span>${t('到達ウェーブ', 'Wave reached')}</span><b>W${this.wave}</b></div>
         <div class="rs-row"><span>${t('生存時間', 'Time survived')}</span><b>${Math.floor(survived / 60)}:${String(survived % 60).padStart(2, '0')}</b></div>
-        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
+        ${/* スコアの自己ベストも「見えない記録」にしない。帯はウェーブで決まるので、
+              スコアだけ伸びた回は行の横で伝える。 */''}
+        <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}${scoreBest && e.score > 0 ? ` <small style="color:var(--gold)">${t('自己ベスト', 'best')}</small>` : ''}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         ${rewardsRows(rewards)}
       </div>
@@ -7498,6 +7579,12 @@ class SprintMode {
     countdownOverlay(3, afterCountdown(this, () => {
       if (this.ended) return;
       v.inputLocked = false;
+      // ⏱ 「実際に遊び始めた時刻」。startedAt は 3-2-1 のオーバーレイ（3.3秒）
+      //    より前に打っているので、そちらを分母にすると毎秒スコアが常に低く出る
+      //    （60秒で約5%、180秒で約2%）。このモードで唯一の腕前の指標なのに、
+      //    コメントは「実プレイ時間で割る」と宣言していた。
+      //    サーバーへ送る duration も同じ時計にそろえる。
+      this.playStartedAt = Date.now();
       this.endAt = Date.now() + this.duration * 1000;
       this.tickInt = setInterval(() => this.tick(), 200);
       this.tick();
@@ -7521,7 +7608,9 @@ class SprintMode {
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
     // 走行中に自己ベストを追い越したら BEST も一緒に伸ばす（ソロと同じ扱い）。
     const best = Math.max(sprintBest(this.duration), this.engine.score);
-    const rate = Math.round(this.engine.score / Math.max(1, (Date.now() - this.startedAt) / 1000));
+    // 分母は「遊び始めてから」。3-2-1 の 3.3秒を含めると、序盤ほど大きく低く出る
+    // （開始1秒目は score/4.3 になる）。結果画面の毎秒スコアと同じ時計にそろえる。
+    const rate = Math.round(this.engine.score / Math.max(1, (Date.now() - (this.playStartedAt || this.startedAt)) / 1000));
     $('#hudSub').textContent = t(`${this.duration}秒 ・ BEST ${fmt(best)} ・ ${fmt(rate)}/秒`,
       `${this.duration}s ・ BEST ${fmt(best)} ・ ${fmt(rate)}/s`);
   }
@@ -7543,14 +7632,18 @@ class SprintMode {
 
     const rewards = await submitResult({
       mode: 'sprint', score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
-      duration: Math.max(1, (Date.now() - this.startedAt) / 1000), won: false,
+      // 3-2-1 のぶんは遊んでいない。playStartedAt が無いのは
+      // カウントダウン中に抜けた回だけなので、そのときは 1秒に丸める。
+      duration: Math.max(1, (Date.now() - (this.playStartedAt || Date.now())) / 1000), won: false,
       sprintDur: this.duration,
     });
     // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
     if (currentMode !== this) return;
     const banner = isBest ? 'NEW RECORD!' : reason === 'topout' ? t('盤面が埋まった…', 'Board filled up…') : reason === 'quit' ? t('中断', 'Aborted') : 'TIME UP!';
     // 毎秒スコアは HUD の実レートと同じく実プレイ時間で割る（途中終了で制限時間固定だと過小になる）。
-    const elapsed = Math.max(1, (Date.now() - this.startedAt) / 1000);
+    // ⚠ 分母は playStartedAt（3-2-1 が明けた時刻）。startedAt はオーバーレイの
+    //   前なので、遊べない3.3秒まで数えて常に低く出ていた。
+    const elapsed = Math.max(1, (Date.now() - (this.playStartedAt || this.startedAt)) / 1000);
     const m = showModal(`
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${banner}</div>
       <div class="result-stats">
@@ -8842,6 +8935,15 @@ function endToMenu() {
   clearIntroOverlays();
   const picker = document.querySelector('.emote-picker');
   if (picker) picker.remove();
+  // ⏱ HUDのタイマーを畳む。**urgent（赤＋点滅）を必ず外すこと。**
+  //    サバイバル・ウィークリー・デイリーの destroy() は urgent を戻して
+  //    いなかったので、残り3秒を切った状態で終わると、次に始めたモードの
+  //    HUD（採掘場の深度・パズル遺跡の残り手数・工房の手数）が赤いまま
+  //    0.5秒周期で点滅し続けていた。メルトダウンの臨界やタイムアタックの
+  //    残り10秒と同じ見た目なので、警告表示そのものが信用できなくなる。
+  //    各モードの start() が必要に応じて出し直すので、ここで畳んでよい。
+  const hudTimer = $('#hudTimer');
+  if (hudTimer) { hudTimer.classList.add('hidden'); hudTimer.classList.remove('urgent'); }
   $('#btnEmote').classList.add('hidden');
   showItemBar(false);
   audio.playTrack('menu');

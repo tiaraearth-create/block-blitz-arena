@@ -119,9 +119,20 @@ const EN_MAP = new Map(PHRASES_EN.map(([en, ja]) => [en.toLowerCase(), ja]));
 const EN_MULTI = PHRASES_EN.filter(([en]) => en.includes(' ')).sort((a, b) => b[0].length - a[0].length);
 
 // Trailing chat quirks (w, 草, ！, emoji) are kept as-is on the end.
+//
+// ⚠ 半角の w／ｗ は「日本語のチャットのクセ（草）」としてだけ末尾に残す。
+//   文字クラスに無条件で入れていたので、**英文の最後の1文字も食っていた**。
+//   "lets go now" が body="lets go no" / tail="w" に割れ、no →「いや」と訳されて
+//   誘いが拒否に反転する、という形で日本語側の画面に出ていた
+//   （now / know / show / how / new / win … 末尾が w の語は全部同じ）。
+const TAIL_ALWAYS = '笑草！!?？…〜~。、\\s\\p{Extended_Pictographic}';
+// 日本語が混ざっているか（HAS_JA はこのファイルの下で定義。関数の中から
+// 呼ぶだけなので、宣言より前に書いてあっても実行時には解決している）。
 function splitTail(text) {
-  const m = String(text).match(/^(.*?)([wｗ笑草！!?？…〜~。、\s\p{Extended_Pictographic}]*)$/su);
-  return m ? [m[1], m[2]] : [text, ''];
+  const s = String(text);
+  const cls = HAS_JA.test(s) ? `wｗ${TAIL_ALWAYS}` : TAIL_ALWAYS;
+  const m = s.match(new RegExp(`^(.*?)([${cls}]*)$`, 'su'));
+  return m ? [m[1], m[2]] : [s, ''];
 }
 
 function jaToEn(text) {
@@ -188,7 +199,14 @@ export function translateLocal(text, to) {
   const from = detectLang(text);
   if (from === to) return null;
   const out = to === 'en' ? jaToEn(text) : enToJa(text);
-  if (!out || out === String(text).trim()) return null;
+  // ⚠ 原文と同じかどうかは **大文字小文字を無視して** 比べる。
+  //   enToJa は本文を丸ごと toLowerCase() してから処理するので、表に無い語は
+  //   すべて小文字になって返る。素の !== 比較では「Hades」→「hades」が
+  //   別物と判定され、日本語プレイヤーの画面に "hades" という吹き出しと
+  //   「簡易翻訳 ・ 原文」ボタンが並んでいた（押すと "Hades" に戻るだけ）。
+  //   前後の空白も揃えてから比べる。
+  const src = String(text).trim();
+  if (!out || out === src || out.toLowerCase() === src.toLowerCase()) return null;
   // 🈳 対訳表は「部分文字列の置換」なので、表に無い語が混ざると日本語が
   //    そのまま残った半端な文が出る。実例:
   //      「すきな色」→ "love itな色"（'すき' だけ当たった）
