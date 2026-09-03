@@ -96,7 +96,7 @@ const requireMod = (req, res, next) => ctx.requireMod(req, res, next);
 // しない ── 呼び出し側がレコード削除まで済ませてから1回だけ保存する。
 export function purgeUserContent(userId, username) {
   const id = String(userId || '');
-  if (!id) return { stages: 0, likes: 0, replays: 0, transactions: 0, reports: 0, errors: 0, chat: 0, sockets: 0 };
+  if (!id) return { stages: 0, likes: 0, replays: 0, transactions: 0, reports: 0, errors: 0, chat: 0, sockets: 0, hof: 0, news: 0 };
   const ws = purgeUserWorkshop(id);
   if (ws.stages) console.log(`[workshop] 退会に伴い ${username || id} のステージ ${ws.stages} 件を削除しました`);
   const replays = purgeUserDailyReplays(id);
@@ -107,16 +107,67 @@ export function purgeUserContent(userId, username) {
   //   ここを id で引けるようにするなら記録側（server/index.js の
   //   /api/bugreport と /api/clienterror）に userId を足すのが先。
   const name = String(username || '');
+  // ID を持つ記録は ID で、持たない古い記録は名前で。名前だけで消すと、
+  // 同じ名前を後から取った別人の記録まで巻き添えにする。
+  const isMine = rec => !!rec && (rec.byId ? rec.byId === id : (!!name && rec.by === name));
   let reports = 0;
-  if (name && Array.isArray(db.bugreports)) {
+  if (Array.isArray(db.bugreports)) {
     for (const r of db.bugreports) {
-      if (r && r.by === name) { r.by = TX_ANON_NAME; r.role = 'player'; r.deletedUser = true; reports++; }
+      if (!isMine(r) || r.by === TX_ANON_NAME) continue;
+      r.by = TX_ANON_NAME; r.byId = null; r.role = 'player'; r.deletedUser = true; reports++;
     }
   }
   let errors = 0;
-  if (name && db.meta && Array.isArray(db.meta.clientErrors)) {
+  if (db.meta && Array.isArray(db.meta.clientErrors)) {
     for (const e of db.meta.clientErrors) {
-      if (e && e.by === name) { e.by = TX_ANON_NAME; e.role = 'player'; e.deletedUser = true; errors++; }
+      if (!isMine(e) || e.by === TX_ANON_NAME) continue;
+      e.by = TX_ANON_NAME; e.byId = null; e.role = 'player'; e.deletedUser = true; errors++;
+    }
+  }
+  // 🏛 殿堂に刻まれた名前。記録（順位と値）は歴代の事実なので残し、名前だけ伏せる。
+  //    照合は userId 優先（同姓同名や、その名前を後から取った人を巻き込まない）。
+  let hof = 0;
+  if (db.meta && Array.isArray(db.meta.hallOfFame)) {
+    for (const season of db.meta.hallOfFame) {
+      for (const b of (season && Array.isArray(season.boards) ? season.boards : [])) {
+        for (const t of (Array.isArray(b.top) ? b.top : [])) {
+          const mine = t && (t.userId ? t.userId === id : (!!name && t.username === name));
+          if (!mine || t.username === TX_ANON_NAME) continue;
+          t.username = TX_ANON_NAME; t.userId = null; hof++;
+        }
+      }
+    }
+  }
+  // 📰 お知らせ。未ログインでも読めるので、退会したのに名前だけ残るのは避けたい。
+  //    ただし本文はただの文章なので、名前を無差別に文字列置換すると別の語の
+  //    一部まで壊す（2文字の名前は他の語に埋まりうる）。
+  //    そこで **自分たちが焼き込んだと分かっている記録だけ** を直す ──
+  //    生成時に names を残してあり、書式も必ず「名前（値）」「name (value)」。
+  //    直前が行頭か空白で、直後が開き括弧のときだけ置き換える。
+  //    ⚠ names を持たない古いお知らせは触らない（壊すほうが害が大きい）。
+  //    照合は names に焼いた userId で行う ── 本文は「当時の名前」のまま残す
+  //    方針なので、改名 → 退会 の順で通られると今の名前では引けない。
+  let news = 0;
+  if (Array.isArray(db.news)) {
+    const esc = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const n of db.news) {
+      if (!n) continue;
+      if (name && n.by === name) { n.by = TX_ANON_NAME; news++; }
+      if (!Array.isArray(n.names)) continue;
+      // 古い形（名前だけの配列）も受ける。
+      const rows = n.names.map(x => (typeof x === 'string' ? { name: x, userId: null } : x)).filter(Boolean);
+      const mine = rows.filter(r => (r.userId ? r.userId === id : (!!name && r.name === name)));
+      if (!mine.length) continue;
+      for (const r of mine) {
+        if (!r.name || r.name === TX_ANON_NAME) continue;
+        // 自分たちが焼いた書式「名前（値）」「name (value)」だけを狙う。
+        // 行頭か空白のあとで、直後が開き括弧のときにしか置き換えない。
+        const re = new RegExp(`(^|\\s)${esc(r.name)}(?=[（(])`, 'gm');
+        if (typeof n.body === 'string') n.body = n.body.replace(re, `$1${TX_ANON_NAME}`);
+        if (typeof n.bodyEn === 'string') n.bodyEn = n.bodyEn.replace(re, `$1${TX_ANON_NAME}`);
+      }
+      n.names = rows.filter(r => !mine.includes(r));
+      news++;
     }
   }
   // 💬 全体チャットの履歴と 🚪 開きっぱなしの socket。どちらも battle 側にしか
@@ -131,7 +182,7 @@ export function purgeUserContent(userId, username) {
       sockets = battle.disconnectUser(id, 'このアカウントは削除されました');
     }
   }
-  return { stages: ws.stages, likes: ws.likes, replays, transactions, reports, errors, chat, sockets };
+  return { stages: ws.stages, likes: ws.likes, replays, transactions, reports, errors, chat, sockets, hof, news };
 }
 
 export const adminRouter = express.Router();
@@ -315,13 +366,31 @@ adminRouter.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) =
     if (target.role === 'admin' && b.banned) return res.status(400).json({ error: '管理者は凍結できません' });
     applies.push(() => {
       target.banned = b.banned;
+      if (!b.banned) {
+        // 🔓 解除したら、その人のせいで止めた回線も一緒に戻す。戻さないと
+        //    「凍結を解いたのに、その家からは誰も新規登録できない」が2週間続く。
+        const freed = ctx.clearIpBansFor ? ctx.clearIpBansFor(target.id, target.username) : 0;
+        if (freed) console.log(`[ban] ${target.username} の凍結解除に伴い、回線 ${freed}件を戻しました`);
+        return;
+      }
+      // 🚫 回線ごとの凍結。トークンを捨ててゲストとして入り直す道を塞ぐ。
+      //    止めるのは「ゲストとしての参加」と「新規登録」だけで、その回線の
+      //    **ログイン済みアカウントは素通し**（同じ回線には家族・学校・寮の
+      //    別人がいるのがふつう）。2週間で自動失効する。
+      //    ⚠ 回線を集めるのは切断より **前**。切ったあとでは socket が
+      //      消えていて、いま繋いでいる回線が分からなくなる。
+      const fps = new Set();
+      if (battleReady && battle && typeof battle.ipFingerprintsOf === 'function') {
+        for (const fp of battle.ipFingerprintsOf(target.id)) fps.add(fp);
+      }
+      if (target.lastIpFp) fps.add(target.lastIpFp);   // 今つないでいなくても効かせる
+      const banned = ctx.addIpBans ? ctx.addIpBans([...fps], req.user && req.user.username, target.username, target.id) : 0;
+      if (banned) console.log(`[ban] ${target.username} の回線 ${banned}件を2週間ゲスト参加不可にしました`);
       // 🚪 凍結はその場で効かせる。gateSocket は **メッセージを受け取ったとき
       //    にしか** 走らないので、黙って座っている socket は凍結後もそのまま
       //    生きていた ── 進行中の試合は最後まで遊べるし、全体チャットの受信も
       //    続く。開いている口を閉じるところまでが凍結。
-      //    （トークンを捨ててゲストとして入り直す道は別に残る。そこは
-      //     「ゲストを受け入れる」設計そのものの話なので、ここでは塞がない。）
-      if (b.banned && battleReady && battle && typeof battle.disconnectUser === 'function') {
+      if (battleReady && battle && typeof battle.disconnectUser === 'function') {
         battle.disconnectUser(target.id, 'このアカウントは管理者により凍結されました');
       }
     });
@@ -867,16 +936,23 @@ adminRouter.get('/api/admin/playerstats/:id', requireAuth, requireAdmin, (req, r
   history.reverse();   // 新しい順
 
   // 🐛 この人が出した通報／バグ報告。db.bugreports は
-  // バグ報告・工房通報・パーティー通報が全部落ちる1本の箱で、
-  // 送り主は表示名（by）で入っている。
+  // バグ報告・工房通報・パーティー通報が全部落ちる1本の箱。
+  //
+  // 📌 照合は **ID優先・名前はフォールバック**。表示名だけで引いていたころは、
+  //    誰かが改名した瞬間に「その名前を今持っている別人」の履歴として出ていた
+  //    （改名は1日1回できるので、狙って他人の通報履歴に化けることもできた）。
+  //    byId / targetId は途中から記録し始めた欄なので、それを持たない古い記録は
+  //    今までどおり名前で拾う ── ただし **byId が入っていて別人を指している
+  //    記録は名前が一致しても拾わない**（そこが改名の穴だった）。
+  const ownedBy = (rec, idField) => (rec && rec[idField] ? rec[idField] === u.id : rec && rec.by === u.username);
   const reports = (Array.isArray(db.bugreports) ? db.bugreports : [])
-    .filter(b => b && b.by === u.username)
+    .filter(b => ownedBy(b, 'byId'))
     .slice(-PS_REPORTS_KEEP).reverse()
     .map(b => ({ id: b.id, at: b.at, status: b.status, text: String(b.text || '').slice(0, 300) }));
 
-  // 🧾 運営がこの人に対して何をしたか（adminLog の target は表示名）。
+  // 🧾 運営がこの人に対して何をしたか（同上。target は表示名、targetId がID）。
   const adminActions = (Array.isArray(db.meta.adminLog) ? db.meta.adminLog : [])
-    .filter(l => l && l.target === u.username)
+    .filter(l => (l && l.targetId ? l.targetId === u.id : l && l.target === u.username))
     .slice(-PS_LOG_KEEP).reverse()
     .map(l => ({ at: l.at, by: l.by, action: l.action, detail: l.detail }));
 
@@ -925,6 +1001,47 @@ adminRouter.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res)
   db.deleted[req.params.id] = Date.now();
   saveDb();
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// 🚫 回線ごとの凍結の一覧と解除
+// ---------------------------------------------------------------------------
+// 凍結の副作用として自動で積まれるので、**運営が中身を見られないと解除できない**
+// （誤って家庭の回線を止めてしまったときに戻す手段が無い、が最悪）。
+// 出すのは指紋の先頭だけ。指紋そのものを画面に流しても意味が無いうえ、
+// /api/admin/* は秘匿の関門を経路ごとバイパスするので、出す量は必要最小限にする。
+adminRouter.get('/api/admin/ipbans', requireAuth, requireAdmin, (req, res) => {
+  if (ctx.sweepIpBans) ctx.sweepIpBans();
+  const t = (ctx.ipBansTable ? ctx.ipBansTable() : {});
+  const rows = Object.entries(t).map(([fp, r]) => ({
+    id: fp,
+    short: fp.slice(0, 8),
+    at: r && r.at ? r.at : null,
+    until: r && r.until ? r.until : null,
+    by: r && r.by ? r.by : null,
+    target: r && r.target ? r.target : null,
+  })).sort((a, b) => (b.at || 0) - (a.at || 0));
+  res.json({ bans: rows });
+});
+
+adminRouter.delete('/api/admin/ipbans/:id', requireAuth, requireAdmin, (req, res) => {
+  const t = (ctx.ipBansTable ? ctx.ipBansTable() : {});
+  const id = String(req.params.id || '');
+  if (id === 'all') {
+    const n = Object.keys(t).length;
+    for (const k of Object.keys(t)) delete t[k];
+    adminLog(req, 'ipban_clear_all', null, { count: n });
+    saveDb();
+    return res.json({ ok: true, removed: n });
+  }
+  if (!Object.prototype.hasOwnProperty.call(t, id)) {
+    return res.status(404).json({ error: 'その回線凍結は見つかりません' });
+  }
+  const rec = t[id];
+  delete t[id];
+  adminLog(req, 'ipban_clear', rec && rec.target ? rec.target : id.slice(0, 8), {});
+  saveDb();
+  res.json({ ok: true, removed: 1 });
 });
 
 // Force a brand-new season starting now (everyone's battle pass resets — that

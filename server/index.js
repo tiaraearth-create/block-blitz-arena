@@ -19,7 +19,7 @@ import { initBattle } from './battle.js';
 import {
   hashPassword, verifyPassword, issueToken, revokeToken, revokeAllTokens,
   authMiddleware, requireAuth, requireAdmin, userFromToken, SESSIONS_PERSIST,
-  sweepRevoked, recordLogin,
+  sweepRevoked, recordLogin, fingerprint,
 } from './auth.js';
 import {
   SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED, BOOST_ITEMS,
@@ -2046,6 +2046,85 @@ function sanitizeName(name) {
 }
 
 // ---------------------------------------------------------------------------
+// 🚫 回線ごとの凍結（凍結アカウントの「ゲストになって入り直す」を塞ぐ）
+// ---------------------------------------------------------------------------
+//
+// ■ 何が抜けていたか
+//   凍結もミュートも db.users のレコードを引いて判定する。だからトークンを
+//   捨ててゲストとして入り直すと、判定そのものが走らない ── 凍結された人が
+//   そのまま全体チャットに戻ってこられた。「ゲストを受け入れる」以上、
+//   身元をアカウントだけに頼っていると必ずこの穴が空く。
+//
+// ■ どこまでやるか（ここが肝心）
+//   ・塞ぐのは **ゲストとしての参加と、新規登録** だけ。
+//     ログイン済みアカウントは素通しにする ── 同じ回線には家族・学校・寮の
+//     別人がいるのが普通で（同時接続の上限を12に緩めてあるのはそのため）、
+//     登録済みの人は個別に取り締まれる。巻き添えにする理由が無い。
+//   ・期限を付ける。永久に貯めると、回線が別人に割り当てられた後まで
+//     効き続ける（モバイルや共有回線ではふつうに起きる）。
+//   ・生のIPは保存しない。auth.js の fingerprint() で指紋にしてから持つ。
+//     このリポジトリは「IPは db に残さない」で通してある（adminLog 参照）。
+const IP_BAN_MS = 14 * 24 * 60 * 60 * 1000;   // 2週間で自動失効
+
+function ipBansTable() {
+  if (!db.meta.ipBans || typeof db.meta.ipBans !== 'object') db.meta.ipBans = {};
+  return db.meta.ipBans;
+}
+
+/** 期限切れを掃除する。読むたびに1回通るので、専用の掃除タイマーは要らない。 */
+function sweepIpBans() {
+  const t = ipBansTable();
+  const now = Date.now();
+  let gone = 0;
+  for (const [fp, rec] of Object.entries(t)) {
+    if (!rec || !(Number(rec.until) > now)) { delete t[fp]; gone++; }
+  }
+  return gone;
+}
+
+/** この接続元は凍結されているか（ゲスト参加と新規登録の門で使う）。 */
+function ipBanned(ip) {
+  const fp = fingerprint(ip);
+  if (!fp) return false;
+  const rec = ipBansTable()[fp];
+  if (!rec) return false;
+  if (!(Number(rec.until) > Date.now())) { delete ipBansTable()[fp]; return false; }
+  return true;
+}
+
+/** 凍結したアカウントの回線を登録する。指紋の配列を受ける。 */
+function addIpBans(fps, byName, targetName, targetId) {
+  const t = ipBansTable();
+  const until = Date.now() + IP_BAN_MS;
+  let n = 0;
+  for (const fp of fps) {
+    if (!fp) continue;
+    t[fp] = {
+      until, at: Date.now(), by: byName || '運営',
+      target: targetName || null,
+      // 凍結解除で戻すときの照合はIDで。表示名だと、解除までに改名されると
+      // 引き当てられず、回線だけが2週間止まったまま残る。
+      targetId: targetId || null,
+    };
+    n++;
+  }
+  if (n) sweepIpBans();
+  return n;
+}
+
+/** 凍結を解除したとき、その人のせいで止めた回線も一緒に戻す。 */
+function clearIpBansFor(targetId, targetName) {
+  const t = ipBansTable();
+  let n = 0;
+  for (const [fp, rec] of Object.entries(t)) {
+    if (!rec) continue;
+    const mine = rec.targetId ? rec.targetId === targetId : (!!targetName && rec.target === targetName);
+    if (mine) { delete t[fp]; n++; }
+  }
+  return n;
+}
+
+// ---------------------------------------------------------------------------
 // 🪪 これから名乗る名前（登録・改名・ゲスト名）に使う、厳しいほうの正規化
 // ---------------------------------------------------------------------------
 //
@@ -2102,6 +2181,12 @@ app.post('/api/register', (req, res) => {
     return res.status(429).json({ error: '試行回数が多すぎます。しばらく待ってください' });
   }
   if (inMaintenance()) return res.status(503).json({ error: 'メンテナンス中です。しばらくお待ちください' });
+  // 🚫 凍結された回線からは新しいアカウントを作れない。ここを開けたままだと、
+  //    凍結が「作り直せばよい」だけの手間になる（ログインは塞がない ── 同じ
+  //    回線の別の登録済みプレイヤーを巻き添えにしないため）。
+  if (ipBanned(req.ip)) {
+    return res.status(403).json({ error: 'この回線からは現在アカウントを作成できません' });
+  }
   // claimName（sanitizeName の厳しい版）。全角の「ａｄｍｉｎ」を畳んで予約名の
   // 検査に当てる／見えない文字を落として「運営＋ゼロ幅」を作れなくする。
   const username = claimName(req.body.username);
@@ -2158,6 +2243,12 @@ app.post('/api/login', (req, res) => {
   // 「戻ってきた回数」なので、混ぜると意味が薄まる。auth.js に置いた理由と
   // 「なぜ issueToken の中でやらないか」は recordLogin のコメントに書いた。
   recordLogin(user);
+  // 🔏 この人が最後に使った回線の指紋。凍結したときに「どの回線を止めるか」を
+  //    知るために要る。生のIPは持たない（auth.js の fingerprint 参照）。
+  //    ログインのたびに1つだけ持ち替える ── 履歴を貯めると、凍結の巻き添えが
+  //    その人の引っ越し前の回線にまで広がる。
+  const fp = fingerprint(req.ip);
+  if (fp) user.lastIpFp = fp;
   const dailyBonus = grantDaily(user);
   res.json({ token, user: publicUser(user), dailyBonus });
 });
@@ -2207,8 +2298,26 @@ app.post('/api/me/rename', requireAuth, (req, res) => {
     return res.status(429).json({ error: `名前変更は1日1回までです（あと約${left}時間）` });
   }
   if (username === user.username) return res.status(400).json({ error: '現在と同じ名前です' });
+  const oldName = user.username;
   user.username = username;
   user.lastRename = Date.now();
+  // 🏛 殿堂は「歴代の記録」なので、名前が変わったら追いかける。追いかけないと、
+  //    改名した人の実績が旧名のまま残り、しかもその旧名を後から取った別人の
+  //    実績に見える（殿堂は未ログインでも読める）。照合は userId で行うので、
+  //    同姓同名や名前を取り直した人を巻き込まない。
+  //    ※ お知らせの本文は触らない ── あちらは「そのとき何が起きたか」を書いた
+  //      文章で、当時の名前で読めるほうが記録として正しい。
+  if (Array.isArray(db.meta.hallOfFame)) {
+    let moved = 0;
+    for (const season of db.meta.hallOfFame) {
+      for (const b of (season && Array.isArray(season.boards) ? season.boards : [])) {
+        for (const t of (Array.isArray(b.top) ? b.top : [])) {
+          if (t && t.userId === user.id && t.username !== username) { t.username = username; moved++; }
+        }
+      }
+    }
+    if (moved) console.log(`[halloffame] 改名に伴い ${oldName} → ${username} を ${moved}件書き換えました`);
+  }
   saveDb();
   res.json({ user: publicUser(user) });
 });
@@ -2454,6 +2563,17 @@ function adminLog(req, action, target, detail = {}) {
     byId: req.user ? req.user.id : null,
     action,
     target: target || null,
+    // 🪪 「誰に対して」の側もIDで残す。target は表示名なので、対象が改名すると
+    //    管理画面の「この人に対して何をしたか」が別人の履歴として出てくる
+    //    （by 側は元から byId を持っていたのに、target 側だけ抜けていた）。
+    //    detail.id が入る経路（凍結・削除など）はそれを採り、無ければ表示名で
+    //    引き当てる。古い記録に無いのは従来どおり名前で照合する。
+    // ⚠ detail.id は経路によって「お知らせのID」など別物のこともある。
+    //    **実在するユーザーに解決できたときだけ** 採ること（解決しない値を
+    //    そのまま入れると、targetId があるのに誰にも当たらない記録になり、
+    //    名前でのフォールバックまで塞いでしまう）。
+    targetId: (detail && detail.id && db.users[detail.id] ? detail.id : null)
+      || (target ? (Object.values(db.users).find(u => u.username === target) || {}).id || null : null),
     detail: safe,
   });
   if (db.meta.adminLog.length > ADMIN_LOG_MAX) {
@@ -3001,7 +3121,24 @@ const SEED_NEWS = [
     bodyEn: '[Play offline] Solo modes now work without a connection. Open the game online once and it will start even when you are offline. Modes that need a connection are marked before you tap them.\n' +
       '[Hidden difficulties unlock on phones] They used to need a keyboard. Long-press the title logo and an input pad appears. Unlocks are saved to your account, so they survive switching devices.\n' +
       '[Rankings are full] Some boards did not reach 100th place. Every board now shows a full 100, and your own rank appears even when you are outside it.\n' +
-      '[Other fixes] If your opponent disconnected near the end of a match, the player who stayed could be handed the loss. Fixed. Also fixed double-counted rewards, shop previews that all looked alike, and dozens more.' }
+      '[Other fixes] If your opponent disconnected near the end of a match, the player who stayed could be handed the loss. Fixed. Also fixed double-counted rewards, shop previews that all looked alike, and dozens more.' },
+  { id: 'seed-v240', pinned: true,
+    title: 'アップデート ログアウトの後始末と、対戦の公平さ',
+    titleEn: 'Update: signing out cleanly, and fairer matches',
+    body: '【ログアウトすると、この端末から自分の記録が消えます】これまではログアウトしても、ベストスコアや到達階、パズルの星、隠し要素の解放状態が端末に残っていました。家族や友だちと1台を使っていると、次に開いた人の画面に前の人の数字が出てしまう状態でした。いまはログアウトした時点で画面から消えます。\n' +
+      '【消えるだけで、失われるわけではありません】記録はその人のぶんとして端末に仕舞われるので、同じアカウントで入り直せばそのまま戻ります。パズルの星のようにアカウント側に控えの無いものも失われません。\n' +
+      '【アカウントを削除したときも、端末に何も残りません】削除したのに記録が残る、という状態を無くしました。あわせて、退会すると工房の作品や購入履歴に残っていた表示名も伏せ字になります。\n' +
+      '【「ローカルデータを消す」が2つに分かれました】<b>記録と解放だけ消す</b>と、<b>この端末のものを全部消す</b>から選べます。前者では音量・言語・チュートリアルの状態が残ります。これまでは一括で、しかも消し残しがありました。\n' +
+      '【未登録の相手との対戦は「練習試合」になりました】これまで、アカウントを持たない相手との1対1では、レートは動かないのに勝ち星や勝利報酬だけが入っていました。同じ扱いにそろえ、レートも戦績も勝利報酬も動かないようにしています。参加ぶんの報酬とプレイ回数はこれまでどおり入りますし、結果画面に理由も出ます。合言葉ルームの対戦も同じ扱いです。\n' +
+      '【名前のなりすまし対策】見た目が同じで中身が違う文字を使って、運営や他のプレイヤーの名前を名乗れてしまう問題を塞ぎました。いま使っている名前はそのまま使えます。\n' +
+      '【そのほか】バトルロイヤルで、未登録のまま上位に入ると受け取れない報酬額が表示されていた問題、ログアウトしたのにマッチングが続いていた問題などを直しました。',
+    bodyEn: '[Signing out now clears your records from this device] Until now, best scores, depths, puzzle stars and hidden unlocks stayed on the device after signing out. If you share one device with family or friends, the next person saw the previous person\'s numbers. They are cleared the moment you sign out.\n' +
+      '[Cleared from view, not lost] Your records are kept aside under your own account, so signing back in brings them straight back — including things with no copy on the server, such as puzzle stars.\n' +
+      '[Deleting an account leaves nothing behind either] Deleting used to leave your records on the device. It no longer does, and your display name is also removed from workshop stages and purchase history.\n' +
+      '[Clearing local data is now two choices] <b>Clear records and unlocks</b> or <b>clear everything on this device</b>. The first keeps your volume, language and tutorial state. The old single button both went too far and missed things.\n' +
+      '[Matches against unregistered players are friendlies] Playing someone without an account used to leave your rating alone but still count the win and pay win rewards. Those now agree: rating, record and win rewards all stay put. You still get the participation rewards and the play count, and the result screen explains why. Private room matches work the same way.\n' +
+      '[Name impersonation closed] Characters that look identical but are technically different could be used to take the staff name or another player\'s name. That is fixed, and the name you use today keeps working.\n' +
+      '[Also] Battle Royale used to show a placement reward to unregistered players that they never actually received, and signing out could leave you in matchmaking. Both fixed.' }
 ];
 
 // ニュース本文の改訂番号。SEED_NEWS の文面を書き直したら1つ増やすと、
@@ -3010,7 +3147,7 @@ const SEED_NEWS = [
 // これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
 // 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
 // v2.11.1 の本文を差し替えるのに必要になった。
-const NEWS_BODY_REV = 12;  // v2.34: お知らせ本文の絵文字を言葉に置き換えた（アイコンは画面側の独自SVGに一本化）
+const NEWS_BODY_REV = 13;  // v2.40: ログアウトの後始末と対戦の公平さの告知を追加（seed-v240）
 
 // id で引いたユーザー。`__proto__` や `constructor` を渡されると
 // Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
@@ -3089,7 +3226,7 @@ function seedNews() {
 //
 // 一度きり（db.meta.newsUnpinned で記録）。管理者があとで📌し直したものを
 // 起動のたびに剥がしてしまわないため。
-const KEEP_PINNED = ['seed-v239-play', 'seed-v239-battle', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
+const KEEP_PINNED = ['seed-v240', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
 function unpinOldReleaseNotes() {
   // KEEP_PINNED を変えたら、もう一度だけ剥がし直す必要がある。
   if (db.meta.newsUnpinned === NEWS_BODY_REV) return;
@@ -3119,6 +3256,11 @@ app.post('/api/bugreport', (req, res) => {
     id: crypto.randomUUID(),
     text,
     by: req.user ? req.user.username : 'ゲスト',
+    // 🪪 送り主のアカウントID。表示名は改名で変わるので、これが無いと管理画面の
+    //    「この人が出した通報」が改名した瞬間に別人の履歴になり、退会したときの
+    //    伏せ字も名前一致に頼るしかなかった。古い記録には無いので、読む側は
+    //    byId があればそれで、無ければ従来どおり名前で照合する。
+    byId: req.user ? req.user.id : null,
     role: req.user ? req.user.role : 'guest',
     ua: String(req.headers['user-agent'] || '').slice(0, 160),
     at: Date.now(),
@@ -3215,6 +3357,7 @@ app.post('/api/clienterror', (req, res) => {
     // **別人の端末指紋がその人の名前で** 並んでいた。1行の中で人と端末が
     // 食い違わないよう、必ず同じ1件のもので揃えて入れ替える。
     found.by = req.user ? req.user.username : 'ゲスト';
+    found.byId = req.user ? req.user.id : null;   // by と必ず同じ1人ぶんで揃える
     found.role = req.user ? req.user.role : 'guest';
     found.ua = ua;
     found.lang = lang;
@@ -3226,6 +3369,7 @@ app.post('/api/clienterror', (req, res) => {
   list.push({
     hash, message, stack, where, ua, lang, screen,
     by: req.user ? req.user.username : 'ゲスト',
+    byId: req.user ? req.user.id : null,   // 理由は /api/bugreport の byId と同じ
     role: req.user ? req.user.role : 'guest',
     count: 1, at: Date.now(), lastAt: Date.now(), status: 'open',
   });
@@ -3534,6 +3678,13 @@ function finalizeWeeklyRankings() {
       body: `先週の週間チャレンジの結果です（参加${players.length}人）！\n${top.join('\n')}\n\n参加者全員に順位に応じたコイン＆ジェムをお届けしました。ゲームを開くと受け取れます。今週のチャレンジも開催中！`,
       bodyEn: `Last week's Weekly Challenge results (${players.length} entrants)!\n${top.join('\n')}\n\nEveryone received coins & gems for their placement — open the game to claim. This week's challenge is already live!`,
       pinned: false, by: '運営', at: Date.now(),
+      // 🪪 本文に焼き込んだ名前と、その持ち主。退会したときに**その名前だけ**を
+      //    伏せ字へ置き換えるために要る（お知らせは未ログインでも読めるので、
+      //    退会したのに名前だけが残り続けるのを避ける）。画面には出さない。
+      //    ⚠ 名前だけでなく userId も持つこと。お知らせの本文は「当時の名前」の
+      //      まま残す方針なので、あとで改名されると名前だけでは引けなくなる
+      //      （改名 → 退会、の順で通ると取り残される）。
+      names: players.slice(0, 3).map(u => ({ name: u.username, userId: u.id })),
     });
     if (db.news.length > 200) db.news.shift();
     battle.crowd.feed({
@@ -3650,7 +3801,11 @@ function settleSeasonHallOfFame() {
   for (const b of HOF_BOARDS) {
     const { entrants, top, realTop, realEntrants } = hofTopOf(b.id);
     if (!top.length) continue;
-    boards.push({ id: b.id, name: b.name, nameEn: b.nameEn, entrants, top: top.map(t => ({ rank: t.rank, username: t.username, value: t.value, resident: t.resident })) });
+    // 🪪 userId も焼く。名前だけだと、改名した人が殿堂では旧名のまま残り、
+    //    退会した人の名前を伏せるときも「同姓同名の別人」と見分けが付かない。
+    //    ⚠ 公開の /api/halloffame では resident と一緒に必ず落とすこと（下の
+    //      読み出しでそうしている）── 未ログインで読める口に id は出さない。
+    boards.push({ id: b.id, name: b.name, nameEn: b.nameEn, entrants, top: top.map(t => ({ rank: t.rank, username: t.username, userId: t.userId || null, value: t.value, resident: t.resident })) });
     // フィードの見出しはボードの表示どおり（住人が首位ならその名前）。
     if (top[0]) winners.push({ username: top[0].username, board: b.name, boardEn: b.nameEn });
     // 実プレイヤーが少なすぎるボードは表彰を見送る（1人で400💎を防ぐ）。
@@ -3698,6 +3853,10 @@ function settleSeasonHallOfFame() {
       body: `${prev.name}が終了しました。歴代の記録として殿堂に刻まれた顔ぶれです。\n\n${lineJa}\n\n各ボードで上位に入った挑戦者にはジェムを、その首位にはシーズン刻印バッジをお届けしました（ゲームを開くと受け取れます）。新シーズンもよろしくお願いします！`,
       bodyEn: `${prev.nameEn} has ended — here are the names carved into the Hall of Fame.\n\n${lineEn}\n\nThe top challengers on each board received gems, and the highest of them earned the season champion badge — open the game to claim. See you in the new season!`,
       pinned: false, by: '運営', at: Date.now(),
+      // 🪪 本文に焼き込んだ名前と持ち主（週間結果と同じ理由。上のコメント参照）。
+      //    住人（userId なし）も本文には載るので、名前だけで持っておく。
+      names: [...new Map(boards.flatMap(b => b.top.map(t => [`${t.userId || ''}|${t.username}`,
+        { name: t.username, userId: t.userId || null }]))).values()],
     });
     if (db.news.length > 200) db.news.shift();
     if (battleReady) {
@@ -3730,7 +3889,9 @@ app.get('/api/halloffame', (req, res) => {
       ...e,
       boards: (Array.isArray(e.boards) ? e.boards : []).map(b => ({
         ...b,
-        top: (Array.isArray(b.top) ? b.top : []).map(({ resident, ...t }) => t),
+        // resident は正体そのもの、userId は未ログインで読める口に出す理由が
+        // 無い（改名・退会の追跡に使う内部の欄）。どちらもここで落とす。
+        top: (Array.isArray(b.top) ? b.top : []).map(({ resident, userId, ...t }) => t),
       })),
     }));
   res.json({ seasons: list, current: currentSeason() });
@@ -4467,6 +4628,20 @@ const battle = initBattle(server, {
   // これが無かったころは「運営＋ゼロ幅スペース」や全角の「ａｄｍｉｎ」で
   // 予約名の検査をすり抜けられた ── 画面の見た目は本物と1ドットも変わらない。
   claimName, isClaimableName,
+  // 🚫 回線ごとの凍結。battle.js は hello で「ゲストとしての参加」を断るのに使い、
+  //    ログイン済みは素通しにする（同じ回線の別人を巻き添えにしない）。
+  isIpBanned: ipBanned,
+  ipFingerprint: fingerprint,
+  // 🔏 ログイン済みの接続元を控える。/api/login を通らない再訪（保存済み
+  //    トークンでの起動）でも指紋を更新できるように、WS 側からも呼んでもらう。
+  noteUserIp: (userId, ip) => {
+    const u = db.users[userId];
+    const fp = fingerprint(ip);
+    if (!u || !fp || u.lastIpFp === fp) return;
+    u.lastIpFp = fp;
+    // 保存は他の書き込みに相乗りさせる（ここで saveDb すると接続のたびに
+    // ディスクを叩く。lastSeen が5分に1回書くのと同じ理由）。
+  },
   // 予約名（運営/管理者ゼロ 等）判定。ゲストがWSでこれらを名乗れないように
   // battle.js の hello から使う。クロージャなので RESERVED_NAMES 定義後
   // （＝実際に呼ばれる hello 受信時）に評価される。
@@ -4815,6 +4990,9 @@ setContext({
   // routes/adminevent.js の /api/adminevent/result も同じ性格なので、あちらも
   // maintenanceGuard からこれに差し替えてよい。
   rateLimit, maintenanceGuard, maintenanceResultGuard, requireMod,
+  // 🚫 回線ごとの凍結（凍結アカウントのゲスト回避を塞ぐ）。管理者パネルの
+  //    凍結ボタンから addIpBans、一覧と解除から ipBansTable / sweepIpBans。
+  addIpBans, clearIpBansFor, ipBansTable, sweepIpBans,
   // 期間もの（イベント・シーズン・週・日）
   currentEvent, currentSeason, SEASON_MS, derivedSeasonIndex, adoptLegacySeason,
   syncBattlePass, settleSeasonHallOfFame, SEASON_BADGE_RE,

@@ -137,6 +137,30 @@ export function initBattle(server, deps) {
   //    なりすまし対策は効かなくなるので本番では必ず渡すこと。
   const claimName = deps.claimName || sanitizeName;
   const isClaimableName = deps.isClaimableName || (n => !!String(n || '').trim());
+  // 🚫 回線ごとの凍結。渡ってこない組み方（部分起動のテスト）では素通し。
+  const isIpBanned = deps.isIpBanned || (() => false);
+  const ipFingerprintOf = deps.ipFingerprint || (() => null);
+  const noteUserIp = deps.noteUserIp || (() => {});
+  // 🔍 ゲスト名の照会は「名前を変えたとき」だけ数える。
+  //    hello は何度でも送れるので、名前を変えながら繋ぎ直すだけで
+  //    「その名前は使われているか」を無制限に調べられた（登録者と住人の名簿を
+  //    総当たりで作れる）。ただし素朴にIPで回数制限を掛けると、電波の悪い人が
+  //    再接続を繰り返しただけで枠を使い切る（再接続は1回の切断で最大6本走る）。
+  //    **同じ名前での名乗り直しは無料**にして、名前を変えたときだけ数える ──
+  //    総当たりは名前を変えることでしか成立しないので、これで狙いは外さない。
+  const lastGuestNameByIp = new Map();   // ip -> 直近に名乗った名前
+
+  // 🏠 同じ回線の2アカウントが、レート戦で何度も当たっている組み合わせ。
+  //    マッチングでは同一回線を後回しにしてあるが、他に誰も並んでいなければ
+  //    従来どおり組まれる。そこを無制限にすると、2つ目のアカウントを作って
+  //    交互に勝つだけでレートを押し上げられる。数えて、続きは練習試合に落とす。
+  //    ⚠ 同一回線というだけでは落とさない（家族・学校・寮でふつうに起きる）。
+  //      「同じ回線 × 同じ相手 × 短時間に何度も」の3つが揃ったときだけ。
+  //    メモリにしか持たない ── 再起動で消えてよい程度の重みの判定で、
+  //    db.json を太らせるほうが害が大きい。
+  const REPEAT_WINDOW_MS = 6 * 60 * 60 * 1000;
+  const REPEAT_FREE = 3;                 // ここまでは今までどおり数える
+  const pairHistory = new Map();         // 'idA|idB' -> [終わった時刻]
   // 👑 「王者を破った」の全体速報。連発防止（1人1日1回・印は stats.champAnnDay）と
   // 日英の文面は index.js の announceChampionFall が持っているので、こちらは
   // endMatch で beatChampion が立った直後に呼ぶだけでよい。何度呼んでも二重には
@@ -1884,6 +1908,30 @@ export function initBattle(server, deps) {
     // 終了時点の名乗りで引くと、ゲスト化・別token での戦績回避／付け替えが通る。
     const humanUsers = match.players.map(p =>
       (!p.sock.isBot && p.userId) ? db.users[p.userId] : null);
+
+    // 🏠 同じ回線の2アカウントで、短時間に何度も当たっている組み合わせか。
+    //    ここで数えるのは **試合ごとに1回**（下は選手ごとのループなので、
+    //    そちらで数えると1試合で2回積んでしまう）。
+    let repeatPair = false;
+    if ((match.mode === 'duel' || match.mode === 'attack') && match.rated && match.players.length === 2
+        && humanUsers[0] && humanUsers[1] && humanUsers[0].id !== humanUsers[1].id) {
+      const ipA = sockIp(match.players[0].sock);
+      const ipB = sockIp(match.players[1].sock);
+      if (ipA !== '?' && ipA === ipB) {
+        const key = [humanUsers[0].id, humanUsers[1].id].sort().join('|');
+        const now = Date.now();
+        const hist = (pairHistory.get(key) || []).filter(t => now - t < REPEAT_WINDOW_MS);
+        repeatPair = hist.length >= REPEAT_FREE;
+        hist.push(now);
+        pairHistory.set(key, hist);
+        // 窓から出た組み合わせは捨てる（際限なく増やさない）。
+        if (pairHistory.size > 500) {
+          for (const [k, v] of pairHistory) {
+            if (!v.length || now - v[v.length - 1] > REPEAT_WINDOW_MS) pairHistory.delete(k);
+          }
+        }
+      }
+    }
     // 🔁 デュエル/アタックの2人戦は再戦オファーを用意（30秒有効）。
     let rematchId = null;
     if ((match.mode === 'duel' || match.mode === 'attack') && match.players.length === 2
@@ -1955,7 +2003,8 @@ export function initBattle(server, deps) {
           : (!match.rated && !match.tourney) ? 'room'
             : (!match.rated ? null
               : (!match.players[oppSlot].sock.isBot && !humanUsers[oppSlot]) ? 'guest'
-                : null);
+                : repeatPair ? 'repeat'
+                  : null);
       if (me) {
         if (duel2) {
           const oppUser = humanUsers[1 - p.slot];
@@ -3633,6 +3682,17 @@ export function initBattle(server, deps) {
           // これらは登録できないので db.users には載らず、衝突チェックだけでは
           // 常にすり抜けた。断罪イベント中に偽の「運営」告知を流せる穴だった。
           if (!user) {
+            // 🚫 凍結された回線からは、ゲストとしても入れない。
+            //    ここが開いていると、凍結された人はトークンを捨てるだけで
+            //    そのまま全体チャットへ戻ってこられる（凍結・ミュートの判定は
+            //    db.users を引くので、レコードを名乗らなければ走らない）。
+            //    ログイン済み（この分岐の外）は素通し ── 同じ回線の家族や
+            //    同居人まで巻き添えにしない。
+            if (isIpBanned(sockIp(ws))) {
+              send(ws, { type: 'error', error: 'この回線からは現在ご利用いただけません' });
+              try { ws.close(); } catch { /* すでに閉じている */ }
+              return;
+            }
             // 🪪 登録と**まったく同じ**正規化と文字種検査を通す。
             //   以前は sanitizeName（切って記号を落とすだけ）だったので、
             //   ・「運営」＋ゼロ幅スペース … 予約名の検査に当たらないのに見た目は同じ
@@ -3642,21 +3702,44 @@ export function initBattle(server, deps) {
             //   が全部通っていた。登録できない見た目をゲストなら名乗れる、という
             //   非対称そのものが穴なので、門を1本に揃える。
             const want = claimName(msg.guestName) || '';
+            const ip = sockIp(ws);
+            // 同じ名前での名乗り直し（＝再接続）は数えない。名前を変えたときだけ
+            // 枠を消費する。使い切ったら **照会そのものをやめて** 無条件に
+            // ゲスト名を振る ── 断り方を変えるだけだと、断られたこと自体が
+            // 「その名前は存在する」という答えになる。
+            const sameAsBefore = want && lastGuestNameByIp.get(ip) === want;
+            const mayCheck = !want || sameAsBefore || userRate(`gname:${ip}`, 12, 10 * 60 * 1000);
             const bad = want && !isClaimableName(want);
-            const taken = want && (
+            const taken = want && mayCheck && (
               Object.values(db.users).some(u => u.username.toLowerCase() === want.toLowerCase())
               || reservedName(want)
               || !!residentByName(want)
             );
-            ws.guestName = (want && !bad && !taken) ? want : `ゲスト${Math.floor(Math.random() * 9999)}`;
+            ws.guestName = (want && mayCheck && !bad && !taken) ? want : `ゲスト${Math.floor(Math.random() * 9999)}`;
+            if (want && mayCheck && !bad && !taken) {
+              // 覚えておくのは「その回線が直前に名乗った名前」1つだけ。
+              // 上限を置かないと、接続元の数だけ際限なく増える入れ物になる
+              // （落としても困らない ── 忘れた回線は次の1回だけ枠を消費する）。
+              if (lastGuestNameByIp.size > 2000) lastGuestNameByIp.clear();
+              lastGuestNameByIp.set(ip, want);
+            }
             // 断る理由は出し分けない（「使われている」と「形が悪い」を分けると、
             // 名前を投げ分けるだけで登録者と住人を炙り出す列挙オラクルになる ──
             // /api/register が同じ理由で1文言に統一してある）。
-            if (want && (bad || taken)) send(ws, { type: 'error', error: 'その名前は使えません。別の名前になりました' });
+            // 枠を使い切ったときだけは別の文面にする。こちらは名前について何も
+            // 言っていない（＝答えになっていない）ので、出しても漏れない。
+            if (want && !mayCheck) {
+              send(ws, { type: 'error', error: '名前の変更が多すぎます。しばらくしてからお試しください' });
+            } else if (want && (bad || taken)) {
+              send(ws, { type: 'error', error: 'その名前は使えません。別の名前になりました' });
+            }
           } else {
             ws.guestName = null;
           }
           trackSocket(ws);
+          // 🔏 ログイン済みの接続元を控える（凍結時に「どの回線か」を知るため）。
+          //    保存済みトークンでの再訪は /api/login を通らないので、ここでも拾う。
+          if (user) noteUserIp(user.id, sockIp(ws));
           if (user) {
             // 5分に1回だけ書く。毎回書くと接続のたびにディスクを叩く。
             const live = db.users[user.id];
@@ -4457,6 +4540,18 @@ export function initBattle(server, deps) {
   //
   // 進行中の試合は forfeit させず、close に任せる（切断の扱いは既存の
   // onclose が持っており、そちらのほうが賢い）。
+  // 🔏 いまその人が繋いでいる回線の指紋。凍結したときに「どの回線を止めるか」を
+  //    決めるのに使う。**生のIPは返さない** ── 呼び出し側（管理者パネル）に
+  //    渡ってしまえば、db に残さない方針が意味を失う。
+  function ipFingerprintsOf(userId) {
+    const out = new Set();
+    for (const w of socketsOf(String(userId || ''))) {
+      const fp = ipFingerprintOf(sockIp(w));
+      if (fp) out.add(fp);
+    }
+    return [...out];
+  }
+
   function disconnectUser(userId, reason) {
     const live = socketsOf(String(userId || ''));
     for (const w of live) {
@@ -4496,7 +4591,7 @@ export function initBattle(server, deps) {
     clients,
     party,
     presence: { isOnline, statusOf, sendToUser },
-    disconnectUser, scrubDepartedName,
+    disconnectUser, scrubDepartedName, ipFingerprintsOf,
     matches, rooms,
     endAllForShutdown,
     queueSize: queueSizeAll,   // all seven queues — duel+team alone under-reported

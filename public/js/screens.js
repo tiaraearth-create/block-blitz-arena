@@ -4003,6 +4003,69 @@ function normalizeClientErrors(data) {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// 🚫 回線凍結の一覧と解除（管理者）
+// ---------------------------------------------------------------------------
+// アカウントを凍結すると、その人が使っていた回線からの「ゲスト参加」と
+// 「新規登録」が2週間だけ止まる（トークンを捨ててゲストで戻る道を塞ぐため）。
+// **運営が中身を見られて、手で戻せる**ことがこの機能の前提 ── 家庭や学校の
+// 共有回線を誤って止めたときに、戻す手段が無いのがいちばん困る。
+// 出るのは指紋の頭8文字だけで、接続元のアドレスそのものは保存していない。
+async function showIpBansAdminModal() {
+  let rows = [];
+  let errMsg = '';
+  try {
+    const d = await api('/api/admin/ipbans');
+    rows = Array.isArray(d.bans) ? d.bans : [];
+  } catch (err) {
+    if (err.status !== 404) errMsg = err.message;
+  }
+  const when = t => (t ? new Date(t).toLocaleString('ja-JP') : '—');
+  const left = until => {
+    const ms = Number(until) - Date.now();
+    if (!(ms > 0)) return '期限切れ';
+    const d = Math.floor(ms / 86400000);
+    return d >= 1 ? `あと${d}日` : `あと${Math.max(1, Math.round(ms / 3600000))}時間`;
+  };
+  const row = b => `
+    <div class="feed-row real" style="align-items:flex-start">
+      <span class="feed-icon">${ic('warn', 18)}</span>
+      <span class="feed-text" style="min-width:0;word-break:break-word">
+        ${b.target ? escapeHtml(b.target) : '（対象不明）'} の回線
+        <small class="muted" style="display:block;margin-top:2px">${escapeHtml(b.short || '')} ・ ${when(b.at)} に ${escapeHtml(b.by || '運営')} が凍結 ・ ${left(b.until)}</small>
+      </span>
+      <button class="btn btn-sm btn-ghost" data-ib-del="${escapeHtml(b.id)}" style="color:var(--red)" title="この回線の制限を解除">解除</button>
+    </div>`;
+  const m = showModal(`
+    <h2>${ic('warn', 20)} 回線の凍結（${rows.length}件）</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:8px">
+      凍結したアカウントが「ゲストになって入り直す」「作り直す」のを2週間だけ止めます。<br>
+      同じ回線でも、<b>ログイン済みのアカウントは今までどおり遊べます</b>（家族や学校の共有回線を巻き添えにしないため）。<br>
+      アカウントの凍結を解除すると、その人ぶんはここからも自動で消えます。
+    </p>
+    <div class="feed-list" style="max-height:52vh">
+      ${rows.length ? rows.map(row).join('') : `<p class="muted center">${escapeHtml(errMsg || '凍結中の回線はありません')}</p>`}
+    </div>
+    <div class="modal-buttons">
+      ${rows.length ? '<button class="btn btn-ghost" id="ibClear" style="color:var(--red)">全解除</button>' : ''}
+      <button class="btn btn-primary" id="ibClose">閉じる</button>
+    </div>`);
+  m.querySelector('#ibClose').onclick = closeModal;
+  const clr = m.querySelector('#ibClear');
+  if (clr) clr.onclick = async () => {
+    if (!confirm('凍結中の回線をすべて解除します。よろしいですか？')) return;
+    try { await api('/api/admin/ipbans/all', { method: 'DELETE' }); closeModal(); showIpBansAdminModal(); }
+    catch (err) { toast(err.message, 'err'); }
+  };
+  m.querySelectorAll('[data-ib-del]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try { await api(`/api/admin/ipbans/${encodeURIComponent(b.dataset.ibDel)}`, { method: 'DELETE' }); closeModal(); showIpBansAdminModal(); }
+      catch (err) { toast(err.message, 'err'); b.disabled = false; }
+    };
+  });
+}
+
 async function showClientErrorsAdminModal() {
   let rows = [];
   let errMsg = '';
@@ -4367,6 +4430,24 @@ export function bindAdminActions() {
     }
     if (ce) ce.onclick = () => { audio.click(); showClientErrorsAdminModal(); };
   } catch { /* 管理パネルの形が変わっても他のボタンは死なせない */ }
+
+  // 🚫 回線凍結の一覧。⚠️ の隣に置く（同じ「様子を見る」系のボタン）。
+  //    index.html 側にまだ枠が無いので、上のクライアントエラーと同じ作法で
+  //    無ければ足す。後から index.html に生えたら、それを拾うだけで二重にしない。
+  try {
+    let ib = $('#btnIpBans');
+    if (!ib) {
+      const anchor = $('#btnClientErrors') || $('#btnBugReports');
+      if (anchor && anchor.parentNode) {
+        ib = document.createElement('button');
+        ib.className = 'btn btn-ghost btn-sm';
+        ib.id = 'btnIpBans';
+        ib.textContent = '回線凍結';
+        anchor.parentNode.insertBefore(ib, anchor.nextSibling);
+      }
+    }
+    if (ib) ib.onclick = () => { audio.click(); showIpBansAdminModal(); };
+  } catch { /* 同上 */ }
   $('#btnPoll').onclick = () => { audio.click(); showPollAdminModal(); };
 
   const selfGrant = async (kind) => {

@@ -57,6 +57,27 @@ if (SECRET_SOURCE === 'file') {
   console.warn('[auth] セッション鍵を保存できません: ログイン状態は再起動で失われます。環境変数 SESSION_SECRET を設定してください');
 }
 
+// ---------------------------------------------------------------------------
+// 🔏 値の指紋（照合はできるが、元の値には戻せない）
+// ---------------------------------------------------------------------------
+// 用途は「接続元IPを保存せずに、同じ回線かどうかだけ判定したい」。
+// このリポジトリは **IPアドレスを db に残さない** 方針で通してある
+// （adminLog のコメント参照 ── バックアップは公開リポジトリへコミットされる）。
+// 一方、凍結したアカウントがトークンを捨ててゲストとして入り直す道を塞ぐには、
+// 同じ回線かどうかの判定だけは要る。そこで生のIPではなく HMAC の指紋を持つ。
+//
+// 鍵はセッション鍵をそのまま使う。SESSION_SECRET が設定されていれば再デプロイ
+// をまたいで同じ指紋になり、設定されていなければ再起動で指紋が変わる
+// （＝ IP 凍結も一緒に失効する）。**そこは意図した挙動**にしてある ── 鍵が
+// 揮発する構成で古い指紋だけ残っても、もう誰とも照合できない値になるだけ。
+//
+// 鍵は export しない。ここを通す形にしておけば、鍵そのものが他所へ漏れない。
+export function fingerprint(value) {
+  const s = String(value == null ? '' : value);
+  if (!s || s === '?') return null;
+  return crypto.createHmac('sha256', SECRET).update(s).digest('hex').slice(0, 24);
+}
+
 export function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.pbkdf2Sync(password, salt, 120000, 32, 'sha256').toString('hex');
   return { salt, hash };

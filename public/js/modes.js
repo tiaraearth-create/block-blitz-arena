@@ -7135,6 +7135,8 @@ class OnlineMode extends VersusBase {
         'Private room matches do not change rating, record or win rewards'],
       self: ['同じアカウント同士の対戦のため、レート・戦績・勝利報酬は動きません',
         'Both sides are the same account, so rating, record and win rewards do not change'],
+      repeat: ['同じ回線の同じ相手と短時間に何度も対戦しているため、ここからはレート・戦績・勝利報酬が動きません（時間をおくと戻ります）',
+        'You have played the same opponent on the same connection many times in a short window, so rating, record and win rewards pause here — they return after a while'],
     };
     const friendlyNote = FRIENDLY_NOTE[msg.friendly]
       ? `<p class="center muted" style="font-size:12px;margin:6px 0 2px">${ic('warn', 13)} ${t('練習試合', 'Friendly match')} — ${t(FRIENDLY_NOTE[msg.friendly][0], FRIENDLY_NOTE[msg.friendly][1])}</p>`
