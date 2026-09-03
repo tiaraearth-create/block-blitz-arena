@@ -800,8 +800,20 @@ export function boardResidents(board, weekId, now = Date.now()) {
   // 王者が他の住人の上に来るようにするため。
   const champ = registered.find(isChampion) || null;
   const pool = champ ? registered.filter(r => r !== champ) : registered;
+  // ⚠ 監査の実験用パッチ（あとで必ず元に戻す）: 無作為抽選 → 成績の上位N人
+  const KEY = {
+    score: r => residentStats(r, now, weekId).bestScore,
+    rating: r => residentStats(r, now, weekId).rating,
+    dungeon: r => residentStats(r, now, weekId).dungeonMax,
+    weekly: r => residentStats(r, now, weekId).weeklyBest,
+    sprint: r => residentStats(r, now, weekId).sprintBest,
+    puzzle: r => residentStats(r, now, weekId).dungeonMax,
+    dig: r => residentStats(r, now, weekId).dungeonMax,
+    daily: r => residentDailyScore(r, now),
+  };
+  const kf = KEY[board] || KEY.score;
   const rest = pool
-    .map(r => ({ r, k: unit(`${r.id}-${board}`, bucket) }))
+    .map(r => ({ r, k: -kf(r) }))
     .sort((a, b) => a.k - b.k)
     .slice(0, champ ? Math.max(0, count - 1) : count)
     .map(x => x.r);

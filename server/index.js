@@ -3121,24 +3121,7 @@ const SEED_NEWS = [
     bodyEn: '[Play offline] Solo modes now work without a connection. Open the game online once and it will start even when you are offline. Modes that need a connection are marked before you tap them.\n' +
       '[Hidden difficulties unlock on phones] They used to need a keyboard. Long-press the title logo and an input pad appears. Unlocks are saved to your account, so they survive switching devices.\n' +
       '[Rankings are full] Some boards did not reach 100th place. Every board now shows a full 100, and your own rank appears even when you are outside it.\n' +
-      '[Other fixes] If your opponent disconnected near the end of a match, the player who stayed could be handed the loss. Fixed. Also fixed double-counted rewards, shop previews that all looked alike, and dozens more.' },
-  { id: 'seed-v240', pinned: true,
-    title: 'アップデート ログアウトの後始末と、対戦の公平さ',
-    titleEn: 'Update: signing out cleanly, and fairer matches',
-    body: '【ログアウトすると、この端末から自分の記録が消えます】これまではログアウトしても、ベストスコアや到達階、パズルの星、隠し要素の解放状態が端末に残っていました。家族や友だちと1台を使っていると、次に開いた人の画面に前の人の数字が出てしまう状態でした。いまはログアウトした時点で画面から消えます。\n' +
-      '【消えるだけで、失われるわけではありません】記録はその人のぶんとして端末に仕舞われるので、同じアカウントで入り直せばそのまま戻ります。パズルの星のようにアカウント側に控えの無いものも失われません。\n' +
-      '【アカウントを削除したときも、端末に何も残りません】削除したのに記録が残る、という状態を無くしました。あわせて、退会すると工房の作品や購入履歴に残っていた表示名も伏せ字になります。\n' +
-      '【「ローカルデータを消す」が2つに分かれました】<b>記録と解放だけ消す</b>と、<b>この端末のものを全部消す</b>から選べます。前者では音量・言語・チュートリアルの状態が残ります。これまでは一括で、しかも消し残しがありました。\n' +
-      '【未登録の相手との対戦は「練習試合」になりました】これまで、アカウントを持たない相手との1対1では、レートは動かないのに勝ち星や勝利報酬だけが入っていました。同じ扱いにそろえ、レートも戦績も勝利報酬も動かないようにしています。参加ぶんの報酬とプレイ回数はこれまでどおり入りますし、結果画面に理由も出ます。合言葉ルームの対戦も同じ扱いです。\n' +
-      '【名前のなりすまし対策】見た目が同じで中身が違う文字を使って、運営や他のプレイヤーの名前を名乗れてしまう問題を塞ぎました。いま使っている名前はそのまま使えます。\n' +
-      '【そのほか】バトルロイヤルで、未登録のまま上位に入ると受け取れない報酬額が表示されていた問題、ログアウトしたのにマッチングが続いていた問題などを直しました。',
-    bodyEn: '[Signing out now clears your records from this device] Until now, best scores, depths, puzzle stars and hidden unlocks stayed on the device after signing out. If you share one device with family or friends, the next person saw the previous person\'s numbers. They are cleared the moment you sign out.\n' +
-      '[Cleared from view, not lost] Your records are kept aside under your own account, so signing back in brings them straight back — including things with no copy on the server, such as puzzle stars.\n' +
-      '[Deleting an account leaves nothing behind either] Deleting used to leave your records on the device. It no longer does, and your display name is also removed from workshop stages and purchase history.\n' +
-      '[Clearing local data is now two choices] <b>Clear records and unlocks</b> or <b>clear everything on this device</b>. The first keeps your volume, language and tutorial state. The old single button both went too far and missed things.\n' +
-      '[Matches against unregistered players are friendlies] Playing someone without an account used to leave your rating alone but still count the win and pay win rewards. Those now agree: rating, record and win rewards all stay put. You still get the participation rewards and the play count, and the result screen explains why. Private room matches work the same way.\n' +
-      '[Name impersonation closed] Characters that look identical but are technically different could be used to take the staff name or another player\'s name. That is fixed, and the name you use today keeps working.\n' +
-      '[Also] Battle Royale used to show a placement reward to unregistered players that they never actually received, and signing out could leave you in matchmaking. Both fixed.' }
+      '[Other fixes] If your opponent disconnected near the end of a match, the player who stayed could be handed the loss. Fixed. Also fixed double-counted rewards, shop previews that all looked alike, and dozens more.' }
 ];
 
 // ニュース本文の改訂番号。SEED_NEWS の文面を書き直したら1つ増やすと、
@@ -3147,7 +3130,18 @@ const SEED_NEWS = [
 // これが無いと、一度出したお知らせは二度と直せなかった（seedNews は
 // 英語の補完しかしないため）。実際、管理者向けの内容が載ってしまった
 // v2.11.1 の本文を差し替えるのに必要になった。
-const NEWS_BODY_REV = 13;  // v2.40: ログアウトの後始末と対戦の公平さの告知を追加（seed-v240）
+const NEWS_BODY_REV = 14;  // v2.41: seed-v240 を取り下げ、📌を v2.39 の2件に戻す
+
+// 🗑 取り下げたお知らせ。
+//
+// SEED_NEWS から消しただけでは **すでに公開されている本番の行は残る**
+// （seedNews は「無ければ足す」しかしないので、消えるのはこれから作る機体だけ）。
+// 取り下げは id をここに書くこと ── 起動のたびに db.news から取り除く。
+// 消したあとに同じ id を SEED_NEWS へ戻しても、こちらが勝って消え続けるので、
+// 復活させるときはここからも外すこと。
+//
+// seed-v240（不具合修正の告知）は運営判断で取り下げ。
+const RETIRED_NEWS = ['seed-v240'];
 
 // id で引いたユーザー。`__proto__` や `constructor` を渡されると
 // Object.prototype が返り、そこへの書き込みが全オブジェクトに波及する
@@ -3170,6 +3164,16 @@ const NEWS_EMOJI = /(\p{Extended_Pictographic}(️)?(‍\p{Extended_Pictographic
 const newsKey = (s) => String(s || '').replace(NEWS_EMOJI, '').replace(/\s+/g, '');
 
 function seedNews() {
+  // 🗑 取り下げたお知らせを先に落とす。**改訂番号では門を作らない** ──
+  //    取り下げは「もう出さない」という決定なので、起動のたびに効かせる
+  //    （管理者が手で戻したときも、次の起動で必ず消える側に倒す）。
+  //    下の「無ければ足す」より前に置くこと。逆だと足した直後に消すことになる。
+  if (RETIRED_NEWS.length) {
+    const before = db.news.length;
+    db.news = db.news.filter(n => !n || !RETIRED_NEWS.includes(n.id));
+    const gone = before - db.news.length;
+    if (gone) console.log(`[news] 取り下げたお知らせ ${gone}件を削除しました（${RETIRED_NEWS.join(', ')}）`);
+  }
   // ループ内で push すると2件目以降の判定が狂うので「元から空だったか」を先に確定
   const hadNews = db.news.length > 0;
   const refresh = (db.meta.newsBodyRev || 0) < NEWS_BODY_REV;
@@ -3226,19 +3230,24 @@ function seedNews() {
 //
 // 一度きり（db.meta.newsUnpinned で記録）。管理者があとで📌し直したものを
 // 起動のたびに剥がしてしまわないため。
-const KEEP_PINNED = ['seed-v240', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
+const KEEP_PINNED = ['seed-v239-play', 'seed-v239-battle', 'seed-ghost'];   // 最新の更新 ＋ 常設の小ネタ
 function unpinOldReleaseNotes() {
-  // KEEP_PINNED を変えたら、もう一度だけ剥がし直す必要がある。
+  // KEEP_PINNED を変えたら、もう一度だけ合わせ直す必要がある。
   if (db.meta.newsUnpinned === NEWS_BODY_REV) return;
-  let n = 0;
+  // 📌 は「外す」だけでなく「付け直す」もやる。
+  //    外すだけだと、いちど📌を移したあとで前の版へ戻したくなったときに
+  //    **どこにも📌が無い状態**から復帰できない（実際、取り下げで起きた）。
+  //    KEEP_PINNED を唯一の正解にして、その通りの状態へ合わせる。
+  let off = 0, on = 0;
   for (const item of db.news) {
-    if (!item || !item.pinned) continue;
-    if (KEEP_PINNED.includes(item.id)) continue;
-    item.pinned = false;
-    n++;
+    if (!item) continue;
+    const want = KEEP_PINNED.includes(item.id);
+    if (!!item.pinned === want) continue;
+    item.pinned = want;
+    if (want) on++; else off++;
   }
   db.meta.newsUnpinned = NEWS_BODY_REV;
-  if (n) console.log(`[news] 過去の更新履歴 ${n}件のピン留めを外しました（最新版のみピン留め）`);
+  if (off || on) console.log(`[news] ピン留めを合わせました（外した${off}件 / 付けた${on}件）`);
 }
 
 // ---------------------------------------------------------------------------
