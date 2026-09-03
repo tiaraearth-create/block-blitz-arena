@@ -4,6 +4,8 @@ import { t } from './i18n.js';
 // 段位のしきい値は ranks.js が唯一の正解、絵は icons.js。
 import { rankOf as rankTier } from './ranks.js';
 import { icon } from './icons.js';
+// 🗄 端末に置く bba_* の仕分け（public/js/localdata.js）。
+import { switchOwner, ownerKeyOf } from './localdata.js';
 
 export const $ = sel => document.querySelector(sel);
 export const $$ = sel => [...document.querySelectorAll(sel)];
@@ -1107,6 +1109,21 @@ export function updateTopbar() {
   // ログアウト（＝トークンが消えた）なら控えも捨てる。残すと、次にこの端末を
   // 開いた人の画面に前の人の名前と残高が出る。
   if (!session.token && hasCachedUser()) clearCachedUser();
+
+  // 🗄 遊んでいる人が変わったら、端末に置いてある記録を仕舞い直す。
+  //
+  //   ここに置くのは、session.user が差し替わる経路すべてが必ず
+  //   updateTopbar() を通るから（clearCachedUser や幽霊屋敷の扉と同じ理由）。
+  //   仕舞う＝消すではない ── サーバーに控えが無いもの（パズルの★・カオスの
+  //   自己ベスト等）まで消すと、前の人のデータを隠すために自分のデータを
+  //   失うことになる。詳しくは public/js/localdata.js の冒頭。
+  //
+  //   ⚠ 「トークンはあるのに本物がまだ無い」＝**誰なのか分からない**あいだは
+  //     動かさない。ここで guest に倒すと、起動のたびに
+  //     「ゲストへ仕舞う → 本物が届いて戻す」を往復し、その最中に閉じられると
+  //     記録が控えに入ったままになる。
+  const ownerNow = session.user ? ownerKeyOf(session.user) : (session.token ? null : 'guest');
+  if (ownerNow) switchOwner(ownerNow);
 
   const u = session.user;
   // 控えを描いているあいだは true。権限も残高も、そのまま信じさせない。

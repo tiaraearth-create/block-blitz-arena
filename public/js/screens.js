@@ -1,6 +1,9 @@
 // Sub-screens: auth modal, leaderboard, shop, battle pass, admin panel.
 import { session, api, setToken, refreshMe } from './net.js';
-import { $, $$, showScreen, showModal, closeModal, popModal, toast, fmt, updateTopbar, confettiBurst, rankOf, rankBadge, staffUiOn, setStaffUi, staffExtras, usingCachedUser } from './dom.js';
+import { $, $$, showScreen, showModal, closeModal, popModal, toast, fmt, updateTopbar, confettiBurst, rankOf, rankBadge, staffUiOn, setStaffUi, staffExtras, usingCachedUser, clearCachedUser } from './dom.js';
+// 🗄 端末に置く bba_* の一覧と仕分け（public/js/localdata.js）。
+//    設定の「ローカルデータを消す」と、アカウント削除の後始末が使う。
+import { resetLocal, forgetOwner, ownerKeyOf } from './localdata.js';
 import { getSkin, BOARDS, PALETTE } from './themes.js';
 // 独自SVGアイコン。絵文字は端末ごとに絵が変わるうえ、**別々の商品に同じ絵を
 // 当てても誰も止めてくれない**（実際にエフェクト15品のうち8品が ✨ だった）。
@@ -280,18 +283,63 @@ function showProfileModal() {
   m.querySelector('#pTitles').onclick = () => showTitlesModal();
   m.querySelector('#pRename').onclick = () => showRenameModal();
   m.querySelector('#pLogout').onclick = async () => {
-    try { await api('/api/logout', { method: 'POST' }); } catch { /* ignore */ }
+    // 通信が届いたかどうかで文面を変える。届いていないとき、消えたのは
+    // **この端末のトークンだけ**で、サーバー側のセッションは最長1年生きている。
+    // それを「ログアウトしました」とだけ言うのは嘘に近い（共用PCで
+    // 「ログアウトしたから大丈夫」と席を立たれるのがいちばん困る）。
+    let reachedServer = false;
+    try { await api('/api/logout', { method: 'POST' }); reachedServer = true; } catch { /* 圏外 */ }
     setToken(null);
     session.user = null;
+    // 🚪 対戦用のソケットを閉じる。閉じないと、マッチング画面や合言葉ルームから
+    //    ログアウトしても前のアカウントのまま試合が成立し、勝敗・レート・報酬が
+    //    そのアカウントに入る（ソケットの身元は hello のときに決まるため）。
+    import('./modes.js').then(mod => mod.leaveOnlineOnSignOut()).catch(() => {});
+    // 控えの破棄と、端末に置いた記録の仕舞い直しは updateTopbar が持っている。
     updateTopbar();
+    // 開いていた画面の中身を捨てる。showScreen は hidden を外し付けするだけで
+    // DOM を捨てないので、フレンド一覧・所持品・ミッション・管理画面は
+    // ログアウト後もそのまま残っていた（次に開いた人にも見える）。
+    // ⚠ closeModal より **前** に呼ぶこと（先に閉じると親モーダルが開き直る）。
+    showScreen('menu');
+    resetScreenCaches();
     closeModal();
     // パーティーの棚も畳む。畳まないと、ログアウトしたあとも前の人の
     // パーティーが出たままになる（次に入った人の画面にも残る）。
     import('./party.js').then(p => p.resetParty()).catch(() => {});
     reconnectChat();
     refreshMissionDot();
-    toast(tr('ログアウトしました', 'Logged out'));
+    toast(reachedServer
+      ? tr('ログアウトしました', 'Logged out')
+      : tr('この端末からログアウトしました（サーバーに届かなかったため、他の端末のログインは残っています）',
+        'Signed out on this device — the server could not be reached, so sessions on other devices are still active'),
+    reachedServer ? '' : 'err', reachedServer ? 2500 : 6000);
   };
+}
+
+// ---------------------------------------------------------------------------
+// 🚪 持ち主が変わるときに、画面が抱えている「前の人の情報」を捨てる
+// ---------------------------------------------------------------------------
+// 各画面は取得結果をモジュール変数に貯めて、次に開いたときの初期表示に使う。
+// これを捨てずにログアウトすると、次の人の画面に前の人の所持品・ミッション・
+// ギルド・殿堂・（運営なら）全ユーザーの名簿がそのまま出る。
+// DOM 側も一緒に空にする ── キャッシュだけ捨てても、既に描いてある HTML は
+// 消えない（showScreen は hidden を付け外しするだけ）。
+export function resetScreenCaches() {
+  titlesCatalog = null;
+  hofBoard = null;
+  shopItems = null;
+  shopDeals = null;
+  shopGift = null;
+  shopFetchedAt = 0;
+  missionsCache = null;
+  achCache = null;
+  guildData = null;
+  for (const id of ['#lbList', '#invBody', '#shopGrid', '#msBody', '#bpTiers', '#friendsBody', '#guildBody', '#adminUsers']) {
+    const el = $(id);
+    if (el) el.innerHTML = '';
+  }
+  import('./friends.js').then(f => f.resetFriendsCache()).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -670,8 +718,8 @@ export function showSettingsModal() {
         <button class="btn btn-sm btn-ghost" id="setCredits">${tr('見る', 'View')}</button>
       </div>
       <div class="settings-row danger-row">
-        <label>${tr('ローカルデータをリセット', 'Reset local data')}</label>
-        <button class="btn btn-sm btn-ghost" id="setResetLocal">${tr('実行', 'Reset')}</button>
+        <label>${tr('ローカルデータを消す', 'Clear local data')}<br><small class="muted" style="font-weight:600">${tr('記録だけ／この端末のもの全部、を選べます', 'Choose records only, or everything on this device')}</small></label>
+        <button class="btn btn-sm btn-ghost" id="setResetLocal">${tr('選ぶ', 'Choose')}</button>
       </div>
       ${session.user ? `
       <div class="settings-row danger-row">
@@ -747,34 +795,42 @@ export function showSettingsModal() {
   });
   m.querySelector('#setClose').onclick = closeModal;
 
+  // 🗄 2段階にする。以前はボタン1つで、しかも中身は手書きの消去リスト
+  //    （実在46キーのうち25キーを消し残していた ＝「リセットしたのに前の人の
+  //    ベストスコアが残る」）。いまは:
+  //      ・記録だけ … 記録・解放・所持品を消し、音量/言語/既読は残す
+  //      ・全部     … bba_* を前方一致で丸ごと（ログイン状態だけは残す）
+  //    どちらの一覧も public/js/localdata.js が唯一の正解で、
+  //    test/localkeys.test.mjs がソースから抽出して突き合わせている。
   m.querySelector('#setResetLocal').onclick = () => {
     const c = showModal(`
-      <h2>${tr('ローカルデータをリセット', 'Reset local data')}</h2>
-      <p class="muted center" style="margin-bottom:14px">${tr('設定・ゲストのベストスコア・隠し難易度の解放状態を消去します。', 'This clears your settings, guest best score and hidden-difficulty unlocks.')}<br>${tr('アカウントのデータ（コイン・スコア等）は残ります。', 'Your account data (coins, scores, etc.) is kept.')}${session.user ? `<br>${tr('※ アカウントに保存済みの隠し要素は残り、次回の読み込みで戻ります。', 'Note: hidden content saved to your account stays, and returns on the next load.')}` : ''}</p>
-      <div class="modal-buttons">
-        <button class="btn btn-ghost" id="rlNo">${tr('やめる', 'Cancel')}</button>
-        <button class="btn btn-ai" id="rlYes">${tr('リセットする', 'Reset')}</button>
+      <h2>${tr('ローカルデータを消す', 'Clear local data')}</h2>
+      <p class="muted center" style="margin-bottom:14px">${tr('この端末に保存されているものだけを消します。', 'This only clears what is stored on this device.')}${session.user ? `<br>${tr('アカウントのデータ（コイン・スコア・購入品）は消えません。', 'Your account data — coins, scores and purchases — is not affected.')}` : ''}</p>
+      <div class="form-col">
+        ${/* boss-select は「見出し＋小さな説明」の2行ボタンの既存クラス
+              （display:flex / column / small の字送り）。ここで独自に組むと、
+              ボタンの中で説明文が1行に潰れる。 */''}
+        <button class="btn btn-ghost boss-select" id="rlRecords">
+          <span>${tr('記録と解放だけ消す', 'Clear records and unlocks')}</span>
+          <small>${tr('ベストスコア・到達階・パズルの★・隠し要素・ゲストの所持品<br>音量・言語・チュートリアル済みは残ります', 'Best scores, depths, puzzle stars, hidden content, guest items<br>Volume, language and “tutorial done” are kept')}</small>
+        </button>
+        <button class="btn btn-ai boss-select" id="rlAll">
+          <span>${tr('この端末のものを全部消す', 'Clear everything on this device')}</span>
+          <small>${tr('上に加えて、音量・言語・既読・チュートリアルの状態も初期に戻します', 'Everything above, plus volume, language, read markers and tutorial state')}</small>
+        </button>
+        <div class="modal-buttons">
+          <button class="btn btn-primary" id="rlNo">${tr('やめる', 'Cancel')}</button>
+        </div>
       </div>`);
     c.querySelector('#rlNo').onclick = () => { closeModal(); showSettingsModal(); };
-    c.querySelector('#rlYes').onclick = () => {
-      const keys = [
-        'bba_settings', 'bba_guest_name',
-        // 隠し難易度・隠しモードの解放状態（神／創造神／幽霊屋敷）
-        'bba_kami', 'bba_souzou', 'bba_ghost',
-        // ゲストのベストスコア・ローカル記録
-        'bba_best', 'bba_meltdown_best', 'bba_chimera_best', 'bba_dig_best',
-        'bba_ghost_best', 'bba_chaos_best', 'bba_coop_best', 'bba_survival_best',
-        'bba_survival_wave', 'bba_boss_max', 'bba_rush_depth', 'bba_weekly_best',
-        'bba_daily_record', 'bba_dungeon_abyss_max', 'bba_puzzle_stars', 'bba_puzzle_stage',
-      ];
-      for (const key of keys) localStorage.removeItem(key);
-      // タイムアタックのベストは時間別に複数（bba_sprint_60 等）あるので前方一致で消す。
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith('bba_sprint_')) localStorage.removeItem(k);
-      }
+    const wipe = mode => () => {
+      const removed = resetLocal(mode);
+      // 消した直後に控えへ書き戻されないよう、読み込み直してから使ってもらう。
+      console.log(`[localdata] ${mode}: ${removed.length}件を消しました`);
       location.reload();
     };
+    c.querySelector('#rlRecords').onclick = wipe('records');
+    c.querySelector('#rlAll').onclick = wipe('all');
   };
 
   const delBtn = m.querySelector('#setDeleteAccount');
@@ -791,14 +847,35 @@ export function showSettingsModal() {
         </div>
       </div>`);
     c.querySelector('#delNo').onclick = () => { closeModal(); showSettingsModal(); };
-    c.querySelector('#delYes').onclick = async () => {
+    const delYes = c.querySelector('#delYes');
+    delYes.onclick = async () => {
+      // 連打で二重送信させない。2発目は 401（トークンはもう失効している）で
+      // 返るので、「削除しました」と「パスワードが違います」が同時に出ていた。
+      if (delYes.disabled) return;
+      delYes.disabled = true;
+      // 削除が通ったら端末側も掃除する。どの持ち主のぶんを捨てるかは
+      // session.user が消える**前**に控えておくこと。
+      const gone = ownerKeyOf(session.user);
       try {
         await api('/api/me', { method: 'DELETE', body: { password: c.querySelector('#delPass').value } });
         setToken(null);
         session.user = null;
+        // 🗄 端末に残る「そのアカウントの記録」を控えごと捨てる。
+        //    完全削除と言っておきながら、ベストスコア・到達階・パズルの★・
+        //    解放状態は端末に残り続けていた（次に開いた人にそのまま見える）。
+        //    戻す先のアカウントがもう無いので、仕舞わずに捨てる。
+        forgetOwner(gone);
+        clearCachedUser();          // 「前回の情報」で名前と残高が復活しないように
+        resetScreenCaches();
+        // 上部バーもその場でゲストに戻す（読み込み直すまでの1.5秒、消したはずの
+        // 名前と残高が出たままにしない）。forgetOwner が持ち主を guest に戻した
+        // あとなので、ここでの持ち主の同期は何もしない。
+        updateTopbar();
+        showScreen('menu');
         toast(tr('アカウントを削除しました。ご利用ありがとうございました', 'Account deleted. Thanks for playing!'), 'ok', 3000);
         setTimeout(() => location.reload(), 1500);
       } catch (err) {
+        delYes.disabled = false;
         c.querySelector('#delError').textContent = err.message;
         audio.error();
       }

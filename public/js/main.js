@@ -1,5 +1,7 @@
 // App bootstrap: wire menu, session restore, global buttons.
 import { session, api, refreshMe, setToken, queuedResultCount, UNLOCK_LS_KEYS } from './net.js';
+// 🗄 端末に置く bba_* の一覧と仕分け（public/js/localdata.js）。
+import { noteUnlockSource, locallyEarnedUnlocks } from './localdata.js';
 import { $, $$, showScreen, showModal, closeModal, popModal, toast, updateTopbar, fmt, staffExtras , goBack, initHistory } from './dom.js';
 import { audio } from './audio.js';
 import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked, tutorialDone } from './modes.js';
@@ -304,7 +306,13 @@ function hasUnlock(id) {
   try { return localStorage.getItem(UNLOCK_LS_KEYS[id]) === '1'; } catch { return false; }
 }
 function markUnlockLocally(id) {
-  try { localStorage.setItem(UNLOCK_LS_KEYS[id], '1'); } catch { /* 保存できなくてもこの回は遊べる */ }
+  try {
+    localStorage.setItem(UNLOCK_LS_KEYS[id], '1');
+    // 「この端末で自力で見つけた」印。これがあるものだけが下の
+    // carryOverLocalUnlocks でアカウントへ引き継がれる（＝別のアカウントから
+    // 写ってきただけの解放は引き継がない）。
+    noteUnlockSource(UNLOCK_LS_KEYS[id], 'local');
+  } catch { /* 保存できなくてもこの回は遊べる */ }
 }
 
 // 解放をアカウントへ送る。ゲスト（未ログイン）は何もしない。
@@ -409,7 +417,15 @@ function carryOverLocalUnlocks() {
   if (u.stats.unlockImportedAt) return;            // このアカウントは引き継ぎ済み
   if (unlockCarried.has(u.id)) return;
   const have = u.stats.unlocks || [];
-  const ids = Object.keys(UNLOCK_LS_KEYS).filter(id => hasUnlock(id) && !have.includes(id));
+  // 引き継ぐのは **この端末で自力で見つけたぶんだけ**。
+  // 以前は「印が付いていれば何でも」送っていたので、共用端末で
+  //   A（神を持っている）がログイン → 端末に神の印が写る → Aがログアウト
+  //   → Bがログイン → Bのアカウントに神が入る
+  // が起きていた。しかも引き継ぎは1アカウント1回きりなので、Bは自分の枠を
+  // 他人の解放で使い切ってしまう。
+  const earned = new Set(locallyEarnedUnlocks());
+  const ids = Object.keys(UNLOCK_LS_KEYS)
+    .filter(id => hasUnlock(id) && earned.has(UNLOCK_LS_KEYS[id]) && !have.includes(id));
   if (!ids.length) return;                         // 送るものが無いなら1回きりの枠を使わない
   unlockCarried.add(u.id);
   api('/api/me/unlocks', { method: 'POST', body: { unlocks: ids, from: 'local' } })

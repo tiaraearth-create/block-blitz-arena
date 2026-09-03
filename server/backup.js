@@ -943,15 +943,34 @@ export function applyRestore(db, data, mode = 'merge', opts = {}) {
   const report = { mode, added: 0, updated: 0, kept: 0, tokens: 0, before, after: 0 };
 
   if (mode === 'replace') {
+    // 🪦 墓標と失効トークンだけは「この機体の履歴」なので、ファイル側で
+    //    上書きせず**足し算**にする。両方とも一度立ったら二度と下ろさない性質の
+    //    もので、巻き戻すと消したはずのアカウントと、失効させたはずのセッションが
+    //    そのまま生き返る（merge 側は元から墓標を見ていたが、replace だけが
+    //    素通りしていた ── 経路で挙動が割れているのがそもそもの問題）。
+    //    衝突したらこの機体の値を採る（こちらのほうが新しい）。
+    const deadUnion = { ...(data.deleted && typeof data.deleted === 'object' ? data.deleted : {}), ...(db.deleted || {}) };
+    const revokedUnion = { ...(data.revoked && typeof data.revoked === 'object' ? data.revoked : {}), ...(db.revoked || {}) };
     db.users = data.users;
+    // 墓標のあるアカウントは、ファイルに載っていても復活させない。
+    let resurrected = 0;
+    for (const id of Object.keys(db.users || {})) {
+      if (deadUnion[id]) { delete db.users[id]; resurrected++; }
+    }
+    if (resurrected) console.log(`[restore] 削除済みアカウント ${resurrected} 件は墓標に従って復元しませんでした`);
     db.tokens = data.tokens && typeof data.tokens === 'object' ? data.tokens : {};
+    // 旧形式のトークン表も同じ理由で掃除する。ユーザーだけ消してトークンを
+    // 残すと、そのトークンで「持ち主のいないセッション」が生き続ける。
+    for (const [tok, rec] of Object.entries(db.tokens)) {
+      if (rec && deadUnion[rec.userId]) delete db.tokens[tok];
+    }
     if (data.season) db.season = data.season;
     if (Array.isArray(data.transactions)) db.transactions = data.transactions;
     if (data.guilds && typeof data.guilds === 'object') db.guilds = sanitizeGuilds(data.guilds);
     if (Array.isArray(data.news)) db.news = data.news;
     if (Array.isArray(data.bugreports)) db.bugreports = data.bugreports;
-    if (data.revoked && typeof data.revoked === 'object') db.revoked = data.revoked;
-    if (data.deleted && typeof data.deleted === 'object') db.deleted = data.deleted;
+    db.revoked = revokedUnion;
+    db.deleted = deadUnion;
     if (data.meta && typeof data.meta === 'object') {
       // seedHash は「同梱 seed をもう適用したか」の記録で、この機体の履歴に
       // 属するもの。バックアップ側の値で上書きしてはいけない。

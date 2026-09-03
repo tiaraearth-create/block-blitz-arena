@@ -353,6 +353,25 @@ export function quitCurrent() {
   if (currentMode) currentMode.quit();
 }
 
+// 🚪 ログアウト・アカウント削除のときに呼ぶ。オンラインのモードだけを畳む。
+//
+// 対戦用の WebSocket は hello のときのトークンで身元が決まる。ログアウトで
+// localStorage のトークンを捨てても、**既に開いているソケットはそのまま生きて
+// いる** ので、マッチング画面や合言葉ルームからログアウトすると、前の
+// アカウントのまま試合が成立して勝敗・レート・報酬がそのアカウントに入る。
+// （トップバーは対戦中は隠れているので、到達できるのはマッチング/ルーム画面。）
+//
+// ソロやボスなど、サーバーに身元を預けていないモードは畳まない ── 遊んでいる
+// 途中のプレイを、設定を触っただけで失わせない。
+export function leaveOnlineOnSignOut() {
+  const m = currentMode;
+  if (!m || !m.client) return false;
+  try { m.client.close(); } catch { /* もう閉じている */ }
+  try { if (typeof m.destroy === 'function') m.destroy(); } catch { /* 片付けの失敗で画面を止めない */ }
+  currentMode = null;
+  return true;
+}
+
 // 結果画面の「アカウントを作る」ボタン。rewardsRows() は十数個のモーダルから
 // 使われるので、配線は委譲リスナー1本にまとめる。screens.js の showAuthModal を
 // import すると screens.js ⇄ modes.js の循環になるため、main.js が既に配線して
@@ -6075,7 +6094,15 @@ class OnlineMode extends VersusBase {
         <div class="rs-row"><span>${t('最終順位', 'Final placement')}</span><b>#${msg.placement} / ${msg.players}</b></div>
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(msg.score)}</b></div>
         <div class="rs-row"><span>${t('KO数', 'Knockouts')}</span><b>${msg.kills || 0}</b></div>
-        ${msg.payout ? `<div class="rs-row"><span>${ic('leaderboard')} ${t('順位報酬', 'Placement reward')}（${tierName}）</span><b>+${fmt(msg.payout.coins)} ${ic('coins', 14)}${msg.payout.gems ? ` +${fmt(msg.payout.gems)} ${ic('gems', 14)}` : ''}</b></div>` : ''}
+        ${/* 順位の帯（優勝／表彰台…）は誰にでも出す。金額は **実際に入ったときだけ**
+              出す ── ゲストには1枚も入らないのに「+1200🪙 +40💎」と書いてあり、
+              残高が動かないのを見た人には不具合にしか見えなかった。
+              古いサーバー（payoutGranted を送ってこない）では従来どおり出す。 */''}
+        ${msg.payout && (msg.payoutGranted !== false)
+          ? `<div class="rs-row"><span>${ic('leaderboard')} ${t('順位報酬', 'Placement reward')}（${tierName}）</span><b>+${fmt(msg.payout.coins)} ${ic('coins', 14)}${msg.payout.gems ? ` +${fmt(msg.payout.gems)} ${ic('gems', 14)}` : ''}</b></div>`
+          : msg.payout
+            ? `<div class="rs-row"><span>${ic('leaderboard')} ${t('順位', 'Placement')}（${tierName}）</span><b class="muted">${t('報酬はアカウントが必要です', 'An account is needed to earn rewards')}</b></div>`
+            : ''}
         ${rewardsRows(msg.rewards)}
       </div>
       ${spectate ? `<div class="modal-buttons">
@@ -7094,6 +7121,25 @@ class OnlineMode extends VersusBase {
         + '</p>'
       : '';
 
+    // 🤝 練習試合だった理由。サーバー（server/battle.js の endMatch）が
+    //    friendly:'guest'|'room'|'self' を載せてきたときだけ出す。
+    //    以前はゲスト相手だと ratingDelta が 0 になってレートの行ごと消え、
+    //    「なぜ何も動かないのか」がどこにも書いていなかった。黙って0にするより、
+    //    理由を1行出したほうが「壊れている」と誤解されない。
+    //    ※ 'guest' は相手が本物の未登録プレイヤーのときだけ来る（住人は必ず
+    //      レートを持つので該当しない）＝この文面で正体は漏れない。
+    const FRIENDLY_NOTE = {
+      guest: ['相手が未登録のプレイヤー（ゲスト）のため、レート・戦績・勝利報酬は動きません',
+        'Your opponent is an unregistered (guest) player, so rating, record and win rewards do not change'],
+      room: ['合言葉ルームの対戦では、レート・戦績・勝利報酬は動きません',
+        'Private room matches do not change rating, record or win rewards'],
+      self: ['同じアカウント同士の対戦のため、レート・戦績・勝利報酬は動きません',
+        'Both sides are the same account, so rating, record and win rewards do not change'],
+    };
+    const friendlyNote = FRIENDLY_NOTE[msg.friendly]
+      ? `<p class="center muted" style="font-size:12px;margin:6px 0 2px">${ic('warn', 13)} ${t('練習試合', 'Friendly match')} — ${t(FRIENDLY_NOTE[msg.friendly][0], FRIENDLY_NOTE[msg.friendly][1])}</p>`
+      : '';
+
     const myRating = msg.user && msg.user.stats ? msg.user.stats.rating : null;
     const tier = myRating != null ? rankOf(myRating) : null;
     // 増減そのものは resultRankBlock() が見出しの下に大きく出すようになったので、
@@ -7114,6 +7160,7 @@ class OnlineMode extends VersusBase {
       ${resultRankBlock(msg)}
       ${reasonNote}
       ${championNote}
+      ${friendlyNote}
       <div class="result-stats">
         ${scoreRows}
         ${ratingRow}

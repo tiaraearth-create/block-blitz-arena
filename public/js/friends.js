@@ -254,6 +254,22 @@ export async function openFriends(which = 'list') {
 
 let pendingCount = 0;
 
+// 🚪 ログアウト・アカウント切替のときに呼ぶ。読み込み済みの他人の情報を捨てる。
+//
+// data には**フレンドの名前・レベル・在席状態**が、boardData には順位表が
+// 入っている。持ち主が変わっても捨てていなかったので、ログアウトしたあとも
+// 前の人のフレンド一覧がそのまま画面に残り、次に開いた人にも見えていた
+// （画面は hidden を外し付けするだけで、中身を消していない）。
+export function resetFriendsCache() {
+  data = null;
+  boardData = null;
+  boardLoading = false;
+  boardError = null;
+  tab = 'list';
+  challengeCooldown.clear();
+  setFriendPending(0);
+}
+
 export function friendPending() { return pendingCount; }
 
 function setFriendPending(n) {

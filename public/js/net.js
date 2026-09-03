@@ -1,5 +1,10 @@
 // REST API client + WebSocket battle client.
 import { trServer, LANG } from './i18n.js';
+// 🗄 端末に置く bba_* の一覧と仕分け（public/js/localdata.js）。ここでは
+//    「解放印がどこから来たか」を記録するのに使う ── 記録しておかないと、
+//    Aがアカウントで持っていた解放が端末に残り、次にログインしたBの
+//    アカウントへ carryOverLocalUnlocks が恒久コピーしてしまう。
+import { noteUnlockSource, ownerKeyOf } from './localdata.js';
 
 const TOKEN_KEY = 'bba_token';
 
@@ -41,7 +46,11 @@ function mirrorUnlocksToDevice(user) {
     let changed = false;
     for (const id of list) {
       const key = UNLOCK_LS_KEYS[id];
-      if (!key || localStorage.getItem(key) === '1') continue;
+      if (!key) continue;
+      // 出どころは毎回付け直す ── 印だけ先にあって出どころが無い端末
+      // （この仕組みより前からある端末）を、ここで拾って埋める。
+      noteUnlockSource(key, ownerKeyOf(user));
+      if (localStorage.getItem(key) === '1') continue;
       localStorage.setItem(key, '1');
       changed = true;
     }

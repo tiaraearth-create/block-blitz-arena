@@ -43,7 +43,7 @@ import {
   healSocial, unfriendAll,
 } from '../friends.js';
 import {
-  archivedTransactions, anonymizeUserTransactions,
+  archivedTransactions, anonymizeUserTransactions, TX_ANON_NAME,
 } from './shop.js';
 import {
   purgeUserWorkshop,
@@ -74,7 +74,11 @@ export function initAdminRoutes() {
 // 呼び出しを1枚かぶせて、実体の解決をリクエスト時まで遅らせる。
 const requireMod = (req, res, next) => ctx.requireMod(req, res, next);
 
-// 🧩 退会の後始末（UGC と履歴）── **削除経路が2本あるので1本にまとめてある**。
+// 🧩 退会の後始末（UGC・履歴・接続）── **削除経路が2本あるので1本にまとめてある**。
+//
+// 掃除するもの: 🛠工房のステージと♡、📅デイリーのゴースト、💎購入履歴の表示名、
+// 🐛バグ報告とクライアントエラーの報告者名、💬全体チャット履歴の発言者名、
+// 🚪その人の開いている WebSocket。
 //
 // レコードを消しただけだと、工房のステージ・📅デイリーのゴースト・💎購入履歴が
 // 「投稿時の表示名スナップショット」で名前を出し続ける（どれも db.users から
@@ -92,12 +96,42 @@ const requireMod = (req, res, next) => ctx.requireMod(req, res, next);
 // しない ── 呼び出し側がレコード削除まで済ませてから1回だけ保存する。
 export function purgeUserContent(userId, username) {
   const id = String(userId || '');
-  if (!id) return { stages: 0, likes: 0, replays: 0, transactions: 0 };
+  if (!id) return { stages: 0, likes: 0, replays: 0, transactions: 0, reports: 0, errors: 0, chat: 0, sockets: 0 };
   const ws = purgeUserWorkshop(id);
   if (ws.stages) console.log(`[workshop] 退会に伴い ${username || id} のステージ ${ws.stages} 件を削除しました`);
   const replays = purgeUserDailyReplays(id);
   const transactions = anonymizeUserTransactions(id);
-  return { stages: ws.stages, likes: ws.likes, replays, transactions };
+  // 🐛 バグ報告と 💥 クライアントエラーは userId を持たず `by`（表示名）だけで
+  // 記録される。件数と本文は運営の資産なので残し、名前だけ伏せる。
+  // ⚠ 名前で照合するので、**改名より前に持っていた名前の行は残る**。
+  //   ここを id で引けるようにするなら記録側（server/index.js の
+  //   /api/bugreport と /api/clienterror）に userId を足すのが先。
+  const name = String(username || '');
+  let reports = 0;
+  if (name && Array.isArray(db.bugreports)) {
+    for (const r of db.bugreports) {
+      if (r && r.by === name) { r.by = TX_ANON_NAME; r.role = 'player'; r.deletedUser = true; reports++; }
+    }
+  }
+  let errors = 0;
+  if (name && db.meta && Array.isArray(db.meta.clientErrors)) {
+    for (const e of db.meta.clientErrors) {
+      if (e && e.by === name) { e.by = TX_ANON_NAME; e.role = 'player'; e.deletedUser = true; errors++; }
+    }
+  }
+  // 💬 全体チャットの履歴と 🚪 開きっぱなしの socket。どちらも battle 側にしか
+  // 実体が無いので、そちらの入口を借りる（battle がまだ立っていない起動途中や
+  // 部分起動のテストでは何もしない）。
+  let chat = 0, sockets = 0;
+  if (battleReady && battle) {
+    if (name && typeof battle.scrubDepartedName === 'function') {
+      chat = battle.scrubDepartedName(name, TX_ANON_NAME);
+    }
+    if (typeof battle.disconnectUser === 'function') {
+      sockets = battle.disconnectUser(id, 'このアカウントは削除されました');
+    }
+  }
+  return { stages: ws.stages, likes: ws.likes, replays, transactions, reports, errors, chat, sockets };
 }
 
 export const adminRouter = express.Router();
@@ -279,7 +313,18 @@ adminRouter.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) =
   }
   if (typeof b.banned === 'boolean') {
     if (target.role === 'admin' && b.banned) return res.status(400).json({ error: '管理者は凍結できません' });
-    applies.push(() => { target.banned = b.banned; });
+    applies.push(() => {
+      target.banned = b.banned;
+      // 🚪 凍結はその場で効かせる。gateSocket は **メッセージを受け取ったとき
+      //    にしか** 走らないので、黙って座っている socket は凍結後もそのまま
+      //    生きていた ── 進行中の試合は最後まで遊べるし、全体チャットの受信も
+      //    続く。開いている口を閉じるところまでが凍結。
+      //    （トークンを捨ててゲストとして入り直す道は別に残る。そこは
+      //     「ゲストを受け入れる」設計そのものの話なので、ここでは塞がない。）
+      if (b.banned && battleReady && battle && typeof battle.disconnectUser === 'function') {
+        battle.disconnectUser(target.id, 'このアカウントは管理者により凍結されました');
+      }
+    });
   }
   if (typeof b.muted === 'boolean') {
     if ((target.role === 'admin' || target.role === 'mod') && b.muted) {

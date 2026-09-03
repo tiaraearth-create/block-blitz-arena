@@ -131,6 +131,12 @@ export function initBattle(server, deps) {
   const { db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, MATCH_DURATION } = deps;
   // 予約名判定（無ければ何も予約しない安全側デフォルト）。index.js が渡す。
   const reservedName = deps.reservedName || (() => false);
+  // 🪪 名乗る名前の正規化と文字種検査（server/index.js の claimName /
+  //    isClaimableName）。渡ってこない組み方（部分起動のテスト）では、
+  //    従来どおり sanitizeName だけに落ちる ── 落ちても壊れないが、
+  //    なりすまし対策は効かなくなるので本番では必ず渡すこと。
+  const claimName = deps.claimName || sanitizeName;
+  const isClaimableName = deps.isClaimableName || (n => !!String(n || '').trim());
   // 👑 「王者を破った」の全体速報。連発防止（1人1日1回・印は stats.champAnnDay）と
   // 日英の文面は index.js の announceChampionFall が持っているので、こちらは
   // endMatch で beatChampion が立った直後に呼ぶだけでよい。何度呼んでも二重には
@@ -1919,6 +1925,37 @@ export function initBattle(server, deps) {
       // 同一アカウントの2ソケットによる自己対戦。Elo は既に oppUser.id !== me.id で
       // 除外済みだが、pvpWins/pvpLosses と PvP 報酬は無条件に走っていた。unrated 扱いに落とす。
       const selfPlay = !!(me && duel2 && humanUsers[1 - p.slot] && humanUsers[1 - p.slot].id === me.id);
+      // 🤝 練習試合（friendly）── 1対1だが「レート戦として成立していない」試合。
+      //
+      // なぜ要るか
+      //   Elo は昔からゲスト相手では動かない（下の oppRating が null になる）。
+      //   ところが **勝ち星・コイン・ミッション・実績・称号だけは無条件に入って
+      //   いた**ので、3つの判断が食い違っていた。この食い違いがそのまま抜け道で、
+      //   シークレットウィンドウをゲストとして開いてわざと負けるだけで、
+      //   PvP勝利数・勝利系ミッション・実績・報酬を無限に量産できた（ゲストは
+      //   登録が要らないので、いくらでも・ただで作れる）。
+      //   合言葉ルームも同じ形。rated:false なので Elo と勝ち星は元から動かない
+      //   のに、applyGameResult の won だけは通っていた。
+      //   ここで「Elo が動かない1対1では勝ち星も勝利報酬も動かない」に揃える。
+      //
+      // 付かないのは **勝敗に紐づくもの** だけで、参加そのものの報酬・プレイ回数・
+      // ライン数・ピース数のミッションは今までどおり入る（遊んだ事実は消さない）。
+      //
+      // ⚠ 2v2（team）は対象外。4人のうち1人がゲストでも試合全体は成立している
+      //   ので、1対1のようには落とせない。
+      // ⚠ 🏆トーナメントも rated:false の 'duel' として作られる（Elo を動かさない
+      //   ため）。ここを素直に「rated でなければ練習試合」と書くと、**優勝の
+      //   バッジとボーナスが出なくなる** ── レート戦でないことと、勝ちに意味が
+      //   無いことは別。合言葉ルームだけを練習試合にするため tourney を除く。
+      //   （rated:false の1対1を作るのは、この2本しかない。）
+      const duel1v1 = (match.mode === 'duel' || match.mode === 'attack') && match.players.length === 2;
+      const oppSlot = 1 - p.slot;
+      const friendly = !me || !duel1v1 ? null
+        : selfPlay ? 'self'
+          : (!match.rated && !match.tourney) ? 'room'
+            : (!match.rated ? null
+              : (!match.players[oppSlot].sock.isBot && !humanUsers[oppSlot]) ? 'guest'
+                : null);
       if (me) {
         if (duel2) {
           const oppUser = humanUsers[1 - p.slot];
@@ -1965,7 +2002,7 @@ export function initBattle(server, deps) {
             }
           }
         }
-        if (match.rated && match.mode !== 'raid' && !selfPlay) {
+        if (match.rated && match.mode !== 'raid' && !friendly) {
           if (outcome === 1) me.stats.pvpWins += 1;
           else if (outcome === 0) me.stats.pvpLosses += 1;
         }
@@ -1991,8 +2028,8 @@ export function initBattle(server, deps) {
             pieces: (match.mode === 'coop' || match.mode === 'land') ? (p.moves || 0) : (p.pieces || 0),
             // Tournament: the badge/bonus fires only on winning the FINAL.
             // 自己対戦は勝敗を付けない（PvP勝利系ミッション/実績・勝利報酬を稼がせない）。
-            won: selfPlay ? false : (match.tourney ? (outcome === 1 && !!match.tourney.final) : outcome === 1),
-            drew: selfPlay ? false : outcome === 0.5,
+            won: friendly ? false : (match.tourney ? (outcome === 1 && !!match.tourney.final) : outcome === 1),
+            drew: friendly ? false : outcome === 0.5,
           });
         }
       }
@@ -2037,6 +2074,12 @@ export function initBattle(server, deps) {
           : null,
         you: { slot: p.slot, team: p.team },
         players: sockAdmin(p.sock) ? playersInfoAdmin : playersInfo,
+        // 🤝 練習試合だった理由（'guest' / 'room' / 'self'）。結果画面が
+        //    「なぜレートも勝ち星も動かないのか」を出すのに使う。付かない試合
+        //    では欄ごと落とす（false を載せると、その有無が別の情報になる）。
+        //    ⚠ 'guest' が出るのは相手が本物の未登録プレイヤーのときだけで、
+        //      住人（ボット）は必ずレートを持つのでここには来ない＝正体は漏れない。
+        ...(friendly ? { friendly } : {}),
         ratingDelta, rewards, tierChange, rematchId,
         user: me ? publicUser(me) : null,
       });
@@ -2161,8 +2204,17 @@ export function initBattle(server, deps) {
   const ratingBand = (waitedMs) => 120 + Math.floor(waitedMs / 1000) * 10;
 
   // Pick the best-matched pair currently in `q`, or null.
+  //
+  // 🏠 同じ回線どうしは「最後の手段」にする。自分の2窓（シークレットウィンドウで
+  //    ゲスト、あるいは2つ目のアカウント）を並べて自己対戦を仕込む、がいちばん
+  //    安いブースト手段で、以前はそれを避ける仕組みが1つも無かった。
+  //    ただし **禁止はしない** ── 同一IPは家族・学校・寮でふつうに起きる
+  //    （MAX_SOCKETS_PER_IP を 12 に緩めてあるのは、まさにそれを想定してのこと）。
+  //    禁止すると「兄弟が同時に並ぶと永久に待つ」になるので、他に相手がいる
+  //    ときだけ避け、いなければ従来どおり組む。
   function bestPair(q, now) {
-    let best = null;
+    let best = null;        // 別回線どうし（優先）
+    let fallback = null;    // 同一回線どうし（他に相手がいないときだけ）
     for (let i = 0; i < q.length; i++) {
       for (let j = i + 1; j < q.length; j++) {
         // 同一アカウントの2ソケットを組ませない（自己対戦の多重防御）。
@@ -2170,10 +2222,15 @@ export function initBattle(server, deps) {
         const gap = Math.abs(ratingOf(q[i].ws) - ratingOf(q[j].ws));
         const allowed = Math.max(ratingBand(now - q[i].since), ratingBand(now - q[j].since));
         if (gap > allowed) continue;
-        if (!best || gap < best.gap) best = { i, j, gap };
+        const sameIp = sockIp(q[i].ws) !== '?' && sockIp(q[i].ws) === sockIp(q[j].ws);
+        if (sameIp) {
+          if (!fallback || gap < fallback.gap) fallback = { i, j, gap };
+        } else if (!best || gap < best.gap) {
+          best = { i, j, gap };
+        }
       }
     }
-    return best;
+    return best || fallback;
   }
 
   // The bot that fills an empty seat is drawn to MATCH the human, not at
@@ -2965,7 +3022,13 @@ export function initBattle(server, deps) {
     const me = e.ws.user ? db.users[e.ws.user.id] : null;
     let rewards = null;
     const payout = royalePayout(placement);
-    if (me && e.ws.readyState === e.ws.OPEN) {
+    // 順位報酬が**実際に入ったか**。ゲスト（アカウント無し）には1枚も入らないのに
+    // 結果画面は payout をそのまま描いていたので、未登録の人が1位を取ると
+    // 「+1200🪙 +40💎」と表示されたうえで残高が1も動かなかった。
+    // 帯の名前（優勝／入賞…）は出したいので payout 自体は送り、
+    // 金額を出してよいかだけを別の印で伝える。
+    const payoutGranted = !!(me && e.ws.readyState === e.ws.OPEN);
+    if (payoutGranted) {
       rewards = applyGameResult(me, {
         trusted: true,   // サーバーが順位を決めている（クライアント申告ではない）
         mode: 'royale', score: e.score, lines: e.lines, maxCombo: e.combo,
@@ -2989,7 +3052,7 @@ export function initBattle(server, deps) {
     send(e.ws, {
       type: 'royale_result',
       placement, players: ROYALE_SIZE, score: e.score, kills: e.kills || 0,
-      payout,
+      payout, payoutGranted,
       top: ranked.slice(0, 5).map(x => ({ name: x.name, score: Math.floor(x.score) })),
       rewards, user: me ? publicUser(me) : null,
       spectate: placement > 1 && !r.ended,
@@ -3570,14 +3633,26 @@ export function initBattle(server, deps) {
           // これらは登録できないので db.users には載らず、衝突チェックだけでは
           // 常にすり抜けた。断罪イベント中に偽の「運営」告知を流せる穴だった。
           if (!user) {
-            const want = sanitizeName(msg.guestName) || '';
+            // 🪪 登録と**まったく同じ**正規化と文字種検査を通す。
+            //   以前は sanitizeName（切って記号を落とすだけ）だったので、
+            //   ・「運営」＋ゼロ幅スペース … 予約名の検査に当たらないのに見た目は同じ
+            //   ・全角の「ａｄｍｉｎ」    … 同上
+            //   ・キリル文字の "аdmin"    … 登録では通らない文字なのに名乗れた
+            //   ・空白1文字／絵文字だけ    … 名前の無い相手、表示崩し
+            //   が全部通っていた。登録できない見た目をゲストなら名乗れる、という
+            //   非対称そのものが穴なので、門を1本に揃える。
+            const want = claimName(msg.guestName) || '';
+            const bad = want && !isClaimableName(want);
             const taken = want && (
               Object.values(db.users).some(u => u.username.toLowerCase() === want.toLowerCase())
               || reservedName(want)
               || !!residentByName(want)
             );
-            ws.guestName = (want && !taken) ? want : `ゲスト${Math.floor(Math.random() * 9999)}`;
-            if (want && taken) send(ws, { type: 'error', error: 'その名前は使えません。別の名前になりました' });
+            ws.guestName = (want && !bad && !taken) ? want : `ゲスト${Math.floor(Math.random() * 9999)}`;
+            // 断る理由は出し分けない（「使われている」と「形が悪い」を分けると、
+            // 名前を投げ分けるだけで登録者と住人を炙り出す列挙オラクルになる ──
+            // /api/register が同じ理由で1文言に統一してある）。
+            if (want && (bad || taken)) send(ws, { type: 'error', error: 'その名前は使えません。別の名前になりました' });
           } else {
             ws.guestName = null;
           }
@@ -4372,10 +4447,56 @@ export function initBattle(server, deps) {
     return ended;
   }
 
+  // 🚪 退会・管理者削除の後始末（その1）── その人の socket を全部閉じる。
+  //
+  // 閉じないと、レコードが消えたあとも socket は生き続ける。ws.user は hello の
+  // ときに取った控え（id と名前だけ）なので db から引けなくなっても残り、
+  // 退会したはずの名前でチャットを続けられた。しかも凍結・ミュートの判定は
+  // db.users[id] を引いて決めるので、**レコードが無い＝制限も掛からない** ──
+  // 「退会すると取り締まりから外れる」という逆向きの穴になっていた。
+  //
+  // 進行中の試合は forfeit させず、close に任せる（切断の扱いは既存の
+  // onclose が持っており、そちらのほうが賢い）。
+  function disconnectUser(userId, reason) {
+    const live = socketsOf(String(userId || ''));
+    for (const w of live) {
+      try {
+        if (reason) send(w, { type: 'error', error: reason });
+        w.user = null;              // 閉じ切るまでの隙間で名乗れないようにする
+        w.close();
+      } catch { /* すでに閉じている */ }
+    }
+    return live.length;
+  }
+
+  // 🚪 退会・管理者削除の後始末（その2）── 全体チャットの履歴から名前を伏せる。
+  //
+  // chatHistory は接続のたびに丸ごと配られる（hello_ok の chat: 欄）。退会者の
+  // 発言をそのまま残すと、アカウントを消したあとも名前つきの発言が新規接続の
+  // 全員に配られ続ける。発言そのものは会話の流れとして残す価値があるので、
+  // 消すのではなく名前だけ伏せる（💎購入履歴の TX_ANON_NAME と同じ考え方）。
+  // メモリ側（chatHistory）とディスク側（db.meta.chatLog）の両方を直すこと ──
+  // 片方だけだと、再起動でもう一方から名前が戻ってくる。
+  function scrubDepartedName(username, replacement) {
+    const name = String(username || '');
+    if (!name) return 0;
+    let n = 0;
+    for (const e of chatHistory) {
+      if (e && e.from === name) { e.from = replacement; e.role = 'player'; n++; }
+    }
+    if (Array.isArray(db.meta.chatLog)) {
+      for (const e of db.meta.chatLog) {
+        if (e && e.from === name) { e.from = replacement; e.role = 'player'; }
+      }
+    }
+    return n;
+  }
+
   return {
     clients,
     party,
     presence: { isOnline, statusOf, sendToUser },
+    disconnectUser, scrubDepartedName,
     matches, rooms,
     endAllForShutdown,
     queueSize: queueSizeAll,   // all seven queues — duel+team alone under-reported

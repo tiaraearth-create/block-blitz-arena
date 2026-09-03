@@ -92,7 +92,7 @@ import {
   captureDailyReplay, sanitizeReplay,
 } from './routes/daily.js';
 import { initWorkshopRoutes, workshopRouter } from './routes/workshop.js';
-import { initAdminRoutes, adminRouter } from './routes/admin.js';
+import { initAdminRoutes, adminRouter, purgeUserContent } from './routes/admin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -2046,6 +2046,54 @@ function sanitizeName(name) {
 }
 
 // ---------------------------------------------------------------------------
+// 🪪 これから名乗る名前（登録・改名・ゲスト名）に使う、厳しいほうの正規化
+// ---------------------------------------------------------------------------
+//
+// ■ 何が抜けていたか
+//   sanitizeName は「切って・記号を落とす」だけで、**見えない文字**を素通し
+//   していた。ゼロ幅スペースを1つ足した「運営​」は、予約名チェックにも
+//   既存ユーザーとの衝突チェックにも引っかからないのに、画面では「運営」と
+//   まったく同じに見える。ゲスト名には文字種の検査も無かったので、
+//   キリル文字の а で "аdmin" と名乗ることも、名前を空白1文字にすることも、
+//   絵文字で表示を崩すこともできた。断罪イベント中に偽の「運営」告知を
+//   流せる、という実害のある形。
+//
+// ■ ここでやること
+//   ・NFKC 正規化 … 全角の「ａｄｍｉｎ」を「admin」に畳む（畳めば予約名の
+//     チェックに当たる）。半角カナも普通のカナになる。
+//   ・見えない文字を落とす … ゼロ幅・書字方向の制御・異体字セレクタ・
+//     ハングルの詰め物など、「幅を持たないのに文字列は変える」もの。
+//   ・空白を1つに畳んで前後を落とす。
+//
+// ■ なぜ sanitizeName 自体を厳しくしないのか
+//   sanitizeName は **ログインの照合** にも使われている。正規化を足すと、
+//   正規化前に作られた名前を持つ人が「入力した名前と保存された名前が
+//   食い違う」でログインできなくなる。名乗り直す場面だけを厳しくして、
+//   既に持っている名前の照合は今までどおりにする（安全側に倒す向きが逆）。
+//   ※ 既存の登録名は /^[\w\-ぁ-んァ-ヶ一-龠ー]{2,16}$/u を通っており、この
+//     文字集合は NFKC で1文字も変わらないので、実際には食い違わない見込み。
+//     それでも照合を触らないのは、見込みで人を締め出さないため。
+// 軟ハイフン / 見えない繋ぎ / アラビア語の字形制御 / ハングルの詰め物（幅ゼロ）/
+// クメールの見えない記号 / モンゴル語の字形選択 / ゼロ幅スペースと書字方向の制御 /
+// 単語結合子と不可視演算子 / 全角ハングル詰め物 / 異体字セレクタ / BOM / 割り込み注釈。
+// どれも「画面には出ないのに文字列は別物になる」＝なりすましの道具。
+const INVISIBLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFB]/g;
+// 名乗ってよい文字。登録が昔から使っていた式で、ゲスト名にも同じものを当てる
+// （登録できない見た目の名前をゲストなら名乗れる、という非対称をなくす）。
+const CLAIM_NAME_RE = /^[\w\-ぁ-んァ-ヶ一-龠ー]{2,16}$/u;
+
+function claimName(name) {
+  let s = String(name || '');
+  try { s = s.normalize('NFKC'); } catch { /* normalize が無い実行環境 */ }
+  s = s.replace(INVISIBLE_RE, '').replace(/\s+/g, ' ');
+  return sanitizeName(s);
+}
+/** 名乗ってよい形か（長さ・文字種）。 */
+function isClaimableName(name) {
+  return CLAIM_NAME_RE.test(String(name || ''));
+}
+
+// ---------------------------------------------------------------------------
 // Auth API
 // ---------------------------------------------------------------------------
 
@@ -2054,9 +2102,11 @@ app.post('/api/register', (req, res) => {
     return res.status(429).json({ error: '試行回数が多すぎます。しばらく待ってください' });
   }
   if (inMaintenance()) return res.status(503).json({ error: 'メンテナンス中です。しばらくお待ちください' });
-  const username = sanitizeName(req.body.username);
+  // claimName（sanitizeName の厳しい版）。全角の「ａｄｍｉｎ」を畳んで予約名の
+  // 検査に当てる／見えない文字を落として「運営＋ゼロ幅」を作れなくする。
+  const username = claimName(req.body.username);
   const password = String(req.body.password || '');
-  if (!/^[\w\-ぁ-んァ-ヶ一-龠ー]{2,16}$/u.test(username)) {
+  if (!isClaimableName(username)) {
     return res.status(400).json({ error: 'ユーザー名は2〜16文字（英数字・日本語）で入力してください' });
   }
   if (password.length < 6) {
@@ -2139,8 +2189,8 @@ app.get('/api/me', (req, res) => {
 // Change own username (once per 24h; admins exempt from the cooldown).
 app.post('/api/me/rename', requireAuth, (req, res) => {
   const user = req.user;
-  const username = sanitizeName(req.body.username);
-  if (!/^[\w\-ぁ-んァ-ヶ一-龠ー]{2,16}$/u.test(username)) {
+  const username = claimName(req.body.username);   // 登録と同じ厳しさ（改名で抜けない）
+  if (!isClaimableName(username)) {
     return res.status(400).json({ error: 'ユーザー名は2〜16文字（英数字・日本語）で入力してください' });
   }
   if (username.toLowerCase() !== user.username.toLowerCase()) {
@@ -2352,6 +2402,13 @@ app.delete('/api/me', requireAuth, (req, res) => {
   // （リーダーが消えたパーティーが凍る）。
   unfriendAll(db, user);
   if (battleReady && battle.party) battle.party.ejectUser(user.id);
+  // 🧩 UGC と履歴の後始末。DELETE /api/admin/users/:id と**同じ1本**を呼ぶ。
+  // server/routes/admin.js の purgeUserContent は「呼ぶのは2本」と書いてあったが、
+  // 実際に呼んでいたのは管理者経路だけで、実際に多いほうのこちら（本人の退会）が
+  // 素通りしていた ── 退会しても工房のステージ・📅デイリーのゴースト・💎購入履歴が
+  // 投稿時の表示名スナップショットで名前を出し続け、作者不在のステージが
+  // WS_MAX_STAGES のグローバル枠を永久に食っていた。
+  purgeUserContent(user.id, user.username);
   delete db.users[user.id];
   db.deleted[user.id] = Date.now();
   saveDb();
@@ -4404,6 +4461,12 @@ const server = http.createServer(app);
 const battle = initBattle(server, {
   db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, userFromToken,
   MATCH_DURATION,
+  // 🪪 ゲスト名にも登録と同じ厳しさを当てるための2本。
+  //   claimName … NFKC で畳み、見えない文字（ゼロ幅など）を落とす
+  //   isClaimableName … 長さと文字種（英数字・かな・カナ・漢字）
+  // これが無かったころは「運営＋ゼロ幅スペース」や全角の「ａｄｍｉｎ」で
+  // 予約名の検査をすり抜けられた ── 画面の見た目は本物と1ドットも変わらない。
+  claimName, isClaimableName,
   // 予約名（運営/管理者ゼロ 等）判定。ゲストがWSでこれらを名乗れないように
   // battle.js の hello から使う。クロージャなので RESERVED_NAMES 定義後
   // （＝実際に呼ばれる hello 受信時）に評価される。

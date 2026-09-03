@@ -166,7 +166,10 @@ export function archivedTransactions(limit = 100) {
 // （金額・取引ID・日時・件数は動かさないので、管理画面の売上集計は無傷）。
 // ※ 書庫（DATA_DIR/transactions-YYYY.jsonl）は追記専用なのでここでは触らない。
 //    保持年数の運用は README 側の宿題（coordination 参照）。
-const TX_ANON_NAME = '(退会済み / deleted)';
+// 退会者の伏せ字。💎購入履歴・🐛バグ報告・クライアントエラー・全体チャットの
+// 履歴が同じ文字列を使う（表記が経路ごとに割れると、管理画面で「これは同じ
+// 状態なのか」が読めなくなる）。増やすときはここを import すること。
+export const TX_ANON_NAME = '(退会済み / deleted)';
 export function anonymizeUserTransactions(userId) {
   const id = String(userId || '');
   if (!id || !Array.isArray(db.transactions)) return 0;
