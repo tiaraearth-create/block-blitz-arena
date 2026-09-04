@@ -412,35 +412,58 @@ export function pauseModeForDialog() {
   //    相手のいる試合で自分だけ時間を稼げてしまうのも、当然まずい。
   if (m.client || m.mode === 'pvp' || m.mode === 'zero' || m.kind) return null;
   m._dialogPaused = true;
-  const at = Date.now();
   const v = getView();
   const lockWas = v ? v.inputLocked : false;
   if (v) v.inputLocked = true;
-  return () => {
-    if (!m._dialogPaused) return;
-    m._dialogPaused = false;
-    const delta = Date.now() - at;
+
+  // ⏱ 期限は「閉じたときにまとめて」ではなく、**開いている間ずっと**
+  //    進む時間ぶんだけ押し続ける。
+  //
+  //    最初は閉じるときに一度だけ足す形にしたが、それだと開いている間は
+  //    画面の時計が減り続ける（実測: 5秒読んだら残りが 57→45 秒に見えた）。
+  //    見た目が怖いだけでなく、startTimer の刻みが timeLeft<=0 に到達して
+  //    **ダイアログを読んでいる最中に走行が終わる** ── 直したかったこと
+  //    そのものが起きる。押し続ければ、残り時間・ボスの予告バー・波の
+  //    カウントダウンが全部そのまま凍る（読む側に特別な対応が要らない）。
+  const shift = (delta) => {
+    if (delta <= 0) return;
     for (const key of PAUSABLE_DEADLINES) {
       if (typeof m[key] === 'number' && m[key] > 0) m[key] += delta;
     }
     // 効果の残り時間（フィーバー・要塞・無敵・危険表示）も同じだけ後ろへ。
     // ここを忘れると、止めている間に効果だけが切れる。
     const e = m.engine;
-    if (e) for (const key of ['feverUntil', 'fortressUntil']) {
-      if (typeof e[key] === 'number' && e[key] > 0) e[key] += delta;
-    }
-    if (v) {
-      v.inputLocked = lockWas;
-      for (const key of ['godInvincibleUntil', 'dangerUntil']) {
-        if (typeof v[key] === 'number' && v[key] > 0) v[key] += delta;
+    if (e) {
+      for (const key of ['feverUntil', 'fortressUntil']) {
+        if (typeof e[key] === 'number' && e[key] > 0) e[key] += delta;
       }
       // ボスの呪縛（コマごとの氷結）も止まっていた時間ぶん延びる。
-      if (e && Array.isArray(e.hand)) {
+      if (Array.isArray(e.hand)) {
         for (const p of e.hand) {
           if (p && typeof p.frozenUntil === 'number' && p.frozenUntil > 0) p.frozenUntil += delta;
         }
       }
     }
+    if (v) {
+      for (const key of ['godInvincibleUntil', 'dangerUntil']) {
+        if (typeof v[key] === 'number' && v[key] > 0) v[key] += delta;
+      }
+    }
+  };
+
+  let last = Date.now();
+  const iv = setInterval(() => {
+    const now = Date.now();
+    shift(now - last);
+    last = now;
+  }, 100);
+
+  return () => {
+    if (!m._dialogPaused) return;
+    m._dialogPaused = false;
+    clearInterval(iv);
+    shift(Date.now() - last);   // 最後の端数（刻みの残り）
+    if (v) v.inputLocked = lockWas;
   };
 }
 

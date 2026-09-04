@@ -231,7 +231,12 @@ const partySrv = read('server/party.js');
   check('D-15 戻るで履歴を積み直さない（空押しを溜めない）',
     /const to = screenStack\.pop\(\) \|\| 'menu';\n\s+poppingBack = true;\n\s+showScreen\(to, \{ push: false \}\);\n\s+poppingBack = false;\n\s+\}\);/.test(dom), '');
 
-  check('D-16 チャットは読み返し中に引き戻さない', /const wasAtBottom = box\.scrollHeight/.test(chat), '');
+  check('D-16 チャットは読み返し中に引き戻さない',
+    /const wasAtBottom = me \|\| box\.scrollHeight - box\.scrollTop - box\.clientHeight <= NEAR_BOTTOM;/.test(chat), '');
+  check('D-16b 自分の一言だけは必ず下まで追う',
+    /const wasAtBottom = me \|\|/.test(chat), '');
+  check('D-16c 上を読んでいる間は、先頭を削ったぶんの位置を補正する',
+    /if \(!wasAtBottom\) box\.scrollTop = Math\.max\(0, box\.scrollTop - h\);/.test(chat), '');
   check('D-17 新着の合図を出す', /function showChatNewBadge\(box\) \{/.test(chat), '');
   check('D-18 合図の見た目がある', /\.chat-new \{/.test(read('public/css/style.css')), '');
   check('D-19 ゲストも自分の吹き出しになる', /const me = msg\.from === myChatName\(\);/.test(chat), '');

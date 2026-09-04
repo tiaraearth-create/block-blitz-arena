@@ -75,6 +75,14 @@ const zs = read('server/zero-session.js');
     /if \(m\.client \|\| m\.mode === 'pvp' \|\| m\.mode === 'zero' \|\| m\.kind\) return null;/.test(body), '');
   check('②-2 終わった走行では何もしない', /if \(!m \|\| m\.ended \|\| m\._dialogPaused\) return null;/.test(body), '');
   check('②-3 止めた時間ぶん期限を後ろへずらす', /m\[key\] \+= delta;/.test(body), '');
+  // ⏱ 「閉じたときにまとめて足す」だけでは足りない。開いている間は画面の
+  //    時計が減り続け（実測: 5秒読んだら 57→45秒）、startTimer の刻みが
+  //    timeLeft<=0 に届いて**読んでいる最中に走行が終わる**。開いている間
+  //    ずっと押し続けること。
+  check('②-3b 開いている間ずっと押し続ける（読んでいる最中に終わらせない）',
+    /const iv = setInterval\(\(\) => \{[\s\S]{0,160}?shift\(now - last\);/.test(body), '');
+  check('②-3c 閉じたら見張りを止めて端数も足す',
+    /clearInterval\(iv\);\n\s+shift\(Date\.now\(\) - last\);/.test(body), '');
   for (const key of ['endAt', 'nextAt', 'nextAtk', 'startedAt', 'playStartedAt']) {
     check(`②-4 ${key} を送らせる対象に入れている`,
       new RegExp(`'${key}'`).test(modes.slice(modes.indexOf('const PAUSABLE_DEADLINES'), i)), '');
