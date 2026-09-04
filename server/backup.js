@@ -415,6 +415,24 @@ function mergeEarned(winner, loser) {
   if (loser.stats && typeof loser.stats === 'object') {
     const ws = winner.stats || (winner.stats = {});
     ws.coinsBest = Math.max(Number(ws.coinsBest) || 0, Number(loser.stats.coinsBest) || 0);
+    // 🏅 実績「ギルド加入」は「一度でも入ったか」で決まる。落とすと、
+    //    復元のたびに未受取の 500🪙+4💎 が取り消される。
+    if (loser.stats.guildJoinedEver && !ws.guildJoinedEver) {
+      ws.guildJoinedEver = loser.stats.guildJoinedEver;
+    }
+    // 🧺 一度そろえたセット（道具棚コンプ）の印。在庫が減っても消えない
+    //    ようにするための高水位なので、こちらも union。
+    if (loser.stats.setEver && typeof loser.stats.setEver === 'object') {
+      ws.setEver = { ...loser.stats.setEver, ...(ws.setEver || {}) };
+    }
+    // ⭐ パズル遺跡のステージ評価。ステージごとに高いほうを採る
+    //    （進行度で負けたコピーのほうが速く解いている回がありうる）。
+    if (loser.stats.puzzleStars && typeof loser.stats.puzzleStars === 'object') {
+      ws.puzzleStars = ws.puzzleStars || {};
+      for (const [k, v] of Object.entries(loser.stats.puzzleStars)) {
+        ws.puzzleStars[k] = Math.max(Number(ws.puzzleStars[k]) || 0, Number(v) || 0);
+      }
+    }
   }
   // 👑 管理者イベントの予約は「進行度」に出ないので、進行度で負けたコピーが
   // 持っていると消えてしまう。新しいほうの予約を残す。

@@ -216,6 +216,20 @@ export function translateLocal(text, to) {
   //    「訳が無い」として扱い、原文のまま出す（index.js / battle.js とも
   //    `if (tr && …)` で受けているので、English 面には原文が出る）。
   if (to === 'en' && HAS_JA.test(out)) return null;
+  // 🈳 逆方向（英→日）にも同じ歯止めが要る。こちらのほうが人が多い側なのに、
+  //    ガードが片方にしか無かった。実例:
+  //      "i finally beat the demon king" → 「自分ついにbeat demon king」
+  //      "can someone explain how mines work" → 「can誰かexplainどうmines work」
+  //    どちらも**簡易翻訳として**日本語面に配られていた。
+  //    訳し残しの英単語が残っているうちは翻訳できていないので、何も返さない。
+  //    ただし固有名詞（住人の名前・モード名）は原文のまま残るのが正しいので、
+  //    「文の半分以上がラテン文字のまま」のときだけ諦める ── 1語だけ英語が
+  //    残る訳（例: 「Zero が来た」）まで捨てると、まともな訳まで消える。
+  if (to === 'ja') {
+    const words = out.split(/\s+/).filter(Boolean);
+    const latin = words.filter(w => /^[A-Za-z][A-Za-z'-]*$/.test(w)).length;
+    if (words.length >= 2 && latin * 2 >= words.length) return null;
+  }
   return { lang: to, text: out, engine: 'table' };
 }
 

@@ -137,8 +137,27 @@ const RESULT_QUEUE_KEY = 'bba_result_queue';
 // 現実の「圏外のひとまとまり」は収まる（これを超えると古いほうから落ちる）。
 const RESULT_QUEUE_MAX = 20;
 const RESULT_QUEUE_TTL_MS = 12 * 60 * 60 * 1000;
+// 📅 デイリーの控えだけは寿命が短い。
+//    サーバーの予約（attemptId）は2時間で切れるので、それを過ぎて送ると
+//    `reason:'expired'` で記録もクリア報酬も連続クリアも付かない。12時間
+//    預かってから黙って捨てられるより、控える段階で「もう間に合わない」と
+//    分かるほうがいい（結果画面は「つながったときに送られ、そのとき
+//    記録されます」と約束している）。サーバーの DAILYC_ATTEMPT_MS と揃える。
+const DAILY_QUEUE_TTL_MS = 2 * 60 * 60 * 1000;
+const ttlFor = entry => (entry && entry.body && entry.body.mode === 'daily'
+  ? DAILY_QUEUE_TTL_MS : RESULT_QUEUE_TTL_MS);
 // 控えを送るときの間隔。まとめて叩いてレート上限(30件/分)を自分で踏まない。
 const RESULT_QUEUE_GAP_MS = 2500;
+
+// 📣 「控えを送れなかった／捨てた」を画面へ知らせる合図。
+//    net.js は表示を持たないので、ここでは投げるだけ（main.js が受ける）。
+//    黙って件数だけ減らしていたので、「未送信3件」がいつのまにか0件になり、
+//    報酬も記録も付かないのに理由がどこにも出なかった。
+function noteResultsDropped(count, reason) {
+  if (!count || typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+  try { window.dispatchEvent(new CustomEvent('bba:results-dropped', { detail: { count, reason } })); }
+  catch { /* 合図が出せなくても控えの扱いは変わらない */ }
+}
 
 function readResultQueue() {
   try {
@@ -148,9 +167,14 @@ function readResultQueue() {
     const now = Date.now();
     // 読むたびに「冪等キーを持つ・期限内」だけに絞る。手で書き換えられた
     // 控えも、ここで形の合わないものは落ちる。
-    return list.filter(e => e && typeof e === 'object' && e.body && typeof e.body === 'object'
+    const kept = list.filter(e => e && typeof e === 'object' && e.body && typeof e.body === 'object'
       && typeof e.body.runId === 'string' && e.body.runId
-      && Number(e.at) > now - RESULT_QUEUE_TTL_MS).slice(-RESULT_QUEUE_MAX);
+      && Number(e.at) > now - ttlFor(e)).slice(-RESULT_QUEUE_MAX);
+    // 寿命切れで落ちた件数を画面へ知らせる。黙って減らすと、結果画面の
+    // 「つながったら送ります」がそのまま嘘になる。
+    const dropped = list.length - kept.length;
+    if (dropped > 0) noteResultsDropped(dropped, 'expired');
+    return kept;
   } catch { return []; }
 }
 
@@ -201,8 +225,13 @@ export async function flushResultQueue() {
       // （サーバーは冪等なので実害は無いが、レート上限を無駄に食う）。
       writeResultQueue(list.filter(e => e !== entry));
       try {
-        await api(RESULT_PATH, { method: 'POST', body: entry.body, queueOffline: false });
+        const res = await api(RESULT_PATH, { method: 'POST', body: entry.body, queueOffline: false });
         sent++;
+        // 送れても「デイリーとしては記録されなかった」ことがある（予約が
+        // 2時間で切れる／日付が変わった）。報酬は入るのに連続クリアだけが
+        // 付かない、という一番わかりにくい形なので、そこだけ別に言う。
+        const d = res && res.rewards && res.rewards.daily;
+        if (d && d.recorded === false) noteResultsDropped(1, d.reason || 'expired');
       } catch (err) {
         // まだ圏外(0) / 送りすぎ(429) / メンテ中(503) は、こちらの都合ではなく
         // 時間が解決する ── 控えに戻して次の機会に回す。
@@ -213,6 +242,9 @@ export async function flushResultQueue() {
           break;
         }
         // 401/403/400 … 送り直しても通らない。捨てる（残すと永遠に叩き続ける）。
+        // ただし黙っては捨てない ── 件数だけが減って、報酬も記録も付かない
+        // 理由がどこにも出ないのがいちばん困る。
+        noteResultsDropped(1, err.status === 401 || err.status === 403 ? 'auth' : 'rejected');
       }
       // 次がある時だけ間を空ける（最後の1件のあとに待つ意味は無い）。
       if (!readResultQueue().some(e => e.uid === session.user.id)) break;

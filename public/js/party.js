@@ -7,7 +7,7 @@
 // 表示は #partyDock。チャットの引き出し(.chat-drawer)の中には入れない ──
 // あれはメニュー画面でしか出ない作りなので、試合中に見えなくなる。
 
-import { $, showModal, closeModal, toast, showScreen } from './dom.js';
+import { $, showModal, closeModal, toast, showScreen, enterIsLive } from './dom.js';
 import { t, trServer, LANG } from './i18n.js';
 import { audio } from './audio.js';
 import { session, api } from './net.js';
@@ -23,7 +23,11 @@ const LAST_PARTY_KEY = 'bba_last_party';
 let state = null;          // サーバーから来た最新のパーティー
 let chatLog = [];
 let openDock = false;
-let pendingInvite = null;
+// 📨 だまだ答えていない招待の id。
+// 以前は let pendingInvite の**1件だけ**で、招待が届くたびに上書きされていた
+// ── 2通目が来た瞬間に1通目の open() は何も描かずに戻り、順番待ちがそこで詰まっていた。
+// 招待ごとに持つ。
+const pendingInvites = new Set();
 
 // サーバーは本文を素通し（200文字で切るだけ）で保存する。
 // ここを1か所でも抜かすと、保存された文字がそのまま実行される形になる。
@@ -151,7 +155,7 @@ export function renderParty() {
     input.value = '';
   };
   $('#ptSend').onclick = send;
-  $('#ptText').onkeydown = e => { if (e.key === 'Enter') send(); };
+  $('#ptText').onkeydown = e => { if (enterIsLive(e)) send(); };
   // 状態が届くたびに innerHTML を組み直しているので、打ちかけの文と
   // カーソル位置が消えていた。誰かが出入りしただけで書きかけが飛ぶ。
   if (draft) {
@@ -392,9 +396,21 @@ function flushWaiting() {
   // ロック中でなくても、出ているものは潰さない ── ショップの購入確認を
   // 勝手に消すのも結局は同じ事故なので、完全に空くまで待つ。
   if (!waiting.length || modalOpen()) return;
-  // ここは MutationObserver のコールバックなので、投げると残りの待ち行列が
-  // まるごと出せなくなる。1件の失敗で道を塞がない。
-  try { waiting.shift().show(); } catch (err) { console.error('[party] queued modal', err); }
+  // 🚪 「実際に出せたか」を確かめてから止める。
+  //
+  //   以前は shift().show() を1回呼ぶだけで、次の合図は #modal-root の
+  //   childList の変化に任せていた。ところが招待の open() は
+  //   `pendingInvite !== msg.inviteId` のとき**何も描かずに戻る**ことがあり
+  //   （pendingInvite は招待が届くたび最新1件で上書きされる）、そのとき DOM が
+  //   動かないので Observer が二度と発火しない ── 順番待ちに「部屋ができました
+  //   （合言葉◯◯）」が並んでいると、そちらも永久に出てこなくなる。
+  //   何も出なかったら次へ進める。
+  while (waiting.length) {
+    // ここは MutationObserver のコールバックなので、投げると残りの待ち行列が
+    // まるごと出せなくなる。1件の失敗で道を塞がない。
+    try { waiting.shift().show(); } catch (err) { console.error('[party] queued modal', err); }
+    if (modalOpen()) return;   // 出た。あとは閉じたときにまた呼ばれる
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -429,7 +445,7 @@ export function currentParty() { return state; }
 export function resetParty() {
   state = null;
   chatLog = [];
-  pendingInvite = null;
+  pendingInvites.clear();
   waiting = [];
   // 前の人あての通知ドットも消す（未ログインなら refreshFriendDot が 0 にする）。
   import('./friends.js').then(f => f.refreshFriendDot()).catch(() => {});
@@ -485,7 +501,7 @@ export function initParty() {
   });
 
   registerHandler('party_invite', msg => {
-    pendingInvite = msg.inviteId;
+    pendingInvites.add(msg.inviteId);
     audio.combo(3);
     // 期限は「届いた時刻」から数える。順番待ちで遅れて出したときに 60秒が
     // まるごと延びると、サーバー側ではもう切れている招待に「参加する」を
@@ -497,8 +513,8 @@ export function initParty() {
     // 解除していなかったので、60秒後に「そのとき開いていた別のモーダル」を
     // 勝手に閉じていた（結果画面やショップの購入確認が消える）。
     const timer = setTimeout(() => {
-      if (pendingInvite !== msg.inviteId) return;
-      pendingInvite = null;
+      if (!pendingInvites.has(msg.inviteId)) return;
+      pendingInvites.delete(msg.inviteId);
       // 自分の招待モーダルがまだ出ているときだけ閉じる。別のモーダルに
       // 差し替わったあとに closeModal() すると、それを巻き添えにする
       // （順番待ちに回してまだ出していない場合も同じ）。
@@ -506,12 +522,12 @@ export function initParty() {
     }, life);
     const answer = (type) => {
       clearTimeout(timer);
-      pendingInvite = null;
+      pendingInvites.delete(msg.inviteId);
       closeModal();
       sendWs({ type, inviteId: msg.inviteId });
     };
     const open = () => {
-      if (pendingInvite !== msg.inviteId) return;   // もう答えた／期限切れ
+      if (!pendingInvites.has(msg.inviteId)) return;   // もう答えた／期限切れ
       modal = showModal([
         `<h2>${icon('friends', { size: 22 })} ${t('パーティーに誘われました', 'Party invite')}</h2>`,
         `<p class="center"><b>${esc(msg.from)}</b> ${t('からのお誘いです', 'invited you')}</p>`,

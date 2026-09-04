@@ -361,14 +361,10 @@ const NEEDS_DEEP_MERGE = ['workshop', 'dailyReplays'];
 
   // ── 既知の抜け（TODO）。"<経路>::<関数名>" で許可する。
   // 直すのは削除経路の担当者。直したら消すこと（D-4 で消し忘れも赤くなる）。
-  const MISSING_CLEANUP_TODO = new Map([
-    ['退会 DELETE /api/me::purgeUserContent',
-      '🧩🎞💎 本人が退会したときだけ、工房ステージ・👻ゴースト盤面・購入履歴の表示名が公開面に残り続ける。'
-      + '管理者削除の経路だけがこのまとめ役を呼んでいる（routes/admin.js の purgeUserContent は '
-      + '「呼ぶのは DELETE /api/admin/users/:id と DELETE /api/me の2本」と書いているが、'
-      + 'server/index.js 側はまだ呼んでいない）。しかも退会は管理者削除よりずっと多い経路。'
-      + '【要修正・削除経路の担当 / server/index.js の app.delete(\'/api/me\') に1行足すだけ】'],
-  ]);
+  // 申し送りは空。ここに載せてよいのは「まだ直していないと分かっている抜け」だけで、
+  // 直したら**必ず外す**（残すと D-4 が⚠を出し続けて、本物の抜けが埋もれる）。
+  // 直近では 退会 DELETE /api/me::purgeUserContent が v2.40 で埋まって外れた。
+  const MISSING_CLEANUP_TODO = new Map([]);
 
   const gaps = [];
   for (const [label, body] of paths) {

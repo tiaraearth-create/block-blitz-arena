@@ -92,7 +92,20 @@ weeklyDailyRouter.get('/api/daily', (req, res) => {
     played: !!today,
     score: today ? today.score : null,
     cleared: today ? !!today.cleared : false,
-    streak: today ? today.streak : (d && d.day === jstDayKey(Date.now() - 86400000) && d.cleared ? d.streak : 0),
+    // 🔥 走っている最中に「連続クリア」を0にして見せない。
+    //
+    //    /api/daily/start は予約を `streak: 0` で作る（結果が出るまで確定
+    //    しないため）ので、ここが素直に today.streak を返すと、**挑戦する**を
+    //    押した瞬間に「連続クリア12日」が画面から消えていた。本当の日数は
+    //    prevStreak に退避されていて失われていないのに、いちばん途切れさせたく
+    //    ない数字が「もう失った」と読める。まだ結果の出ていない予約なら、
+    //    退避してあるほうを返す（クリアすれば +1 されて確定する）。
+    streak: today
+      ? (today.pending && !today.cleared ? (today.prevStreak || 0) : today.streak)
+      : (d && d.day === jstDayKey(Date.now() - 86400000) && d.cleared ? d.streak : 0),
+    // 走行中かどうか。画面は「（挑戦中）」と添えて、伸びるのかリセットされるのか
+    // を伝えられる。
+    inProgress: !!(today && today.pending && !today.cleared),
     bestStreak: (req.user && req.user.stats.dailycBestStreak) || 0,
   });
 });
@@ -167,6 +180,10 @@ weeklyDailyRouter.post('/api/daily/start', requireAuth, maintenanceGuard, (req, 
 const REPLAY_MAX_MOVES = 200;              // これを越える着手ログは丸ごと捨てる
 const REPLAY_MAX_MS = 6 * 60 * 60 * 1000;  // t（経過ms）の頭打ち
 const DAILY_REPLAY_TOP = 3;                // 公開するのはその日のTOP3
+// 🪨 瓦礫の初期配置を「その日の seed で全員同じ」に直した時刻（2026-09-04 JST）。
+//    これより前に録った瓦礫の日の録画は、いまの盤面と食い違うので出さない。
+//    録画の保持は2日ぶん（DAILY_REPLAY_DAYS）なので、この歯止めはすぐ空振りになる。
+const RUBBLE_DETERMINISTIC_AT = Date.parse('2026-09-04T00:00:00+09:00');
 const DAILY_REPLAY_KEEP = 60;              // 1日ぶんに残す最大件数（TOP3＋本人分の控え）
 const DAILY_REPLAY_DAYS = 2;               // 今日と昨日だけ。古い日は捨てる
 
@@ -330,7 +347,16 @@ dailyReplayRouter.get('/api/daily/replays', (req, res) => {
   const day = requestedDay(req.query.day);
   const store = dailyReplayStore();
   const all = store && Array.isArray(store[day]) ? store[day] : [];
-  const sorted = all.slice().sort((a, b) => (b.score - a.score) || (a.at - b.at));
+  // 🪨 瓦礫の日の「古い録画」は出さない。
+  //
+  // 以前は瓦礫の初期配置が Math.random() で、ひとりずつ違った（＝録画を
+  // 再生しても盤面が合わない）。いまは その日の seed から決めるので全員同じ
+  // だが、直し**より前**に録った行だけは、その日の配置と食い違う。
+  // 保存済みの `at` で見分けて落とす（保持は2日ぶんなので、この歯止めは
+  // 自然に空振りになる）。
+  const rubble = dailyModifierOf(day).id === 'rubble';
+  const fresh = all.filter(r => !rubble || (r && r.at >= RUBBLE_DETERMINISTIC_AT));
+  const sorted = fresh.slice().sort((a, b) => (b.score - a.score) || (a.at - b.at));
   // BAN された人のゴーストは公開ボードに出さない（ランキングと同じ扱い）。
   const publicRows = sorted.filter(r => { const u = db.users[r.uid]; return !u || !u.banned; });
   const viewerId = req.user ? req.user.id : null;

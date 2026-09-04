@@ -215,6 +215,28 @@ export function fill(tpl, r, ctx, extra = {}, cache = null) {
   return String(tpl).replace(/\{(\w+)\}/g, (_, k) => renderSlot(k, resolveSlot(k, r, ctx, extra, cache), lang));
 }
 
+// 🕳 差し込む中身が無い行を、プールから外すための判定。
+//
+// LINES 側は ctx（'poll' など）で開催中に限定しているのに、**返信のプール
+// だけ守りが無かった**。投票が開かれていないときに投票の話を振ると、
+// `{opt}` が空文字になって「に入れた」という壊れた文が返っていた
+// （日本語プールは7本中1本がこれ。返信は最大3人ぶん出るので、数回振れば
+// 高確率で見える）。英語プールからは別の文を引くので、英語面だけ正常という
+// 食い違いも出ていた。
+//
+// 空になると文が壊れる差し込みだけを見る（{name} や {event} は
+// renderSlot 側に「誰か」「イベント」という当たり障りのない既定がある）。
+const BREAKS_IF_EMPTY = ['opt', 'winner', 'question', 'ach', 'boss', 'item', 'saleitem', 'title', 'board', 'badge'];
+export function lineUsable(tpl, r, ctx, extra = {}, cache = null) {
+  const keys = [...String(tpl).matchAll(/\{(\w+)\}/g)].map(m => m[1]);
+  for (const k of keys) {
+    if (!BREAKS_IF_EMPTY.includes(k)) continue;
+    const v = renderSlot(k, resolveSlot(k, r, ctx, extra, cache), r ? r.lang : 'ja');
+    if (!v || !String(v).trim()) return false;
+  }
+  return true;
+}
+
 const EMOJI = ['🔥', '😂', '🎉', '👍', '😭', '💪', '✨', '😎', '🙌', '😱', '🤔', '💎'];
 
 // Make the line sound like *this* resident.
@@ -526,20 +548,33 @@ function renderBoth(r, ctx, src, extra = {}, opener = null, tail = null) {
   const text = primaryEn ? (en || ja) : (ja || en);
   if (!text) return null;
   const other = primaryEn ? ja : en;
+  // 🈳 片方の言語しか無い行では、text と other が**同じ文字列**になる
+  //    （`text = primaryEn ? (en || ja) : (ja || en)` のフォールバック）。
+  //    そのまま tr に載せると、「翻訳 ・ 原文」のボタンが出るのに押しても
+  //    何も変わらない ── 海外勢の住人の英語のセリフに、まったく同じ英文が
+  //    「日本語訳」として付いていたのはこれ。同じなら訳ではない。
+  const same = !other || other === text;
   return {
     text: stylize(text, r),
-    tr: other ? { lang: primaryEn ? 'ja' : 'en', text: other, engine: 'native' } : null,
+    tr: same ? null : { lang: primaryEn ? 'ja' : 'en', text: other, engine: 'native' },
   };
 }
 
 // 返信/リアクション用の対訳: これらのプールは ja/en が「対」ではなく等価な
 // 言い回しの集合なので、反対言語のプールから1本選んで同じスロット値で描画し、
 // ネイティブ tr として添える。辞書置換のエセ翻訳よりずっと自然に読める。
-function pairTr(r, ctx, extra, cache, otherLines, otherLang, poolKey) {
+function pairTr(r, ctx, extra, cache, otherLines, otherLang, poolKey, srcText = '') {
   if (!otherLines || !otherLines.length) return null;
   const tpl = gen.smartPick(`${poolKey}.${otherLang}.tr`, otherLines, { now: ctx.now });
   if (!tpl) return null;
-  return { lang: otherLang, text: fill(tpl, { ...r, lang: otherLang }, ctx, extra, cache), engine: 'native' };
+  const text = fill(tpl, { ...r, lang: otherLang }, ctx, extra, cache);
+  // 🈳 「訳」が原文と同じなら、訳ではない。
+  //    英語プールしか無い行に英語の対訳が付くと、海外勢の住人の発言に
+  //    「翻訳 ・ 原文」のボタンが出るのに、押しても何も変わらなかった。
+  if (!text || (srcText && text.trim() === String(srcText).trim())) return null;
+  // 日本語の訳のはずが日本語を1文字も含まない（＝英語のまま）ものも配らない。
+  if (otherLang === 'ja' && !/[ぁ-んァ-ヶ一-龠ー]/.test(text)) return null;
+  return { lang: otherLang, text, engine: 'native' };
 }
 
 // 1本の発言を合成する。トピック本文 / フォロー / 生活雑談 / 旧LINESの
@@ -936,8 +971,9 @@ export function composeReaction(kind, ctx, extra = {}, count = 1) {
     const tpl = gen.smartPick(`react.${poolKey}.${useEn ? 'en' : 'ja'}`, lines, { now: ctx.now, rid: r.id });
     if (!tpl) break;
     const cache = {};
-    const s = stylize(fill(tpl, r, ctx, extra, cache), r);
-    const tr = pairTr(r, ctx, extra, cache, useEn ? pool.ja : pool.en, useEn ? 'ja' : 'en', `react.${poolKey}`);
+    const s0 = stylize(fill(tpl, r, ctx, extra, cache), r);
+    const s = s0;
+    const tr = pairTr(r, ctx, extra, cache, useEn ? pool.ja : pool.en, useEn ? 'ja' : 'en', `react.${poolKey}`, s0);
     gen.noteSpoken(r.id, ctx.now);
     out.push({ resident: r, text: s, tr, delay });
     delay += 5000 + rnd() * 20000;
@@ -1070,7 +1106,14 @@ export function chooseReplies(text, ctx, forcedName = null) {
     if (re.test(t)) { category = cat; break; }
   }
   const spec = REPLIES[category];
-  const pool = (lang === 'en' && spec.en) ? spec.en : spec.ja;
+  // 🕳 差し込む中身が無い行はプールから外す（詳しくは lineUsable）。
+  //    全部落ちたら generic に落とす ── 黙るより当たり障りのない返事のほうがいい。
+  const usable = (lines) => {
+    if (!Array.isArray(lines) || !lines.length) return lines;
+    const ok = lines.filter(l => lineUsable(l, null, ctx));
+    return ok.length ? ok : (lang === 'en' ? REPLIES.generic.en : REPLIES.generic.ja);
+  };
+  const pool = usable((lang === 'en' && spec.en) ? spec.en : spec.ja);
 
   const pickResident = (exclude) => {
     const prefer = active.filter(r => !exclude.has(r.id) && r.lang === lang && (!spec.arch || spec.arch.includes(r.arch)));
@@ -1089,11 +1132,11 @@ export function chooseReplies(text, ctx, forcedName = null) {
     const r = mentioned[0];
     used.add(r.id);
     const useEn = r.lang === 'en' && spec.en;
-    const lines = useEn ? spec.en : spec.ja;
+    const lines = usable(useEn ? spec.en : spec.ja);
     gen.noteSpoken(r.id, ctx.now);
     const mCache = {};
     const mText = stylize(fill(replyPick(r, lines, `${category}.${useEn ? 'en' : 'ja'}`), r, ctx, {}, mCache), r);
-    const mTr = pairTr(r, ctx, {}, mCache, useEn ? spec.ja : spec.en, useEn ? 'ja' : 'en', `reply.${category}`);
+    const mTr = pairTr(r, ctx, {}, mCache, useEn ? spec.ja : spec.en, useEn ? 'ja' : 'en', `reply.${category}`, mText);
     out.push({ resident: r, text: mText, tr: mTr, delay: 2500 + rnd() * 5000 });
   }
   const r1 = pickResident(used);
@@ -1103,20 +1146,20 @@ export function chooseReplies(text, ctx, forcedName = null) {
     gen.noteSpoken(r1.id, ctx.now);
     const cache1 = {};
     const text1 = stylize(fill(first, r1, ctx, {}, cache1), r1);
-    const tr1 = pairTr(r1, ctx, {}, cache1, lang === 'en' ? spec.ja : spec.en, lang === 'en' ? 'ja' : 'en', `reply.${category}`);
+    const tr1 = pairTr(r1, ctx, {}, cache1, lang === 'en' ? spec.ja : spec.en, lang === 'en' ? 'ja' : 'en', `reply.${category}`, text1);
     out.push({ resident: r1, text: text1, tr: tr1, delay: (out.length ? out[0].delay : 0) + 3500 + rnd() * 8500 });
     // Sometimes a second voice chimes in.
     if (rnd() < 0.28) {
       const r2 = pickResident(used);
       if (r2) {
         const spec2 = rnd() < 0.5 ? spec : REPLIES.generic;
-        const pool2 = (lang === 'en' && spec2.en) ? spec2.en : spec2.ja;
+        const pool2 = usable((lang === 'en' && spec2.en) ? spec2.en : spec2.ja);
         let second = replyPick(r2, pool2, `${category}2.${lang}`);
         if (second === first) second = (lang === 'en' ? REPLIES.generic.en : REPLIES.generic.ja)[0];
         gen.noteSpoken(r2.id, ctx.now);
         const cache2 = {};
         const text2 = stylize(fill(second, r2, ctx, {}, cache2), r2);
-        const tr2 = pairTr(r2, ctx, {}, cache2, lang === 'en' ? spec2.ja : spec2.en, lang === 'en' ? 'ja' : 'en', `reply.${category}2`);
+        const tr2 = pairTr(r2, ctx, {}, cache2, lang === 'en' ? spec2.ja : spec2.en, lang === 'en' ? 'ja' : 'en', `reply.${category}2`, text2);
         out.push({ resident: r2, text: text2, tr: tr2, delay: out[out.length - 1].delay + 4000 + rnd() * 7000 });
       }
     }

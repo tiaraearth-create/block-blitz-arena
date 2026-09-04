@@ -70,7 +70,18 @@ export function createGuild(db, owner, input) {
   db.guilds[guild.id] = guild;
   owner.guildId = guild.id;
   owner.guildJoinedAt = Date.now();
+  markGuildEver(owner);
   return { guild };
+}
+
+// 🏅 実績「ギルド加入」は**一度でも入ったか**で決まる。
+//    在籍中かどうか（user.guildId）で判定していたので、脱退や除名で
+//    未受取の 500🪙+4💎 が取り消され、進捗バーが逆走していた。
+//    ここで「一度入った」を刻む（stats に置くのは backup の統合が
+//    stats を最高値でまとめてくれるため）。
+function markGuildEver(user) {
+  user.stats = user.stats || {};
+  if (!user.stats.guildJoinedEver) user.stats.guildJoinedEver = Date.now();
 }
 
 export function findGuild(db, { id, code, name } = {}) {
@@ -93,9 +104,15 @@ export function joinGuild(db, user, guild, { viaCode = false } = {}) {
   if (user.guildLeftAt && Date.now() - user.guildLeftAt < 60 * 60 * 1000) {
     return { error: '脱退から1時間はギルドに参加できません' };
   }
+  // 除名されたときは「元のギルドへの出戻り」だけ1時間断る（上のコメント参照）。
+  if (user.guildKickedAt && user.guildKickedFrom === guild.id
+      && Date.now() - user.guildKickedAt < 60 * 60 * 1000) {
+    return { error: '除名されたギルドには1時間参加できません' };
+  }
   guild.members.push(user.id);
   user.guildId = guild.id;
   user.guildJoinedAt = Date.now();
+  markGuildEver(user);
   return { guild };
 }
 
@@ -124,7 +141,17 @@ export function kickMember(db, guild, actor, targetId) {
   if (!guild.members.includes(targetId)) return { error: 'そのメンバーはいません' };
   guild.members = guild.members.filter(id => id !== targetId);
   const t = db.users[targetId];
-  if (t) { t.guildId = null; t.guildLeftAt = Date.now(); }
+  // 🚪 除名では guildLeftAt を刻まない。
+  //    自分では抜けていないのに1時間どのギルドにも入れず（コインボーナスも
+  //    週間ptの加算も無し）、しかも理由が「脱退から1時間はギルドに参加
+  //    できません」と嘘になる。除名の確認ダイアログにもその副作用は
+  //    書かれていない。即出戻りを防ぐのは元のギルドにだけで足りるので、
+  //    別の欄に刻んで joinGuild 側でそこだけ断る。
+  if (t) {
+    t.guildId = null;
+    t.guildKickedAt = Date.now();
+    t.guildKickedFrom = guild.id;
+  }
   return { ok: true };
 }
 

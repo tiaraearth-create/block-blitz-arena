@@ -1,6 +1,6 @@
 // Sub-screens: auth modal, leaderboard, shop, battle pass, admin panel.
 import { session, api, setToken, refreshMe } from './net.js';
-import { $, $$, showScreen, showModal, closeModal, popModal, toast, fmt, updateTopbar, confettiBurst, rankOf, rankBadge, staffUiOn, setStaffUi, staffExtras, usingCachedUser, clearCachedUser } from './dom.js';
+import { $, $$, showScreen, showModal, closeModal, popModal, toast, fmt, updateTopbar, confettiBurst, rankOf, rankBadge, staffUiOn, setStaffUi, staffExtras, usingCachedUser, clearCachedUser, enterIsLive } from './dom.js';
 // 🗄 端末に置く bba_* の一覧と仕分け（public/js/localdata.js）。
 //    設定の「ローカルデータを消す」と、アカウント削除の後始末が使う。
 import { resetLocal, forgetOwner, ownerKeyOf } from './localdata.js';
@@ -197,7 +197,7 @@ export function showAuthModal(initialMode) {
     }
   };
   m.querySelector('#authSubmit').onclick = submit;
-  m.querySelector('#authPass').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+  m.querySelector('#authPass').addEventListener('keydown', e => { if (enterIsLive(e)) submit(); });
 }
 
 // 🏛 シーズン刻印バッジ `s{N}champ`（s3champ, s4champ …）。シーズンが終わるたびに
@@ -1571,8 +1571,14 @@ let shopGift = null;       // { available, claimed, coins, gems, nextAt } | null
 let shopFetchedAt = 0;
 const SHOP_CACHE_MS = 60000;
 
-export async function openShop(tab = shopTab) {
-  showScreen('shop');
+export async function openShop(tab = shopTab, { keepScreen = false } = {}) {
+  // 🚪 keepScreen ＝「もう見ているはずの棚を描き直すだけ」。
+  //    showScreen('shop') はメニューからだと戻り先と履歴を1つ積むので、
+  //    無料ギフトの応答が遅れて返ったあとにこれを呼ぶと、戻るでメニューへ
+  //    抜けた人がショップへ引き戻され、しかも戻るを1回余計に押さないと
+  //    メニューへ帰れなくなっていた。
+  if (keepScreen && document.body.dataset.screen !== 'shop') return;
+  if (!keepScreen) showScreen('shop');
   shopTab = tab;
   $$('[data-shop]').forEach(t => t.classList.toggle('active', t.dataset.shop === tab));
   const grid = $('#shopGrid');
@@ -1677,12 +1683,30 @@ function dealRemainText(ms) {
 let dealTimer = null;
 function tickDeals() {
   const els = document.querySelectorAll('[data-deal-end]');
-  if (!els.length) { if (dealTimer) { clearInterval(dealTimer); dealTimer = null; } return; }
+  // ⏰ ショップを離れたら止める。
+  //
+  //   showScreen は #shopGrid の中身を捨てないので、[data-deal-end] は
+  //   document に残ったまま ── コメントが言う「対象が画面から消えたら自分で
+  //   止まる」は成立せず、試合中も1秒ごとに回り続けていた。
+  //   要素の有無ではなく「いまショップを見ているか」で止める。
+  const onShop = document.body.dataset.screen === 'shop';
+  if (!els.length || !onShop) { if (dealTimer) { clearInterval(dealTimer); dealTimer = null; } return; }
   const now = Date.now();
+  let ended = false;
   els.forEach(el => {
     const end = Number(el.dataset.dealEnd) || 0;
-    el.textContent = end > now ? dealRemainText(end - now) : tr('終了しました', 'Ended');
+    if (end > now) { el.textContent = dealRemainText(end - now); return; }
+    el.textContent = tr('終了しました', 'Ended');
+    ended = true;
   });
+  // 🏷 日付をまたいだ。値札そのものは再描画されないので、「終了しました」と
+  //    割引価格が同時に出たままになり、押すとサーバーは**新しい日のセール**
+  //    （多くは定価）で引き落とす。棚ごと引き直す。
+  if (ended) {
+    if (dealTimer) { clearInterval(dealTimer); dealTimer = null; }
+    shopFetchedAt = 0;
+    openShop(shopTab, { keepScreen: true });
+  }
 }
 function startDealTimer() {
   tickDeals();
@@ -1723,7 +1747,8 @@ async function claimShopGift(btn) {
     toast(tr(`無料ギフト： ${gname}${g.amount ? ` ×${fmt(g.amount)}` : ''}`,
       `Free gift: ${gname}${g.amount ? ` ×${fmt(g.amount)}` : ''}`), 'ok', 3500);
     shopFetchedAt = 0;   // 受取済みの状態を取り直す
-    openShop(shopTab);
+    // 応答が遅れて返ったときに、もうショップを離れている人を引き戻さない。
+    openShop(shopTab, { keepScreen: true });
   } catch (err) {
     audio.error();
     toast(err.message, 'err');
@@ -2276,10 +2301,19 @@ async function renderInvDex() {
     <span class="inv-bar"><span style="width:${rate}%"></span></span>
     <p class="muted center inv-note">${tr('灰色はまだ持っていない品です。入手できる場所を各マスに書いています',
       'Greyed-out entries are still missing — each one lists where to get it')}</p>
-    ${claimable && session.user
+    ${/* 🥇 きょうのぶんを使い切ったら、金色のボタンは出さない。
+          画面幅いっぱいの金色＝この画面でいちばん強い誘導なのに、上限に
+          達したあとも出続け、押すと**必ず**エラー音と赤トーストになっていた
+          （claimsLeftToday は手元にあるのに、注意書きにしか使っていなかった）。
+          代わりに「明日また受け取れる」ことだけを静かに伝える。 */''}
+    ${claimable && session.user && claimsLeft !== 0
       ? `<button class="btn btn-gold" id="dexClaimAll" style="width:100%;margin-bottom:${capHint ? '4' : '10'}px">${tr(`受け取れるセット報酬が${claimable}件あります`, `${claimable} set reward${claimable > 1 ? 's' : ''} ready to claim`)}</button>${
           capHint ? `<p class="muted center" style="font-size:12px;margin:0 0 10px">${escapeHtml(capHint)}</p>` : ''}`
-      : ''}
+      : claimable && session.user
+        ? `<p class="muted center" style="font-size:12px;margin:0 0 10px">${tr(
+          `きょうのぶんは受け取り済みです（残り${claimable}件は明日から）`,
+          `Today’s claim is used — ${claimable} more available tomorrow`)}</p>`
+        : ''}
     ${sets.map(s => {
       const pct = Math.round((s.owned / Math.max(1, s.total)) * 100);
       return `
@@ -2304,7 +2338,12 @@ async function renderInvDex() {
             ${rewardChip(s.coins, s.gems)}
             ${s.claimed
               ? `<span class="ms-check">${ic('check', 14)}</span>`
-              : `<button class="btn btn-sm ${s.done ? 'btn-gold' : 'btn-ghost'}" data-dexclaim="${escapeHtml(s.id)}" ${s.done ? '' : 'disabled'}>${s.done ? tr('受取', 'Claim') : tr('未達成', 'Locked')}</button>`}
+              /* 上限に達している日は、そろっていても押せる形で出さない
+                 （押すと必ずエラーになる。理由はボタンの文字で伝える）。 */
+              : `<button class="btn btn-sm ${s.done && claimsLeft !== 0 ? 'btn-gold' : 'btn-ghost'}" data-dexclaim="${escapeHtml(s.id)}" ${s.done && claimsLeft !== 0 ? '' : 'disabled'}>${
+                !s.done ? tr('未達成', 'Locked')
+                  : claimsLeft === 0 ? tr('あすまで', 'Tomorrow')
+                    : tr('受取', 'Claim')}</button>`}
           </div>` : ''}
       </div>`;
     }).join('')}`;
@@ -2491,18 +2530,28 @@ function renderBoosterShop() {
   shopBoosters.forEach((item, idx) => {
     const count = u ? (u.items && u.items[item.id]) || 0 : null;
     const deal = item.adminOnly ? null : dealFor(item);
+    // 🛠 運営専用のブースターは、値札も買うボタンも出さない。
+    //    装備品のグリッド（1775行）は adminOnly を「運営専用」の無効ボタンに
+    //    出し分けているのに、この棚だけ取り残されていて、🪙0 の買うボタンが
+    //    並び（押すと必ず 403）、所持数も ×0 と出ていた ── インベントリの
+    //    同じ持ち物は invIsStaff() で ∞ と出るので、そこでも食い違う。
+    const staffItem = !!item.adminOnly;
     const el = document.createElement('div');
     el.className = 'shop-item';
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
     el.innerHTML = `
       <div class="shop-preview booster-preview">${icon(itemIconName(item), { size: 48, label: catName(item) })}</div>
-      <div class="shop-name">${catName(item)}${count !== null ? ` <span class="muted">×${fmt(count)}</span>` : ''}</div>
+      <div class="shop-name">${staffItem ? `${ic('throne', 14)} ` : ''}${catName(item)}${
+        count !== null ? ` <span class="muted">×${staffItem ? '∞' : fmt(count)}</span>` : ''}</div>
       <div class="shop-desc">${catDesc(item)}</div>
       ${saleBadge(deal)}
-      <button class="btn btn-sm btn-gold" data-act="buy">${priceLabel(ic('coins', 14), item, deal)}</button>
+      ${staffItem
+        ? `<button class="btn btn-sm btn-ghost" disabled>${tr('運営専用', 'Staff only')}</button>`
+        : `<button class="btn btn-sm btn-gold" data-act="buy">${priceLabel(ic('coins', 14), item, deal)}</button>`}
     `;
     grid.appendChild(el);
     const bbtn = el.querySelector('[data-act]');
+    if (!bbtn) return;
     bbtn.onclick = async () => {
       if (!session.user) { showAuthModal(); return; }
       // 二度押しで2個買わないように、送信中は押せなくする。
@@ -2637,7 +2686,15 @@ export function openGacha() {
           : icon(itemIconName(r), { size: 26, label: catName(r) });
         const label = r.type === 'coins' ? tr(`コイン +${fmt(r.amount)}`, `Coins +${fmt(r.amount)}`)
           : r.type === 'gems' ? tr(`ジェム +${fmt(r.amount)}${r.complete ? '（コンプ済）' : ''}`, `Gems +${fmt(r.amount)}${r.complete ? ' (all collected)' : ''}`)
-          : r.type === 'item' ? catName(r)
+          // 🎁 個数を必ず出す。サーバーは図鑑コンプ後のSSRに amount:3、
+          //    ジェム予算切れの受け皿に amount:2/5 を載せているのに、ここが
+          //    名前しか出さないので、ふつうのR（1個）と見分けがつかなかった。
+          //    （`（コンプ済）` の表記も type:'gems' の枝にしか無く、いまの
+          //     返り値では絶対に出ない死んだコードになっていた。）
+          : r.type === 'item'
+            ? `${catName(r)}${r.amount > 1 ? ` ×${r.amount}` : ''}${
+              r.complete ? tr('（コンプ済）', ' (all collected)')
+                : r.budgetOut ? tr('（本日のジェム上限）', ' (daily gem cap)') : ''}`
           : catName(r);
         card.innerHTML = `<span class="gc-rarity">${r.limited ? ic('fx_prism', 12) : ''}${r.rarity}</span><span class="gc-icon${isPv ? ' gc-pv' : ''}">${iconHtml}</span><span class="gc-label">${escapeHtml(label)}</span>`;
         // renderPreview は id と cat しか見ないので、ガチャの結果をそのまま渡せる
@@ -2785,10 +2842,15 @@ function renderMissions() {
   const rrLeftJa = rrLeft === null ? '' : `（あと${rrLeft}回）`;
   const rrLeftEn = rrLeft === null ? '' : ` (${rrLeft} left)`;
   const rrLabel = rrFree ? tr('無料', 'Free') : `${ic('coins', 12)}${fmt(rrCost)}`;
+  // 🗓 引き直しの枠は、デイリーは「日」・ウィークリーは「週」で数える
+  //    （サーバーの rerollCounts() が weekly を週キーで数えていて、その
+  //     コメント自身が「以前は両方とも日付キーだった」と直した経緯を書いている）。
+  //    画面だけが「本日」と言い続けていたので、翌日ぶんの無料枠をあてにした人が損をする。
+  const per = daily ? tr('本日', 'today') : tr('今週', 'this week');
   const rrHint = rrOut
-    ? `${ic('reroll', 13)} ${tr('引き直しは本日ぶんを使い切りました', 'No rerolls left today')}`
+    ? `${ic('reroll', 13)} ${tr(`引き直しは${per}ぶんを使い切りました`, `No rerolls left ${per}`)}`
     : rrFree
-      ? `${ic('reroll', 13)} ${tr(`引き直し 本日1回無料${rrLeftJa}`, `Reroll: free today${rrLeftEn}`)}`
+      ? `${ic('reroll', 13)} ${tr(`引き直し ${per}1回無料${rrLeftJa}`, `Reroll: free ${per}${rrLeftEn}`)}`
       : `${ic('reroll', 13)} ${tr(`引き直し 1回 ${ic('coins', 12)}${fmt(rrCost)}${rrLeftJa}`, `Reroll: ${ic('coins', 12)}${fmt(rrCost)} each${rrLeftEn}`)}`;
   // 受け取りそびれたランキング報酬の入口（起動時のダイアログを閉じてもここから受け取れる）
   const rankPending = session.user && Array.isArray(session.user.rankRewards) ? session.user.rankRewards.length : 0;
@@ -2822,7 +2884,7 @@ function renderMissions() {
           ${r.claimed
             ? `<span class="ms-check">${ic('check', 14)}</span>`
             : `${rrOut ? '' : `<button class="btn btn-sm btn-ghost" data-reroll="${escapeHtml(String(r.id))}"${r.done ? ' data-reroll-done="1"' : ''} title="${rrFree
-                  ? tr('別のミッションに引き直す（本日1回無料）', 'Swap for another mission (free today)')
+                  ? tr(`別のミッションに引き直す（${per}1回無料）`, `Swap for another mission (free ${per})`)
                   : tr(`別のミッションに引き直す（コイン${fmt(rrCost)}）`, `Swap for another mission (${fmt(rrCost)} coins)`)}"
                 style="padding:4px 8px;line-height:1.1">${ic('reroll', 14)}<small style="display:block;font-size:9px">${rrLabel}</small></button>${
                 !rrFree && rrCostGems > 0
@@ -3231,9 +3293,21 @@ function renderBattlePass(data) {
         const rw = rewardLabel(res.reward);
         // アイコンは文字（言葉）。空のこともあるので、空白が余らないよう詰める。
         const what = [rw.icon, rw.label].filter(Boolean).join(' ');
-        toast(tr(`${what} を受け取りました！`, `Claimed ${what}!`), 'ok');
+        // 🎁 もう持っている装備品だったときは、サーバーが同じ値段ぶんの通貨へ
+        //    振り替えて払う。何と引き換えだったのかを添えないと、
+        //    「スキンのはずがコインだった」と食い違って見える。
+        toast(res.reward && res.reward.insteadOf
+          ? tr(`すでに持っていたので ${what} を受け取りました！`, `Already owned — received ${what} instead!`)
+          : tr(`${what} を受け取りました！`, `Claimed ${what}!`), 'ok');
         updateTopbar();
-        openBattlePass();   // 描き直すのでボタンごと差し替わる
+        // 🔖 全面描き直しをしない。innerHTML を捨てると横スクロールが
+        //    ティア1へ戻るので、1シーズン最大54枠のうちティア20あたりを
+        //    受け取るたびに約3,400px 送り直すことになっていた（入場アニメも
+        //    毎回かかり直すので、受け取るほど遅く感じる）。
+        //    押したセルだけ「受取済み」にして、通貨は上部バーに任せる。
+        const cell = btn.closest('.bp-cell');
+        if (cell) { cell.classList.add('claimed'); btn.remove(); }
+        else openBattlePass();   // セルが見つからない＝形が変わった。従来どおり描き直す
       } catch (err) { audio.error(); toast(err.message, 'err'); btn.disabled = false; }
     };
   });
@@ -6106,7 +6180,7 @@ export async function openWorkshop(sort = wsSort) {
   const codeInput = m.querySelector('#wsCode');
   const go = () => openWorkshopByCode(codeInput.value);
   m.querySelector('#wsGo').onclick = go;
-  codeInput.onkeydown = e => { if (e.key === 'Enter') go(); };
+  codeInput.onkeydown = e => { if (enterIsLive(e)) go(); };
   m.querySelectorAll('[data-ws]').forEach(b => {
     b.onclick = () => {
       if (wsSort === b.dataset.ws) return;
@@ -6324,7 +6398,7 @@ async function showWorkshopAdminModal(q = '') {
   const qInput = m.querySelector('#waQ');
   const run = () => loadWorkshopAdmin(m, qInput.value.trim());
   m.querySelector('#waSearch').onclick = run;
-  qInput.onkeydown = e => { if (e.key === 'Enter') run(); };
+  qInput.onkeydown = e => { if (enterIsLive(e)) run(); };
   await loadWorkshopAdmin(m, q);
   return m;
 }

@@ -122,7 +122,12 @@ export function sendRequest(db, from, toId) {
   // ここで分岐しても新しい情報は漏れない。
   // 呼び出し側が「申請が届いた」ではなく「フレンドになった」を送れるよう、
   // 成立したことが分かる印を付けて返す。
-  if (from.friendReqIn.some(r => r.from === toId)) {
+  // ⏳ 期限切れ(REQ_EXPIRE_MS超)の申請は「無い」ものとして扱う。
+  //    見ていなかったので、相手からの14日超の申請が受信箱に残っていると
+  //    この枝に入り、acceptRequest が期限切れを検出して
+  //    `{error:'その申請はありません'}` を返す ── 何も送られないまま
+  //    1回目だけ失敗し、2回目は（掃除されたので）通る、という形だった。
+  if (from.friendReqIn.some(r => r.from === toId && Date.now() - (r.at || 0) < REQ_EXPIRE_MS)) {
     if (eitherBlocks(from, to)) return { error: REFUSED };
     const r = acceptRequest(db, from, toId);
     return r.error ? r : { ...r, accepted: true };
@@ -189,7 +194,11 @@ export function acceptRequest(db, me, fromId) {
 export function declineRequest(db, me, fromId) {
   if (!me) return { error: '相手が見つかりません' };
   ensureSocial(me);
-  const had = me.friendReqIn.some(r => r.from === fromId);
+  // ⏳ 期限切れ(14日超)は「無い」ものとして扱う。掃除はするが、7日ロックは
+  //    刻まない ── 期限切れの行を断っただけで、相手が7日間再申請できなく
+  //    なるのはおかしい（acceptRequest 側は既に期限を見て断っている）。
+  const had = me.friendReqIn.some(r => r.from === fromId
+    && Date.now() - (r.at || 0) < REQ_EXPIRE_MS);
   me.friendReqIn = me.friendReqIn.filter(r => r.from !== fromId);
   const other = userOf(db, fromId);
   if (other) { ensureSocial(other); other.friendReqOut = other.friendReqOut.filter(id => id !== me.id); }
@@ -386,7 +395,15 @@ export function friendsView(db, user, levelOf, statusOf) {
   ensureSocial(user);
   return {
     friends: user.friends.map(id => friendRow(db, id, levelOf, statusOf)).filter(Boolean),
+    // ⏳ 期限切れ(14日超)は受信箱に出さない。
+    //    acceptRequest は期限を見て断るのに、この一覧は見ていなかったので、
+    //    「承認」だけが必ず赤トースト『その申請はありません』になり、
+    //    「ことわる」は成功して friendDeclines を刻む ── 相手はその後
+    //    **7日間**再申請できなくなる。承認は壊れているのに拒否だけ効いて
+    //    相手を締め出す、という最悪の組み合わせだった。通知ドットの件数も
+    //    ここを数えているので、まとめて直る。
     incoming: user.friendReqIn
+      .filter(r => r && Date.now() - (r.at || 0) < REQ_EXPIRE_MS)
       .map(r => { const row = friendRow(db, r.from, levelOf, statusOf); return row ? { ...row, at: r.at } : null; })
       .filter(Boolean),
     outgoing: user.friendReqOut.map(id => friendRow(db, id, levelOf, statusOf)).filter(Boolean),

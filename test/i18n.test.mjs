@@ -131,4 +131,56 @@ const ids = [...catalog.matchAll(/\{ id: '([a-z_0-9]+)',\s*cat:/g)].map(m => m[1
 const noEn = ids.filter(id => !catalogEn.includes(`${id}:`));
 check('すべての装備に英語名がある', noEn.length === 0, noEn.join(', '));
 
+// ---------------------------------------------------------------------------
+// 5. サーバーのエラー文言を、機械で数え上げる
+// ---------------------------------------------------------------------------
+// 上の 1. は「表に載っている文言が正しいか」を見るだけで、**載せ忘れ**は
+// 見つけられない。対訳表は手書きなので「あとから足したエラーだけが必ず抜ける」
+// 構造になっていて、実際に合言葉ルームの操作エラー8本と王座の宝物庫の2本が、
+// いちばん「何をすればいいか」を伝えるべき瞬間に読めない文字で出ていた。
+//
+// server/ 配下の `error: '…'` を全部拾い、日本語を含むものは
+//   ・対訳表にある、か
+//   ・管理画面でしか出ない（下のファイル）
+// のどちらかであることを機械で確かめる。新しいエラーを足したら、
+// どちらかを選ばないとここで落ちる。
+{
+  // 管理画面だけに出るエラーは英訳を求めない。運営（この1人）は日本語で読む。
+  const ADMIN_ONLY_FILES = [
+    'server/routes/admin.js',   // 運営パネル
+    'server/backup.js',         // バックアップの取り込み
+    'server/adminevent.js',     // イベントの時間割の設定
+    'server/routes/adminevent.js', // 同上（時間割と王座の設定。全経路 requireAdmin）
+  ];
+  const walk = d => {
+    const out = [];
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) out.push(...walk(p));
+      else if (e.name.endsWith('.js')) out.push(p);
+    }
+    return out;
+  };
+  const missing = [];
+  let total = 0;
+  for (const abs of walk(path.join(root, 'server'))) {
+    const rel = path.relative(root, abs).split(path.sep).join('/');
+    if (ADMIN_ONLY_FILES.includes(rel)) continue;
+    for (const line of fs.readFileSync(abs, 'utf8').split(/\r?\n/)) {
+      // コメント行は見ない（説明文の中の例まで拾ってしまう）。
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
+      for (const m of line.matchAll(/error:\s*'([^']+)'/g)) {
+        const msg = m[1];
+        if (!hasJa(msg)) continue;
+        total++;
+        if (!translated.has(msg)) missing.push(`${msg} @ ${rel}`);
+      }
+    }
+  }
+  check('サーバーのエラー文言に英訳がある（管理画面ぶんを除く）',
+    missing.length === 0,
+    missing.length ? `未訳 ${missing.length}件: ${missing.slice(0, 6).join(' / ')}${missing.length > 6 ? ' …' : ''}`
+      : `${total}本を照合`);
+}
+
 for (const [ok, name, detail] of results) console.log(ok, name, detail ? `— ${detail}` : '');

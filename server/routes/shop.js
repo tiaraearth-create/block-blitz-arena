@@ -356,6 +356,13 @@ function dealEligible(i) {
 }
 
 let dealsMemo = { day: null, list: null };
+// 🏷️ その日のセール。住人の世界観（crowd.js の ctx.sale）にも渡す ──
+//    セール用のセリフ13本と専用リアクションが全部そろっているのに、
+//    ctx.sale を供給する場所がどこにも無く、**一度も出ていなかった**。
+//    「今これ安いよ」は宣伝ではなく、遊んでいる人が普通にする話。
+//    CTX_OK が「セールが実際に開催中のときだけ」に絞っているので、
+//    無い日は今までどおり黙る。
+export function currentDeals() { return dailyDeals(); }
 function dailyDeals(dayKey = jstDayKey()) {
   if (dealsMemo.day === dayKey && dealsMemo.list) return dealsMemo.list;
   const pool = SHOP_ITEMS.filter(dealEligible);
@@ -527,8 +534,24 @@ function gachaPull(user, lucky = false, floor = 0, gemBudget = null) {
     user.items[it.id] = (user.items[it.id] || 0) + 1;
     return { type: 'item', id: it.id, name: it.name, rarity: 'R' };
   }
+  // 💠 予算切れの受け皿。
+  //
+  // takeGems() は日次予算の残りしか払わないので、その日の💎が配りきりだと
+  // SR も UR も **中身0** で返っていた。UR は虹枠と全体フィードまで出たうえで
+  // 0💎。しかも下の呼び出し側は rarity だけを見て天井をリセットするので、
+  // 最大39連ぶんの積み上げまで一緒に消えていた。
+  // SSR帯には「コンプ済みなら非通貨のブースター束」という代替が既にあるので、
+  // 同じ考え方で SR / UR にも受け皿を用意する（通貨は配らない＝両替機化しない）。
+  const boosterFallback = (qty, rarity) => {
+    const pool = BOOST_ITEMS.filter(i => !i.adminOnly);
+    const it = pool[Math.floor(Math.random() * pool.length)];
+    user.items = user.items || {};
+    user.items[it.id] = (user.items[it.id] || 0) + qty;
+    return { type: 'item', id: it.id, name: it.name, amount: qty, rarity, budgetOut: true };
+  };
   if (roll < 87) {   // SR: gems
     const amount = takeGems(15 + Math.floor(Math.random() * 6) * 5);
+    if (amount <= 0) return boosterFallback(2, 'SR');
     return { type: 'gems', amount, rarity: 'SR' };
   }
   if (roll < 97) {   // SSR: unowned cosmetic (or a booster bundle when complete)
@@ -552,6 +575,7 @@ function gachaPull(user, lucky = false, floor = 0, gemBudget = null) {
   }
   // UR: jackpot gems
   const amount = takeGems(150);
+  if (amount <= 0) return boosterFallback(5, 'UR');
   return { type: 'gems', amount, rarity: 'UR' };
 }
 
@@ -600,7 +624,9 @@ shopRouter.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
   // Big pulls make the live feed.
   const ur = results.find(r => r.rarity === 'UR');
   const ssr = results.find(r => r.rarity === 'SSR' && r.type === 'cosmetic');
-  if (ur) postRealFeed(user, [{ icon: '🌟', ja: `${user.username} が UR を引き当てた！！`, en: `${user.username} hit the UR jackpot!!`, react: null }]);
+  // 🌟 UR は必ず流す（3%・虹枠つきの、いちばん珍しい瞬間）。react:null は
+  //    「住人には反応させない」という元からの意思なので、そちらは変えない。
+  if (ur) postRealFeed(user, [{ icon: '🌟', ja: `${user.username} が UR を引き当てた！！`, en: `${user.username} hit the UR jackpot!!`, react: null, always: true }]);
   // 英語面に日本語のアイテム名が挿さっていた。カタログの英名を使う。
   else if (ssr) postRealFeed(user, [{ icon: '🎰', ja: `${user.username} がガチャで SSR「${ssr.name}」を引いた！`, en: `${user.username} pulled SSR "${enName(ssr)}"!` }]);
   const collectibles = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly);

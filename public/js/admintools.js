@@ -10,7 +10,7 @@ import {
 } from './modes.js';
 import { fireUlt, ULT_META } from './skills.js';
 import { session, api } from './net.js';
-import { $, showModal, closeModal, toast, confettiBurst, fmt, staffExtras } from './dom.js';
+import { $, showModal, closeModal, toast, confettiBurst, fmt, staffExtras, enterIsLive } from './dom.js';
 import { audio } from './audio.js';
 import { SHAPES } from './engine.js';
 // 独自SVGアイコン。管理者パレットのタブ・ボタンに付いていた絵文字の置き換え先。
@@ -130,7 +130,7 @@ export function showAdminPalette(tab = 'board') {
   body.querySelectorAll('#apMult button').forEach(b => { b.onclick = () => { god.mult = Number(b.dataset.v); applyGod(); audio.click(); closeModal(); showAdminPalette('god'); }; });
   const run = () => { const v = modal.querySelector('#apCmd').value.trim(); if (v) runCommandLine(v); modal.querySelector('#apCmd').value = ''; };
   modal.querySelector('#apRun').onclick = run;
-  modal.querySelector('#apCmd').addEventListener('keydown', ev => { if (ev.key === 'Enter') run(); ev.stopPropagation(); });
+  modal.querySelector('#apCmd').addEventListener('keydown', ev => { if (enterIsLive(ev)) run(); ev.stopPropagation(); });
 }
 
 function needGame() {
@@ -497,7 +497,7 @@ function renderStatsTab(body, data, modal) {
     // Enter でも「検索」でも同じ経路。入力のたびに投げると、
     // 8,000件の集計を打鍵ごとに走らせることになるので投げない。
     const go = () => { ps.q = search.value.trim(); ps.offset = 0; reload(); };
-    search.addEventListener('keydown', ev => { if (ev.key === 'Enter') go(); ev.stopPropagation(); });
+    search.addEventListener('keydown', ev => { if (enterIsLive(ev)) go(); ev.stopPropagation(); });
     body.querySelector('#psSearchGo').onclick = () => { audio.click(); go(); };
   }
   body.querySelectorAll('[data-sort]').forEach(b => {
@@ -776,7 +776,7 @@ async function renderOnlineTab(body) {
   };
 
   const go = () => { ol.q = search.value.trim(); tick(); };
-  search.addEventListener('keydown', ev => { if (ev.key === 'Enter') go(); ev.stopPropagation(); });
+  search.addEventListener('keydown', ev => { if (enterIsLive(ev)) go(); ev.stopPropagation(); });
   body.querySelector('#olSearchGo').onclick = () => { audio.click(); go(); };
   body.querySelectorAll('[data-only]').forEach(b => {
     b.onclick = () => {

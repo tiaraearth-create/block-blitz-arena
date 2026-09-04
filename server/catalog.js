@@ -412,7 +412,23 @@ function collectionOwnedIds(user, set) {
 }
 
 function collectionSetDone(user, set) {
-  return set.ids.length > 0 && collectionOwnedIds(user, set).length >= set.ids.length;
+  // 🧺 一度そろえたら、そのあと使っても達成は取り消さない。
+  //
+  // 図鑑の受け取りは1日1セット（COLLECTION_CLAIM_PER_DAY）で、注意書きも
+  // 「受け取れる権利は消えない（明日また受け取れる）」と言っている。ところが
+  // kind:'boost' だけは在庫>0 で判定するので、翌日まわしにしたあとブースターを
+  // 1個使うだけで 1,500コインが消えていた ── しかも自分の操作が原因だと
+  // 分からないので、「アイテムを使うと損をする」向きの誘導になっていた。
+  // 称号側の claimedSets と同じ考え方で、そろえた日を印として残す。
+  if (set.kind === 'boost' && user && user.stats && user.stats.setEver
+      && user.stats.setEver[set.id]) return true;
+  const done = set.ids.length > 0 && collectionOwnedIds(user, set).length >= set.ids.length;
+  if (done && set.kind === 'boost' && user) {
+    user.stats = user.stats || {};
+    user.stats.setEver = user.stats.setEver || {};
+    if (!user.stats.setEver[set.id]) user.stats.setEver[set.id] = Date.now();
+  }
+  return done;
 }
 
 // 図鑑の中身。各セットの所持数/総数と、まだ足りない id を返す純粋関数

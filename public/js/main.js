@@ -2,9 +2,9 @@
 import { session, api, refreshMe, setToken, queuedResultCount, UNLOCK_LS_KEYS } from './net.js';
 // 🗄 端末に置く bba_* の一覧と仕分け（public/js/localdata.js）。
 import { noteUnlockSource, locallyEarnedUnlocks } from './localdata.js';
-import { $, $$, showScreen, showModal, closeModal, popModal, toast, updateTopbar, fmt, staffExtras , goBack, initHistory } from './dom.js';
+import { $, $$, showScreen, showModal, closeModal, popModal, toast, updateTopbar, fmt, staffExtras , goBack, initHistory, onModalClosed } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked, tutorialDone } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked, tutorialDone, pauseModeForDialog } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
 import { initClipHud } from './clipexport.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openInventory, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
@@ -810,6 +810,10 @@ $('#btnQuit').onclick = () => {
   // Chaos and dungeon have their own quit dialogs.
   const cur = window.__bbaMode;
   if (cur && (cur.mode === 'chaos' || cur.mode === 'dungeon') && !cur.ended) { audio.click(); quitCurrent(); return; }
+  // ⏸ 読んでいる数秒で走行を終わらせない。暗幕で指は届かないのに、ボスの
+  //    予告技も波も時計も進んでいた。オンラインでは null が返る（相手を
+  //    待たせられないので、そこは止めない）。
+  const resume = pauseModeForDialog();
   const m = showModal(`
     <h2>${t('ゲームを終了しますか？', 'Quit this game?')}</h2>
     ${(() => {
@@ -841,8 +845,11 @@ $('#btnQuit').onclick = () => {
       <button class="btn btn-ghost" id="qNo">${t('続ける', 'Keep playing')}</button>
       <button class="btn btn-ai" id="qYes">${t('終了する', 'Quit')}</button>
     </div>`);
+  // 「続ける」で必ず時計を戻す。枠外タップ・Esc でも閉じられるので、
+  // ボタンの onclick だけに書くと止まったままになる（＝永久に無敵）。
   m.querySelector('#qNo').onclick = closeModal;
   m.querySelector('#qYes').onclick = () => { closeModal(); quitCurrent(); };
+  if (resume) onModalClosed(resume);
 };
 
 // settings
@@ -857,8 +864,18 @@ $('#btnUlt').onclick = () => fireUltCurrent();
 window.addEventListener('keydown', e => {
   if (e.code !== 'Space' && e.key !== 'q') return;
   if (document.body.dataset.screen !== 'game') return;
+  // 🪟 モーダルが開いている間は奥義に触らない。
+  //    body.dataset.screen はモーダルが出ても 'game' のままなので、
+  //    「終了しますか？」の上で Space を押すと、裏で切り札が1本消えていた。
+  //    逆に結果モーダルでは preventDefault に殺されて、Space でボタンを
+  //    押せなかった（キーボードだけで遊んでいる人は出口を失う）。
+  //    ここは preventDefault もせずに素通りさせるのが正しい。
+  const root = document.getElementById('modal-root');
+  if (root && root.firstChild) return;
   const tag = (e.target.tagName || '').toLowerCase();
-  if (tag === 'input' || tag === 'textarea') return;
+  if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
+  // 押しっぱなしの自動リピートで連発しない（1本しかない切り札が溶ける）。
+  if (e.repeat) return;
   e.preventDefault();
   fireUltCurrent();
 });
@@ -1390,8 +1407,16 @@ $('#btnChimera').onclick = () => {
 $('#btnPuzzle').onclick = () => {
   audio.click();
   const cleared = puzzleBestStage();
+  // ⭐ 端末のぶんとサーバーのぶんを重ねる（高いほう）。
+  //    サーバーが★を預かるようになる前は端末にしか無かったので、機種変更で
+  //    ☆☆☆ に戻っていた。逆に、まだ送っていない直近の★は端末にしか無い。
+  //    どちらも落とさないよう Math.max で統合する。
   let stars = {};
   try { stars = JSON.parse(localStorage.getItem('bba_puzzle_stars') || '{}'); } catch { /* fresh */ }
+  const remote = (session.user && session.user.stats && session.user.stats.puzzleStars) || {};
+  for (const k of Object.keys(remote)) {
+    stars[k] = Math.max(Number(stars[k]) || 0, Number(remote[k]) || 0);
+  }
   const next = cleared + 1;
   const show = Math.max(next, 10);
   let grid = '';
@@ -1844,7 +1869,8 @@ $('#btnDaily').onclick = async () => {
         ? `${t('今日は挑戦済み', 'Today\'s attempt is done')}${todayScore != null ? ` — <b style="color:var(--yellow)">${fmt(todayScore)}</b>` : ''}${t('（ここからは練習）', ' (practice from here)')}`
         : `<b style="color:var(--yellow)">${t('記録に残るのは最初の1回だけ！', 'Only your FIRST run counts!')}</b>${session.user ? `<br><small>${t('※ 始めた時点で今日の1回を使います（途中でやめても記録は確定）', '* Starting uses today\'s attempt — quitting midway still locks it in')}</small>` : ''}`}
       <br>${t('次のお題まで', 'Next challenge in')} <b>${fmtWeeklyRemain(info.endsAt - Date.now())}</b>
-      ${info.streak ? `<br>${t(`連続クリア${info.streak}日`, `${info.streak}-day clear streak`)}` : ''}
+      ${info.streak ? `<br>${t(`連続クリア${info.streak}日`, `${info.streak}-day clear streak`)}${
+        info.inProgress ? `<small class="muted"> ${t('（挑戦中）', '(in progress)')}</small>` : ''}` : ''}
       ${session.user ? '' : `<br><small>${t('記録とランキングにはログイン', 'Log in for records & the ranking')}</small>`}
     </p>
     <div class="modal-buttons">
@@ -2097,6 +2123,28 @@ window.addEventListener('bba:results-sent', ev => {
     `Rewards for ${n} offline run${n === 1 ? '' : 's'} have arrived`), 'ok', 4000);
   // 送ったぶんコインとジェムが増えているので、トップバーを引き直す。
   refreshMe().then(() => updateTopbar()).catch(() => { /* 次の更新で合う */ });
+  updateOfflineNotice(netDown());
+});
+
+// 📮 控えを送れずに捨てたとき。
+//
+// 結果画面は「つながったときに送られ、そのとき記録されます」と約束している。
+// ところが寿命切れ・401・400 で捨てた控えは**黙って件数が減るだけ**で、
+// 報酬も記録も付かない理由がどこにも出なかった（デイリーはサーバーの予約が
+// 2時間で切れるので、いちばん踏みやすい）。必ず言う。
+window.addEventListener('bba:results-dropped', ev => {
+  const d = (ev && ev.detail) || {};
+  const n = Math.max(0, Number(d.count) || 0);
+  if (!n) return;
+  const why = {
+    auth: t('（ログインが切れていました）', ' (you were signed out)'),
+    expired: t('（時間切れです。デイリーは2時間以内に送る必要があります）',
+      ' (too old — the Daily must be submitted within 2 hours)'),
+    stale: t('（日付が変わっていました）', ' (the day had rolled over)'),
+    unreserved: t('（挑戦の登録がありませんでした）', ' (the run was never registered)'),
+  }[d.reason] || t('（サーバーに受け付けてもらえませんでした）', ' (the server rejected it)');
+  toast(t(`${n}件はデイリーとして記録できませんでした`,
+    `${n} run${n === 1 ? '' : 's'} could not be recorded as a Daily`) + why, 'err', 6000);
   updateOfflineNotice(netDown());
 });
 

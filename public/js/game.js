@@ -257,6 +257,13 @@ export class GameView {
     this.coolCells = null;
     this.oreCells = null;
     this.ghostFx = null;
+    // 🛡 絶対防御の無敵は「1試合ぶん」の約束。同じアイテムの他の2効果
+    //    （fortressUntil / streakShield）は engine 側にあるので試合ごとに
+    //    消えるが、これだけ使い回しの view 側にあり、ここにも endToMenu にも
+    //    無かったので**最大60秒ぶん次の試合へ持ち越して**いた。
+    //    ⚠ 運営トグルの godInvincible（試合をまたいで効かせる意図がある）
+    //      には触らない。消すのは残り時間のほうだけ。
+    this.godInvincibleUntil = 0;
   }
 
   setTheme({ skinId, boardId, fxId }) {
@@ -459,7 +466,19 @@ export class GameView {
       ));
     } catch { /* 差し替えられた canvas スタブなど */ }
 
+    // 🖱 右クリックのメニューは盤面の上では出さない。
+    //    掴んだままメニューが盤面を覆い、閉じるつもりの左クリックで意図しない
+    //    1手を消費していた。
+    this.canvas.addEventListener('contextmenu', e => e.preventDefault());
+
     this.canvas.addEventListener('pointerdown', e => {
+      // 🖱 左ボタン（＝主ポインタ）だけを受ける。
+      //    右クリックでも掴めてしまい、中クリックは Windows Chrome の
+      //    自動スクロールに pointerup を持っていかれるので、下の
+      //    `if (this.drag) return;` に永久に阻まれて**以後どのコマも
+      //    掴めなくなる**（固まったように見える）。
+      //    e.button は touch/pen でも 0 になるので、指の操作は影響を受けない。
+      if (e.button !== 0 || e.isPrimary === false) return;
       // Already dragging with another pointer? A second finger / the palm
       // touching the canvas must not hijack or replace the active drag.
       if (this.drag) return;
@@ -562,6 +581,19 @@ export class GameView {
     if (this.inputLocked || !this.running || !this.engine || this.engine.over) { audio.putback(); return false; }
     // 掴んでいる/選んでいる間に手札が書き換わることがある（ボスの技、協力プレイの
     // 配信、管理者の🎴シャッフル）。別の形を置いてしまわないよう同一性を見る。
+    // ❄️ ボスの呪縛（8秒の氷結）は、ここで見る。
+    //    判定が入口3か所（pointerdown / selectSlot / selectFirstPlayable）に
+    //    しか無かったので、**凍る前に掴んで／選んでいれば無視して置けた** ──
+    //    ドラッグ操作の人だけが罰を受け、タップ選択の人は受けない、という
+    //    不公平にもなっていた。このコメントの下の行が自分で「最後に必ず通る
+    //    1本道」と言っているとおり、判定はここに置くのが正しい。
+    //    入口側の判定は、掴む前に分かる即時のフィードバックとして残す。
+    if (piece.frozenUntil > Date.now()) {
+      audio.invalid();
+      // 選んだままの枠が凍ったら、選択も落とす（凍った枠を選び続けさせない）。
+      if (this.sel && this.sel.index === index) this.sel = null;
+      return false;
+    }
     if (this.engine.hand[index] !== piece) { audio.putback(); return false; }
     if (!(r >= 0 && c >= 0) || !this.engine.canPlace(piece, r, c)) { audio.putback(); return false; }
     // Co-op runs on a server-authoritative board: the hook forwards the
@@ -825,8 +857,16 @@ export class GameView {
     }
     // Autopilot 5.0 guard: a rescue may redraw the hand / clear cells instead.
     if (this.onRescue && this.onRescue()) return;
-    audio.gameOver();
-    if (this.onGameOver) this.onGameOver();
+    // 💀 死亡ジングルは「本当に終わったとき」だけ。
+    //
+    //    以前はここで無条件に鳴らしてから onGameOver() を呼んでいたので、
+    //    ダンジョンの残機・無限地獄ラッシュの不死鳥の羽で**復活する回も、
+    //    必ず死亡音が鳴り切ってから「復活！」のトーストが出て**いた
+    //    （天国は5階ごとに残機が増えるので、何度も起きる）。
+    //    モード側が「復活した」を返せるようにして、その回は鳴らさない
+    //    ── onRescue と同じ扱いにそろえる。
+    const revived = this.onGameOver ? this.onGameOver() === true : false;
+    if (!revived) audio.gameOver();
   }
 
   // 🪦 盤面が死んだことに気づく口が、長らく「置いた直後」しか無かった。
@@ -1340,15 +1380,35 @@ export class GameView {
     ctx.globalAlpha = 1;
   }
 
-  ghostInfo() {
-    const anchor = this.dragAnchor();
-    if (!anchor) return null;
-    const piece = this.engine.hand[this.drag.index];
+  // 👆 いま掴んでいるコマ。**掴んだときのもの**が正。
+  //
+  // 置く側（drop / commitPlace）は this.drag.piece で同一性を見ているのに、
+  // 描く側は engine.hand[index] を読んでいたので、掴んでいる最中に手札が
+  // 書き換わると（管理者イベントの手札シャッフルは6.5〜12秒ごと、
+  // レインボーハンド、ミニピース）**指の下の絵とゴーストだけが別のコマに
+  // すり替わる**。緑の（置ける）ゴーストが出ているのに、離すと putback が
+  // 鳴るだけ。背の高いコマに化けると赤いマスが手札の帯の上まではみ出す。
+  // すり替わりに気づいたら、そのドラッグは捨てる（掴み直してもらう）。
+  dragPiece() {
+    if (!this.drag || !this.engine) return null;
+    const live = this.engine.hand[this.drag.index];
     // 掴んだままの枠を自分以外が消化する（協力プレイのサーバー代打ち、
     // オートパイロット）と hand[index] が null になる。canPlace(null) は
     // piece.cells で TypeError を投げ、それが render() の中なので
     // requestAnimationFrame の再登録に届かず描画が永久に止まる。
-    // drawDrag は同じ読み出しに既にガードを持っているので、そちらに揃える。
+    if (!live) return null;
+    if (live !== this.drag.piece) {
+      this.drag = null;
+      audio.putback();
+      return null;
+    }
+    return live;
+  }
+
+  ghostInfo() {
+    const anchor = this.dragAnchor();
+    if (!anchor) return null;
+    const piece = this.dragPiece();
     if (!piece) return null;
     return this.ghostAt(piece, anchor);
   }
@@ -1397,7 +1457,8 @@ export class GameView {
   drawDrag() {
     const { ctx, cell } = this;
     const skin = getSkin(this.skinId);
-    const piece = this.engine.hand[this.drag.index];
+    // 掴んだときのコマを描く（すり替わっていたら dragPiece が捨てる）。
+    const piece = this.dragPiece();
     if (!piece) return;
 
     // Weld zone: highlight the target slot INSTEAD of a board ghost, so the

@@ -187,6 +187,9 @@ export function addHuman(s, ws, deps, run = null) {
     const rejoining = !!seat.left;
     seat.ws = ws;
     seat.left = false;
+    // 前の走行の「終わった」印は必ず解く。残すと新しい走行で断罪が
+    // 一度も飛ばず、斬るところが何も無いまま2分が過ぎる。
+    seat.done = false;
     if (rejoining) {
       // 🪦 前の走行のダウンは持ち越さない。
       //    持ち越すと、新しい走行の**途中**で tick の復帰（zero_revive）が飛び、
@@ -240,10 +243,30 @@ export function addHuman(s, ws, deps, run = null) {
 // 進行
 // ---------------------------------------------------------------------------
 
+// 🏁 走行が終わった（120秒を走りきった／✕で抜けた）。席は**残す** ──
+//    伝言(zero_will)はソケットの ws.zeroId が生きている間しか送れないので、
+//    ここで席ごと外すと、とどめを刺した人が伝言を書けなくなる。
+//    的から降ろすことだけをする。席を畳むのは、このあと届く zero_leave。
+//
+//    これが無かったとき: 結果画面と伝言モーダル（最長12秒）を開いている間も
+//    席は「生きている人」のままなので、断罪が飛び続けた。本人はもう盤面を
+//    操作できないので必ず落ち、そのたびに段のHPが回復し、住人がその人の
+//    名前で処刑され、断罪録に「落とした」が積まれていった。
+export function finishHuman(s, ws) {
+  if (!s || !ws) return null;
+  const e = s.entrants.find(x => x.human && x.ws === ws);
+  if (!e) return null;
+  e.done = true;
+  e.alive = false;
+  return e;
+}
+
 export function aliveHumans(s) {
   // 席を外した人(e.left)は名指ししない。zeroSeatOut は alive も false にするが、
   // 断罪の的になるかどうかは席の有無で決まるべきなので、両方を見る。
-  return s.entrants.filter(e => e.human && e.alive && !e.left);
+  // e.done は「走行は終わったが、伝言を送るために席だけ残っている」状態。
+  // ここを見ないと、結果画面や伝言モーダルを開いている人に断罪が飛ぶ。
+  return s.entrants.filter(e => e.human && e.alive && !e.left && !e.done);
 }
 // 「いま席に座っている」人間。走行を終えて席を外した人(e.left)は数えないし、
 // 配信もしない ── 部屋が枠ごとに1つになったことで、抜けた人の席は次の走行まで
@@ -332,8 +355,10 @@ export function tick(s, run, deps) {
   // 席を外した人(e.left)は復帰させない。復帰させると aliveHumans に混ざり、
   // 画面を見ていない人へ断罪が飛んで、必ず落ちて（＝ゼロが回復して住人が処刑
   // される）しまう。次に座り直したとき addHuman が起こす。
+  // 走行を終えた人(e.done)も同じ理由で起こさない。トップアウトの60秒が
+  // 走行の終わりをまたぐと、席だけ残っている人が復帰扱いになって的に戻る。
   for (const e of s.entrants) {
-    if (e.human && !e.left && !e.alive && e.downUntil && t >= e.downUntil) {
+    if (e.human && !e.left && !e.done && !e.alive && e.downUntil && t >= e.downUntil) {
       e.alive = true; e.downUntil = 0;
       if (emit) emit(e, { type: 'zero_revive' });
     }
@@ -357,12 +382,20 @@ export function tick(s, run, deps) {
       // ハードコード null を上書きして配る ── 再接続後も伝言を書く権利を復元できる。
       // 席の「自分」印も視聴者ごとなので、seats だけ差し替える（view ごと作り直すと
       // 盤面のスナップショットを人数ぶん取り直すことになる）。
+      const userIdOf = deps.userIdOf;
       for (const e of seatedHumans(s)) {
         const canWill = (run.broken || []).some(b => b.by === e.name && !b.will);
+        // 🤝 取引に「もう投票したか」も視聴者ごとに載せる。走行をまたいで
+        //    取引が出し直されるようになったので（クライアントの onState が
+        //    view.deal を読む）、これが無いと投票済みの人にボタンが押せる形で
+        //    出てしまい、押すと必ず「もう投票しました」のエラーになる。
+        const voted = !!(run.deal && userIdOf && run.deal.humanVotes
+          && run.deal.humanVotes[userIdOf(e.ws)]);
         emit(e, {
           ...view,
           seats: view.seats.map(x => (x.name === e.name ? { ...x, you: true } : x)),
           canWill,
+          deal: view.deal ? { ...view.deal, voted } : null,
           you: youView(e),
         });
       }
@@ -378,7 +411,12 @@ function resolveExpiredVerdicts(s, run, danIndex, deps) {
     if (v.resolved || t <= v.at + v.warnMs) continue;
     v.resolved = true;
     const e = s.entrants.find(x => x.name === v.target);
-    if (e) e.missed = (e.missed || 0) + 1;
+    // 🪑 撃ったあとに席を立った／走行が終わった人の断罪は、無かったことにする。
+    //    斬れなかったのは本人のせいではないのに「落とした」が1つ付き、段のHPが
+    //    回復し、その人の名前で住人が1人処刑され、断罪録にも名前が残っていた。
+    //    落とす罰は「見ていたのに斬らなかった」ときだけ意味がある。
+    if (!e || e.left || e.done) continue;
+    e.missed = (e.missed || 0) + 1;
     if (deps.onStat) deps.onStat(v.target, 'zeroMissed');
     // 落とすと段が少し回復し、住人が1人処刑される。
     const dan = danAt(danIndex);
@@ -759,8 +797,19 @@ function runDeal(s, run, danIndex, deps, elapsed, t) {
   // run.slotStartsAt（現在スロットの開始時刻, ms）を adminevent 側が書き込む。
   // 無い場合は後方互換でセッション基準にフォールバックする。
   const slotElapsed = run.slotStartsAt ? (t - run.slotStartsAt) / 1000 : elapsed;
+  // 🕒 発火点は「20分地点」だが、1枠の長さは管理画面で 10〜180分まで動かせる
+  //    （adminevent.js の AE_MIN_DURATION / AE_MAX_DURATION、既定は30分）。
+  //    20分より短い枠にすると、この地点に到達する前に枠が終わるので、取引は
+  //    **構造的に一度も開かない**。枠が短いときだけ前倒しして、投票の60秒と
+  //    締切後の余韻ぶんが枠の中に必ず収まるようにする。既定の30分枠では
+  //    min(1200, 1800-80) = 1200 で、これまでと1秒も変わらない。
+  const slotSec = (run.slotEndsAt && run.slotStartsAt)
+    ? (run.slotEndsAt - run.slotStartsAt) / 1000 : 0;
+  const dealAt = slotSec > 0
+    ? Math.max(30, Math.min(DEAL_AT_SEC, slotSec - DEAL_SEC - 20))
+    : DEAL_AT_SEC;
   // 開幕
-  if (!run.deal && slotElapsed >= DEAL_AT_SEC && run.dealDoneFor !== danIndex) {
+  if (!run.deal && slotElapsed >= dealAt && run.dealDoneFor !== danIndex) {
     run.deal = makeDeal(run.dayKey || 'x', danIndex, t);
     if (say) say('deal', danIndex, { seed: t });
     if (emit) for (const x of seatedHumans(s)) emit(x, { type: 'zero_deal', deal: dealView(run.deal) });

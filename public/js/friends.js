@@ -7,7 +7,7 @@
 // 断りの文言はサーバー側でどの理由でも同じにしてある ── 理由を出し分けると、
 // この窓口が「あの人にブロックされているか」を調べる道具になるので。
 
-import { $, showScreen, showModal, closeModal, toast, fmt } from './dom.js';
+import { $, showScreen, showModal, closeModal, toast, fmt, enterIsLive } from './dom.js';
 import { t } from './i18n.js';
 import { audio } from './audio.js';
 import { icon, medalIconName } from './icons.js';
@@ -294,7 +294,8 @@ export async function refreshFriendDot() {
   if (!session.user) { setFriendPending(0); return; }
   try {
     const d = await api('/api/friends');
-    setFriendPending((d.incoming || []).length);
+    // 申請と挑戦状は同じタブで捌くので、同じドットで数える。
+    setFriendPending((d.incoming || []).length + (d.challenges || []).length);
   } catch { /* 取れなければ今の表示のまま。ドット1つのために画面は荒らさない */ }
 }
 
@@ -335,7 +336,9 @@ function renderFriends() {
     b.classList.toggle('active', b.dataset.fr === tab);
     b.onclick = () => { audio.click(); setTab(b.dataset.fr); };
   });
-  const inc = (data.incoming || []).length;
+  // 挑戦状もこのタブで捌くので、ドットの件数に足す（申請だけ数えていたので、
+  // 挑戦状が届いても画面のどこにも印が出なかった）。
+  const inc = (data.incoming || []).length + (data.challenges || []).length;
   const dot = $('#frReqDot');
   if (dot) dot.classList.toggle('hidden', !inc);
   // 画面を開いた／申請を捌いた時点の実数で、ナビのドットも合わせる。
@@ -398,7 +401,26 @@ function viewList() {
 
 function viewRequests() {
   const inc = data.incoming || [], out = data.outgoing || [];
+  const chal = data.challenges || [];
   return [
+    // 🔔 届いている挑戦状。
+    //
+    // サーバーは24時間の保管・上限20件・期限切れの掃除まで作ってあり、
+    // /api/friends の応答にも毎回載っていたのに、**描く場所が public/js の
+    // どこにも無かった**。挑戦状は誰にも見られないまま消え、送った側は成功
+    // トーストと20時間のクールダウンだけを消費していた。
+    chal.length ? [
+      `<h3 class="fr-h">${t('届いている挑戦状', 'Challenges')}</h3>`,
+      '<div class="fr-list">',
+      chal.map(f => row(f, [
+        `<button class="fr-b ok" data-chalgo="${esc(f.day)}">${t('受けて立つ', 'Accept')}</button>`,
+        `<button class="fr-b" data-chaldrop="${esc(f.id)}">${t('消す', 'Dismiss')}</button>`,
+      ].join(''))).join(''),
+      '</div>',
+      `<p class="muted" style="font-size:11px">${t(
+        'デイリーは全員が同じ盤面・同じピース順です。同じ日のうちに挑めば、実力だけの勝負になります。',
+        'The Daily uses the same board and piece order for everyone — take it on the same day for a fair contest.')}</p>`,
+    ].join('') : '',
     `<h3 class="fr-h">${t('届いている申請', 'Incoming')}</h3>`,
     inc.length
       ? '<div class="fr-list">' + inc.map(f => row(f, [
@@ -494,6 +516,19 @@ function wire(body) {
     b.textContent = t('送りました', 'Sent');
   });
 
+  // 🔔 届いた挑戦状
+  //
+  // 「受けて立つ」はメニューのデイリーへ送るだけにする。startDaily をここから
+  // 呼ぶと friends.js → modes.js の import が増えて循環になりかねないので、
+  // メニューのボタンを押す（挑戦状は当日ぶんなので、行き先は必ずこれで合う）。
+  on('[data-chalgo]', () => {
+    showScreen('menu');
+    const btn = $('#btnDaily');
+    if (btn) btn.click();
+    else toast(t('メニューの「デイリー」から挑戦できます', 'Start it from “Daily” on the menu'), '', 3000);
+  });
+  on('[data-chaldrop]', b => act('/api/friends/challenge/dismiss', { userId: b.dataset.chaldrop }));
+
   // 🏁 ライバルボード
   on('[data-chal]', b => sendChallenge(b));
   const reload = body.querySelector('#frBoardReload');
@@ -540,7 +575,7 @@ function wire(body) {
     } catch (err) { out.innerHTML = `<p class="muted">${esc(err.message)}</p>`; }
   };
   const nameInput = body.querySelector('#frName');
-  if (nameInput) nameInput.onkeydown = e => { if (e.key === 'Enter') search.click(); };
+  if (nameInput) nameInput.onkeydown = e => { if (enterIsLive(e)) search.click(); };
 
   body.querySelectorAll('input[type=radio]').forEach(r => {
     r.onchange = () => act('/api/friends/settings', { [r.name]: r.value });

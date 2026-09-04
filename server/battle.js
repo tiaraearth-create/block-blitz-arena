@@ -42,6 +42,7 @@ import { createSession as createZeroSession, tick as tickZero, submitCut as zero
   submitStake as zeroStake, submitDealVote as zeroDealVote,
   submitWill as zeroWill, latestWill as zeroLatestWill, addHuman as zeroAddHuman,
   topOut as zeroTopOut, stateView as zeroStateView, syncBoard as zeroSyncBoard,
+  finishHuman as zeroFinishHuman,
   ZERO_TICK } from './zero-session.js';
 import { eventBonus } from './events.js';
 import { danAt, DAN as ZERO_DAN } from './zero.js';
@@ -450,6 +451,9 @@ export function initBattle(server, deps) {
   function zeroDeps(sess) {
     return {
       Engine, chooseMove, sockName,
+      // 🤝 取引の「もう投票したか」を視聴者ごとに返すために使う。
+      // 票はユーザーidで数えている（席や名前ではない）。
+      userIdOf: ws => (ws && ws.user ? ws.user.id : null),
       SHARD: AE_SHARD,
       pickResidentBot, pickPersona,
       uuid: () => crypto.randomUUID(),
@@ -559,12 +563,20 @@ export function initBattle(server, deps) {
       zeroChat(`……前の方が言伝を残しています。「${will.text}」 ── ${will.by} より`,
         `…The last one left you a message. "${will.text}" — from ${will.by}`);
     }
+    const found = zeroStateView(sess, run, e.name);
     send(e.ws, {
-      ...zeroStateView(sess, run, e.name),
+      ...found,
       type: 'zero_found',
       id: sess.id, seed: sess.seed, countdown: 3,
       // 再接続（新セッション）でも、とどめを刺して未記入の段があれば伝言を書ける。
       canWill: (run.broken || []).some(b => b.by === e.name && !b.will),
+      // 🤝 開催中の取引は席に着いた瞬間にも出す（毎秒の zero_state と同じ形）。
+      //    走行は120秒・取引は60秒なので、走行の切れ目に当たっただけで
+      //    1票も投じられないままだった（人間1票＝住人5票ぶん）。
+      deal: found.deal
+        ? { ...found.deal, voted: !!(run.deal && run.deal.humanVotes && e.ws.user
+            && run.deal.humanVotes[e.ws.user.id]) }
+        : null,
     });
   }
 
@@ -786,7 +798,13 @@ export function initBattle(server, deps) {
     }
   }
 
-  // Replying to a resident's message always gets an answer from that resident.
+  // Replying to a resident's message asks *that* resident to answer — when
+  // they are still around. Residents have online hours, so one who has gone
+  // for the night is not in ctx.active and someone else picks it up instead.
+  // （「必ず本人が答える」と書いていたが、実装はそうではなかった。住人に
+  //   在席の時間帯があるのは世界設定として正しく、名簿全体から強制的に
+  //   喋らせると「常に居る」ことになって秘匿の方向にも逆行する ── 直すのは
+  //   実態に合わせるこのコメントのほう。）
   // The category/language are judged from the RAW text (a prefixed name would
   // break the ^-anchored reply rules and language detection); the target is
   // forced via chooseReplies' mention slot. Per-socket cooldown keeps a
@@ -1059,6 +1077,14 @@ export function initBattle(server, deps) {
     }
   }, 25000);
   function queueSizeAll() { return Object.values(queues).reduce((a, q) => a + q.length, 0); }
+
+  // 🔇 このソケットの持ち主がミュートされているか。
+  //    同じ式を3か所に書き写していたので、4か所目（絵文字）だけ書き忘れて
+  //    抜け穴になっていた。以後は必ずここを通す。
+  function isMuted(ws) {
+    const u = ws && ws.user ? db.users[ws.user.id] : null;
+    return !!(u && u.muted);
+  }
 
   function sockRate(ws, key, limit, windowMs) {
     const now = Date.now();
@@ -2007,7 +2033,13 @@ export function initBattle(server, deps) {
       //   バッジとボーナスが出なくなる** ── レート戦でないことと、勝ちに意味が
       //   無いことは別。合言葉ルームだけを練習試合にするため tourney を除く。
       //   （rated:false の1対1を作るのは、この2本しかない。）
-      const duel1v1 = (match.mode === 'duel' || match.mode === 'attack') && match.players.length === 2;
+      // 🚩 陣取りデュエルもここに入れる。1対1でレートを動かさない試合なのに
+      //    duel1v1 に無かったので、mode:'pvp' の won:true として届いていた ──
+      //    連勝ボーナス（最大200🪙）・d_pvp1 / w_pvp5・ach_streak5/10・称号
+      //    「連勝街道」・totalWins が全部つき、2人で勝ちを譲り合えば無限だった。
+      //    「Elo が動かない1対1では勝ち星も勝利報酬も動かない」の対象に揃える。
+      const duel1v1 = (match.mode === 'duel' || match.mode === 'attack' || match.mode === 'land')
+        && match.players.length === 2;
       const oppSlot = 1 - p.slot;
       const friendly = !me || !duel1v1 ? null
         : selfPlay ? 'self'
@@ -2090,6 +2122,15 @@ export function initBattle(server, deps) {
             // 自己対戦は勝敗を付けない（PvP勝利系ミッション/実績・勝利報酬を稼がせない）。
             won: friendly ? false : (match.tourney ? (outcome === 1 && !!match.tourney.final) : outcome === 1),
             drew: friendly ? false : outcome === 0.5,
+            // 🏳️ 「この試合は勝敗を判定しない」。
+            //    won:false / drew:false のまま渡すと mode:'pvp' の「負け」の枝に
+            //    落ちて、**罰だけ**が通っていた ── 合言葉ルームの練習1試合や
+            //    ゲスト相手の勝利で、ランクマの10連勝が無言で0に戻る。
+            //    battle.js のこの上のコメントは「付かないのは勝敗に紐づくもの
+            //    だけ／遊んだ事実は消さない」と宣言しているのに、連勝だけが
+            //    消えていた。drew:true の流用は結果画面の表示と食い違うので、
+            //    専用の欄で「触るな」と伝える。
+            unrated: !!friendly,
           });
         }
       }
@@ -3938,8 +3979,7 @@ export function initBattle(server, deps) {
           // ミュートは伝言にも効く（モデレーションの抜け穴防止）。伝言は run に
           // 残って次の枠の開幕で全員に読まれる公開テキストなので、チャットを
           // 止められている人がここから書けてしまうと規制の意味が無くなる。
-          const wu = ws.user ? db.users[ws.user.id] : null;
-          if (wu && wu.muted) {
+          if (isMuted(ws)) {
             send(ws, { type: 'error', error: '管理者によりチャットが制限されています' });
             return;
           }
@@ -3969,6 +4009,15 @@ export function initBattle(server, deps) {
           // クールダウンはユーザー単位で run に持つ（席単位だと leave→join の
           // 新セッションで即 alive:true になり60秒上限を回避できた）。
           zeroTopOut(sess, run, sockName(ws), zeroDeps(sess), ws.user ? ws.user.id : null);
+          return;
+        }
+        // 🏁 走行が終わった。席は残したまま的から降ろす ── このあと伝言
+        //    (zero_will) を送ってから zero_leave が来る。詳しくは
+        //    zero-session.js の finishHuman を参照。
+        case 'zero_done': {
+          const sess = zeroSessionOf(ws);
+          if (!sess) return;
+          zeroFinishHuman(sess, ws);
           return;
         }
         case 'zero_leave': {
@@ -4054,7 +4103,17 @@ export function initBattle(server, deps) {
           if (!offer || offer.until < Date.now()) { send(ws, { type: 'rematch_gone' }); return; }
           // joinQueue と同じガード — ルーム/トーナメント/ロイヤル在籍中の再戦受諾は
           // rooms Map にゴースト部屋を残す（createMatch が roomCode を黙って消すため）
-          if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId || ws.zeroId) return;
+          //
+          // ⚠ ここを**無言 return** にしていたのが致命的だった。観戦者の居る
+          //    合言葉ルームでは endMatch が結果フレームより先に p.roomCode を
+          //    戻すので、ルームの試合の「再戦」は必ずこの行で落ちる。
+          //    rematch_offer も rematch_gone も返らないため、ボタンは
+          //    「相手を待っています…」のまま**永久に**固まり、30秒の
+          //    sweepRematches も通らなかった。断るなら必ずそう言うこと。
+          if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId || ws.zeroId) {
+            send(ws, { type: 'rematch_gone' });
+            return;
+          }
           const mine = offer.sides.find(sd => sd.sock === ws);
           if (!mine) return;
           mine.ready = true;
@@ -4278,8 +4337,11 @@ export function initBattle(server, deps) {
         case 'chat': {
           const text = String(msg.text || '').trim().slice(0, 200);
           if (!text) return;
+          // ⚠ u はこのあと（role / 実績カウンター / 王冠 / tagOf）でも使う。
+          //    ミュート判定を isMuted(ws) に寄せたときに、うっかりこの行ごと
+          //    消すと chatHistory へ積む entry の中身が丸ごと壊れる。
           const u = ws.user ? db.users[ws.user.id] : null;
-          if (u && u.muted) {
+          if (isMuted(ws)) {
             send(ws, { type: 'error', error: '管理者によりチャットが制限されています' });
             return;
           }
@@ -4346,7 +4408,7 @@ export function initBattle(server, deps) {
           if (!REACT_EMOJI.includes(emoji)) return;
           // ミュートはリアクションにも効く（モデレーションの抜け穴防止）。
           const ru = ws.user ? db.users[ws.user.id] : null;
-          if (ru && ru.muted) return;
+          if (isMuted(ws)) return;
           if (!sockRate(ws, 'reactTimes', 12, 10000)) return;
           const who = sockName(ws);
           const entry = chatHistory.find(e2 => e2.id === String(msg.msgId || ''));
@@ -4360,6 +4422,14 @@ export function initBattle(server, deps) {
         }
         case 'emote': {
           if (!match || match.ended || !me) return;
+          // 🔇 ミュートは絵文字にも効く。
+          //    chat は明示的に断り、react もコメント付きでミュートを見て
+          //    （「モデレーションの抜け穴防止」）、party_chat も見ているのに、
+          //    **いちばん当たりの強い場所**だけ塞がれていなかった ── 5秒に3回、
+          //    試合をまたいで何度でも、相手にはブロック手段が無い。
+          //    エラーは返さない（黙って落とす）。ミュートされていることを
+          //    本人に毎回知らせても、規制の意味が薄れるだけ。
+          if (isMuted(ws)) return;
           if (!sockRate(ws, 'emoteTimes', 3, 5000)) return;
           const EMOJIS = ['👍', '🔥', '😂', '😭', '🎉', '😱', '💪', '😎', '👏', '🤯'];
           const emoji = EMOJIS.includes(msg.emoji) ? msg.emoji : '👍';
@@ -4524,7 +4594,21 @@ export function initBattle(server, deps) {
       } catch { /* 同上 */ }
     }
     for (const t of [...tourneys.values()]) {
-      try { endTourney(t); ended++; } catch { /* 同上 */ }
+      try {
+        // 🏆 大会だけ、1フレームも送らずに消していた。
+        //    対戦は endMatch(m,'shutdown')、ロイヤルは endRoyaleFor、待ち行列は
+        //    queue_cancelled で必ず知らせているのに、ここだけ無言。SIGTERM 経由なら
+        //    5秒後にソケットが切れて救われるが、この関数は
+        //    /api/admin/prepare-update からも呼ばれ、そちらはサーバーが**動き続ける**。
+        //    ラウンド間の人は「まもなく対戦開始…」（閉じ口の無いモーダル）の前で
+        //    完全に固まり、リロードするしか出口が無かった。
+        for (const p of (t.alive || [])) {
+          if (!p || p.isBot) continue;
+          send(p, { type: 'tourney_cancelled' });
+          send(p, { type: 'error', error: 'サーバー更新のためトーナメントを中止しました' });
+        }
+        endTourney(t); ended++;
+      } catch { /* 同上 */ }
     }
     // 待ち行列だけ通知なしで捨てていた。SIGTERM 経由なら5秒後に落ちるので
     // 目立たないが、この関数は /api/admin/prepare-update からも呼ばれ、

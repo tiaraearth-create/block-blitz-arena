@@ -10,7 +10,7 @@ import {
   requireAuth,
 } from '../auth.js';
 import {
-  BP_TIERS, BP_XP_PER_TIER, BP_PREMIUM_PRICE_GEMS,
+  BP_TIERS, BP_XP_PER_TIER, BP_PREMIUM_PRICE_GEMS, SHOP_ITEMS,
 } from '../catalog.js';
 // 🎲 ミッションのリロールは missions.js 側が `rerollMission` を生やしたときだけ
 // 動く。名前付き import にすると「まだ生えていない」時点で ES モジュールの
@@ -249,10 +249,29 @@ missionsRouter.post('/api/battlepass/claim', requireAuth, maintenanceGuard, (req
   if (bp.claimed.includes(key)) return res.status(409).json({ error: '受け取り済みです' });
 
   bp.claimed.push(key);
+  // 💰 実際に何が入ったかを返す。「持っているものが当たった」ときは中身が
+  //    変わるので、トーストが嘘をつかないようにここで作り直す。
+  let paid = reward;
   if (reward.type === 'coins') user.coins += reward.amount;
   else if (reward.type === 'gems') user.gems += reward.amount;
-  else if (reward.type === 'item') { if (!user.owned.includes(reward.id)) user.owned.push(reward.id); }
-  else if (reward.type === 'badge') { if (!user.badges.includes(reward.id)) user.badges.push(reward.id); }
+  else if (reward.type === 'item') {
+    if (!user.owned.includes(reward.id)) user.owned.push(reward.id);
+    else {
+      // 🎁 もう持っている装備品が当たった。これまでは何も払わずに
+      //    「受け取り済み」の印だけ立てていた。対象は skin_neon /
+      //    board_ocean / fx_fireworks / skin_candy / board_sunset / skin_gold の
+      //    6段すべてで、どれもショップで普通に買える ── 💎500 の有料要素なのに、
+      //    安い順にショップで買う人ほど損をする作りになっていた。
+      //    同じ値段ぶんの通貨に振り替えて必ず払う。
+      const shopItem = SHOP_ITEMS.find(x => x.id === reward.id);
+      const cur = shopItem && shopItem.currency === 'gems' ? 'gems' : 'coins';
+      const amount = Math.max(1, Math.floor(shopItem ? shopItem.price : 500));
+      user[cur] = (user[cur] || 0) + amount;
+      paid = { type: cur, amount, insteadOf: reward.id };
+    }
+  } else if (reward.type === 'badge') {
+    if (!user.badges.includes(reward.id)) user.badges.push(reward.id);
+  }
   saveDb();
-  res.json({ user: publicUser(user), reward });
+  res.json({ user: publicUser(user), reward: paid });
 });

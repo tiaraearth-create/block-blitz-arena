@@ -187,12 +187,21 @@ export function initHistory(onGameBack) {
     // キュー／ルームからは必ず抜けてから出る。抜けた先はメニューなので、
     // 履歴も積み直さない（次の戻るでアプリを閉じてよい）。
     if (leaveViaScreenButton()) return;
+    // 🔙 ここでは積み直さない。
+    //
+    //   popstate は**すでに履歴を1つ消費している**。それと screenStack.pop()
+    //   がちょうど釣り合っているので、そのうえ repush() すると履歴だけが
+    //   1つ余る ── メニュー→A→B→戻る→戻る で、メニューに着いたあとの
+    //   「戻る」が1回ぶん空押しになる（3段潜れば2回）。積み直すのが正しいのは
+    //   「戻る操作を受けたが、画面は動かさなかった」ときだけ（上の
+    //   モーダル・試合中の枝が、それぞれ自分で repush している）。
+    //
+    //   これで「履歴の深さ ＝ screenStack.length」が常に保たれる。
+    //   メニュー復帰時の history.go(-depth) も同じ前提で数えている。
     const to = screenStack.pop() || 'menu';
     poppingBack = true;
     showScreen(to, { push: false });
     poppingBack = false;
-    // menu まで戻ったら、次の戻るでアプリを閉じてよい（＝積み直さない）。
-    if (to !== 'menu') repush();
   });
 }
 
@@ -447,6 +456,20 @@ function escIsLive(e) {
   return !e.isComposing && e.keyCode !== 229 && !e.defaultPrevented;
 }
 
+// ⌨️ 「この Enter は送信の Enter か？」
+//
+// 漢字変換の**確定**も Enter で起きる。同じ問題を Esc 側では escIsLive() が
+// 既に知っていたのに、Enter 側には誰も適用していなかった ── 日本語で打つ人は
+// 変換を確定するたびに未確定の文が全員に配信され、取り消せない。
+// チャット・パーティー・ルームの合言葉・伝言・検索…と8か所に散っていたので、
+// 判定はここ1本に置いて全部そこを通す。
+//
+// e.isComposing は変換中の keydown で true。keyCode 229 は Safari/古い WebKit が
+// isComposing を出さない場合の保険（Esc 側と同じ組み合わせ）。
+export function enterIsLive(e) {
+  return !!e && e.key === 'Enter' && !e.isComposing && e.keyCode !== 229;
+}
+
 // 画面レベルの Esc（＝戻る）は、文字を打っている最中には効かせない。
 // モーダルの Esc は入力欄にいても閉じてよい（それが普通の作法）ので、
 // この判定はモーダルが開いていないときだけ使う。
@@ -595,6 +618,26 @@ function attachModalNav(modal, hasBack) {
   btn.onclick = () => popModal();
   nav.appendChild(btn);
   modal.insertBefore(nav, modal.firstChild);
+}
+
+// 🔚 「このモーダルが閉じたら1回だけ呼んでほしい」用の口。
+//
+// ボタンの onclick に後始末を書くだけでは足りない ── モーダルは枠外タップ・
+// Esc・端末の戻る・親へ戻る（popModal）でも閉じるので、そのどれかで
+// 後始末が飛ぶと、止めた時計が止まったままになる（＝永久に無敵）。
+// 中身が消えたときに必ず流す。次のモーダルに入れ替わったときも流す
+// （開けっぱなしより「戻しすぎる」ほうが必ず安全な向き）。
+let modalClosedHooks = [];
+export function onModalClosed(fn) {
+  if (typeof fn === 'function') modalClosedHooks.push(fn);
+}
+function runModalClosedHooks() {
+  if (!modalClosedHooks.length) return;
+  const hooks = modalClosedHooks;
+  modalClosedHooks = [];
+  for (const fn of hooks) {
+    try { fn(); } catch { /* 後始末の失敗で画面を止めない */ }
+  }
 }
 
 export function showModal(html, { dismissable = true, peekable = false, back = null } = {}) {
@@ -765,6 +808,7 @@ export function closeModal(opts) {
   const had = !!root.firstChild;
   for (const el of [...root.children]) ghostOut(el);
   root.innerHTML = '';
+  if (had) runModalClosedHooks();
   // 開いたボタンへフォーカスを返す。返さないと <body> に落ちて、
   // 次の Tab がページの先頭（トップバー）からやり直しになる。
   // 引数はイベントハンドラに直接渡されることがあるので、明示的に

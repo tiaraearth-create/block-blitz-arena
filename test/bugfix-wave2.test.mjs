@@ -35,8 +35,11 @@ const check = (name, ok, detail = '') => {
   const game = read('public/js/game.js');
   const engine = read('public/js/engine.js');
 
+  // 署名は `addGarbage(n, rng = null)` になった（デイリーの瓦礫だけ、その日の
+  // seed から置き場所を決めるため）。前提として見たいのは「お邪魔で詰んだら
+  // over が立つ」ことなので、引数の形には縛られない書き方にする。
   check('A-0(前提) addGarbage が over を立てる',
-    /addGarbage\(n\)[\s\S]{0,900}?if \(!this\.hasAnyMove\(\)\) this\.over = true;/.test(engine), '');
+    /addGarbage\(n[^)]*\)[\s\S]{0,1200}?if \(!this\.hasAnyMove\(\)\) this\.over = true;/.test(engine), '');
   check('A-1 毎コマの見張りがある', /_checkOver\(\)\s*\{/.test(game), '');
   check('A-2 update() が見張りを回している',
     /update\(dt\) \{[\s\S]{0,200}?this\._checkOver\(\);/.test(game), '');

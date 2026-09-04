@@ -76,7 +76,7 @@ import {
 //    先に「同じパスに当たるルートが他に無いか」を確かめること。
 import { setContext } from './context.js';
 import {
-  initShopRoutes, purchaseRouter, shopRouter, throneShopRouter,
+  initShopRoutes, purchaseRouter, shopRouter, throneShopRouter, currentDeals,
 } from './routes/shop.js';
 import { initMissionRoutes, missionsRouter } from './routes/missions.js';
 import { initGuildRoutes, guildRouter, collectionRouter } from './routes/guild.js';
@@ -1031,7 +1031,7 @@ const BUGREPORT_CAP = 300;
 const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'zero7', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7', 'guildquest'];
 const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']);
 
-function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, beatChampion, trusted, preClamped }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, stars, beatChampion, trusted, preClamped, unrated }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   // mode はキー生成にも使う（下の `${mode}Prev`）。クライアント申告なので、
   // 長さを切っておかないと巨大文字列で stats を無限に太らせられる（実測で
@@ -1072,6 +1072,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   floor = clamp(floor, 100);
   depth = clamp(depth, 9999);
   stage = clamp(stage, 9999);
+  // ⭐ パズル遺跡のステージ評価。0〜3 しか意味を持たない。
+  stars = clamp(stars, 3);
   // ⛓️連鎖カスケードの最大連鎖数。chainMult の上限が ×64（= 2^(連鎖-1)）なので
   // 現実的な連鎖数は高々そのあたり。クライアント申告なので他のテレメトリと
   // 同じ作法で頭を押さえる（実績 ach_chain5/10 の原資になるため）。
@@ -1421,7 +1423,12 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   let gems = 0;
   // Ranked-duel win streak: bonus coins that grow with the streak.
   let streakBonus = 0;
-  if (mode === 'pvp') {
+  // 🏳️ unrated ＝「この試合は勝敗を判定しない」（練習試合・ゲスト相手・
+  //    自己対戦・同じ相手との繰り返し・陣取り）。battle.js が立てる。
+  //    以前はこの欄が無かったので won:false / drew:false のまま下の枝へ落ち、
+  //    **罰だけ**が通っていた ── ランクマの10連勝が、ルームの練習1試合で
+  //    無言で0に戻る。勝ちが付かないなら負けも付けない。
+  if (mode === 'pvp' && !unrated) {
     if (won) {
       s.winStreak = (s.winStreak || 0) + 1;
       if (s.winStreak > (s.winStreakBest || 0)) s.winStreakBest = s.winStreak;
@@ -1597,6 +1604,26 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   if (mode === 'puzzle') {
     s.puzzlePlays = (s.puzzlePlays || 0) + 1;
     const st = Math.min(stage, 999);
+    // ⭐ ステージごとの★も預かる。
+    //
+    // これまでサーバーが持っていたのは「到達ステージ」だけで、★は
+    // localStorage にしか無かった。端末やブラウザを変えると、解放だけ
+    // 引き継がれて評価だけが ☆☆☆ に戻る ── プレイヤーには「記録が下がった」
+    // としか見えない（ダンジョンの4領域は v2.44 で直したが、★は残っていた）。
+    // 上書きは**高いほうだけ**。同じステージを遅く解き直しても下がらない。
+    const starsGot = stars;   // 上で clamp(stars, 3) 済み
+    if (won && st >= 1 && starsGot > 0) {
+      s.puzzleStars = s.puzzleStars || {};
+      const key = String(st);
+      if ((Number(s.puzzleStars[key]) || 0) < starsGot) s.puzzleStars[key] = starsGot;
+      // 表が無制限に太らないよう、ステージ数ぶん（999）で頭打ちにする。
+      const keys = Object.keys(s.puzzleStars);
+      if (keys.length > 999) {
+        for (const k of keys.sort((a, b) => Number(a) - Number(b)).slice(0, keys.length - 999)) {
+          delete s.puzzleStars[k];
+        }
+      }
+    }
     if (won && st > (s.puzzleStage || 0)) {
       const decades = Math.floor(Math.min(st, 100) / 10) - Math.floor(Math.min(s.puzzleStage || 0, 100) / 10);
       if (decades > 0) {
@@ -1822,6 +1849,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     wave: mode === 'survival' ? wave : 0,
     stage: mode === 'puzzle' ? stage : 0,
     depth: mode === 'dig' ? depth : 0,
+    // 🐉 ボスラッシュの撃破数は depth に載って届く（modes.js の finish）。
+    //    ここで名前を与えないと missions.js が読めない。他モードの stray な
+    //    depth を混ぜないよう、ここでも mode でゲートする。
+    bossKills: mode === 'boss_rush' ? depth : 0,
     // ⛓️ 連鎖数ベースのお題用。missions.js の contributions が maxChain を
     // 受ける（chain 以外は 0）。他モードの stray な maxChain を混ぜないよう
     // ここでも mode でゲートする。
@@ -1864,7 +1895,13 @@ function postRealFeed(user, notes) {
   if (!battleReady || !battle.crowd) return;
   const last = feedAt.get(user.id) || 0;
   // Always let the rarest moments through; throttle the ordinary ones.
-  const big = notes.filter(n => n.react);
+  // 🌟 `always` は「住人には反応させないが、この1件は必ず流す」。
+  //    以前は「必ず流す」の判定が react の有無だけだったので、
+  //    react:null を明示している UR（3%・虹枠つき）が**ふつうの出来事**扱いになり、
+  //    直前に何か流していると45秒しぼりで黙って捨てられていた ── 画面には
+  //    虹の演出が出ているのにフィードには何も出ない、という食い違いになる。
+  //    上限2件はそのままなので、これで荒れることはない。
+  const big = notes.filter(n => n.react || n.always);
   const now = Date.now();
   const allowed = big.length ? big.concat(notes.filter(n => !n.react)).slice(0, 2)
     : now - last < 45000 ? [] : notes.slice(0, 1);
@@ -4274,6 +4311,10 @@ const RESULT_FIELDS = [
   'mode', 'score', 'lines', 'maxCombo', 'duration', 'won', 'drew',
   'bossId', 'floor', 'wave', 'ults', 'items', 'pieces', 'floors',
   'sprintDur', 'rank', 'depth', 'stage',
+  // ⭐ パズル遺跡のステージ評価（1〜3）。報酬にはつながらない見た目だけの
+  // 記録で、サーバー側で 0〜3 に丸めてから「そのステージの最高値」としてしか
+  // 使わないので、名乗らせてよい（★を増やしても1コインも増えない）。
+  'stars',
   // ⛓️ 連鎖カスケードの最大連鎖数。他のテレメトリと同じく実プレイ判定を
   // 通った回だけ反映される（applyGameResult 側で clamp(…,64)）ので名乗らせてよい。
   'maxChain',
@@ -4751,6 +4792,11 @@ setWorldProvider(() => ({
   // する。実プレイヤーの王座名を混ぜると、たまたま同名の住人が常駐して「王座は
   // 渡さない」と一人称で自慢し、実在プレイヤーになりすます形になっていた。
   thrones: Object.values(db.meta.thrones || {}).filter(t => t && t.resident).map(t => t.username),
+  // 🏷️ その日のセール。これを渡していなかったので、crowd.js のセール用セリフ
+  //    13本と専用リアクションが**一度も出ていなかった**（ctx.sale を供給する
+  //    場所がどこにも無かった）。CTX_OK が「開催中のときだけ」に絞っているので、
+  //    セールが無い日は今までどおり黙る。
+  sale: { items: currentDeals() },
 }));
 
 // 住人ボット/ロビー発言のなりすまし対策: pickPersona のフォールバックが実在

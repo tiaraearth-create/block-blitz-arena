@@ -280,7 +280,12 @@ export function setTakenNamesProvider(fn) { takenNamesProvider = fn; }
 export function worldCtx(extra = {}) {
   const w = worldProvider() || {};
   const now = extra.now || Date.now();
-  return buildCtx({ now, event: w.event, poll: w.poll, thrones: w.thrones || [], active: activeResidents(now), humans: extra.humans || [] });
+  return buildCtx({
+    now, event: w.event, poll: w.poll, thrones: w.thrones || [],
+    // 🏷️ その日のセール（無い日は null のまま＝セール用の行は出ない）。
+    sale: w.sale || null,
+    active: activeResidents(now), humans: extra.humans || [],
+  });
 }
 
 // ---------------------------------------------------------------------------

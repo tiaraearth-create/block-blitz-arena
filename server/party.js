@@ -75,11 +75,21 @@ export function createParties(deps) {
     };
   }
 
+  // 📺 「いまのパーティーの姿」は**全部の画面へ**配る。
+  //
+  // primaryOnly は「同じ通知が2つの画面に二重に出る」のを避けるための仕掛けで、
+  // 招待や部屋の合図（一過性の通知）には正しい。ところが状態そのもの
+  // （party_state / party_error の後始末）まで primary だけに送っていたので、
+  // PC とスマホの2つ目のタブでは**押しても何も起きない**（作る・入る・抜ける・
+  // 追放・解散が全部）。chat.js の hello は role を送らないので、最初に
+  // つないだソケットが永久に primary になり、逆のタブは一生蚊帳の外だった。
+  // 状態は冪等（同じものを二度受けても同じ絵になる）ので、重複しても害はない
+  // ── socketArrived は既に primaryOnly:false でそう書いてある。
   function broadcast(p, msg) {
-    for (const m of p.members) sendToUser(m.userId, msg, { primaryOnly: true });
+    for (const m of p.members) sendToUser(m.userId, msg, { primaryOnly: false });
   }
   function pushState(p) {
-    for (const m of p.members) sendToUser(m.userId, viewFor(p, m.userId), { primaryOnly: true });
+    for (const m of p.members) sendToUser(m.userId, viewFor(p, m.userId), { primaryOnly: false });
   }
 
   function partyOf(userId) {
@@ -134,7 +144,7 @@ export function createParties(deps) {
     if (p.launch && p.launch.by === userId) p.launch = null;
     p.members = p.members.filter(m => m.userId !== userId);
     partyOfUser.delete(userId);
-    sendToUser(userId, { type: 'party_state', party: null }, { primaryOnly: true });
+    sendToUser(userId, { type: 'party_state', party: null }, { primaryOnly: false });
     if (!p.members.length) { parties.delete(p.id); return { ok: true }; }
     // リーダーが抜けたら、いちばん古いメンバーへ明示的に渡す。
     // 「配列の先頭が偉い」にしておくと、並び替えたときに壊れる。
@@ -154,7 +164,7 @@ export function createParties(deps) {
     if (p.launch && p.launch.by === targetId) p.launch = null;
     p.members = p.members.filter(m => m.userId !== targetId);
     partyOfUser.delete(targetId);
-    sendToUser(targetId, { type: 'party_state', party: null }, { primaryOnly: true });
+    sendToUser(targetId, { type: 'party_state', party: null }, { primaryOnly: false });
     sendToUser(targetId, { type: 'party_error', error: 'パーティーから外れました' }, { primaryOnly: true });
     pushState(p);
     return { ok: true };
@@ -330,7 +340,7 @@ export function createParties(deps) {
     if (!p) return { error: 'そのパーティーはありません' };
     for (const m of p.members) {
       partyOfUser.delete(m.userId);
-      sendToUser(m.userId, { type: 'party_state', party: null }, { primaryOnly: true });
+      sendToUser(m.userId, { type: 'party_state', party: null }, { primaryOnly: false });
       sendToUser(m.userId, { type: 'party_error', error: 'パーティーは運営により解散されました' }, { primaryOnly: true });
     }
     parties.delete(p.id);
@@ -404,7 +414,7 @@ export function createParties(deps) {
         // 長く遊んでいる人ほど確実に踏む）。
         for (const m of p.members) {
           partyOfUser.delete(m.userId);
-          sendToUser(m.userId, { type: 'party_state', party: null }, { primaryOnly: true });
+          sendToUser(m.userId, { type: 'party_state', party: null }, { primaryOnly: false });
           sendToUser(m.userId, { type: 'party_error', error: 'パーティーは時間切れで解散しました' }, { primaryOnly: true });
         }
         parties.delete(p.id);
@@ -437,7 +447,7 @@ export function createParties(deps) {
     if (m) m.offlineAt = 0;
     // 他のメンバーには在席の変化を配る（通知なので primaryOnly）。
     for (const x of p.members) {
-      if (x.userId !== userId) sendToUser(x.userId, viewFor(p, x.userId), { primaryOnly: true });
+      if (x.userId !== userId) sendToUser(x.userId, viewFor(p, x.userId), { primaryOnly: false });
     }
     // 本人には **全部の socket** に配る。再読み込みの瞬間は古い socket が
     // まだ開いていることがあり、primaryOnly だと死にかけの方に送ってしまって

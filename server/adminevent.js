@@ -506,6 +506,11 @@ export function ensureRun(db, occ, entrants) {
       run.dealDoneFor = undefined;
       run.deal = null;
     }
+    // 枠の終わりも渡す。取引の発火点は「20分地点」の決め打ちだが、1枠は
+    // 管理画面で 10〜180分まで動かせる（AE_MIN/MAX_DURATION）。20分より短い
+    // 枠にすると取引は構造的に一度も開かないので、runDeal 側が枠の長さに
+    // 合わせて前倒しできるように、終了時刻もここで持たせる。
+    run.slotEndsAt = slot ? slot.endsAt : occ.closesAt;
     // Late sign-ups grow the target — but never below what has been dealt.
     if (entrants > (run.entrants || 0)) {
       run.entrants = entrants;
@@ -537,6 +542,7 @@ export function ensureRun(db, occ, entrants) {
     entrants,
     startedAt: occ.opensAt,
     slotStartsAt: curSlot ? curSlot.startsAt : occ.opensAt,
+    slotEndsAt: curSlot ? curSlot.endsAt : occ.closesAt,
     total: 0,
     byUser: {},          // userId -> { name, score, runs }
     board: [],           // [{ name, score }] top of the day

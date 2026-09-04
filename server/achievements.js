@@ -18,6 +18,19 @@ const COLLECTIBLE_MAX = SHOP_ITEMS.filter(i => !i.adminOnly).length;
 const S = u => u.stats || {};
 const has = (u, b) => (u.badges || []).includes(b);
 
+// 📈 実績は「一度でも届いたか」で決まる。
+//
+// レート・所持コイン・ギルド在籍は**いま**の値なので、そのまま条件にすると
+// 1敗しただけ・買い物をしただけ・ギルドを抜けただけで解除が取り消され、
+// 進捗バーが逆走する。未受取のまま条件を割ると 900🪙+7💎 〜 12,000🪙+100💎 が
+// 取れなくなる ── 称号側（catalog.js）は同じ事故のあと Math.max(◯Best, いま)
+// に直してあり、そのコメントは「実績側は既に最高値基準」と書いているが、
+// 事実は逆だった。ここで揃える。
+const bestRating = u => Math.max(S(u).ratingBest || 0, S(u).rating || 0);
+const bestCoins = u => Math.max(S(u).coinsBest || 0, u.coins || 0);
+// ギルドは最高値が無いので「一度でも入ったか」の印を見る（在籍中も真）。
+const everJoinedGuild = u => (u.guildId || S(u).guildJoinedEver) ? 1 : 0;
+
 export const ACH_CATS = [
   { id: 'play',    name: 'プレイ',   nameEn: 'Play' },
   { id: 'score',   name: 'スコア',   nameEn: 'Score' },
@@ -57,9 +70,9 @@ export const ACHIEVEMENTS = [
   a('ach_pvp10',    'mode_online', 'battle', 10,   1000, 8,  '常勝将軍',     'Undefeated',       'オンラインで10勝',    'Win 10 online battles',   u => S(u).pvpWins || 0),
   a('ach_pvp50',    'mode_online', 'battle', 50,   3500, 28, '百戦錬磨',     'Battle-Hardened',  'オンラインで50勝',    'Win 50 online battles',   u => S(u).pvpWins || 0),
   a('ach_streak5',  'mode_chain', 'battle', 5,    1500, 12, '連勝街道',     'Streak Rider',     'ランクマ5連勝',       'Win 5 ranked in a row',   u => S(u).winStreakBest || S(u).winStreak || 0),
-  a('ach_rate1200', 'rating', 'battle', 1200, 900,  7,  'レジェンド',   'Legend',           'レート1200到達',      'Reach 1200 rating',       u => S(u).rating || 0),
-  a('ach_rate1500', 'gems', 'battle', 1500, 2500, 20, 'ダイヤの誇り', 'Diamond Pride',    'レート1500到達',      'Reach 1500 rating',       u => S(u).rating || 0),
-  a('ach_rate1700', 'rating', 'battle', 1700, 6000, 50, '頂のマスター', 'Peak Master',      'レート1700到達',      'Reach 1700 rating',       u => S(u).rating || 0),
+  a('ach_rate1200', 'rating', 'battle', 1200, 900,  7,  'レジェンド',   'Legend',           'レート1200到達',      'Reach 1200 rating',       u => bestRating(u)),
+  a('ach_rate1500', 'gems', 'battle', 1500, 2500, 20, 'ダイヤの誇り', 'Diamond Pride',    'レート1500到達',      'Reach 1500 rating',       u => bestRating(u)),
+  a('ach_rate1700', 'rating', 'battle', 1700, 6000, 50, '頂のマスター', 'Peak Master',      'レート1700到達',      'Reach 1700 rating',       u => bestRating(u)),
   a('ach_tourney',  'leaderboard', 'battle', 1,    3000, 25, '大会王者',     'Tournament King',  'トーナメント優勝',     'Win a tournament',        u => has(u, 'tourney') ? 1 : 0),
   a('ach_royale',   'mode_royale', 'battle', 1,    3000, 25, '百人の頂点',   'Apex of 100',      'バトルロイヤル1位',    'Take #1 in Battle Royale', u => has(u, 'royale') ? 1 : 0),
   // v2.11 — battle royale grew a whole progression, so it gets goals that are
@@ -90,7 +103,7 @@ export const ACHIEVEMENTS = [
   a('ach_own5',     'gift', 'collect', 5,   500,  4,  'コレクター見習い', 'Novice Collector', 'アイテムを5種所持',  'Own 5 catalog items',    u => (u.owned || []).length),
   a('ach_own15',    'gift', 'collect', 15,  1800, 14, 'コレクター',   'Collector',        'アイテムを15種所持',   'Own 15 catalog items',    u => (u.owned || []).length),
   a('ach_own30',    'collection', 'collect', 30,  5000, 45, '大コレクター', 'Grand Collector',  'アイテムを30種所持',   'Own 30 catalog items',    u => (u.owned || []).length),
-  a('ach_coins10k', 'coins', 'collect', 10000, 1000, 8, '大富豪',      'Tycoon',           'コインを10,000所持',   'Hold 10,000 coins',       u => u.coins || 0),
+  a('ach_coins10k', 'coins', 'collect', 10000, 1000, 8, '大富豪',      'Tycoon',           'コインを10,000所持',   'Hold 10,000 coins',       u => bestCoins(u)),
   a('ach_lv10',     'level_up', 'collect', 10,  800,  6,  'レベル10',     'Level 10',         'レベル10に到達',      'Reach level 10',          u => 1 + Math.floor((u.xp || 0) / 1000)),
   a('ach_lv30',     'level_up', 'collect', 30,  3000, 25, 'レベル30',     'Level 30',         'レベル30に到達',      'Reach level 30',          u => 1 + Math.floor((u.xp || 0) / 1000)),
 
@@ -105,7 +118,7 @@ export const ACHIEVEMENTS = [
   a('ach_abyss10',  'mode_abyss', 'explore', 10,    1500, 12, '深淵の入口',   'Edge of the Abyss', '深淵 A10到達',          'Reach Abyss A10',         u => S(u).abyssMax || 0),
   a('ach_abyss50',  'mode_abyss', 'explore', 50,    5000, 45, '深淵を覗きし者', 'Abyss Walker',    '深淵 A50到達',          'Reach Abyss A50',         u => S(u).abyssMax || 0),
   a('ach_abyss100', 'badge_under', 'explore', 100,   20000, 200, '深淵の支配者', 'Lord of the Abyss', '深淵 A100制覇',       'Conquer Abyss A100',      u => S(u).abyssMax || 0),
-  a('ach_guild',    'guild', 'collect', 1,     500,  4,  'ギルド加入',   'Guild Member',     'ギルドに加入する',      'Join a guild',            u => u.guildId ? 1 : 0),
+  a('ach_guild',    'guild', 'collect', 1,     500,  4,  'ギルド加入',   'Guild Member',     'ギルドに加入する',      'Join a guild',            u => everJoinedGuild(u)),
   a('ach_guild2k',  'guild', 'collect', 2000,  2000, 16, 'ギルドのエース', 'Guild Ace',      'ギルドに週2,000pt貢献', 'Contribute 2,000 pts in a week', u => S(u).guildBestWeek || 0),
 
   // ---- 伝説（アルティメット & ミッション） ----
@@ -132,7 +145,7 @@ export const ACHIEVEMENTS = [
   // ---- 対戦 ----
   a('ach_pvp100',   'mode_online', 'battle', 100,  6000,  50,  '闘神',         'War God',          'オンラインで100勝',     'Win 100 online battles',    u => S(u).pvpWins || 0),
   a('ach_streak10', 'mode_chain', 'battle', 10,   4000,  35,  '無敗の風',     'Unbeaten Wind',    'ランクマ10連勝',        'Win 10 ranked in a row',    u => S(u).winStreakBest || S(u).winStreak || 0),
-  a('ach_rate1900', 'rank_master', 'battle', 1900, 12000, 100, '孤高の頂',     'Lonely Summit',    'レート1900到達',        'Reach 1900 rating',         u => S(u).rating || 0),
+  a('ach_rate1900', 'rank_master', 'battle', 1900, 12000, 100, '孤高の頂',     'Lonely Summit',    'レート1900到達',        'Reach 1900 rating',         u => bestRating(u)),
   a('ach_weekly1',  'leaderboard', 'battle', 1,    3000,  25,  '週間王者',     'Weekly Champion',  '週間ランキング1位',     'Take #1 in the weekly ranking', u => has(u, 'weekly1') ? 1 : 0),
 
   // ---- 探索 ----

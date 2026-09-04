@@ -1193,6 +1193,19 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
   background: linear-gradient(90deg, rgba(67,217,232,0.15), rgba(176,107,255,0.15));
 }
 .chat-msgs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+/* 🔽 上を読んでいる間に届いた新着の合図。押すと最下部へ戻る。
+   （新着のたびに引き戻すのをやめた代わりに、届いたことは必ず分かるようにする。）
+   親は position:relative を持つチャットのパネル。持っていない器に付いても、
+   いちばん近い位置指定の祖先に寄るだけで画面は壊れない。 */
+.chat-new {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: 64px; z-index: 4;
+  background: var(--accent, #43d9e8); color: #06121a;
+  border: none; border-radius: 999px; padding: 5px 14px;
+  font-size: 12px; font-weight: 800; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  animation: rowIn .2s ease;
+}
 .chat-msg { display: flex; flex-direction: column; align-items: flex-start; max-width: 88%; animation: rowIn .25s ease; }
 .chat-msg.mine { align-self: flex-end; align-items: flex-end; }
 .chat-msg .cm-meta { font-size: 10px; color: var(--muted); font-weight: 700; margin-bottom: 2px; }

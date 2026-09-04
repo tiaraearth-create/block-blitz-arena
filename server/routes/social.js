@@ -12,7 +12,7 @@ import {
   requireAuth,
 } from '../auth.js';
 import {
-  ensureSocial, friendsView, friendRow, sendRequest, acceptRequest, declineRequest, cancelRequest, unfriend, block as blockUser, unblock as unblockUser, rivalBoard, sendChallenge, CHALLENGE_COOLDOWN_MS,
+  ensureSocial, friendsView, friendRow, sendRequest, acceptRequest, declineRequest, cancelRequest, unfriend, block as blockUser, unblock as unblockUser, rivalBoard, sendChallenge, dismissChallenge, CHALLENGE_COOLDOWN_MS,
 } from '../friends.js';
 import {
   jstDayKey,
@@ -271,6 +271,22 @@ socialRouter.post('/api/friends/challenge', requireAuth, maintenanceGuard, (req,
     ok: true, day: r.day, score: r.score, cleared: r.cleared,
     cooldownUntil: Date.now() + CHALLENGE_COOLDOWN_MS,
   });
+});
+
+// 🔔 届いた挑戦状を消す。
+//
+// friends.js には dismissChallenge が最初からあったのに、HTTP の口が1本も
+// 無かった。しかも `data.challenges` を描く場所が public/js 全体に無く、
+// 挑戦状は **どこにも表示されないまま24時間で消えていた** ── 送った側は
+// 成功トーストと20時間のクールダウンを消費するので、届いていないことに
+// 誰も気づけない。フレンド画面に一覧を出すのと合わせて、この口を開ける。
+socialRouter.post('/api/friends/challenge/dismiss', requireAuth, maintenanceGuard, (req, res) => {
+  migrateUser(req.user);
+  const fromId = String((req.body || {}).userId || '');
+  const r = dismissChallenge(db, req.user, fromId);
+  if (r.error) return res.status(409).json({ error: r.error });
+  saveDb();
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------

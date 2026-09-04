@@ -348,19 +348,27 @@ export class Engine {
   // Fill n random empty cells with garbage (boss attacks). Returns the cells.
   // 戻り値は「置いたマス」。お邪魔で行が埋まった場合はこの中に
   // すぐ消えたマスも混ざる（呼び出し側の spawnAnim は空マスを描かないので無害）。
-  addGarbage(n) {
+  // 📅 rng を渡すと、その乱数で置き場所を選ぶ（デイリー専用）。
+  //    デイリーは「全員が同じ盤面・同じピース順」で連続クリアを競う仕組みなのに、
+  //    🪨瓦礫の日だけ Math.random() で置いていたので、6日に1度は配置運で
+  //    ストリークの成否が変わっていた（残像レースとリプレイもこの日だけ成立
+  //    しない）。applyDailyModifier からだけ専用の乱数を渡す ── 対戦で使う
+  //    this.rng には**触らない**（下の注記のとおり、共有シードを進めると
+  //    ピース列が相手とズレる）。
+  addGarbage(n, rng = null) {
     if (this.fortressActive()) return [];   // ult_fortress: interference is void
     const empties = [];
     for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {
       if (this.grid[r * SIZE + c] === 0) empties.push([r, c]);
     }
     const added = [];
+    const pick = typeof rng === 'function' ? rng : Math.random;
     for (let i = 0; i < n && empties.length > 0; i++) {
       // お邪魔マスの選択に共有シードRNG(this.rng)を使うと、攻撃を受けた側だけ
       // 乱数ストリームが進み、以後の drawPiece() のピース列が相手とズレて
       // 「同一シードのピース列を両者に配布」という公平化が崩れる。
       // 妨害配置は盤面公平性に無関係なので Math.random() を使う。
-      const k = Math.floor(Math.random() * empties.length);
+      const k = Math.floor(pick() * empties.length);
       const [r, c] = empties.splice(k, 1)[0];
       this.grid[r * SIZE + c] = 9;
       added.push([r, c]);

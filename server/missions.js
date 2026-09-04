@@ -160,7 +160,7 @@ function defOf(id) {
 }
 
 // Contribution of one finished game, per track key.
-function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, items, pieces, stage, depth, maxChain }) {
+function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, items, pieces, stage, depth, maxChain, bossKills }) {
   const isPvp = mode === 'pvp' || mode === 'tournament' || mode === 'royale' || mode === 'team';
   return {
     games: 1,
@@ -170,7 +170,12 @@ function contributions({ mode, score, lines, maxCombo, won, floors, wave, ults, 
     win: won ? 1 : 0,
     pvpWin: isPvp && won ? 1 : 0,
     aiWin: mode.startsWith('ai') && won ? 1 : 0,
-    bossWin: (mode === 'boss' || mode === 'boss_rush' || mode === 'raid') && won ? 1 : 0,
+    // 🐉 ボスラッシュの won は「ロスター全踏破」の意味なので、7体倒して
+    //    力尽きても 0 のままだった（週間 w_boss4 は 2,800🪙+14💎）。撃破数は
+    //    別に届いているので、ラッシュのときだけそれを数える。
+    //    boss / raid はこれまでどおり「勝ったら1体」。
+    bossWin: mode === 'boss_rush' ? Math.max(0, Number(bossKills) || 0)
+      : ((mode === 'boss' || mode === 'raid') && won ? 1 : 0),
     floors,
     wave,
     ults,

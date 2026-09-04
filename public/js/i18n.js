@@ -216,6 +216,45 @@ const SERVER_MSG_EN = {
   '報告箱がいっぱいです。少し時間をおいてからお願いします': 'The report box is full — please try again a little later',
   'サーバー内部でエラーが発生しました': 'An internal server error occurred',
   '投票がありません': 'No poll is running',
+  // ---- 🏠 合言葉ルームの操作エラー ----
+  //
+  // あとから足したエラーだけが必ず表から抜ける構造だったので、
+  // 「何をすればいいか」をいちばん伝えるべき瞬間に、英語で遊んでいる人へ
+  // 読めない文字が出ていた。もう抜けないよう test/i18n.test.mjs が
+  // server/ の error 文言を機械で数え上げて見張る。
+  'まだ試合中です': 'The match is still running',
+  '対戦席に誰もいません（観戦席から誰かを対戦席へ）': 'No one is in a play seat — move someone from the stands first',
+  'ホストのみ席を変更できます': 'Only the host can move seats',
+  '試合中は席を変更できません': 'Seats cannot be changed during a match',
+  '試合中は設定を変更できません': 'Settings cannot be changed during a match',
+  'その人はこのルームにいません': 'That player is not in this room',
+  'すこし早すぎます。少し待ってください': 'That was too quick — please wait a moment',
+  '名前の変更が多すぎます。しばらくしてからお試しください': 'Too many name changes — please try again later',
+  // ---- 🔌 接続・アカウント ----
+  'この回線からは現在ご利用いただけません': 'This connection is not available right now',
+  'この回線からは現在アカウントを作成できません': 'Accounts cannot be created from this connection right now',
+  '管理者権限が必要です': 'Admin access is required',
+  '管理者アカウントは削除できません（先に権限を外してください）': 'Admin accounts cannot be deleted — remove the role first',
+  'サーバー更新のためトーナメントを中止しました': 'The tournament was cancelled for a server update',
+  '復元の試行が多すぎます。しばらく待ってください': 'Too many restore attempts — please wait a while',
+  '復元処理が混み合っています。少し待ってからやり直してください': 'Restores are busy right now — please try again shortly',
+  'この端末からの引き継ぎは1アカウント1回だけです（すでに実行済み）': 'This device can carry over to one account only, and it already has',
+  '解放の申告が多すぎます。しばらく待ってください': 'Too many unlock claims — please wait a while',
+  '送信が多すぎます': 'Too many submissions',
+  // ---- 🏰 ギルド / 🗳 投票 / 💬 住人 ----
+  '除名されたギルドには1時間参加できません': 'You cannot rejoin a guild you were removed from for one hour',
+  'そのセットはありません': 'That set does not exist',
+  '投票の変更は1回までです': 'You can change your vote only once',
+  'イベント投票ではありません': 'That is not an event poll',
+  '有効な勝者がいません（投票ゼロ？）': 'No valid winner (were there any votes?)',
+  '会話できる住人が足りません（人口を上げるか時間帯を待ってください）': 'Not enough residents around to talk — raise the population or try another time',
+  'オンラインの住人がいません': 'No residents are online',
+  // ---- 📅 デイリー / 🧩 工房 / その他 ----
+  'きょうの設計図がありません': 'There is no blueprint for today',
+  '最初から揃っている行・列がある盤面は投稿できません（置く前に消えてしまいます）': 'Boards with an already-complete row or column cannot be posted — it would clear before the first move',
+  'その記録が見つかりません': 'That record was not found',
+  'message が必要です': 'A message is required',
+  '画像は /img/ 配下のパスで指定してください（例: /img/news/xxx.png）': 'Images must be a path under /img/ (e.g. /img/news/xxx.png)',
   // 👁️ 断罪（管理者ゼロ）── 取引投票と伝言まわりのサーバー送信文言。
   'もう投票しました': 'You have already voted',
   '投票を受け付けられません': 'Your vote could not be accepted',
