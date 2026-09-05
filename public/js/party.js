@@ -40,6 +40,9 @@ function esc(x) {
 
 const STATUS_LABEL = {
   menu: () => t('メニュー', 'in menu'),
+  // 🚪 部屋で待っているだけ。'playing'（本当に対戦中）とは別の状態で、
+  //    こちらは招待も「いっしょに遊ぶ」も通る。
+  room: () => t('ルームで待機中', 'in a room'),
   playing: () => t('対戦中', 'playing'),
   offline: () => t('オフライン', 'offline'),
 };
@@ -566,7 +569,8 @@ export function initParty() {
   registerHandler('party_launch_begin', async msg => {
     try {
       const { createPartyRoom } = await import('./modes.js');
-      const code = await createPartyRoom(msg.mode);
+      // 人数を渡す。合言葉ルームは全員が対戦席に座れる形で開ける。
+      const code = await createPartyRoom(msg.mode, state ? state.members.length : 2);
       if (code) sendWs({ type: 'party_code', code });
     } catch (err) {
       toast(t('部屋を作れませんでした', 'Could not open the room'), 'err');

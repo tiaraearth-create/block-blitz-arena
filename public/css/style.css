@@ -920,7 +920,15 @@ body[data-screen="game"] #toast-root { gap: 4px; }
 }
 .room-join-row input:focus { outline: none; border-color: var(--blue); }
 .room-lobby { display: flex; flex-direction: column; gap: 14px; align-items: center; padding-top: 10px; }
+/* 合言葉を渡す一行。コピーボタンは .room-code の**外**に置くこと ──
+   i18n.js の英語化が .room-code の innerHTML を丸ごと差し替えるので、
+   内側に入れるとボタンごと消える。 */
+.room-code-row { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.room-code-row .btn { padding: 5px 12px; font-size: 12px; min-height: 0; }
 .room-code { font-size: 16px; font-weight: 700; color: var(--muted); }
+/* body 全体が user-select:none なので、合言葉だけは選べるようにしておく
+   （コピーボタンが使えない環境で、長押し選択が最後の手段になる）。 */
+.room-code b { user-select: text; -webkit-user-select: text; }
 .room-code b {
   font-size: 34px; letter-spacing: 0.25em; color: var(--gold); margin-left: 8px;
   text-shadow: 0 0 20px rgba(255,215,94,0.5);
@@ -2699,6 +2707,8 @@ body[data-screen="game"] #topbar { display: none; }
 .fr-status { font-size: 10.5px; flex: 0 0 auto; white-space: nowrap; }
 .fr-status.menu { color: #5ee86e; }
 .fr-status.playing { color: #ffa93d; }
+/* 🚪 ルームで待機中。'playing'（対戦中）とは別の状態 ── 呼べば来られる。 */
+.fr-status.room { color: #62d0e0; }
 .fr-status.offline { color: var(--muted); }
 .fr-status i { font-style: normal; opacity: .7; }
 .fr-btns { display: flex; gap: 4px; flex: 0 0 auto; }

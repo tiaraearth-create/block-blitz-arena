@@ -5773,6 +5773,30 @@ class OnlineMode extends VersusBase {
     };
     $('#btnJoinRoom').onclick = join;
     $('#roomCodeInput').onkeydown = e => { if (enterIsLive(e)) join(); };
+    // 📋 合言葉をコピーする。これが無いあいだ、部屋を作った人は4文字を
+    //    読み上げるかスクショを撮るしかなかった（画面から渡す手段がゼロ）。
+    //    退避の順序は party.js の #ptCopy と同じ ── clipboard → execCommand →
+    //    「コピーできなかった（合言葉: XXXX）」と正直に出す。
+    const copyBtn = $('#btnCopyRoomCode');
+    if (copyBtn) copyBtn.onclick = async () => {
+      const code = ($('#roomCodeLabel').textContent || '').trim();
+      if (!code || code === '----') return;
+      audio.click();
+      let ok = false;
+      try {
+        if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(code); ok = true; }
+      } catch { /* execCommand に退避 */ }
+      if (!ok) {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = code; document.body.appendChild(ta); ta.select();
+          ok = document.execCommand('copy'); ta.remove();
+        } catch { ok = false; }
+      }
+      toast(ok ? t('合言葉をコピーしました', 'Code copied')
+               : t(`コピーできませんでした（合言葉: ${code}）`, `Could not copy (code: ${code})`),
+        ok ? 'ok' : 'err', ok ? 1500 : 3000);
+    };
     $('#btnLeaveRoom').onclick = () => { audio.click(); this.client.leaveRoom(); this.showJoinView(); };
     $('#btnStartRoom').onclick = () => { audio.click(); this.client.startRoom(); };
     $('#btnRoomBack').onclick = () => { audio.click(); this.quit(); };
@@ -9520,14 +9544,20 @@ export function startOnline(kind = 'duel') {
 // 👥 パーティー用。部屋を作るのはリーダーの画面で、できた合言葉を
 // サーバーへ返して全員に配ってもらう。こうすると create_room / join_room /
 // startRoom を1行も触らずに済む（あそこはいちばん壊しやすい場所なので）。
-export function createPartyRoom(mode) {
+export function createPartyRoom(mode, size = 2) {
   return new Promise((resolve) => {
     if (currentMode) currentMode.destroy();
     currentMode = new OnlineMode('custom');
     window.__bbaMode = currentMode;
     // 合言葉が room_update で返ってきたら1回だけ拾う。
     currentMode._onRoomCode = code => { currentMode._onRoomCode = null; resolve(code); };
-    currentMode._autoCreate = { team: mode === 'team', mode };
+    // 🚪 'custom'（合言葉ルーム）はゲームモード名ではなく「部屋を開ける」という
+    //    選択。サーバーの cleanSettings の許可リストに 'custom' は無いので、
+    //    そのまま送ると **duel（対戦席2）** に落ちていた ── パーティー側は
+    //    seats:4 として出しているのに、4人で選ぶと2人が観戦席に落ちる。
+    //    いる人数が座れる形で開ける（中でホストが好きに変えられる）。
+    const roomMode = mode === 'custom' ? (size >= 3 ? 'team' : 'duel') : mode;
+    currentMode._autoCreate = { team: roomMode === 'team', mode: roomMode };
     currentMode.start();
     // 返事が来ない場合に呼び出し側を待たせっぱなしにしない。
     setTimeout(() => resolve(null), 9000);

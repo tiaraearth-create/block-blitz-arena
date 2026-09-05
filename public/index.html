@@ -247,7 +247,10 @@
         <p class="muted center" style="font-size:13px">友達と同じコードで集まって対戦！<br>チーム戦は先に入った2人がチームAになります</p>
       </div>
       <div id="roomLobby" class="room-lobby hidden">
-        <div class="room-code">ルームコード <b id="roomCodeLabel">----</b></div>
+        <div class="room-code-row">
+          <div class="room-code">ルームコード <b id="roomCodeLabel">----</b></div>
+          <button class="btn btn-ghost" id="btnCopyRoomCode">コピー</button>
+        </div>
         <div id="roomPlayers" class="room-players"></div>
         <div id="roomSettings" class="room-settings"></div>
         <div class="modal-buttons" style="max-width:420px">

@@ -225,6 +225,7 @@ const SERVER_MSG_EN = {
   'まだ試合中です': 'The match is still running',
   '対戦席に誰もいません（観戦席から誰かを対戦席へ）': 'No one is in a play seat — move someone from the stands first',
   'ホストのみ席を変更できます': 'Only the host can move seats',
+  'ホストのみ設定を変更できます': 'Only the host can change the settings',
   '試合中は席を変更できません': 'Seats cannot be changed during a match',
   '試合中は設定を変更できません': 'Settings cannot be changed during a match',
   'その人はこのルームにいません': 'That player is not in this room',
@@ -498,6 +499,7 @@ export function applyStaticI18n() {
   if (joinNote) joinNote.innerHTML = 'Gather friends with the same code!<br>In team mode the first two players form Team A';
   const roomCode = document.querySelector('.room-code');
   if (roomCode) roomCode.innerHTML = `Room code <b id="roomCodeLabel">----</b>`;
+  set('#btnCopyRoomCode', 'Copy');
   set('#btnLeaveRoom', 'Leave');
   set('#btnStartRoom', 'Start!');
 

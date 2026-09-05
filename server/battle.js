@@ -257,8 +257,15 @@ export function initBattle(server, deps) {
     for (const w of live) {
       // roomId ではなく roomCode。roomId はこのコードベースのどこにも
       // 代入が無いので、合言葉ルームにいる人がずっと「メニュー」に見えていた。
-      if (w.matchId || w.royaleId || w.zeroId || w.tourneyId || w.roomCode) return 'playing';
+      if (w.matchId || w.royaleId || w.zeroId || w.tourneyId) return 'playing';
     }
+    // 🚪 部屋にいるだけなら 'room'。以前は 'playing' と同じ値に潰していたので、
+    //   **先に部屋を開けて友達を呼ぶ**という一番自然な順番が通らなかった：
+    //   ロビーで待っているだけの人がフレンド一覧に「対戦中」と出、招待も
+    //   「いっしょに遊ぶ」も『対戦中のメンバーがいます』で断られる。
+    //   （招待ボタンは offline 以外で出るので、押せるのに必ず失敗していた。）
+    //   観戦席の人もここに入る ── 盤面を持っていないので呼ばれて困らない。
+    for (const w of live) if (w.roomCode) return 'room';
     return 'menu';
   }
   // 通知は primaryOnly で送ること。対戦画面に入ると同じ人が2本つなぐので、
@@ -2536,6 +2543,31 @@ export function initBattle(server, deps) {
   const ROOM_MAX = 8;
   const roomPlaying = room => room.players.filter(p => !room.watch.has(p));
 
+  // 👑 ホストは「配列の0番目」ではなく、部屋が覚えている1人（room.host）。
+  //
+  //   以前は players[0] だった。ところが startRoom は対戦席の人を splice で
+  //   抜き、endRoomSpectate は**末尾に** push して戻す ── つまりホストが
+  //   自分で1試合遊ぶだけで、王冠は観戦席の先頭へ黙って移り、戻ってこない。
+  //   譲渡もキックも無いので取り返す手段もなく、画面には理由も出ない
+  //   （王冠の位置と「対戦開始！」の有無が入れ替わるだけ）。
+  //   server/party.js の leaderId には「『配列の先頭が偉い』にしておくと、
+  //   並び替えたときに壊れる」と、まさにこの罠がコメントで残っている。
+  //
+  //   席の並び順（＝交代で遊ぶ順番）はこれまでどおり配列順のまま。
+  //   動かさないのは王冠だけ。
+  function ensureHost(room) {
+    const away = Array.isArray(room.away) ? room.away : [];
+    const alive = p => p && p.readyState === p.OPEN;
+    // 試合中はホストが away 側にいる（対戦席の人は部屋から抜けている）。
+    if (room.host && alive(room.host) && (room.players.includes(room.host) || away.includes(room.host))) {
+      return room.host;
+    }
+    // いなくなったら、いま部屋にいるいちばん古い人へ。試合中なら出場者も候補。
+    room.host = room.players.concat(away).find(alive) || null;
+    return room.host;
+  }
+  const isRoomHost = (room, ws) => ensureHost(room) === ws;
+
   // 席の整え直し。入室順に対戦席を埋め、あふれたら観戦席へ落とす。
   // ホストが明示的に観戦席へ回した人（benched）は繰り上げない ── 自動で
   // 戻すと「ホストが決めた席割り」を機械が上書きしてしまう。
@@ -2573,19 +2605,20 @@ export function initBattle(server, deps) {
 
   function broadcastRoom(room) {
     const seats = roomSeats(room);
+    const hostSock = ensureHost(room);
     for (const ws of room.players) {
       if (ws.readyState !== ws.OPEN) continue;
       send(ws, {
         type: 'room_update',
         code: room.code,
         settings: room.settings,
-        youAreHost: room.players[0] === ws,
+        youAreHost: hostSock === ws,
         // 席の内訳。クライアントは seats（対戦席の数）と max（定員）で
         // 「◯/8人・対戦席2」のような表示ができる。
         seats, max: ROOM_MAX,
         yourSeat: room.watch.has(ws) ? 'watch' : 'play',
-        players: room.players.map((p, i) => ({
-          name: sockName(p), isHost: i === 0, isYou: p === ws,
+        players: room.players.map(p => ({
+          name: sockName(p), isHost: p === hostSock, isYou: p === ws,
           seat: room.watch.has(p) ? 'watch' : 'play',
         })),
         ...(roomWatchExtra(room, ws) || { inMatch: false }),
@@ -2602,14 +2635,21 @@ export function initBattle(server, deps) {
     if (i !== -1) room.players.splice(i, 1);
     room.watch.delete(ws);
     room.benched.delete(ws);
-    if (room.players.length === 0) { clearInterval(room.specTick); rooms.delete(room.code); }
+    // 試合中の部屋は、観戦者が全員抜けても消さない ── 対戦席の人たちが
+    // room.away に控えていて、試合が終わったらここへ戻ってくる。
+    // 消すと彼らは戻る先を失う（endRoomSpectate が rooms.has で引き返す）。
+    // 誰も戻らなかったときの片付けは endRoomSpectate がやる。
+    if (room.players.length === 0 && !room.matchId) { clearInterval(room.specTick); rooms.delete(room.code); }
     else { reseat(room); if (notify) broadcastRoom(room); }
   }
 
   function startRoom(ws) {
     const room = roomOf(ws);
-    if (!room) return;
-    if (room.players[0] !== ws) { send(ws, { type: 'room_error', error: 'ホストのみ開始できます' }); return; }
+    // 無言 return だった。部屋が消えたあとも画面は見た目がそのまま残るので
+    // （クライアントは showScreen するだけ）、押しても音だけ鳴って何も起きない──
+    // 何が起きているのか分からない。理由を返す。
+    if (!room) { send(ws, { type: 'room_error', error: 'ルームが見つかりません' }); return; }
+    if (!isRoomHost(room, ws)) { send(ws, { type: 'room_error', error: 'ホストのみ開始できます' }); return; }
     if (room.matchId) { send(ws, { type: 'room_error', error: 'まだ試合中です' }); return; }
     const need = roomSeats(room);
     const coop = room.settings.mode === 'coop';
@@ -2648,16 +2688,31 @@ export function initBattle(server, deps) {
     //   「交代で遊ぶ」に合言葉の入り直しが要る。
     room.away = play.slice();
     const watchers = room.players.slice();
-    if (!watchers.length) { clearInterval(room.specTick); rooms.delete(room.code); }
+    // 🚪 観戦者がゼロでも部屋を消さない。
+    //
+    //   ここは長らく `if (!watchers.length) rooms.delete(room.code)` だった。
+    //   ところが **友達2人で 1v1** は両方とも対戦席に座るので watchers は
+    //   必ず空 ── つまりこの機能のいちばん普通な使い方で、「対戦開始！」を
+    //   押した瞬間に部屋が消えていた。match.roomCode も張られないので
+    //   endRoomSpectate も一度も走らず、結果画面の「ルームへ」はもう無い
+    //   部屋の画面を見せ、「対戦開始！」を押しても無言で何も起きなかった。
+    //   （3人以上で集まった人だけが連戦できていた。）
+    //   空の部屋が残り続けることはない ── specTick が試合の終わりを見て
+    //   endRoomSpectate を呼び、そこで誰も戻らなければ部屋を消す。
     const match = createMatch({
-      mode: coop ? 'coop' : land ? 'land' : room.settings.team ? 'team' : 'duel',
+      // ⚔️ 'attack' の枝が無かった。部屋で「攻撃戦」を選べるようにしたとき
+      //    cleanSettings には追加したのにこちらを忘れていて、attack は
+      //    team=false なので**必ず duel** に落ちていた（お邪魔が一度も飛ばない）。
+      //    受け側（case 'attack' と match.mode === 'attack'）はもとから揃っている。
+      mode: coop ? 'coop' : land ? 'land' : room.settings.mode === 'attack' ? 'attack'
+        : room.settings.team ? 'team' : 'duel',
       entries,
       // 陣取りは時間制。部屋で選んだ長さ（60/120/180秒）をそのまま使う。
       duration: coop ? COOP_MAX_SECS : room.settings.duration,
       rated: false,
     });
-    if (!watchers.length || !match) return;
-    // 観戦席が残っているときだけ、部屋を試合の「観戦室」として生かす。
+    // 部屋を試合の「観戦室」にする。観戦者がいなくても張る ──
+    // match.roomCode が無いと、試合後に出場者を部屋へ戻せない。
     room.matchId = match.id;
     match.roomCode = room.code;
     for (const p of watchers) p.watchTarget = null;   // 既定は「おまかせ＝首位」
@@ -2698,6 +2753,9 @@ export function initBattle(server, deps) {
     // ⚠ benched（ホストが「観戦席へ」と決めた人）は消さない ── 消すと
     //   ホストの席割りが毎試合リセットされ、ホスト自身が毎回対戦席に戻る。
     room.watch.clear();
+    // 試合中に全員が切れた（または別の部屋へ移った）とき、ここで部屋を畳む。
+    // 観戦者ゼロでも部屋を残すようにしたので（startRoom）、掃き口はここだけ。
+    if (room.players.length === 0) { clearInterval(room.specTick); room.specTick = null; rooms.delete(room.code); return; }
     reseat(room);
     broadcastRoom(room);
   }
@@ -4225,6 +4283,8 @@ export function initBattle(server, deps) {
           // 回した socket（対戦席が空いても勝手に繰り上げない印）。
           rooms.set(code, {
             code, players: [ws], settings: cleanSettings(msg.settings),
+            // 👑 作った人がホスト。配列の順番とは別に覚えておく（ensureHost）。
+            host: ws,
             watch: new Set(), benched: new Set(), matchId: null, specTick: null,
             // away … いま試合に出ていて部屋を離れている socket。
             //   endRoomSpectate が試合後に部屋へ戻す（交代で遊ぶための控え）。
@@ -4266,7 +4326,9 @@ export function initBattle(server, deps) {
         }
         case 'room_set': {
           const room = roomOf(ws);
-          if (!room || room.players[0] !== ws) return;
+          // 無言 return をやめる（startRoom と同じ理由）。
+          if (!room) { send(ws, { type: 'room_error', error: 'ルームが見つかりません' }); return; }
+          if (!isRoomHost(room, ws)) { send(ws, { type: 'room_error', error: 'ホストのみ設定を変更できます' }); return; }
           if (room.matchId) { send(ws, { type: 'room_error', error: '試合中は設定を変更できません' }); return; }
           room.settings = cleanSettings({ ...room.settings, ...msg.settings });
           // モードが変わると対戦席の数が変わる（1v1=2 ⇄ 2v2=4）ので席を組み直す。
@@ -4279,8 +4341,8 @@ export function initBattle(server, deps) {
         // ホスト以外が叩いても効かない（下の1行目で弾く）。
         case 'room_seat': {
           const room = roomOf(ws);
-          if (!room) return;
-          if (room.players[0] !== ws) { send(ws, { type: 'room_error', error: 'ホストのみ席を変更できます' }); return; }
+          if (!room) { send(ws, { type: 'room_error', error: 'ルームが見つかりません' }); return; }
+          if (!isRoomHost(room, ws)) { send(ws, { type: 'room_error', error: 'ホストのみ席を変更できます' }); return; }
           if (room.matchId) { send(ws, { type: 'room_error', error: '試合中は席を変更できません' }); return; }
           const seat = msg.seat === 'watch' ? 'watch' : 'play';
           const name = String(msg.name == null ? '' : msg.name).slice(0, 40);
@@ -4906,7 +4968,7 @@ export function initBattle(server, deps) {
             return {
               act: room.matchId ? 'room_watch' : 'room',
               room: room.code,
-              host: room.players[0] === ws,
+              host: ensureHost(room) === ws,
               seat: watch ? 'watch' : 'play',
               mode: room.settings ? room.settings.mode || (room.settings.team ? 'team' : 'duel') : null,
             };

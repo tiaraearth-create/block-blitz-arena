@@ -26,6 +26,9 @@ function esc(x) {
 
 const STATUS = {
   menu: () => t('オンライン', 'Online'),
+  // 🚪 ルームのロビーで待っている。以前はこれも「対戦中」に潰していたので、
+  //    先に部屋を開けて呼ぶ、という一番自然な順番で招待が全部断られていた。
+  room: () => t('ルームで待機中', 'In a room'),
   playing: () => t('対戦中', 'Playing'),
   offline: () => t('オフライン', 'Offline'),
 };
@@ -389,7 +392,8 @@ function viewList() {
       'まだフレンドがいません。「さがす」から名前で申請できます。',
       'No friends yet. Use “Find” to send a request by name.')}</p>`;
   }
-  const order = { menu: 0, playing: 1, offline: 2 };
+  // 呼べば来られる人を上に。room はロビーで待っているだけなので menu の次。
+  const order = { menu: 0, room: 1, playing: 2, offline: 3 };
   const sorted = data.friends.slice().sort((a, b) => (order[a.status] - order[b.status]) || a.username.localeCompare(b.username));
   return head + '<div class="fr-list">' + sorted.map(f => row(f, [
     p && p.members.length < p.max && f.status !== 'offline'
