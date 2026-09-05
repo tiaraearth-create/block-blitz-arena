@@ -3,7 +3,7 @@ import { SIZE, shapeSize, ICE, ICE_CRACKED, EYE } from './engine.js';
 import { PALETTE, getSkin, getBoard } from './themes.js';
 import { ParticleSystem } from './particles.js';
 import { audio } from './audio.js';
-import { getSettings, particleFactor, motionFactor, prefersReducedMotion, onSettingsChange, onReducedMotionChange } from './settings.js';
+import { getSettings, particleFactor, motionFactor, prefersReducedMotion, onSettingsChange, onReducedMotionChange, showPlaceGhost, showClearHint } from './settings.js';
 import { t } from './i18n.js';
 
 // 🔥 コンボの段位 0=streak 2-4 / 1=5-9 / 2=10-19 / 3=20+ ごとの演出強度。
@@ -229,6 +229,9 @@ export class GameView {
     this.keystoneCell = -1;         // 👁️断罪の急所。含めて斬れば貫通が倍
     this.coolCells = null;          // Set of r*8+c pulsing cyan (meltdown coolant)
     this.onTrayDrop = null;         // callback(fromSlot, toSlot) -> true to handle (chimera weld)
+    // 👻 モードが一時的にプレビューを落とす（運営ルーレットの「目隠し」）。
+    //    プレイヤー設定より強い。null なら設定どおり。
+    this.assistOverride = null;
 
     this.running = false;
     this.lastTs = 0;
@@ -312,6 +315,10 @@ export class GameView {
     this.coolCells = null;
     this.oreCells = null;
     this.ghostFx = null;
+    // 👻 モードが落としたプレビューも試合ごとに戻す。view は使い回しなので、
+    //    ここで消さないと**目隠しを引いた人が次の試合以降ずっとゴースト無し**になる
+    //    （すぐ下の godInvincibleUntil がまさにその形の事故だった）。
+    this.assistOverride = null;
     // 🛡 絶対防御の無敵は「1試合ぶん」の約束。同じアイテムの他の2効果
     //    （fortressUntil / streakShield）は engine 側にあるので試合ごとに
     //    消えるが、これだけ使い回しの view 側にあり、ここにも endToMenu にも
@@ -682,7 +689,9 @@ export class GameView {
     if (this.sel) { r = this.sel.r; c = this.sel.c; }   // 持ち替えてもカーソルは動かさない
     else {
       // 最初の1手でいきなり赤いゴーストを出さないよう、置ける場所へ寄せる。
-      const spots = this.engine ? this.engine.placements(piece) : [];
+      // 👻 ただしこれは盤面全体を走査した**結果**（合法手を1つ配っている）なので、
+      //    結果の層に従う。「控えめ＝結果は出さない」と言った以上、ここも止める。
+      const spots = (this.engine && this.showClear()) ? this.engine.placements(piece) : [];
       if (spots.length) { r = spots[0][0]; c = spots[0][1]; }
       else { r = (SIZE - rows) >> 1; c = (SIZE - cols) >> 1; }
     }
@@ -794,6 +803,17 @@ export class GameView {
   liftAmount() {
     const room = this.H - this.boardY - this.boardSize + this.cell * 0.45;
     return Math.min(this.cell * 1.2, Math.max(this.cell * 0.35, room));
+  }
+
+  // 👻 配置プレビューの2層。設定（settings.js）とモードの上書きを合わせた答え。
+  //    設定が読めない環境では従来どおり全部出す（screenFlash / shake と同じ流儀）。
+  showGhost() {
+    if (this.assistOverride === 'off') return false;
+    try { return showPlaceGhost(); } catch { return true; }
+  }
+  showClear() {
+    if (this.assistOverride === 'off') return false;
+    try { return showClearHint(); } catch { return true; }
   }
 
   // Current drag → board anchor cell (top-left of the piece), or null.
@@ -1492,7 +1512,12 @@ export class GameView {
     // ❄️ 氷結: 揃っても氷があると消えない線。白く光らせると「消える」と嘘に
     // なるので、別の集合に分けて水色で見せる（resolveLines の判定と同じ規則）。
     const freezeRows = new Set(), freezeCols = new Set();
-    if (valid) {
+    // 👻 「結果」の層はここ1か所で止める。4つの Set が空のまま返ると、
+    //    読み手（drawBlocks のグロー / 白帯 / 水色帯、ドラッグ側と選択側で計9か所）が
+    //    **全部いっしょに**黙る。表示側に個別の if を書くと、1つ書き忘れたときに
+    //    「入力手段によって見え方が違う」といういちばん悪い形になる。
+    //    valid（置けるかどうか）は位置の層なので、ここでは落とさない。
+    if (valid && this.showClear()) {
       // simulate: which rows/cols become full?
       const g = this.engine.grid;
       const temp = new Set(piece.cells.map(([dr, dc]) => (anchor.r + dr) * SIZE + (anchor.c + dc)));
@@ -1528,7 +1553,9 @@ export class GameView {
     // Weld zone: highlight the target slot INSTEAD of a board ghost, so the
     // preview always matches what releasing will do.
     const wslot = this.weldTargetAt(this.drag.px, this.drag.py, this.drag.index);
-    const ghost = wslot === -1 ? this.ghostInfo() : null;
+    // 👻 「なし」ではゴーストを出さない。指の上に浮くコマ（下の 1589〜）は
+    //    手札の中身であって予告ではないので、どの段でも必ず描く。
+    const ghost = (wslot === -1 && this.showGhost()) ? this.ghostInfo() : null;
     if (wslot !== -1) {
       // 枠の寸法も横持ち／縦持ちで変わる。幅を W/3 のままにしていると、
       // 横持ちで盤面の上まで紫の枠が伸びていた。
@@ -1613,10 +1640,23 @@ export class GameView {
     if (!ghost) { this.sel = null; return; }
     const { piece, valid } = ghost;
     const skin = getSkin(this.skinId);
+    // 👻 「なし」でもマスそのものは描く。**消しても何も隠せないから。**
+    //    下の枠は shapeSize の外接長方形なので、L字やS字ではどのマスを占めるか
+    //    分からない。ところが手札側は選択中のコマを普通に描いていて（drawTray が
+    //    伏せるのはドラッグ中の枠だけ）、黄色の枠でどれを選んでいるかも出ている。
+    //    **外接長方形＋手札の形＝占有マスは一意に決まる**ので、ここを消しても
+    //    情報は1ビットも減らず、読みにくくなるだけ。隠すのは色分け（置ける／
+    //    置けない）のほうだけにする。
+    const tell = this.showGhost();
     for (const [dr, dc] of piece.cells) {
       const x = this.boardX + (s.c + dc) * cell;
       const y = this.boardY + (s.r + dr) * cell;
-      if (valid) {
+      if (!tell) {
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
+        ctx.globalAlpha = 1;
+      } else if (valid) {
         skin(ctx, x, y, cell, piece.color, 0.45);
       } else {
         ctx.globalAlpha = 0.25;
@@ -1644,7 +1684,9 @@ export class GameView {
     const { rows, cols } = shapeSize(piece.cells);
     ctx.save();
     ctx.globalAlpha = 0.6 + 0.3 * Math.sin(this.time * 6);
-    ctx.strokeStyle = valid ? '#ffffff' : '#ff6b6b';
+    // 枠そのものは**どの段でも必ず描く** ── タップ／キーボードには
+    // 指の位置が無いので、これが唯一の手掛かり。色分けだけ段に従う。
+    ctx.strokeStyle = (!this.showGhost() || valid) ? '#ffffff' : '#ff6b6b';
     ctx.lineWidth = Math.max(2, cell * 0.07);
     ctx.strokeRect(this.boardX + s.c * cell + 1, this.boardY + s.r * cell + 1, cols * cell - 2, rows * cell - 2);
     ctx.restore();
@@ -1692,7 +1734,10 @@ export class GameView {
       const oy = this.sideTray
         ? i * slotH + (slotH - ph) / 2
         : this.trayY + (this.trayH - ph) / 2;
-      const placeable = this.engine.placements(piece).length > 0;
+      // 👻 「このコマはどこにも入らない」も盤面を全部走査した結果。
+      //    「なし」では出さない ── ついでに毎フレームの placements() 3回ぶんが消える
+      //    （手札3枚 × 全アンカーの canPlace。この関数でいちばん重い行）。
+      const placeable = this.showGhost() ? this.engine.placements(piece).length > 0 : true;
       const alpha = placeable ? 1 : 0.3;
       // subtle idle bobbing
       const bob = Math.sin(this.time * 2 + i * 1.7) * 2;

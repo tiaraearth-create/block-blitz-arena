@@ -14,6 +14,15 @@ const DEFAULTS = {
   bgmTrack: null,        // jukebox pin: track id to loop everywhere (null = auto per screen)
   colorMarks: false,     // colorblind aid: overlay a shape mark per block color
   haptics: true,         // 📳 短い振動で「置いた／消えた／置けなかった」を返す
+  // 👻 配置プレビューの段。'full' | 'light' | 'off'
+  //   'full'  … いまと同じ。落ちる位置のゴースト／消える線の白帯／氷の水色帯／置けない赤
+  //   'light' … 落ちる位置と「置けない」だけ。**どの線が消えるかは自分で読む**
+  //   'off'   … 何も出さない
+  // 落ちる位置のゴーストは**入力手段の都合**（コマは指より上に浮くので、
+  // 無いとどのマスを狙っているのか分かりにくい ── liftAmount のコメント参照）。
+  // 白帯・水色帯は**結果の予告**＝手助けなので、切れるのはそちらが主。
+  // 既定を 'full' にしてあるのは、いま遊んでいる人の手触りを勝手に変えないため。
+  placePreview: 'full',
 };
 
 let settings = { ...DEFAULTS };
@@ -53,12 +62,24 @@ if (settings.bgmTrack && !TRACK_INFO.some(t => t.id === settings.bgmTrack)) sett
 // Volumes may boost to 200% (the engine's limiter keeps it clean).
 settings.sfxVol = Math.max(0, Math.min(2, Number(settings.sfxVol) || 0));
 settings.musicVol = Math.max(0, Math.min(2, Number(settings.musicVol) || 0));
+// 👻 壊れた値・知らない値は『いまと同じ見え方』へ倒す。
+//   下の showClearHint() は `=== 'full'` なので、正規化が無いと undefined や
+//   打ち間違いが**黙って「控えめ」に落ちる**（設定画面のボタンもどれも光らない）。
+//   particleFactor が未知の値で normal＝既定へ落ちるのと同じ向きにそろえる。
+if (!['full', 'light', 'off'].includes(settings.placePreview)) settings.placePreview = 'full';
 
 export function getSettings() { return settings; }
 
 export function particleFactor() {
   return settings.particles === 'low' ? 0.35 : settings.particles === 'high' ? 1.9 : 1;
 }
+
+// 👻 配置プレビューの段の規則は、この2本だけが持つ。
+//   描画側は7か所で参照するので、生の文字列比較を散らすと1か所ズレても誰も気づかない。
+//   showPlaceGhost … 落ちる位置（ゴースト本体・置けない赤・カーソルの色分け）
+//   showClearHint  … 結果の予告（消える線の白帯・氷の水色帯・盤面ブロックの白いグロー）
+export function showPlaceGhost() { return settings.placePreview !== 'off'; }
+export function showClearHint() { return settings.placePreview === 'full'; }
 
 // OS の「視差効果を減らす」が今 ON か。読み込み時の値ではなく、
 // 実行中に切り替えられたら追随する（下の change 監視で更新している）。

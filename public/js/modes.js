@@ -35,6 +35,8 @@ import { fireUlt, ultColor, ultExists, DEFAULT_ULT } from './skills.js';
 // ページ読み込み時に張るこちらへ届くことがある（下の ZeroMode を参照）。
 // chat.js は modes.js を import していないので循環しない（party.js と同じ）。
 import { registerHandler, showProfileCard } from './chat.js';
+// 👻 「なし」の人にはお題の目隠しが空振りになるので、そこだけ従来の暗転へ落とす。
+import { showPlaceGhost } from './settings.js';
 
 const MATCH_SECONDS = 120;
 
@@ -262,6 +264,16 @@ function currentRunId() {
 }
 
 async function submitResult(payload) {
+  // 🕯 端末側のプレイ回数。**ログインの有無に関わらず**数える。
+  //    ロゴのヒント（main.js の updateLogoHint）が「30戦したら息をする」なのに、
+  //    数える先がサーバーの stats だけだったので、ゲストには永久に出なかった。
+  //    ここは全モード共通の出口なので、1か所で足りる。
+  //    ⚠ 端末に置くキーは localdata.js の OWNED_KEYS にも登録すること
+  //      （忘れると test/localkeys.test.mjs が落ちる ＝ 機械が守ってくれる）。
+  try {
+    const n = Number(localStorage.getItem('bba_plays') || 0) || 0;
+    localStorage.setItem('bba_plays', String(Math.min(999999, n + 1)));
+  } catch { /* プライベートモード。数えられなくても遊べる */ }
   if (!session.user) return null;
   // Per-run telemetry the mission system feeds on — filled in centrally so
   // every mode reports it without repeating itself.
@@ -8451,6 +8463,21 @@ class AdminEventMode extends VersusBase {
     if (this.modeId === 'communal') this.communalOnPlace(r);
   }
 
+  // 👻 お題「目隠し（ゴースト消灯）」の中身。**名前どおりゴーストだけ消す。**
+  //    以前はここが blindFor()（盤面全体を rgba(2,3,10,0.82) で覆う）を呼んでいて、
+  //    お題名は「ゴースト消灯」なのに実際は**盤面が真っ暗**になっていた。
+  //    真っ暗だとただ何もできない時間になるので 4秒に切り詰めてもいて、
+  //    お題としても骨抜きだった。いまは盤面が見えたまま予告だけ消えるので、
+  //    他のお題と同じ1スピンぶん（次のスピンまで）効かせられる。
+  //    ⚠ view は getView() ではなく素の view を使う。getView() は毎回テーマを
+  //      貼り直して canvas を測り直す変異アクセサで、スピンのたびに走らせる理由が無い。
+  assistOff() {
+    if (view) view.assistOverride = 'off';
+    // 設定でもとから「なし」の人には、この1つだけお題が空振りになってしまう。
+    // その人には従来どおり盤面を暗くして、お題が必ず何か起こすようにする。
+    if (view && !showPlaceGhost()) this.blindFor(4000);
+  }
+
   blindFor(ms) {
     const wrap = document.querySelector('.game-canvas-wrap');
     if (!wrap) return;
@@ -8554,7 +8581,7 @@ class AdminEventMode extends VersusBase {
       case 'treasure': this.treasure = true; break;
       // 30秒も手札ごと真っ黒にすると、ただ何もできない時間になる。
       // ルーレットの他の効果と同じ尺（数秒）に揃える。
-      case 'blind': this.blindFor(4000); break;
+      case 'blind': this.assistOff(); break;
       case 'rise':
         this.riseInt = setInterval(() => {
           if (this.ended || e.over || (view && (view.inputLocked || view.drag))) return;
@@ -9732,6 +9759,16 @@ class Tutorial {
     tip.style.pointerEvents = 'none';
     document.body.appendChild(tip);
     this.tip = tip;
+    // 📘 **出した瞬間**に「見た」印を立てる（2026-09-06 ユーザー指示:
+    //    「一回表示されて消されたらもう出てこないように」）。
+    //    以前は完了とスキップのときだけ立てていた。ところが ① の吹き出しには
+    //    「次へ」が無く「スキップ」しかないので、ふつうに1手置いて遊び、
+    //    そのままゲームオーバー→メニューへ戻った人は印が一度も立たず、
+    //    solo/meltdown/chimera/dig/chain/survival を渡り歩くたびに 1/4 から
+    //    出直していた。閉じ方（✕・端末の戻る・ゲームオーバー・リロード）を
+    //    数え上げるやり方では必ず取りこぼす（リロードでは teardown が呼ばれない）
+    //    ので、出した時点で書く。やり直したい人には設定にボタンを置いてある。
+    markTutorialDone();
     this.step = 0;
     this.render();
     this.poll = setInterval(() => this.tick(), 160);
@@ -10972,6 +11009,11 @@ class VersusTutorial {
     tip.style.pointerEvents = 'none';
     document.body.appendChild(tip);
     this.tip = tip;
+    // 📘 こちらも出した瞬間に印を立てる（上と同じ理由）。
+    //    とくにここは AI戦の結果画面「再戦」が startVsAi() を通るので、
+    //    再戦のたびに 1/3 から出直していた（ソロの「もう一度」は this.start() を
+    //    呼ぶだけなので出ない ── 同じ「もう一度」で挙動が割れていた）。
+    markVersusTutorialDone();
     this.render();
   }
 }

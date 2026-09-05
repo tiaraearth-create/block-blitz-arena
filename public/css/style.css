@@ -155,9 +155,19 @@ body {
 
 /* 11 modes: two columns keep the menu on one screen. Solo & Online anchor
    the top and bottom at full width. */
-.menu-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: min(430px, 92vw); }
-.menu-buttons #btnSolo, .menu-buttons #btnOnline { grid-column: 1 / -1; }
+/* 🔖 minmax(0, 1fr) にしてあるのは、`1fr` の自動最小幅が min-content で、
+   .btn-big の white-space:nowrap（すぐ下）と組むと**中身の実幅までトラックが
+   膨らむ**から。しおりのカード（#bookmarkCard は JS が生やす）を素で入れたとき、
+   実測で1列目が 369〜551px まで広がり、容器の min(430px, 92vw) を突き破って
+   375px 幅ではメニュー18本すべての右端が画面外へ出ていた。
+   minmax(0,…) にしても既存の並び（168.5/168.5・210/210）は変わらない。 */
+.menu-buttons { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; width: min(430px, 92vw); }
+.menu-buttons #btnSolo, .menu-buttons #btnOnline, .menu-buttons #bookmarkCard { grid-column: 1 / -1; }
+/* モード名が語の途中で2行に割れるのを止めるための nowrap。ただし しおりの
+   カードは「続きから — メルトダウン 熱62% ・ 12,340 ・ あと48時間」のような
+   長い1行なので、ここだけ折り返しを許す（切り詰めると末尾の残り時間が消える）。 */
 .menu-buttons .btn-big { white-space: nowrap; }
+#bookmarkCard { white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
 .btn {
   border: none; border-radius: 16px; padding: 12px 22px;
   font-size: 16px; font-weight: 800; color: #fff; cursor: pointer;

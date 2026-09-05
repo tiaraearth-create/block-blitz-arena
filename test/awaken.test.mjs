@@ -74,7 +74,13 @@ const crowd = read('server/crowd.js');
 {
   check('③-1 13連打はそのまま残っている', /if \(ghostTaps === 13\) \{ ghostTaps = 0; unlockGhost\(\); \}/.test(main), '');
   check('③-2 遊んだ人にだけロゴが合図する', /function updateLogoHint\(\) \{/.test(main), '');
-  check('③-3 30回遊ぶまでは出さない', /played >= 30 && !ghostUnlocked\(\)/.test(main), '');
+  // v2.55: しきい値の見方が変わった。以前は session.user.stats.gamesPlayed だけを
+  //   見ていたので、**ログインしていない人には永久に 0**（＝ヒントが一度も出ない）。
+  //   👻幽霊屋敷は「ロゴの13連打」を知らないと一生出てこないモードなので、
+  //   端末側の回数（bba_plays）と大きいほうを見る形にした。
+  check('③-3 30回遊ぶまでは出さない', />= 30 && !ghostUnlocked\(\)/.test(main), '');
+  check('③-3b ゲストにも出る（端末側の回数も見る）',
+    /Math\.max\(server, local\) >= 30/.test(main), '');
   check('③-4 解放したら合図を消す', /unlockHere\('ghost'\); updateLogoHint\(\);/.test(main), '');
   check('③-5 合図の見た目がある', /\.logo\.has-secret \.logo-block \{ animation: logoBreathe/.test(css), '');
   check('③-6 動きを嫌う設定では出さない',

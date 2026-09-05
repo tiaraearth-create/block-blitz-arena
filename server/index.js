@@ -1590,8 +1590,29 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   //   解放そのものは通貨も順位も動かさない（より強い相手が選べるようになる
   //   だけ）ので、ここを厳しくしても守れるものが無い。
   const unlocked = [];
-  if (mode === 'ai_oni' && won && grantUnlock(user, 'kami')) unlocked.push('kami');
-  if (mode === 'ai_kami' && won && grantUnlock(user, 'souzou')) unlocked.push('souzou');
+  // 🔓 「勝つ」だけでなく「肉薄する」でも開く。
+  //
+  //   ここは隠しコマンドを打てない人（＝スマホ）のための道として書かれているのに、
+  //   **数字の上で閉じていた**。AI戦は120秒（modes.js の MATCH_SECONDS）で、
+  //   鬼は 700ms / 神は 520ms ごとに1手置く（ai.js の moveMs）＝ 鬼171手・神231手。
+  //   このゲームのスコアはどんな戦術でも1手あたり55〜66点の帯に収まるので、
+  //   点は実質**置いた手数**で決まる。つまり勝つには
+  //     鬼 … 0.70秒に1回、2分間ノーミスで約160手
+  //     神 … 0.52秒に1回、約225手
+  //   をドラッグ&ドロップで出し続ける必要がある。実測（同じエンジンで総当たり）で
+  //   0勝15敗だった。しかもAI戦はアイテムも奥義も無効（modes.js の showItemBar(false)）
+  //   なので逆転札も無い。
+  //
+  //   そこで「相手の平均の8割まで迫った」でも開けるようにする。
+  //   閾値は鬼の120秒平均（約10,000点）／神の平均（約14,800点）から取った。
+  //   score は既に RESULT_FIELDS に載っているので新しい申告欄は要らない。
+  //   自己申告で名乗れる点は変わらないが、**解放は通貨も順位も動かさない**
+  //   （より強い相手が選べるようになるだけ）ので、ここを厳しくしても守れるものが無い
+  //   ── すぐ上の kami/souzou バッジが同じ申告で既に取れることと同じ理屈。
+  const ONI_CLOSE = 8000;    // 鬼の120秒平均（約10,000）の8割
+  const KAMI_CLOSE = 12000;  // 神の120秒平均（約14,800）の8割
+  if (mode === 'ai_oni' && (won || score >= ONI_CLOSE) && grantUnlock(user, 'kami')) unlocked.push('kami');
+  if (mode === 'ai_kami' && (won || score >= KAMI_CLOSE) && grantUnlock(user, 'souzou')) unlocked.push('souzou');
   // Boss rush: clear all bosses back-to-back for a badge + one-time gems.
   if (mode === 'boss_rush' && won && !user.badges.includes('rush')) {
     user.badges.push('rush');

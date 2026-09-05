@@ -247,11 +247,22 @@ $('#btnVsAi').onclick = () => {
     <p class="muted center" style="margin-bottom:12px">${t('2分間のスコアバトル！同じピースが配られます', 'A 2-minute score battle! You both get the same pieces')}</p>
     <div class="form-col" id="aiLevelList">
       ${Object.entries(AI_LEVELS)
-        .filter(([key]) => unlocked(key))
-        .map(([key, cfg]) => `
+        .map(([key, cfg]) => (unlocked(key)
+          ? `
         <button class="btn ${btnClass[key]}" data-ai="${key}">
           ${icon(cfg.iconName, { size: 20 })} ${t(cfg.name, cfg.nameEn || cfg.name)}
-        </button>`).join('')}
+        </button>`
+          // 🔓 まだ開いていない段は**行ごと消さず**、押せない「？？？」を出す。
+          //    消してしまうと「鬼の先に何かある」こと自体が伝わらず、
+          //    隠しコマンドを知らない人には存在しないのと同じだった。
+          //    名前も中身も出さない（秘密は保つ）。開ける条件だけ言う。
+          : `
+        <button class="btn btn-ghost" data-locked="${key}" disabled
+          style="opacity:.55;cursor:default">
+          ？？？<br><small style="font-weight:600;opacity:.8">${key === 'kami'
+            ? t('鬼に肉薄した者にだけ現れる', 'Appears for those who push the Oni close')
+            : t('神に肉薄した者にだけ現れる', 'Appears for those who push the Kami close')}</small>
+        </button>`)).join('')}
     </div>`);
   const wire = () => m.querySelectorAll('[data-ai]').forEach(btn => {
     btn.onclick = () => { closeModal(); startVsAi(btn.dataset.ai); };
@@ -451,7 +462,8 @@ export function refreshBookmarkCard() {
   const el = old || document.createElement('button');
   el.id = 'bookmarkCard';
   el.className = `btn btn-big btn-primary${soon ? ' bookmark-soon' : ''}`;
-  el.style.width = '100%';
+  // 🔖 幅は CSS に任せる（style.css の #bookmarkCard が grid-column: 1 / -1）。
+  //    ここで width:100% を書いても「マスの100%」でしかなく、行いっぱいにはならない。
   el.textContent = `${t('続きから', 'Continue')} — ${bm.label || ''}${bm.score ? ` ・ ${fmt(bm.score)}` : ''}`
     + ` ・ ${t(`あと${hours}時間`, `${hours}h left`)}`;
   el.onclick = () => {
@@ -500,8 +512,14 @@ const logoEl = document.querySelector('.logo');
 //    秘密ではなくなるから。解放済みの人にはもう出さない。
 function updateLogoHint() {
   if (!logoEl) return;
-  const played = (session.user && session.user.stats && session.user.stats.gamesPlayed) || 0;
-  logoEl.classList.toggle('has-secret', played >= 30 && !ghostUnlocked());
+  // 🕯 ゲストにも出す。以前は session.user.stats.gamesPlayed だけを見ていたので、
+  //    **ログインしていない人には永久に 0**（═ヒントが一度も出ない）だった。
+  //    👻幽霊屋敷は「ロゴの13連打」を知らないと一生出てこないモードなので、
+  //    触る場所があることだけは伝わってほしい。端末側のプレイ回数と大きいほうを見る。
+  const server = (session.user && session.user.stats && session.user.stats.gamesPlayed) || 0;
+  let local = 0;
+  try { local = Number(localStorage.getItem('bba_plays') || 0) || 0; } catch { local = 0; }
+  logoEl.classList.toggle('has-secret', Math.max(server, local) >= 30 && !ghostUnlocked());
 }
 // 「いま誰でログインしているか」が変わったら塗り直す（幽霊屋敷のボタンと同じ合図）。
 window.addEventListener('bba:session-changed', updateLogoHint);
@@ -894,7 +912,14 @@ $('#btnQuit').onclick = () => {
       ${/* 🔖 しおり。中断＝終了しか無かったので、長いモードは「まとまった
             時間が取れる日」にしか触れなかった。1本だけ預けて、次のスキマで
             同じ盤面から続けられる。 */''}
-      ${canBookmark() ? `<button class="btn btn-primary" id="qMark">${t('しおりをはさむ', 'Bookmark')}</button>` : ''}
+      ${/* ラベルは全角3文字まで。style.css の .modal-buttons .btn は
+            min-width を明示しているので min-width:auto が効かず、
+            flex は「文字より狭い」幅を割り当ててよくなる（＝ flex-wrap が
+            発動しないまま字がボタンの外へはみ出し、隣の赤いボタンに潜る）。
+            実測で「しおりをはさむ」は 900px 幅で 124px 必要・109px しか無かった。
+            CSS 側のコメント（.modal-buttons の予算 ＝ 1本あたり約98px・全角4文字）
+            に合わせる。 */''}
+      ${canBookmark() ? `<button class="btn btn-primary" id="qMark">${t('しおり', 'Bookmark')}</button>` : ''}
       <button class="btn btn-ai" id="qYes">${t('終了する', 'Quit')}</button>
     </div>`);
   // 「続ける」で必ず時計を戻す。枠外タップ・Esc でも閉じられるので、

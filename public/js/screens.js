@@ -14,7 +14,7 @@ import { audio, TRACK_INFO } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
 import { reconnectChat, markNewsSeen, sendWs, registerHandler } from './chat.js';
 import { t as tr, setLang, LANG, catName, catDesc, trServer } from './i18n.js';
-import { equippedUlt, setGuestUlt, ghostUnlocked } from './modes.js';
+import { equippedUlt, setGuestUlt, ghostUnlocked, resetTutorial } from './modes.js';
 // ultIcon（奥義の絵文字）は import しない。奥義の絵は itemIconName で
 // icons.js から引くようになった ── 絵文字のままだと 🛡️ が管理者ブースター
 // 「絶対防御」と、☄️ が「天変地異」と重複したままになる。色だけ借りる。
@@ -680,6 +680,16 @@ export async function showTitlesModal({ back = null } = {}) {
 
 export function showSettingsModal() {
   const s = getSettings();
+  // 👻 配置プレビューの3段。段ごとに「何が出て何が出ないか」を1行で出す。
+  //    「アシスト」とだけ書いても、消える線の予告が消えることは伝わらない。
+  const PV_NOTE = {
+    full: tr('置く位置と、消える線（氷で消えない線も）を色で予告します',
+      'Shows the landing spot, plus the lines that would clear (and the ones ice is blocking)'),
+    light: tr('置く位置だけ。どの線が消えるかは自分で読みます',
+      'Landing spot only — you spot the clears yourself'),
+    off: tr('何も出ません。置けるかどうかも自分で見ます',
+      'Nothing at all — even the “does not fit” warning is off'),
+  };
   const guestName = localStorage.getItem('bba_guest_name') || '';
   const m = showModal(`
     <h2>${ic('settings', 20)} ${tr('設定', 'Settings')}</h2>
@@ -706,6 +716,18 @@ export function showSettingsModal() {
       <div class="settings-row">
         <label>${tr('サウンドトラック', 'Soundtrack')}<br><small class="muted" style="font-weight:600">${tr('好きな曲を選んでループ再生', 'Pick any track & loop it')}</small></label>
         <button class="btn btn-sm btn-ghost" id="setJukebox">${(() => { const t = TRACK_INFO.find(x => x.id === s.bgmTrack); return t ? `${ic('reroll', 14)} ${escapeHtml(tr(t.name, t.nameEn))}` : tr('開く', 'Open'); })()}</button>
+      </div>
+      <div class="settings-row">
+        <label>${tr('チュートリアル', 'Tutorial')}<br><small class="muted" style="font-weight:600">${tr('一度出たら二度と出ません。読み直したいときはここから', 'Shown once only — tap here if you want to see it again')}</small></label>
+        <button class="btn btn-sm btn-ghost" id="setTutReset">${tr('やり直す', 'Show again')}</button>
+      </div>
+      <div class="settings-row">
+        <label>${tr('配置プレビュー', 'Placement preview')}<br><small class="muted" style="font-weight:600" id="setPvNote">${PV_NOTE[s.placePreview] || PV_NOTE.full}</small></label>
+        <div class="seg" id="setPreview">
+          <button data-pv="full" ${s.placePreview !== 'light' && s.placePreview !== 'off' ? 'class="active"' : ''}>${tr('標準', 'Full')}</button>
+          <button data-pv="light" ${s.placePreview === 'light' ? 'class="active"' : ''}>${tr('控えめ', 'Light')}</button>
+          <button data-pv="off" ${s.placePreview === 'off' ? 'class="active"' : ''}>${tr('なし', 'Off')}</button>
+        </div>
       </div>
       <div class="settings-row">
         <label>${tr('画面シェイク', 'Screen shake')}</label>
@@ -821,6 +843,25 @@ export function showSettingsModal() {
     updateSettings({ musicVol: e.target.value / 100 });
     m.querySelector('#setMusicPct').textContent = `${e.target.value}%`;
   };
+  // 📘 チュートリアルは「出した瞬間に見た印を立てる」ようにしたので
+  //    （modes.js。閉じ方を数え上げると必ず取りこぼすため）、読み直す口をここに置く。
+  //    resetTutorial() は3種の印（1人用・対戦・攻撃の実地レッスン）をまとめて消す。
+  //    export はされていたのに、これまで**どこからも呼ばれていなかった**。
+  m.querySelector('#setTutReset').onclick = () => {
+    audio.click();
+    resetTutorial();
+    toast(tr('次に遊ぶときにもう一度出ます', 'It will show again next time you play'), 'ok', 2600);
+  };
+  m.querySelectorAll('#setPreview button').forEach(b => {
+    b.onclick = () => {
+      m.querySelectorAll('#setPreview button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      updateSettings({ placePreview: b.dataset.pv });
+      // 段ごとの説明も出し替える。ここが変わらないと「何を切ったのか」が分からない。
+      m.querySelector('#setPvNote').textContent = PV_NOTE[b.dataset.pv] || PV_NOTE.full;
+      audio.click();
+    };
+  });
   m.querySelectorAll('#setParticles button').forEach(b => {
     b.onclick = () => {
       m.querySelectorAll('#setParticles button').forEach(x => x.classList.remove('active'));
