@@ -118,7 +118,11 @@ const crowd = read('server/crowd.js');
 
   // 三項の鎖が残っていないこと（部門を足すたびに4か所そろえる形に戻さない）
   check('④-2 値を引く道が1本になっている', /const lbVal = r => Number\(r\[lbKey\]\) \|\| 0;/.test(idx), '');
-  check('④-3 並べ替えも同じ道を使う', /\.sort\(\(a, b\) => lbVal\(b\) - lbVal\(a\)\)/.test(idx), '');
+  // v2.52: 同値のときの第2キー（名前順）を足した。以前は第2キーが無く、
+  // 天井に張り付いた人どうしが db.users の登録順で並んでいた。
+  check('④-3 並べ替えも同じ道を使う', /\.sort\(\(a, b\) => lbVal\(b\) - lbVal\(a\)/.test(idx), '');
+  check('④-3b 同値のときの順位が決まっている',
+    /\|\| \(a\.username < b\.username \? -1 : a\.username > b\.username \? 1 : 0\)/.test(idx), '');
   check('④-4 filter も1本になっている',
     /if \(board !== 'score' && board !== 'rating'\) users = users\.filter\(u => valueOf\(u\) > 0\);/.test(idx), '');
 

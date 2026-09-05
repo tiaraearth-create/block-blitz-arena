@@ -263,7 +263,11 @@ const partySrv = read('server/party.js');
   check('E-1 デイリーの控えは寿命が短い', /const DAILY_QUEUE_TTL_MS = 2 \* 60 \* 60 \* 1000;/.test(net), '');
   check('E-2 種類ごとに寿命を選ぶ', /const ttlFor = entry =>/.test(net), '');
   check('E-3 捨てたら必ず知らせる', /function noteResultsDropped\(count, reason\) \{/.test(net), '');
-  check('E-4 寿命切れも知らせる', /if \(dropped > 0\) noteResultsDropped\(dropped, 'expired'\);/.test(net), '');
+  // v2.52: 知らせる前に **書き戻す**。控えを絞った結果を保存していなかったので、
+  // 期限切れの控えが localStorage に残り続け、api() が1本通るたびに同じ1件について
+  // 同じ赤いトーストが出ていた（/api/status は25秒ごと ＝ 画面を開いているだけで鳴る）。
+  check('E-4 寿命切れも知らせる', /noteResultsDropped\(dropped, 'expired'\)/.test(net), '');
+  check('E-4b 知らせる前に控えを書き戻す', /writeResultQueue\(kept\); noteResultsDropped\(dropped, 'expired'\);/.test(net), '');
   check('E-5 401/400 で捨てたときも知らせる',
     /noteResultsDropped\(1, err\.status === 401 \|\| err\.status === 403 \? 'auth' : 'rejected'\);/.test(net), '');
   check('E-6 デイリーとして記録されなかった回も知らせる',

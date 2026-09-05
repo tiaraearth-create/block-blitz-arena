@@ -90,7 +90,14 @@ const zs = read('server/zero-session.js');
   check('②-5 効果の残り時間（フィーバー・要塞）も延ばす',
     /'feverUntil', 'fortressUntil'/.test(body), '');
   check('②-6 入力ロックを元に戻す（勝手に操作不能にしない）',
-    /v\.inputLocked = lockWas;/.test(body), '');
+    /v\.inputLocked = m\._dialogLockWas === true;/.test(body), '');
+  // v2.52: 控えはクロージャではなく**モードの欄**に持たせる。
+  //   ダイアログを開いているあいだに 3-2-1 が終わることがあり（暗幕越しでも
+  //   ✕ は押せる）、そのとき afterCountdown が控えを false に書き直す。
+  //   直さないと閉じたときにカウントダウン中の施錠が戻り、**盤面が二度と触れなくなる**
+  //   （AI戦・ボス・ボスラッシュ・ダンジョン・カオス・タイムアタック・管理者イベントの7モード）。
+  check('②-6b カウントダウンが裏で終わったら、控えも直す',
+    /if \(mode\._dialogPaused\) \{\s*mode\._dialogLockWas = false;/.test(modes), '');
 
   // 3か所すべてが繋がっていること
   check('②-7 ✕ の確認が止める', /const resume = pauseModeForDialog\(\);/.test(main), '');

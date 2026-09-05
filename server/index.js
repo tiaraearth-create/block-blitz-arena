@@ -1002,6 +1002,16 @@ const GEMDROP_MIN_SECONDS = 20;
 // 1日に💎ドロップで配る上限。gemDrop は1プレイ3個なので40プレイぶん —
 // 普通に遊ぶ人が上限に当たることはまずないが、機械的な連投は必ずここで止まる。
 const GEMDROP_DAILY_CAP = 120;
+// 👁 王座の欠片の1日あたりの上限。💎の GEMDROP_DAILY_CAP と同じ考え方。
+//   欠片は実績の原資ではなく **そのまま通貨**（👑王座の宝物庫の支払い）なので、
+//   歯止めが無いと結果送信の上限（250件/時）いっぱいで毎時6,000個湧き、
+//   棚（7品・計2,420欠片）を25分で買い切れてしまう。正規の蛇口である
+//   管理者イベント側は「その日はじめて席についた＝10」を1日1回に絞ってあり
+//   （routes/adminevent.js）、「回すほど貯まると専用ショップが回数の店になる」と
+//   但し書きまで置いてある。ソロ側にも同じ高さの歯止めを置く。
+//   40 は「よく遊んだ1日ぶん」── 1走行の頭は EYE_MAX_PER_RUN×EYE_SHARDS_EACH=24 個で、
+//   実機の湧き（28手に1個）だと1走行7個前後なので、普通に遊ぶぶんには当たらない。
+const EYE_SHARD_DAILY_CAP = 40;
 // 🪙/XP の1日あたりの上限。💎の GEMDROP_DAILY_CAP と同じ考え方の2枚目の歯止め。
 //
 // なぜ要るか: 固定ぶんを0にしても「スコアだけを申告する偽の結果」は残る。
@@ -1158,6 +1168,26 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 「1プレイの実体があった」判定。score も duration もここで確定するので、
   // 以降どこからでも使える。💎ドロップ・累積カウンタ（下）に加えて、
   // 🗡️ギルド週間クエスト（すぐ下のギルドブロック）もこの門をくぐらせる。
+  // ⏱ 申告テレメトリを**経過時間と相関させる**。
+  //
+  //   上の clamp（ults 200 / items 200 / pieces 20000）は1リクエストあたりの
+  //   頭押さえだが、実プレイの物理から2桁ずれていた ── 1ゲームで奥義を200回
+  //   撃つことも20,000ピース置くこともあり得ない。これらは実績→💎（課金通貨）の
+  //   原資になる累積カウンタなので、桁がずれていると「テレメトリだけを連投して
+  //   最上位実績に到達する」が通ってしまう（実測で6リクエスト・98ミリ秒で
+  //   55,800🪙+451💎）。
+  //   duration はこの上の壁時計クランプで「前回の結果送信からの経過＋90秒」まで
+  //   しか名乗れないので、そこに紐づければ時間の偽装ごと塞げる。
+  //   👁の眼を pieces と相関させた（`Math.floor(pieces/2)`）のと同じ作法。
+  //   係数は現実の3〜4倍の余裕を持たせてあるので、正直なプレイは削られない。
+  {
+    const secs = Math.max(1, Math.floor(Number(duration) || 0));
+    ults = Math.min(ults, Math.ceil(secs / 10) + 2);        // 奥義: ゲージが要る
+    items = Math.min(items, Math.ceil(secs / 8) + 2);       // アイテム: 在庫が要る
+    pieces = Math.min(pieces, secs * 4 + 20);               // 設置: 毎秒4枚でも多すぎるくらい
+    // コンボは「連続でラインを消した回数」なので、消したライン数を超えられない。
+    maxCombo = Math.min(maxCombo, Math.max(2, lines));
+  }
   const realPlay = score >= GEMDROP_MIN_SCORE && duration >= GEMDROP_MIN_SECONDS;
 
   // 🏗️ブループリントは「その日じゅう全員同じ固定盤面」なので、一度解けば
@@ -1166,12 +1196,20 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 勝利ぶんの上積み（+50🪙 / bpXp+100 / accXp+80 / ギルドpt+25 / totalWins /
   // ミッションの 'win'）だけを「その日の初回」に限る。2回目以降も普通に
   // 遊べて、汎用ミッション（games/lines/score）は今までどおり進む。
+  // ⚠ 「勝利ぶんが付かなかった理由」。true/false ではなく理由の名前を入れる ──
+  //   黙って0にすると「クリアしたのに数えられない」が原因不明の不具合に見えるので、
+  //   結果画面に理由を出すための印。1時間の上限（'workshop'）と、同じ対象の
+  //   今日ぶんはもう受け取り済み（'*_day'）では、**待てば戻るかどうかがまるで違う**。
+  //   画面は public/js/modes.js の rewards.capped を読む。
+  let workshopCapped = false;
   if (mode === 'blueprint') {
     const today = jstDayKey();
     const bp = user.stats.bpDay;
     if (!bp || bp.day !== today) user.stats.bpDay = { day: today, cleared: false };
     if (won) {
-      if (user.stats.bpDay.cleared) won = false;
+      // 理由を返す。ここは長らく黙って0にしていたので、クリアしたのに勝利ぶんが
+      // 付かない理由が画面のどこにも出なかった（工房に印を足した理由と同じ形）。
+      if (user.stats.bpDay.cleared) { won = false; workshopCapped = 'blueprint_day'; }
       else user.stats.bpDay.cleared = true;
     }
   }
@@ -1193,7 +1231,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
       pw = user.stats.puzWinDay = { day: today, stages: [] };
     }
     const st = Math.max(0, Math.min(999, Math.floor(stage) || 0));
-    if (pw.stages.includes(st)) won = false;
+    if (pw.stages.includes(st)) { won = false; workshopCapped = 'puzzle_day'; }
     else {
       pw.stages.push(st);
       // 覚えておく数の上限。1日に200ステージを正直に解く人は現実にはいないが、
@@ -1221,7 +1259,6 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   //    遊んだ人まで無言で止めていた。
   //    コードを送ってこない回（古いクライアント・作者の試遊）は、これまでどおり
   //    時間の上限で受ける。
-  let workshopCapped = false;
   if (mode === 'workshop' && won) {
     const code = typeof stageCode === 'string' ? stageCode.trim().toUpperCase().slice(0, 12) : '';
     if (code) {
@@ -1230,13 +1267,16 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
       if (!ww || ww.day !== today || !Array.isArray(ww.codes)) {
         ww = user.stats.wsWinDay = { day: today, codes: [] };
       }
-      if (ww.codes.includes(code)) { won = false; workshopCapped = true; }
+      // 🛠 同じステージの「今日ぶん」はもう受け取り済み。1時間の上限とは
+      //    理由が違う（戻るのは翌日のJST0時であって、待っても戻らない）。
+      //    印を分けないと、画面が「時間をおくと戻ります」と嘘をつく。
+      if (ww.codes.includes(code)) { won = false; workshopCapped = 'workshop_day'; }
       else {
         ww.codes.push(code);
         if (ww.codes.length > PUZ_WIN_DAY_KEEP) ww.codes.splice(0, ww.codes.length - PUZ_WIN_DAY_KEEP);
       }
     } else if (!rateLimit(`wswin:${user.id}`, 40, 60 * 60 * 1000)) {
-      won = false; workshopCapped = true;
+      won = false; workshopCapped = 'workshop';
     }
   }
 
@@ -1926,11 +1966,24 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   //    ソロで潰した数だけ配る ── 世界が段を割るほど眼が濃く湧くので、
   //    👁️断罪という運営枠の中の出来事が、断罪に一度も出ていない人の
   //    ソロの実入りにまで届く。
+  //    ⚠ realPlay と1日の上限を必ず通す。ここは applyGameResult の中で
+  //      **唯一そのまま通貨を鋳造する**行なのに、長らくどちらの門も無かった
+  //      ── スコア0・ライン0・duration 1 の「遊んだ形跡ゼロ」の結果でも
+  //      pieces:24 を添えるだけで24個入り、コインとXPは idleResult が0にするので
+  //      稼ぎの日次上限にも当たらず痕跡すら残らなかった。
+  //      すぐ隣の💎ドロップが realPlay と GEMDROP_DAILY_CAP の二枚重ねなのと
+  //      同じ形にそろえる。
   let eyeShards = 0;
-  if (mode === 'solo' && eyes > 0) {
-    eyeShards = eyes * EYE_SHARDS_EACH;
-    user.shards = (user.shards || 0) + eyeShards;
-    s.eyesCaught = (s.eyesCaught || 0) + eyes;
+  if (mode === 'solo' && realPlay && eyes > 0) {
+    const eyeToday = jstDayKey();
+    if (!s.eyeShardDay || s.eyeShardDay.day !== eyeToday) s.eyeShardDay = { day: eyeToday, got: 0 };
+    const eyeRoom = Math.max(0, EYE_SHARD_DAILY_CAP - (s.eyeShardDay.got || 0));
+    eyeShards = Math.min(eyes * EYE_SHARDS_EACH, eyeRoom);
+    if (eyeShards > 0) {
+      s.eyeShardDay.got = (s.eyeShardDay.got || 0) + eyeShards;
+      user.shards = (user.shards || 0) + eyeShards;
+      s.eyesCaught = (s.eyesCaught || 0) + eyes;
+    }
   }
 
   return {
@@ -1950,7 +2003,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     // 🛠 上限に当たって勝利ぶんが付かなかったとき、その理由。黙って0にすると
     //    「クリアしたのに数えられない」が原因不明の不具合に見える。
     //    付かなかったときだけ載せる（false は載せない＝欄の有無も情報にしない）。
-    ...(workshopCapped ? { capped: 'workshop' } : {}),
+    ...(workshopCapped ? { capped: workshopCapped === true ? 'workshop' : workshopCapped } : {}),
   };
 }
 
@@ -4610,7 +4663,11 @@ app.get('/api/leaderboard', (req, res) => {
     // ⬆ lbRowShape() を土台にする。住人の行にも名無しの埋め草にも
     //    実プレイヤーと同じ欄が必ず並ぶ（値が 0 でも、欄は消さない）。
     .concat(ghostRows(board, week, taken).map(r => ({ ...lbRowShape(), ...r, guildTag: ghostTagOf(r.username) })))
-    .sort((a, b) => lbVal(b) - lbVal(a))
+    // 同値のときの並びを決めておく。以前は第2キーが無かったので、天井に
+    // 張り付いた人どうしは **db.users の登録順**で並んでいた（＝「100万が3人
+    // いるのに順位が付かない」）。名前順は説明できて、いつ見ても同じ順になる。
+    .sort((a, b) => lbVal(b) - lbVal(a)
+      || (a.username < b.username ? -1 : a.username > b.username ? 1 : 0))
     .slice(0, 100);
   // 👑 mark the throne holder's row + total crown counts (name colors scale).
   const throne = (db.meta.thrones || {})[board];

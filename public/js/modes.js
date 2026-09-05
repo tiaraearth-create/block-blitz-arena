@@ -101,7 +101,27 @@ function equippedTheme() {
 // fires. Without this guard the callback then re-armed timers and view hooks
 // that nothing would ever clear again.
 function afterCountdown(mode, fn) {
-  return () => { if (mode.ended || currentMode !== mode) return; fn(); };
+  return () => {
+    if (mode.ended || currentMode !== mode) return;
+    fn();
+    // ⏸ 3-2-1 の最中に ✕（＝端末の戻る／Esc）で確認ダイアログを開くと、
+    //    暗幕越しでも ✕ は押せる（.countdown-overlay は pointer-events:none）。
+    //    その状態で読んでいるあいだに裏でカウントダウンが終わると、
+    //    ここの fn() が `v.inputLocked = false` を実行する。ところが
+    //    pauseModeForDialog は「開いた時点のロック（＝カウントダウン中なので true）」を
+    //    控えていて、閉じるときにそれを書き戻す ── **盤面が二度と触れなくなる**。
+    //    （実測: 時計もカオスのルーレットも動いているのにコマを1つも掴めず、
+    //     出口は「中断する（記録なし）」か 0点の集計だけ。もう一度 ✕ →「続ける」
+    //     でも戻らない。AI戦・ボス・ボスラッシュ・ダンジョン・カオス・
+    //     タイムアタック・管理者イベントの7モードで同じことが起きる。）
+    //    閉じたときに解錠されるよう控えを直し、閉じるまでは塞いだままにする
+    //    （暗幕の裏で先に置かせない）。
+    if (mode._dialogPaused) {
+      mode._dialogLockWas = false;
+      const v = getView();
+      if (v) v.inputLocked = true;
+    }
+  };
 }
 
 // 3-2-1 と入場演出（鬼／神／創造神）は自前の setTimeout で動いていて、外から
@@ -338,6 +358,38 @@ function announceMissions(n) {
   }, 1400);
 }
 
+// 🛠 勝利ぶんが付かなかった理由の1行。
+//
+//   以前は理由が1種類（rewards.capped === 'workshop'）しか無く、文言も
+//   「1時間あたりの上限に達しました／時間をおくと戻ります」だけだった。
+//   ところが実際にいちばん当たるのは「同じステージの今日ぶんはもう受け取り済み」で、
+//   これは**待っても戻らない**（戻るのは翌日のJST0時）。直せる問題
+//   （明日また解ける／別のステージを解けばよい）を、直しようのない不具合に
+//   見せていた。遺跡と設計図にいたっては理由そのものを返していなかったので、
+//   クリアしたのに勝利ぶんが0になった理由が画面のどこにも出なかった。
+function cappedRow(kind) {
+  if (!kind) return '';
+  const row = (what, hint) =>
+    `<div class="rs-row"><span>${ic('warn')} ${what}</span><b class="muted">${hint}</b></div>`;
+  if (kind === 'workshop') {
+    return row(t('工房のクリア報酬は1時間あたりの上限に達しました', 'Workshop clear rewards have hit the hourly cap'),
+      t('時間をおくと戻ります', 'It returns after a while'));
+  }
+  if (kind === 'workshop_day') {
+    return row(t('このステージの今日ぶんのクリア報酬は受け取り済みです', 'You already claimed today’s clear reward for this stage'),
+      t('明日また入ります', 'Back tomorrow'));
+  }
+  if (kind === 'puzzle_day') {
+    return row(t('この遺跡ステージの今日ぶんのクリア報酬は受け取り済みです', 'You already claimed today’s clear reward for this ruin'),
+      t('明日また入ります', 'Back tomorrow'));
+  }
+  if (kind === 'blueprint_day') {
+    return row(t('今日のブループリントのクリア報酬は受け取り済みです', 'You already claimed today’s blueprint reward'),
+      t('明日また入ります', 'Back tomorrow'));
+  }
+  return '';
+}
+
 function rewardsRows(rewards) {
   // 送信に失敗した回。ログインしているのに「ログインしてください」と出すと、
   // 直せる問題（通信・メンテ）を直しようのない問題に見せてしまう。
@@ -366,7 +418,7 @@ function rewardsRows(rewards) {
     ${/* 🛠 上限に当たって勝利ぶんが付かなかった回。黙って0にすると
           「クリアしたのに数えられない」が原因不明の不具合に見える。
           参加ぶんの報酬（下の行）は入っているので、そこは打ち消さない。 */''}
-    ${rewards.capped === 'workshop' ? `<div class="rs-row"><span>${ic('warn')} ${t('工房のクリア報酬は1時間あたりの上限に達しました', 'Workshop clear rewards have hit the hourly cap')}</span><b class="muted">${t('時間をおくと戻ります', 'It returns after a while')}</b></div>` : ''}
+    ${cappedRow(rewards.capped)}
     <div class="rs-row"><span>${ic('coins')} ${t('コイン', 'Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
     ${rewards.streakBonus ? `<div class="rs-row"><span>${ic('fire')} ${t(`${rewards.streak}連勝ボーナス`, `${rewards.streak}-win streak bonus`)}</span><b>+${fmt(rewards.streakBonus)} ${ic('coins', 14)}</b></div>` : ''}
     ${/* サーバーの gems は「初回討伐」だけではない ── イベントの💎ドロップも
@@ -533,7 +585,10 @@ export function pauseModeForDialog() {
   if (m.client || m.mode === 'pvp' || m.mode === 'zero' || m.kind) return null;
   m._dialogPaused = true;
   const v = getView();
-  const lockWas = v ? v.inputLocked : false;
+  // 控えはモードに持たせる（閉じ口のクロージャに閉じ込めない）。ダイアログを
+  // 開いているあいだに 3-2-1 が終わることがあり、そのときは afterCountdown が
+  // ここを false に書き直す ── そうしないと閉じたときに施錠が戻る。
+  m._dialogLockWas = v ? v.inputLocked : false;
   if (v) v.inputLocked = true;
 
   // ⏱ 期限は「閉じたときにまとめて」ではなく、**開いている間ずっと**
@@ -583,7 +638,8 @@ export function pauseModeForDialog() {
     m._dialogPaused = false;
     clearInterval(iv);
     shift(Date.now() - last);   // 最後の端数（刻みの残り）
-    if (v) v.inputLocked = lockWas;
+    if (v) v.inputLocked = m._dialogLockWas === true;
+    m._dialogLockWas = undefined;
   };
 }
 

@@ -232,8 +232,19 @@ try {
     const backup = read('server/backup.js');
     check('D-14 復元の合流で coinsBest を落とさない',
       /coinsBest = Math\.max/.test(backup), '');
+    // 🛠 v2.52 で capped は「理由の名前」になった（'workshop' は1時間の上限、
+    //    '*_day' は同じ対象の今日ぶんを受け取り済み）。待てば戻るかどうかが
+    //    まるで違うので、文言を分けている。ここでは
+    //    「サーバーが理由を返す」「画面がその理由を読む」の2つを見る。
+    const modesSrc = read('public/js/modes.js');
     check('D-15 工房の上限に当たったことを結果に載せる',
-      /capped: 'workshop'/.test(index) && /rewards\.capped === 'workshop'/.test(read('public/js/modes.js')), '');
+      /workshopCapped = 'workshop'/.test(index) && /capped: workshopCapped/.test(index)
+      && /cappedRow\(rewards\.capped\)/.test(modesSrc) && /kind === 'workshop'/.test(modesSrc), '');
+    check('D-15b 「待てば戻る」と「明日また入る」を言い分ける',
+      /workshopCapped = 'workshop_day'/.test(index) && /kind === 'workshop_day'/.test(modesSrc), '');
+    check('D-15c 遺跡・設計図も理由を返す',
+      /workshopCapped = 'puzzle_day'/.test(index) && /workshopCapped = 'blueprint_day'/.test(index)
+      && /kind === 'puzzle_day'/.test(modesSrc) && /kind === 'blueprint_day'/.test(modesSrc), '');
   }
 } catch (err) {
   check('テストが最後まで走った', false, String((err && err.stack) || err));

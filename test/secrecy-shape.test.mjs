@@ -105,6 +105,8 @@ try {
   fs.rmSync(DIR, { recursive: true, force: true });
   await start();
 
+  const read = f => fs.readFileSync(path.join(ROOT, f), 'utf8').replace(/\r\n/g, '\n');
+
   // 実プレイヤーを板に載せる（載っていないと形の比較ができない）。
   const me = await j('/api/register', { method: 'POST', body: { username: 'ホンモノ太郎', password: 'pw-secshape-1' } });
   check('下ごしらえ: アカウントを作れた', !!me.token, me.error || '');
@@ -205,12 +207,23 @@ try {
     bad.length === 0 && seen1.size > 0, bad.length ? bad.join(' ') : `${seen1.size}人ぶん確認`);
 
   await sleep(1500);
+  // 実プレイヤーの lastSeen も段（server/battle.js の 300_000）でしか動かないので、
+  // 「まったく動かない」ではなく「**経過時間のぶんだけ動かない**」を見る。
+  // 段の大きさは実装から読み取る（書き写さない）。
+  const socialSrc = read('server/routes/social.js');
+  const stepM = socialSrc.match(/const SEEN_STEP = (\d+) \* (\d[\d_]*);/);
+  const STEP = stepM ? Number(stepM[1]) * Number(stepM[2].replace(/_/g, '')) : 300000;
+  check('D-0 lastSeen の刻みを実装から読み取れた', STEP >= 60000, `${STEP}ms`);
   const moved = [];
   for (const [name, was] of seen1) {
     const s = await j('/api/friends/search', { method: 'POST', body: { username: name } }, me.token);
-    if (s.user && s.user.lastSeen !== was) moved.push(`${name}: ${was} → ${s.user.lastSeen}`);
+    if (!s.user) continue;
+    const delta = s.user.lastSeen - was;
+    // 0（同じ段の中）か、ちょうど1段ぶん（段をまたいだ）だけを許す。
+    // 経過時間（1.5秒）ぶん動いたら、それが判別印になる。
+    if (delta !== 0 && delta !== STEP) moved.push(`${name}: ${was} → ${s.user.lastSeen} (差 ${delta})`);
   }
-  check('D-1 住人の lastSeen は続けて引いても動かない', moved.length === 0, moved.slice(0, 3).join(' ｜ '));
+  check('D-1 住人の lastSeen が経過時間のぶん動かない', moved.length === 0, moved.slice(0, 3).join(' ｜ '));
   // 離席中の住人が全員そろって同じ時刻になっていないこと（それ自体が印になる）。
   const offlineSeen = [...seen1.values()];
   check('D-2 住人の lastSeen が全員同じ値でそろっていない',
@@ -242,7 +255,6 @@ try {
   // -------------------------------------------------------------------------
   // F. ソースの形（直しが1か所に寄っているか）
   // -------------------------------------------------------------------------
-  const read = f => fs.readFileSync(path.join(ROOT, f), 'utf8').replace(/\r\n/g, '\n');
   const idx = read('server/index.js');
   check('F-1 順位表の行の形が1か所の表から出ている', /const lbRowShape = \(\) => \(\{/.test(idx), '');
   check('F-2 実プレイヤーの行もその表を土台にしている', /\.\.\.lbRowShape\(\),\n    username: u\.username,/.test(idx), '');

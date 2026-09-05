@@ -631,6 +631,29 @@ function mergeEarned(winner, loser) {
     }
   }
 
+  // 🛠 工房の「同じステージはJSTの1日1回だけ勝利扱い」の止め金
+  //   (index.js applyGameResult の wsWinDay = { day, codes })。
+  //   ⚠ ここが**唯一 backup.js に無かった止め金**だった（puzWinDay / bpDay /
+  //     grindDay / eventGemDay は下と上で合流させてある）。落とすと、復元や
+  //     合流が走った日だけ、その日すでにクリアした工房ステージの勝利ぶん
+  //     （+50🪙 / bpXp+100 / accXp+80 / ギルド週間pt+25 / totalWins /
+  //     workshopClears / 'win' ミッション）をもう一度受け取れる。
+  //     工房は1ステージ数十秒なので、puzWinDay を守った理由がそのまま当てはまる。
+  //   合流の作法は puzWinDay と同じ（同じ日なら和集合・勝った側に無ければ
+  //   負けた側・日が違うときは新しい日のほう）。codes は文字列。
+  const lww = loser.stats && loser.stats.wsWinDay;
+  if (isPlainObj(lww) && okDay(lww.day)) {
+    const wstW = winner.stats || (winner.stats = {});
+    const lcodes = (Array.isArray(lww.codes) ? lww.codes : []).filter(c => typeof c === 'string' && c);
+    const www = wstW.wsWinDay;
+    if (!isPlainObj(www) || !okDay(www.day) || String(lww.day) > String(www.day)) {
+      wstW.wsWinDay = { day: String(lww.day), codes: [...new Set(lcodes)].slice(-PUZ_WIN_DAY_KEEP) };
+    } else if (String(www.day) === String(lww.day)) {
+      const cur = Array.isArray(www.codes) ? www.codes.filter(c => typeof c === 'string' && c) : [];
+      www.codes = [...new Set([...cur, ...lcodes])].slice(-PUZ_WIN_DAY_KEEP);
+    }
+  }
+
   // 🪙 1日の稼ぎの上限カウンタ (index.js applyGameResult の
   // grindDay = { day, coins, bpXp, accXp } / 上限は GRIND_DAILY_CAP)と、
   // 💎ドロップの1日の受取総額 (eventGemDay = { day, got } / GEMDROP_DAILY_CAP)。

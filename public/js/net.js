@@ -177,7 +177,13 @@ function readResultQueue() {
     // 寿命切れで落ちた件数を画面へ知らせる。黙って減らすと、結果画面の
     // 「つながったら送ります」がそのまま嘘になる。
     const dropped = list.length - kept.length;
-    if (dropped > 0) noteResultsDropped(dropped, 'expired');
+    // ⚠ **知らせる前に必ず書き戻す。** 絞った結果を保存していなかったので、
+    //   期限切れの控えが localStorage に残り続け、api() が1本通るたびに
+    //   同じ1件について同じ赤いトーストが出ていた（/api/status は25秒ごとなので、
+    //   画面を開いているだけで鳴り続ける）。しかも flushResultQueue は
+    //   「自分の控えが1件も無い」と先に return するので、連打よけの
+    //   lastResultFlushAt に到達せず、throttle も効いていなかった。
+    if (dropped > 0) { writeResultQueue(kept); noteResultsDropped(dropped, 'expired'); }
     return kept;
   } catch { return []; }
 }
@@ -215,9 +221,12 @@ let lastResultFlushAt = 0;
  */
 export async function flushResultQueue() {
   if (flushingResults || !session.token || !session.user) return 0;
+  // 連打よけの刻印は、控えの有無より**前**に押す。控えが1件も無いときに
+  // 早期 return してしまうと、scheduleResultFlush の「15秒は連打しない」判定が
+  // 永久に効かない（＝api() が通るたびに flush が予約され続ける）。
+  lastResultFlushAt = Date.now();
   if (!readResultQueue().some(e => e.uid === session.user.id)) return 0;
   flushingResults = true;
-  lastResultFlushAt = Date.now();
   let sent = 0;
   try {
     for (;;) {

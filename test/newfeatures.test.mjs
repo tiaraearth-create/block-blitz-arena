@@ -189,7 +189,12 @@ const localdata = read('public/js/localdata.js');
   // サーバー側の頭押さえ
   check('C-14 申告に上限がある', /eyes = Math\.min\(clamp\(eyes, EYE_MAX_PER_RUN\)/.test(idx), '');
   check('C-15 置いた手数でも頭を押さえる', /Math\.floor\(\(pieces \|\| 0\) \/ 2\)/.test(idx), '');
-  check('C-16 ソロ以外では欠片を出さない', /if \(mode === 'solo' && eyes > 0\) \{/.test(idx), '');
+  check('C-16 ソロ以外では欠片を出さない', /if \(mode === 'solo' && realPlay && eyes > 0\) \{/.test(idx), '');
+  // v2.52: ここは applyGameResult の中で **唯一そのまま通貨を鋳造する**行なのに、
+  // realPlay の門も日次上限も無かった（空の結果で毎時6,000個湧いた）。
+  // すぐ隣の💎ドロップと同じ二枚重ねにそろえた。
+  check('C-16b 実プレイの門を通している', /mode === 'solo' && realPlay/.test(idx), '');
+  check('C-16c 1日の上限がある', /EYE_SHARD_DAILY_CAP/.test(idx) && /s\.eyeShardDay/.test(idx), '');
   check('C-17 欠片が入った回だけ結果に載せる', /\.\.\.\(eyeShards \? \{ shards: eyeShards \} : \{\}\),/.test(idx), '');
   check('C-18 結果画面に欠片の行が出る', /rewards\.shards \?/.test(modes), '');
   check('C-19 「欠片は管理者イベントでしか」の嘘を直した',

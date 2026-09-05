@@ -62,12 +62,18 @@ socialRouter.get('/api/friends', requireAuth, (req, res) => {
 // 名前から探す。住人(AI)と予約名は弾く ── 登録/改名と同じ三段の確認。
 // 🎭 住人の「最終ログイン」。住人ごとに決まる値で、1分より細かくは動かない。
 //    離席中は 15分前〜約2日前のあいだに散らす（全員が同じ値でそろわないように）。
-const SEEN_MINUTE = 60_000;
+// 刻みは実プレイヤーに合わせる。server/battle.js の在席更新は
+// `Date.now() - live.lastSeen > 300_000` のときだけ書き直すので、実プレイヤーの
+// lastSeen も**5分ていどの段**でしか動かない。住人だけ毎秒動くと、
+// 同じ名前を2回引くだけで見分けが付く。
+const SEEN_STEP = 5 * 60_000;
 function residentSeenAt(r, online) {
-  const nowMin = Math.floor(Date.now() / SEEN_MINUTE) * SEEN_MINUTE;
-  if (online) return nowMin;
-  const back = 15 + (strHash(`seen:${r.id}`) % (48 * 60));   // 15分〜48時間15分前
-  return nowMin - back * SEEN_MINUTE;
+  const nowStep = Math.floor(Date.now() / SEEN_STEP) * SEEN_STEP;
+  if (online) return nowStep;
+  // 離席中は住人ごとに決まる過去へ散らす（全員そろって「ぴったり1時間前」に
+  // なっていると、それ自体が印になる）。15分〜約48時間前。
+  const back = 3 + (strHash(`seen:${r.id}`) % (48 * 12));
+  return nowStep - back * SEEN_STEP;
 }
 
 socialRouter.post('/api/friends/search', requireAuth, (req, res) => {

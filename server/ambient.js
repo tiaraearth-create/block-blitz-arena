@@ -900,6 +900,16 @@ export function digDepthOf(r, st) {
 // SCORE_TOP は「実プレイヤーの上位が届くあたり」。ここを超える住人は
 // 天井に張り付くだけで、板が壊れた数字にはならない。
 const SCORE_TOP = 1_000_000;
+// 住人の bestScore の天井（residents.js の capOf(r,'sc',900000)）。
+const RESIDENT_SCORE_TOP = 900_000;
+// スコア系の板に住人が出せる最大値。人間の絶対上限（server/index.js の
+// 1,000,000）より必ず内側に置く ── 1位を人間が取れる余地を残すため。
+const BOARD_SCORE_TOP = 940_000;
+function scoreBoard(bestScore, mult) {
+  const raw = Math.max(0, (Number(bestScore) || 0)) * mult;
+  const rawTop = RESIDENT_SCORE_TOP * mult;
+  return Math.round(raw * (BOARD_SCORE_TOP / rawTop));
+}
 function scaleToCap(bestScore, floor, cap) {
   const q = Math.max(0, Math.min(1, (Number(bestScore) || 0) / SCORE_TOP));
   return Math.max(floor, Math.round(floor + (cap - floor) * Math.sqrt(q)));
@@ -932,8 +942,15 @@ const BOARD_VALUE = {
   //        ・ブループリント … 累積のクリア枚数なので、他と違って上限は緩い。
   //      分位は「その住人の bestScore が SCORE_TOP のどのあたりか」で取る。
   //      SCORE_TOP は実プレイヤーの上位が届くあたり（100万点）。
-  meltdown: (st) => Math.round((st.bestScore || 0) * 1.6),
-  chimera: (st) => Math.round((st.bestScore || 0) * 1.15),
+  //    ⚠ スコア系の板は、**人間の絶対上限（1,000,000）より内側**に収めること。
+  //      素の倍率のままだと住人の bestScore の天井（900,000）を掛けて
+  //      メルトダウン 1,440,000 / キメラ 1,035,000 になり、人間はどれだけ
+  //      上手く走っても板の1位に構造的に届かなかった（「自己ベストを更新したのに
+  //      順位が動かない」の、絶対上限側の同じ症状）。
+  //      分布の形は変えずに、その式で出る最大値が BOARD_SCORE_TOP になるよう
+  //      線形に縮める ── 天井に張り付いた同点の塊も作らない。
+  meltdown: (st) => scoreBoard(st.bestScore, 1.6),
+  chimera: (st) => scoreBoard(st.bestScore, 1.15),
   chain: (st) => scaleToCap(st.bestScore, 3, 14),
   survival: (st) => scaleToCap(st.bestScore, 6, 38),
   rush: (st) => scaleToCap(st.bestScore, 2, 16),
