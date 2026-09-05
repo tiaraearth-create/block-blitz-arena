@@ -1281,12 +1281,25 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   const paceScale = idleResult ? 0 : Math.max(0.25, Math.min(1, duration / BASE_FULL_SECONDS));
   const paced = n => Math.round(n * paceScale);
   let coins = Math.min(1000, paced(20) + Math.floor(score / 100) + (won ? paced(50) : 0));
-  if (mode === 'chaos') coins = Math.min(1500, Math.round(coins * 1.5));   // chaos-mode bonus
+  // 🌪️ カオスの1.5倍は「カオスタイム開催中だけ」。
+  //
+  //   もとはモードに直付けだった。当時はそれで釣り合っていた ── カオスは
+  //   イベント中しか押せなかったので、「1.5倍のモードが遊べる」こと自体が
+  //   イベントの中身だったから。
+  //   v2.48 で入口を常時開けたときに、この倍率だけが取り残された。その結果、
+  //   **毎日いつでも遊べる 1.5倍のモード**ができていた（コインの実入りで
+  //   他の全モードを常に上回る＝他を遊ぶ理由が減る）。
+  //   イベントの説明文は元から「カオスモードが全員に開放！コイン1.5倍」で、
+  //   開放と倍率の2つを約束している。入口が常時開いたいま、イベントが配るのは
+  //   倍率のほう ── 文面はそのままで、実装をそちらに合わせる。
+  const bonus = eventBonus(currentEvent());
+  if (mode === 'chaos' && bonus.chaos) {
+    coins = Math.min(1500, Math.round(coins * 1.5));
+  }
   let bpXp = Math.min(800, paced(30) + Math.floor(score / 60) + lines * 5 + (won ? paced(100) : 0));
   let accXp = Math.min(600, paced(20) + Math.floor(score / 100) + (won ? paced(80) : 0));
 
   // Limited-time event multipliers.
-  const bonus = eventBonus(currentEvent());
   const isBossMode = mode === 'boss' || mode === 'boss_rush' || mode === 'raid';
   let eventCoins = 0, eventGems = 0;
   const coinMult = (bonus.coin || 1) * (isBossMode && bonus.bossCoin ? bonus.bossCoin : 1);
