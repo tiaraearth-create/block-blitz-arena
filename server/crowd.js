@@ -144,7 +144,11 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'tier': v = st ? st.tier : tierOf(1000); break;
     case 'n': v = rint(2, 9); break;
     // WAVE も99止まりに揃える（residents.js:347 の survivalWave クランプと同じ）。
-    case 'wave': v = st ? Math.max(3, Math.min(99, st.survivalWave + rint(-3, 2))) : 8; break;
+    // 💀 自己ベストを**超える数字は言わない**。ランキングの「サバイバル」板は
+    //    同じ st.survivalWave を出しているので、ここで上振れさせると
+    //    「チャットでは W30 と言っているのに板では W28」という食い違いになり、
+    //    それ自体が住人の見分け方になる（板に実体が無い名前、として読める）。
+    case 'wave': v = st ? Math.max(3, Math.min(st.survivalWave, st.survivalWave + rint(-3, 0))) : 8; break;
     case 'combo': v = r ? Math.max(3, Math.round(3 + r.skill * 12 + rint(-1, 1))) : 6; break;
     // 自慢する点数はランキングの自己ベスト（residentStats）から出す。
     // skill から別式で作ると、住人強化のたびに「チャットでは6万点なのに

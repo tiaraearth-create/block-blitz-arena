@@ -741,7 +741,11 @@ export function residentStats(r, now = Date.now(), weekId = 'W0') {
     // （59,000 / 175,000）で頭打ち — 頂点そのものは人間に残す。
     sprintBest: Math.min(capOf(r, 'sp', 59000), personalBest(r, age, 'sp', 600, Math.pow(s, 2) * 62000, aptSprint)),
     sprint180: Math.min(capOf(r, 's3', 175000), personalBest(r, age, 's3', 2000, Math.pow(s, 2) * 186000, aptSprint)),
-    survivalWave: Math.max(1, Math.min(capOf(r, 'sv', 99), personalBest(r, age, 'sv', 3, s * 95, aptitude(r, 'survival')))),
+    // 💀 天井は 💀ach_wave30（W30）の**内側**に置く ── 頂は人間に残す、という
+    //    約束（sprintBest / sprint180 の 59,000 / 175,000 と同じ考え方）。
+    //    99 にしていたころは、板の1位が W98 で「その実績を持っていない人が
+    //    最高記録を持っている」という規則上ありえない行になっていた。
+    survivalWave: Math.max(1, Math.min(capOf(r, 'sv', 29), personalBest(r, age, 'sv', 3, s * 34, aptitude(r, 'survival')))),
     badges, title,
   };
 }

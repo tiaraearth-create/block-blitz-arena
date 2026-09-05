@@ -262,6 +262,106 @@ try {
   check('F-4 フィードが id を組み立てていない', !/id: f\.id, icon: f\.icon/.test(read('server/crowd.js')), '');
   check('F-5 検索の状態が online を返していない', !/status: online \? 'online'/.test(read('server/routes/social.js')), '');
 
+  // -------------------------------------------------------------------------
+  // G. 派生ボードの値が「素の強さ × 定数」になっていないか
+  //
+  //   ⚠ ここは**値で見るしかない**。ソースの形（BOARD_VALUE に entry があるか）を
+  //     見る検査では原理的に捕まらない種類の抜けで、実際にすり抜けた:
+  //     正規化の分母にも倍率を掛けていたせいで約分で消え、住人の
+  //     meltdownBest と chimeraBest が**必ず同じ値**になり、しかもどちらも
+  //     bestScore のちょうど定数倍だった。公開ランキングは無認証で100行返るので、
+  //     1リクエスト＋割り算1回で板の上の住人が全員あぶり出せた。
+  //     実プレイヤーの各欄は別々の記録から来る独立の値なので、この関係は
+  //     絶対に成立しない ＝ 完全な判別器。
+  // -------------------------------------------------------------------------
+  const ambient = await import('../server/ambient.js');
+  if (ambient.setLiveScale) ambient.setLiveScale(1);
+  const gScore = ambient.ghostRows('score', 'w1', new Set());
+  check('G-0 前提: 住人の行を取れた', gScore.length >= 8, `${gScore.length}行`);
+  const sameMC = gScore.filter(r => r.meltdownBest === r.chimeraBest).length;
+  check('G-1 メルトダウンとキメラの値が一致する行が無い', sameMC === 0, `${sameMC}/${gScore.length}行`);
+  const ratioKinds = (rows, a, b) => new Set(rows.filter(r => r[b]).map(r => (r[a] / r[b]).toFixed(4))).size;
+  for (const [a, b] of [['meltdownBest', 'bestScore'], ['chimeraBest', 'bestScore']]) {
+    const kinds = ratioKinds(gScore, a, b);
+    check(`G-2 ${a} ÷ ${b} が全員同じにならない`, kinds > Math.max(3, gScore.length * 0.5),
+      `${kinds}種 / ${gScore.length}行`);
+  }
+  const gDun = ambient.ghostRows('dungeon', 'w1', new Set());
+  for (const k of ['underMax', 'heavenMax']) {
+    const kinds = ratioKinds(gDun, k, 'dungeonMax');
+    check(`G-3 ${k} ÷ dungeonMax が全員同じにならない`, kinds > Math.max(3, gDun.length * 0.5),
+      `${kinds}種 / ${gDun.length}行`);
+  }
+  // ⚠ 比の種類だけでは弱い ── 定数倍でも Math.round のせいで比は少しずつ違う
+  //   （旧実装でも24種あった＝この検査だけでは素通りする）。
+  //   決め手は「**元の値から予測できてしまうか**」。定数倍だと、塔の階が同じ
+  //   2人は地下の値も必ず同じになる ── そこから「地下＝塔×0.85」と読み取れれば、
+  //   1行見るだけでその行が合成物だと分かる。人ごとの係数が入っていれば割れる。
+  //   （実測: 旧実装は同じ塔階の31組すべてで地下も同一。いまは30/31組が割れる）
+  if (ambient.setLiveScale) ambient.setLiveScale(12);
+  const big = ambient.ghostRows('dungeon', 'w1', new Set());
+  for (const k of ['underMax', 'heavenMax']) {
+    const byTower = new Map();
+    for (const r of big) {
+      if (!byTower.has(r.dungeonMax)) byTower.set(r.dungeonMax, []);
+      byTower.get(r.dungeonMax).push(r[k]);
+    }
+    const dup = [...byTower.values()].filter(v => v.length > 1);
+    const split = dup.filter(v => new Set(v).size > 1);
+    check(`G-3b ${k} が塔の階から予測できない`,
+      dup.length >= 5 && split.length >= dup.length * 0.6,
+      `同じ塔階の組 ${dup.length} / 値が割れている組 ${split.length}`);
+  }
+  if (ambient.setLiveScale) ambient.setLiveScale(1);
+  // 「板の1位なのに、そのバッジを持っていない」も規則上ありえない行。
+  const gRush = ambient.ghostRows('rush', 'w1', new Set());
+  const rushBad = gRush.filter(r => ((r.badges || []).includes('rush')) !== (r.rushDepth >= 12));
+  check('G-4 ボスラッシュの深度と🔥制覇バッジが食い違わない', rushBad.length === 0,
+    rushBad.slice(0, 3).map(r => `${r.username}:${r.rushDepth}`).join(' '));
+  // 回数系の板は「そのモードでいちばん難しい実績のしきい値」の内側に収まること。
+  const capOK = [
+    ['survival', 'survivalWave', 30], ['chain', 'chainMax', 10], ['blueprint', 'blueprintClears', 30],
+  ];
+  for (const [board, key, top] of capOK) {
+    const rows = ambient.ghostRows(board, 'w1', new Set());
+    const over = rows.filter(r => (r[key] || 0) >= top);
+    check(`G-5 ${board} 板が人間の最高実績（${top}）に届かない`, over.length === 0,
+      over.slice(0, 3).map(r => `${r.username}:${r[key]}`).join(' ') || `最大 ${Math.max(0, ...rows.map(r => r[key] || 0))}`);
+  }
+  // チャットが言う数字と板の数字が食い違わないこと（食い違い自体が判別器になる）。
+  const crowdSrc = read('server/crowd.js');
+  check('G-6 チャットのWAVEが自己ベストを超えない',
+    /Math\.min\(st\.survivalWave, st\.survivalWave \+ rint\(-3, 0\)\)/.test(crowdSrc), '');
+
+  // -------------------------------------------------------------------------
+  // H. 名前が並ぶ面（ロイヤル・大会・ゲスト名）
+  //    どれも「片方にだけ起きること」が判別器になっていた形。
+  // -------------------------------------------------------------------------
+  const battleSrc2 = read('server/battle.js');
+  const ambientSrc = read('server/ambient.js');
+  // 実在のプレイヤーのゲスト名は 0〜9998、住人・埋め草は必ず 1000〜9999 の4桁
+  // だったので、**3桁以下のゲスト名は必ず生身の人間**と分かった。
+  const humanGuest = battleSrc2.match(/ゲスト\$\{([^}]+)\}/);
+  check('H-1 ゲスト名の番号帯を住人とそろえている',
+    !!humanGuest && /1000 \+ Math\.floor\(Math\.random\(\) \* 9000\)/.test(humanGuest[1]),
+    humanGuest ? humanGuest[1] : '見つからない');
+  check('H-1b 住人側の番号帯も同じ（1000〜9999）',
+    /ゲスト\$\{1000 \+ Math\.floor\(rnd\(\) \* 9000\)\}/.test(ambientSrc), '');
+  // ロイヤル優勝の全体告知が「勝者が人間のときだけ」だと、結果カードの名前と
+  // チャットの告知を見比べるだけで住人だと確定できた。
+  check('H-2 ロイヤル優勝の告知を勝者の種類で出し分けていない',
+    !/if \(winner && winner\.human\) \{/.test(battleSrc2)
+    && /const hadHuman = r\.entrants\.some\(e => e\.human\);/.test(battleSrc2), '');
+  // 大会のブラケットは人間が必ず左に置かれていた（参加者が4人以下なら右列は全部AI）。
+  check('H-3 大会のブラケットで組の左右を入れ替えている',
+    /for \(let i = 0; i < 8; i \+= 2\) \{[\s\S]{0,40}?if \(crypto\.randomInt\(2\)\)/.test(battleSrc2), '');
+  // 人間が潰れた回に帰属が付かないので、矢印つきの撃破ログに出る名前が
+  // 例外なく住人だった。
+  check('H-4 人間が潰れた回にも撃破の帰属が付く',
+    /target\.lastHitBy = from;/.test(battleSrc2) && /const blame = \(e\.lastHitBy/.test(battleSrc2), '');
+  check('H-4b ただし直前のお邪魔からの時間で切る（自滅は自滅のまま）',
+    /ROYALE_BLAME_MS/.test(battleSrc2), '');
+
 } catch (err) {
   check('テストが最後まで走った', false, err.message);
 } finally {

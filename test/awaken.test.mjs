@@ -134,7 +134,11 @@ const crowd = read('server/crowd.js');
 
   // 住人側の3か所
   const bv = ambient.slice(ambient.indexOf('const BOARD_VALUE = {'), ambient.indexOf('};', ambient.indexOf('const BOARD_VALUE = {')));
-  for (const b of NEW) check(`④-5 BOARD_VALUE に ${b} がある`, new RegExp(`\\b${b}:\\s*\\(st\\)`).test(bv), '');
+  // v2.57: 引数が (st) → (st, r) になった板がある（住人ごとの得手不得手を掛けるため。
+  //   定数倍のままだと、板の値を素の強さで割るだけで住人だと分かった）。
+  //   ⚠ この「ある／無い」の検査では、値が定数倍かどうかは**原理的に捕まらない**。
+  //     値で見る検査は test/secrecy-shape.test.mjs にある。
+  for (const b of NEW) check(`④-5 BOARD_VALUE に ${b} がある`, new RegExp(`\\b${b}:\\s*\\(st`).test(bv), '');
   const gc = ambient.slice(ambient.indexOf('const GHOST_COUNT = {'), ambient.indexOf('};', ambient.indexOf('const GHOST_COUNT = {')));
   for (const b of NEW) check(`④-6 GHOST_COUNT に ${b} がある`, new RegExp(`\\b${b}: \\d+`).test(gc), '');
 

@@ -2894,6 +2894,17 @@ export function initBattle(server, deps) {
     const slots = new Array(8).fill(null);
     humanSocks.slice(0, 8).forEach((ws, i) => { slots[positions[i]] = ws; });
     for (let i = 0; i < 8; i++) if (!slots[i]) slots[i] = new Bot('random', used);
+    // 🎭 組の中の左右を入れ替える。
+    //
+    //    上の positions は「人間どうしが準決勝より前に当たらない」ためのもので、
+    //    その性質は組の**中**で入れ替えても保たれる（同じ組の2人が誰かは変わらない）。
+    //    ところが入れ替えないと、人間は必ず各組の左に置かれる ── 参加した人間が
+    //    4人以下なら**右列の4つの名前は毎回100%AI**。友達2人で同時に並べば
+    //    2人とも自分の行の左に出ることが確認でき、以後どの大会でも同じなので
+    //    「右列＝AI」が確定する。
+    for (let i = 0; i < 8; i += 2) {
+      if (crypto.randomInt(2)) { const tmp = slots[i]; slots[i] = slots[i + 1]; slots[i + 1] = tmp; }
+    }
     const t = { id, round: 0, alive: slots, ended: false, pending: 0, results: [], timers: [] };
     tourneys.set(id, t);
     for (const ws of humanSocks) ws.tourneyId = id;
@@ -3215,8 +3226,16 @@ export function initBattle(server, deps) {
     royaleHit(r, target, cells, from, lines);
   }
 
+  // 🎭 「直前に誰のお邪魔を受けたか」。人間が潰れたときの帰属に使う。
+  //    これが無かったころ、矢印つきの撃破ログ（A → B）は**Bが住人のときだけ**
+  //    作られていた。人間が誰かのお邪魔で潰れても必ず「名前 脱落」としか出ず、
+  //    直前に「◯◯の攻撃！」のトーストで攻撃者まで見えているのに帰属が付かない。
+  //    KOトーストも同じで、自分のKO数に数えられる相手は全員住人だった ──
+  //    つまり矢印の右に出た名前・KOに出た名前は例外なく住人だと確定できた。
+  const ROYALE_BLAME_MS = 6000;   // これより前のお邪魔は「そのせいで潰れた」と見なさない
   function royaleHit(r, target, cells, from, lines = 0) {
     if (!target || !target.alive) return;
+    if (from && from !== target) { target.lastHitBy = from; target.lastHitAt = Date.now(); }
     if (target.human) {
       if (target.ws.readyState === target.ws.OPEN) {
         send(target.ws, { type: 'royale_garbage', cells, from: from ? from.name : null, lines });
@@ -3446,9 +3465,18 @@ export function initBattle(server, deps) {
       for (const e of r.entrants) {
         if (e.human && e.ws.royaleId === r.id) e.ws.royaleId = null;
       }
-      // Only a REAL player's win is world news — a bot taking a lobby that no
-      // human survived is not an announcement.
-      if (winner && winner.human) {
+      // 🎭 告知は**勝者の種類で出し分けない**。
+      //
+      //    以前は winner.human のときだけ流していた。ところが結果カードには
+      //    優勝者の名前とKO数が全員に出るので、プレイヤーはそれをチャットに
+      //    流れた告知と見比べるだけでよく、**告知が来なければその優勝者は住人**と
+      //    確定できた。100人ロビーではたいてい自分が先に落ちるので、毎試合この
+      //    照合ができる。告知の中身は名前・点・KO数だけなので、住人が優勝した回に
+      //    流しても正体を明かすことにはならない。
+      //    「人が誰も居なかったロビーの結果まで流したくない」を残すなら、
+      //    勝者の種類ではなく **そのロビーに人間が居たか** で切ること。
+      const hadHuman = r.entrants.some(e => e.human);
+      if (winner && hadHuman) {
         broadcastAll({
           type: 'announce',
           message: `バトルロイヤルで「${winner.name}」が100人の頂点に！（${winner.kills || 0}KO）`,
@@ -3924,7 +3952,14 @@ export function initBattle(server, deps) {
               || reservedName(want)
               || !!residentByName(want)
             );
-            ws.guestName = (want && mayCheck && !bad && !taken) ? want : `ゲスト${Math.floor(Math.random() * 9999)}`;
+            // 🎭 番号帯を住人側とそろえる（1000〜9999 の4桁）。
+      //    実在のプレイヤーには 0〜9998 を振っていたのに、住人・埋め草の
+      //    ゲスト風の名前は pickPersona が必ず 1000〜9999 の4桁を作る。
+      //    つまり「ゲスト7」「ゲスト538」のように**3桁以下なら必ず生身の人間**で、
+      //    住人には構造上そう名乗れなかった。対戦カード・ブラケット・ロイヤルの
+      //    一覧・部屋の参加者一覧など、ゲスト風の名前が並ぶどの画面でも同じ判定が
+      //    できてしまう（1対1では相手が実在のプレイヤーかどうかが名前だけで確定）。
+      ws.guestName = (want && mayCheck && !bad && !taken) ? want : `ゲスト${1000 + Math.floor(Math.random() * 9000)}`;
             if (want && mayCheck && !bad && !taken) {
               // 覚えておくのは「その回線が直前に名乗った名前」1つだけ。
               // 上限を置かないと、接続元の数だけ際限なく増える入れ物になる
@@ -4186,7 +4221,14 @@ export function initBattle(server, deps) {
           const r = royales.get(ws.royaleId);
           if (!r || r.ended) return;
           const e = r.entrants.find(x => x.ws === ws);
-          if (e && e.alive) royaleTopOut(r, e, null);
+          // 🎭 人間が潰れた回にも帰属を付ける（上の royaleHit のコメント）。
+          //    直前のお邪魔から一定時間内のときだけ「そのせいで潰れた」と見なす
+          //    ので、自分で詰ませた回は今までどおり「脱落」のまま。
+          if (e && e.alive) {
+            const blame = (e.lastHitBy && e.lastHitBy.alive
+              && Date.now() - (e.lastHitAt || 0) <= ROYALE_BLAME_MS) ? e.lastHitBy : null;
+            royaleTopOut(r, e, blame);
+          }
           return;
         }
         // A 2+ line clear buries somebody. Line count is bounded the same way

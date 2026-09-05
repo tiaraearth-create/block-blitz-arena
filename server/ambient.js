@@ -905,10 +905,27 @@ const RESIDENT_SCORE_TOP = 900_000;
 // スコア系の板に住人が出せる最大値。人間の絶対上限（server/index.js の
 // 1,000,000）より必ず内側に置く ── 1位を人間が取れる余地を残すため。
 const BOARD_SCORE_TOP = 940_000;
-function scoreBoard(bestScore, mult) {
-  const raw = Math.max(0, (Number(bestScore) || 0)) * mult;
-  const rawTop = RESIDENT_SCORE_TOP * mult;
-  return Math.round(raw * (BOARD_SCORE_TOP / rawTop));
+// 🎭 派生ボードの「得手不得手」。住人ごとに決まる係数（seed だけで決まるので
+//    同じ日なら同じ値）。puzzleStageOf / digDepthOf が同じ形で先にやっている。
+//
+//    ⚠ **派生ボードの値を「素の強さ × 定数」にしてはいけない。**
+//      定数だと、公開ランキング（無認証・1リクエストで100行）の1行を見て
+//      meltdownBest ÷ bestScore を計算するだけで住人だと確定できる ──
+//      実プレイヤーの3つの欄は別々の記録から来る独立の値なので、その比が
+//      全員で一致することは絶対に無い。実際、v2.53 の scoreBoard は
+//      正規化の分母にも mult を掛けていたせいで**約分で消え**、
+//      住人の meltdownBest と chimeraBest が必ず同じ値になっていた
+//      （どちらも bestScore のちょうど 940000/900000 倍）。
+//      地下・天国も塔のちょうど 0.85倍・0.70倍で、3板が同じ順位表だった。
+const apt = (r, key, lo, hi) => lo + (hi - lo) * unit((r && r.id) || 'x', key);
+
+// スコア系の板の正規化。**分母に倍率を含めない** ── 含めると約分で消える。
+// いちばん大きい係数（下の meltdown の上限）を基準に、そこが BOARD_SCORE_TOP に
+// なるよう縮める。これで部門ごとに桁が変わり、bestScore との比も人ごとに変わる。
+const BOARD_MULT_TOP = 1.95;
+function scoreBoard(v) {
+  const raw = Math.max(0, Number(v) || 0);
+  return Math.round(raw * (BOARD_SCORE_TOP / (RESIDENT_SCORE_TOP * BOARD_MULT_TOP)));
 }
 function scaleToCap(bestScore, floor, cap) {
   const q = Math.max(0, Math.min(1, (Number(bestScore) || 0) / SCORE_TOP));
@@ -949,14 +966,35 @@ const BOARD_VALUE = {
   //      順位が動かない」の、絶対上限側の同じ症状）。
   //      分布の形は変えずに、その式で出る最大値が BOARD_SCORE_TOP になるよう
   //      線形に縮める ── 天井に張り付いた同点の塊も作らない。
-  meltdown: (st) => scoreBoard(st.bestScore, 1.6),
-  chimera: (st) => scoreBoard(st.bestScore, 1.15),
-  chain: (st) => scaleToCap(st.bestScore, 3, 14),
-  survival: (st) => scaleToCap(st.bestScore, 6, 38),
-  rush: (st) => scaleToCap(st.bestScore, 2, 16),
-  blueprint: (st) => scaleToCap(st.bestScore, 1, 60),
-  under: (st) => Math.max(1, Math.round((st.dungeonMax || 0) * 0.85)),
-  heaven: (st) => Math.max(1, Math.round((st.dungeonMax || 0) * 0.7)),
+  //    ⚠ どの式にも **住人ごとの係数（apt）** を掛けること。定数倍にすると、
+  //      板の値を素の強さで割るだけで住人だと分かる（上の apt のコメント）。
+  //    ⚠ 回数系の天井は「そのモードでいちばん難しい実績のしきい値の**内側**」に
+  //      置く ── 頂は人間に残す、という約束。天井を超える住人がいると、
+  //      「板の1位なのにそのバッジを持っていない」という規則上ありえない行になる
+  //      （実際、ボスラッシュ板の1位が深度15なのに🔥制覇バッジ無しだった）。
+  meltdown: (st, r) => scoreBoard(st.bestScore * apt(r, 'mdApt', 1.15, 1.95)),
+  chimera: (st, r) => scoreBoard(st.bestScore * apt(r, 'cmApt', 0.72, 1.34)),
+  chain: (st, r) => scaleToCap(st.bestScore * apt(r, 'chApt', 0.6, 1.45), 3, 9),
+  //    💀 サバイバルは住人ごとの**本物の記録**が residentStats にある
+  //      （survivalWave。専用の得手不得手つき）。板だけ bestScore から作っていたので、
+  //      ロビーのチャットや速報が言う数字（st.survivalWave）と板の値が食い違い、
+  //      「チャットで大きい数字を言う名前＝板に実体が無い」という見分け方になっていた
+  //      （実測: 登録済み住人53人中14人が板の天井を超える数字をチャットで名乗る）。
+  //      板もチャットも同じ1つの値から引く。
+  survival: (st) => st.survivalWave,
+  //    🔥 ボスラッシュの「制覇」バッジは**全12体を倒した**印なので、
+  //      持っている人の深度は 12（＝全部）でなければ辻褄が合わない。
+  //      持っていない人は 11 まで（あと1体、が最大）。バッジと板の値が
+  //      食い違うと「板の1位なのに制覇していない」という規則上ありえない行になる。
+  rush: (st, r) => ((st.badges || []).includes('rush')
+    ? 12
+    : Math.min(11, scaleToCap(st.bestScore * apt(r, 'rsApt', 0.5, 1.35), 2, 11))),
+  //    🏗 ブループリントは**1日1枚**しか増えない（server/index.js の bpDay）。
+  //      累積の上限を60にしていたので、板の1位が57枚 ＝ 2か月毎日欠かさず、という
+  //      実在しにくい数字だった。住人の在籍日数に見合う高さへ下げる。
+  blueprint: (st, r) => scaleToCap(st.bestScore * apt(r, 'bpApt', 0.5, 1.4), 1, 24),
+  under: (st, r) => Math.max(1, Math.round((st.dungeonMax || 0) * apt(r, 'unApt', 0.66, 0.98))),
+  heaven: (st, r) => Math.max(1, Math.round((st.dungeonMax || 0) * apt(r, 'hvApt', 0.48, 0.88))),
   // 🕳 深淵は「ダンジョン塔 F100 を制覇した人だけ」が入れる解放制
   //    （public/js/main.js の realmLocked）。ところが住人の塔記録は
   //    residents.js の cap で最大98止まりで、🏰百塔踏破バッジも一度も付かない
