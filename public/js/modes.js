@@ -413,6 +413,12 @@ const BOOKMARK_TTL_MS = 48 * 60 * 60 * 1000;
 // 先に「engine だけで成立するモード」で形を確かめてから広げる。
 const BOOKMARKABLE = new Set(['solo', 'meltdown', 'survival', 'chain', 'ghost']);
 
+// 見出しの既定。bookmarkLabel() を持たないモード用。
+const BOOKMARK_NAME = {
+  solo: 'ソロプレイ', meltdown: 'メルトダウン', survival: 'サバイバル',
+  chain: '連鎖カスケード', ghost: '幽霊屋敷',
+};
+
 // 預けたモードごとの始め方。start() を呼んでから engine を差し替える。
 const BOOKMARK_START = {
   solo: () => startSolo(),
@@ -465,8 +471,11 @@ function saveBookmark(mode) {
       // モードが自分で足したいもの（階・ウェーブ・熱・深度・遺物…）。
       // 持たないモードは undefined でよい。
       extra: typeof mode.bookmarkExtra === 'function' ? mode.bookmarkExtra() : null,
-      // 何の続きかを画面に出すための見出し。
-      label: typeof mode.bookmarkLabel === 'function' ? mode.bookmarkLabel() : '',
+      // 何の続きかを画面に出すための見出し。モードが自前の見出しを持たない
+      // ときは、モード名だけでも必ず出す ── ここが空だと「続きから — ・4,321」と
+      // 中黒が浮いて、何の続きなのか読めないカードになる。
+      label: (typeof mode.bookmarkLabel === 'function' && mode.bookmarkLabel())
+        || BOOKMARK_NAME[mode.mode] || '',
       score: mode.engine.score | 0,
     }));
     return true;

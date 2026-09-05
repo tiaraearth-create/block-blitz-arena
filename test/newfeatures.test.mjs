@@ -135,6 +135,9 @@ const localdata = read('public/js/localdata.js');
   check('B-14 預けられないモードでは出さない', /\$\{canBookmark\(\) \?/.test(main), '');
   check('B-15 メニューに「続きから」が出る', /export function refreshBookmarkCard\(\) \{/.test(main), '');
   check('B-16 残り時間が短いと色が変わる', /bookmark-soon/.test(main), '');
+  check('B-17 見出しが空にならない（モード名の既定がある）',
+    /const BOOKMARK_NAME = \{/.test(modes)
+    && /\|\| BOOKMARK_NAME\[mode\.mode\] \|\| '',/.test(modes), '');
 }
 
 // ===========================================================================
