@@ -11918,7 +11918,14 @@ export async function fetchDailyReplays(day) {
   }
 }
 
-// 👻 その日の走りの一覧。TOP3 ＋（あれば）自分の回。
+// 👻 その日の「録画が残っている走り」の一覧。
+//
+// ⚠ これは**その日の順位表ではない**。録画（着手ログ）は結果送信を通った
+//   実アカウントの回にしか残らないので、ここに並ぶのは順位表の上位とは
+//   別の集合になる。以前は 🥇🥈🥉 と #順位 を付けて出していたので、
+//   「同じ日の1位が2つある」うえに、**走りが残る名前と残らない名前が
+//   きれいに二分される**＝住人の判別表として読めてしまっていた。
+//   メダルと順位番号を外し、見出しでも「録画」だと分かるようにしてある。
 export async function openDailyReplays(day) {
   audio.click();
   const m = showModal(`<h2>${ic('clip', 22)} ${t('みんなの走り', 'Ghost replays')}</h2><p class="muted center">${t('読み込み中…', 'Loading…')}</p>`);
@@ -11941,6 +11948,7 @@ export async function openDailyReplays(day) {
   m.innerHTML = `
     <h2>${ic('clip', 22)} ${t('みんなの走り', 'Ghost replays')}</h2>
     <p class="muted center">${escapeHtml(`${data.day} ${t(mod.ja || '', mod.en || '')}`)}</p>
+    <p class="muted center" style="font-size:11px">${t('録画が残っている走りです（その日の順位表とは別）', 'Runs with a recording — not the day’s leaderboard')}</p>
     ${playable ? '' : `<p class="muted center">${t('この日のお題は瓦礫の位置がひとりずつ違うため、走りを再生できません',
       'On rubble day the debris layout differs per player, so runs cannot be replayed')}</p>`}
     <div class="ms-list" id="grList"></div>
@@ -11949,11 +11957,12 @@ export async function openDailyReplays(day) {
   rows.forEach((row, i) => {
     const el = document.createElement('div');
     el.className = 'ms-row';
-    // 順位の絵は icons.js（medal_1/2/3）。4位以降は #N のまま。
-    const medal = medalIconName(row.rank) ? icon(medalIconName(row.rank), { size: 18 }) : `#${row.rank}`;
+    // 🥇 メダルと #順位 は出さない（この一覧は順位表ではないため。
+    //    上の関数コメント参照）。並び順はスコア順のままなので、
+    //    強い走りが上に来ることは変わらない。
     el.innerHTML = `
       <div class="ms-info">
-        <div class="ms-name">${medal} ${escapeHtml(row.username || '???')}${row.you ? ` <small>(${t('あなた', 'you')})</small>` : ''}</div>
+        <div class="ms-name">${escapeHtml(row.username || '???')}${row.you ? ` <small>(${t('あなた', 'you')})</small>` : ''}</div>
         <div class="ms-prog">${fmt(row.score)}${t('点', ' pts')}</div>
       </div>
       ${playable ? `<button class="btn btn-ghost" data-watch="${i}">${ic('spectate', 14)} ${t('観る', 'Watch')}</button>

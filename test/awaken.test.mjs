@@ -98,7 +98,18 @@ const crowd = read('server/crowd.js');
 //   そろっていることを機械で確かめる。
 // ===========================================================================
 {
-  const NEW = ['meltdown', 'chimera', 'chain', 'survival', 'rush', 'blueprint', 'under', 'heaven', 'abyss'];
+  // 🕳 abyss だけ別扱い。深淵は「ダンジョン塔 F100 を制覇した人だけ」の
+  //    解放制で、住人はそこへ構造的に到達できない（residents.js の cap で
+  //    塔は最大98止まり ＝「頂は人間に残す」という意図的な不変条件。
+  //    test/ranking-ai.test.mjs が機械確認している）。
+  //    住人を並べると **その板の全行が「規則上そこに居られない人」** になり、
+  //    ダンジョン板と1回突き合わせるだけで住人だと確定できてしまう。
+  //    ここでの「実プレイヤーしか並ばない板は正体判定器」という懸念は、
+  //    深淵に限っては当てはまらない ── 深淵に居ないことは実プレイヤーでも
+  //    普通なので、**住人の名前は1つも特定できない**（漏れの向きが逆で、
+  //    しかもその向きの先はほぼ空）。深淵は実プレイヤーだけの板にする。
+  const NEW = ['meltdown', 'chimera', 'chain', 'survival', 'rush', 'blueprint', 'under', 'heaven'];
+  const REAL_ONLY = ['abyss'];
 
   // サーバー: 部門の表
   const lb = idx.slice(idx.indexOf('const LB_BOARDS = {'), idx.indexOf('};', idx.indexOf('const LB_BOARDS = {')));
@@ -116,10 +127,25 @@ const crowd = read('server/crowd.js');
   for (const b of NEW) check(`④-5 BOARD_VALUE に ${b} がある`, new RegExp(`\\b${b}:\\s*\\(st\\)`).test(bv), '');
   const gc = ambient.slice(ambient.indexOf('const GHOST_COUNT = {'), ambient.indexOf('};', ambient.indexOf('const GHOST_COUNT = {')));
   for (const b of NEW) check(`④-6 GHOST_COUNT に ${b} がある`, new RegExp(`\\b${b}: \\d+`).test(gc), '');
+
+  // 実プレイヤーだけの板は、**そう決めたことがソースに書いてある**こと。
+  // 表への足し忘れ（事故）と、意図した除外を見分けられるようにするための門。
+  const noGhost = ambient.slice(ambient.indexOf('const NO_GHOST_BOARDS = new Set('),
+    ambient.indexOf(');', ambient.indexOf('const NO_GHOST_BOARDS = new Set(')));
+  for (const b of REAL_ONLY) {
+    check(`④-5b ${b} は「住人を出さない板」だと明示されている`, noGhost.includes(`'${b}'`), noGhost.slice(-60));
+    check(`④-6b ${b} は GHOST_COUNT に残っていない（死んだ設定を置かない）`,
+      !new RegExp(`\\b${b}: \\d+`).test(gc), '');
+    check(`④-1b ${b} の部門そのものは残っている（実プレイヤーは並ぶ）`,
+      new RegExp(`\\b${b}:\\s*\\{`).test(lb), '');
+    check(`④-9b ${b} の画面の対応表も残っている`, new RegExp(`${b}: '`).test(
+      screens.slice(screens.indexOf('const LB_KEY = {'), screens.indexOf('};', screens.indexOf('const LB_KEY = {')))), '');
+  }
+
   const rowOf = ambient.slice(ambient.indexOf('const rowOf = (name, st, r) => ({'), ambient.indexOf('});', ambient.indexOf('const rowOf = (name, st, r) => ({')));
   check('④-7 住人の行が BOARD_VALUE と同じ式から出ている',
-    (rowOf.match(/BOARD_VALUE\.\w+\(st, r\)/g) || []).length === NEW.length,
-    `${(rowOf.match(/BOARD_VALUE\.\w+\(st, r\)/g) || []).length}件`);
+    (rowOf.match(/BOARD_VALUE\.\w+\(st, r\)/g) || []).length === NEW.length + REAL_ONLY.length,
+    `${(rowOf.match(/BOARD_VALUE\.\w+\(st, r\)/g) || []).length}件 / 期待 ${NEW.length + REAL_ONLY.length}件`);
 
   // 実プレイヤーの行にも欄があること
   // ⛓️ chain は chainMax（最大連鎖数）。chainBest はスコアで別物 ── 取り違えると

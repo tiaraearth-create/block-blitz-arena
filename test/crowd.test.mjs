@@ -87,7 +87,10 @@ for (let i = 0; i < 600; i++) {
   if (!item) continue;
   scan(item.text, 'feed/ja');
   scan(item.textEn, 'feed/en');
-  feedIds.add(item.id);
+  // 内部名の欄は 'id' から 'feedTemplate' に変わった（'id' のままだと
+  // 実プレイヤーの行に無い欄になり、住人の一覧表として外に出てしまうため。
+  // いまは SECRET_KEYS に入っていて、運営以外へ返る JSON からは落ちる）。
+  feedIds.add(item.feedTemplate);
   feedCount++;
 }
 check(`composeFeed fuzz (${feedCount} items, ${feedIds.size} distinct kinds)`, bad.length === 0 && feedIds.size >= 15, bad.slice(0, 3).join(' | '));

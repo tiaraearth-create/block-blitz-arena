@@ -12,7 +12,7 @@
 import {
   buildRoster, customResident, residentStats, residentDailyScore, onlineResidents, residentsForLevel,
   archetype, ARCHETYPES, jstHour, jstWeekday, jstDay, unit, mulberry32, strHash, JA_NAMES, EN_NAMES,
-  isChampion, residentRecord,
+  isChampion, residentRecord, CHAMPION,
   // 🎭 使い捨ての対戦相手を「その帯に出てくる住人」と同じ条件で作るために要る
   // （residentsForLevel が住人を絞るのと同じ帯・同じ軽量レート式）。
   residentRating, BOT_RATING_BANDS,
@@ -427,6 +427,15 @@ const PERSONA_STEP = 7919;
 // 強さも種に混ぜるのは、席のレートが帯から決まる以上、称号だけ名前で固定すると
 // レートと食い違う組み合わせが出てしまうため（上の②の理由）。
 function personaResident(name, level, now) {
+  // 👑 王者の名前だけは合成に使えない。makeResident は名前が CHAMPION.name に
+  //    一致した時点で skill を 0.995 に固定し、isChangeless な最強の値へ倒すので、
+  //    何回引き直しても easy/normal/hard の帯には一生入らない。下の
+  //    「いちばん近かった1人」がそのまま返るため、**レート850の easy 席に
+  //    157勝0敗・称号「神殺し」** が並ぶ ── 住人にも実プレイヤーにも起きない
+  //    組み合わせなので、席が合成物だと1枚で分かってしまう。
+  //    王者と当たる頻度は CHAMPION_ENCOUNTER 1か所で決める設計なので、
+  //    名前の衝突でそこを迂回させない意味もある。
+  if (name === CHAMPION.name) name = `${CHAMPION.name}${(strHash(`champ:${level}`) % 90) + 10}`;
   const [lo, hi] = BOT_RATING_BANDS[level] || BOT_RATING_BANDS.normal;
   const base = strHash(`persona:${name}:${level}`) % 1000000;
   let best = null;
@@ -761,10 +770,19 @@ export function chooseReplies(text, now = Date.now(), forcedName = null) {
 // 🆕 板を新設したモードは、いま実際に遊ばれている量に合わせて控えめに置く。
 //    ここを足し忘れても既定の24で埋まるので「その板だけ空」にはならないが、
 //    総合スコア(40)と同じ賑わいにすると新設の板だけ不自然に混む。
+// 🚫 住人を1行も出さない板。
+//    深淵は塔F100の解放を通った人しか記録を持ち得ないのに、住人は構造的に
+//    そこへ到達できない（上の BOARD_VALUE.abyss のコメント）。並べると
+//    **その板の全行が「規則上そこに居られない人」**になる。
+//    幽霊屋敷を板に持たないのと同じ扱いで、ここは実プレイヤーだけの板にする。
+const NO_GHOST_BOARDS = new Set(['abyss']);
+
 const GHOST_COUNT = {
   score: 40, rating: 30, dungeon: 24, weekly: 18, sprint: 22, daily: 20,
   meltdown: 20, chimera: 16, chain: 16, survival: 22, rush: 18, blueprint: 14,
-  under: 18, heaven: 14, abyss: 10,
+  under: 18, heaven: 14,
+  // 🕳 abyss はここに置かない。深淵は NO_GHOST_BOARDS（上）に入っていて
+  //    住人を1行も出さないので、行数を決める値そのものが要らない。
 };
 // 公開ランキングは100行で切られる。それ以上は作っても捨てられる。
 export const BOARD_MAX_ROWS = 100;
@@ -815,6 +833,7 @@ export function boardRowCount(board) {
 export function boardResidents(board, weekId, now = Date.now()) {
   const scale = effectiveScale();
   if (!scale || !custom.toggles.ghosts) return [];
+  if (NO_GHOST_BOARDS.has(board)) return [];
   const count = boardRowCount(board);
   // 📅 デイリーは「今日挑戦した住人」の顔ぶれ — 週ではなくJST日で入れ替わる。
   const bucket = board === 'daily' ? `D${jstDay(now)}` : weekId;
@@ -921,7 +940,16 @@ const BOARD_VALUE = {
   blueprint: (st) => scaleToCap(st.bestScore, 1, 60),
   under: (st) => Math.max(1, Math.round((st.dungeonMax || 0) * 0.85)),
   heaven: (st) => Math.max(1, Math.round((st.dungeonMax || 0) * 0.7)),
-  abyss: (st) => Math.max(1, Math.round((st.dungeonMax || 0) * 0.45)),
+  // 🕳 深淵は「ダンジョン塔 F100 を制覇した人だけ」が入れる解放制
+  //    （public/js/main.js の realmLocked）。ところが住人の塔記録は
+  //    residents.js の cap で最大98止まりで、🏰百塔踏破バッジも一度も付かない
+  //    ── 「頂は人間に残す」という意図的な不変条件（test/ranking-ai.test.mjs が
+  //    機械確認している）。つまり住人に深淵の記録を持たせると、
+  //    **塔F98なのに深淵に入っている**という、規則上ありえない組み合わせになる。
+  //    ダンジョン板と1回突き合わせるだけで住人だと確定できてしまうので、
+  //    住人の深淵記録は 0（＝まだ解放していない人と同じ）にする。
+  //    深淵板そのものにも住人を出さない（下の NO_GHOST_BOARDS）。
+  abyss: () => 0,
 };
 
 let rankMemo = new Map();
@@ -961,6 +989,7 @@ export function boardRanking(board, weekId, now = Date.now()) {
 export function ghostRows(board, weekId, taken, now = Date.now()) {
   const scale = effectiveScale();
   if (!scale || !custom.toggles.ghosts) return [];
+  if (NO_GHOST_BOARDS.has(board)) return [];
   // The public board is sliced to 100 rows — never generate more than that.
   const count = boardRowCount(board);
   const used = new Set(taken);

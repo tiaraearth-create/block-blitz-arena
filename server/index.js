@@ -1745,11 +1745,17 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 書いてあるのに、100階を制覇してもジェム0・バッジ無し・到達階の記録すら
   // 残らない ——「難しいほうを選ぶと損をする」状態だった。
   // 表にしておけば、世界を足したときに報酬を書き忘れることがなくなる。
+  // 🏰 name / nameEn / prefix は**到達速報の文面**に使う。
+  //    以前は文面が「ダンジョン F○○」直書きだったので、地下でB50、天国でH50、
+  //    深淵でA50 に着いても全部「ダンジョン F50 に到達」と流れていた。
+  //    読んだ人がランキングの「ダンジョン」（塔）でその名前を探すと F0 なので、
+  //    速報のほうが嘘に見える（登った本人も、違う世界の名前で祝われる）。
+  //    接頭辞は public/js/modes.js の DUNGEON_REALMS と同じ（F / B / H / A）。
   const DUNGEON_REALMS = {
-    dungeon:         { stat: 'dungeonMax', badge: 'dungeon', perDecade: 20, clear: 500 },
-    dungeon_under:   { stat: 'underMax',   badge: 'under',   perDecade: 30, clear: 750 },
-    dungeon_heaven:  { stat: 'heavenMax',  badge: 'heaven',  perDecade: 20, clear: 500 },
-    dungeon_abyss:   { stat: 'abyssMax',   badge: 'abyss',   perDecade: 40, clear: 1000 },
+    dungeon:         { stat: 'dungeonMax', badge: 'dungeon', perDecade: 20, clear: 500,  name: 'ダンジョン',     nameEn: 'the dungeon',        prefix: 'F' },
+    dungeon_under:   { stat: 'underMax',   badge: 'under',   perDecade: 30, clear: 750,  name: '地下ダンジョン', nameEn: 'the underworld',     prefix: 'B' },
+    dungeon_heaven:  { stat: 'heavenMax',  badge: 'heaven',  perDecade: 20, clear: 500,  name: '天国ダンジョン', nameEn: 'the heavens',        prefix: 'H' },
+    dungeon_abyss:   { stat: 'abyssMax',   badge: 'abyss',   perDecade: 40, clear: 1000, name: '深淵ダンジョン', nameEn: 'the abyss',          prefix: 'A' },
   };
   // 自前キーのときだけ表を引くヘルパー。プロトタイプ上の名前は必ず null。
   const ownRealm = (m) => (Object.prototype.hasOwnProperty.call(DUNGEON_REALMS, m) ? DUNGEON_REALMS[m] : null);
@@ -1861,7 +1867,13 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   const prevKey = ownRealm(mode) ? `${mode}Prev` : null;
   const prevFloor = prevKey ? (s[prevKey] != null ? s[prevKey] : (mode === 'dungeon' ? s.dungeonPrev || 0 : 0)) : 0;
   if (prevKey && floor >= 10 && Math.floor(floor / 10) > Math.floor(prevFloor / 10)) {
-    feedNotes.push({ icon: '🏰', ja: `${nm} がダンジョン F${Math.floor(Number(floor) || 0)} に到達`, en: `${nm} reached dungeon F${Math.floor(Number(floor) || 0)}` });
+    const rlm = ownRealm(mode);
+    const fl = Math.floor(Number(floor) || 0);
+    feedNotes.push({
+      icon: '🏰',
+      ja: `${nm} が${rlm.name} ${rlm.prefix}${fl} に到達`,
+      en: `${nm} reached ${rlm.prefix}${fl} in ${rlm.nameEn}`,
+    });
   }
   if (newWaveBest && wave >= 10) feedNotes.push({ icon: '💀', ja: `${nm} がサバイバル WAVE ${wave} に到達`, en: `${nm} survived to wave ${wave}` });
   if (mode === 'sprint' && score >= 8000 && s.sprint && score >= (s.sprint[`s${[60, 180].includes(Number(sprintDur)) ? sprintDur : 60}`] || 0)) {
@@ -2869,7 +2881,15 @@ app.post('/api/admin/weekly/reset', requireAuth, requireAdmin, (req, res) => {
 app.get('/api/profile/:name', (req, res) => {
   if (!rateLimit(`profile:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください' });
   const name = String(req.params.name || '').slice(0, 20);
-  const u = Object.values(db.users).find(x => x.username === name && !x.banned);
+  // 🎭 大文字小文字を無視して引く。実プレイヤーだけ完全一致で引いていたので、
+  //    住人（residentByName が小文字索引）とのあいだに差ができていた ──
+  //    表記を変えた名前で叩くと、実プレイヤーは404・住人は200が返り、
+  //    しかも body の name は正しい表記に直って返る。ASCII名なら1名1リクエストで
+  //    仕分けできる（無認証・60回/分）。
+  //    アカウント名は登録・改名の時点で大文字小文字を無視して一意なので
+  //    （index.js の register / rename）、ここを小文字比較にしても別人には当たらない。
+  const lowName = name.toLowerCase();
+  const u = Object.values(db.users).find(x => x.username.toLowerCase() === lowName && !x.banned);
   if (u) {
     migrateUser(u);
     const s = u.stats;
@@ -4506,7 +4526,31 @@ app.get('/api/leaderboard', (req, res) => {
     // 英語でプレイしていてもランキングの称号だけ日本語のままになる。
     return t ? { id: t.id, name: t.name, color: t.color } : null;
   };
+  // 🎭 順位表の行の「形」。**実プレイヤーも住人も名無しの埋め草も、
+  //    必ずこの全部の欄を持つ。** 欄の有無で正体が割れるのを構造的に塞ぐ表で、
+  //    ここ1か所が唯一の正解にしてある（片方だけに足す、ができない形）。
+  //
+  //    ここが抜けていたときに何が起きていたか: 実プレイヤーの行にだけ
+  //    dailyScore が付き、住人の行（ambient.js の rowOf）には無かった。
+  //    /api/leaderboard は**無認証**で100行まとめて返るので、
+  //    「dailyScore というキーを持つ行＝実プレイヤー」という総当たり不要の
+  //    仕分け表が、いちばん人目に触れる画面で1リクエストぶん公開されていた。
+  //    禁止キーは1つも出ていないので sanitize.js の関門では止まらない
+  //    （あちらはキー名で「落とす」だけで、欄が無い側には何もできない）。
+  //
+  //    ⚠ 部門を足すときは、この表にも既定値を足すこと。
+  const lbRowShape = () => ({
+    username: '', guildTag: null, level: 1,
+    bestScore: 0, rating: 0, pvpWins: 0, pvpLosses: 0,
+    dungeonMax: 0, underMax: 0, heavenMax: 0, abyssMax: 0,
+    weeklyBest: 0, sprintBest: 0, sprint180: 0,
+    puzzleStage: 0, digDepth: 0, dailyScore: 0,
+    meltdownBest: 0, chimeraBest: 0, chainMax: 0,
+    survivalWave: 0, rushDepth: 0, blueprintClears: 0,
+    badges: [], title: null,
+  });
   const realRows = users.map(u => ({
+    ...lbRowShape(),
     username: u.username,
     guildTag: u.guildId && db.guilds[u.guildId] ? db.guilds[u.guildId].tag : null,
     abyssMax: u.stats.abyssMax || 0,
@@ -4563,7 +4607,9 @@ app.get('/api/leaderboard', (req, res) => {
   const lbKey = LB_BOARDS[board].key;
   const lbVal = r => Number(r[lbKey]) || 0;
   const rows = realRows
-    .concat(ghostRows(board, week, taken).map(r => ({ ...r, guildTag: ghostTagOf(r.username) })))
+    // ⬆ lbRowShape() を土台にする。住人の行にも名無しの埋め草にも
+    //    実プレイヤーと同じ欄が必ず並ぶ（値が 0 でも、欄は消さない）。
+    .concat(ghostRows(board, week, taken).map(r => ({ ...lbRowShape(), ...r, guildTag: ghostTagOf(r.username) })))
     .sort((a, b) => lbVal(b) - lbVal(a))
     .slice(0, 100);
   // 👑 mark the throne holder's row + total crown counts (name colors scale).

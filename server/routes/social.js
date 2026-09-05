@@ -20,6 +20,7 @@ import {
 import {
   residentByName, residentStats, activeResidents,
 } from '../ambient.js';
+import { strHash } from '../residents.js';
 import { anonId } from '../sanitize.js';
 import { ctx } from '../context.js';
 
@@ -59,6 +60,16 @@ socialRouter.get('/api/friends', requireAuth, (req, res) => {
 });
 
 // 名前から探す。住人(AI)と予約名は弾く ── 登録/改名と同じ三段の確認。
+// 🎭 住人の「最終ログイン」。住人ごとに決まる値で、1分より細かくは動かない。
+//    離席中は 15分前〜約2日前のあいだに散らす（全員が同じ値でそろわないように）。
+const SEEN_MINUTE = 60_000;
+function residentSeenAt(r, online) {
+  const nowMin = Math.floor(Date.now() / SEEN_MINUTE) * SEEN_MINUTE;
+  if (online) return nowMin;
+  const back = 15 + (strHash(`seen:${r.id}`) % (48 * 60));   // 15分〜48時間15分前
+  return nowMin - back * SEEN_MINUTE;
+}
+
 socialRouter.post('/api/friends/search', requireAuth, (req, res) => {
   const name = String(req.body.username || '').trim().slice(0, 24);
   if (!name) return res.status(400).json({ error: '名前を入力してください' });
@@ -87,8 +98,19 @@ socialRouter.post('/api/friends/search', requireAuth, (req, res) => {
           level: st.level,
           badges: (st.badges || []).slice(0, 6),
           title: st.title ? st.title.id : null,
-          status: online ? 'online' : 'offline',
-          lastSeen: online ? Date.now() : Date.now() - 3600000,
+          // 🎭 状態の言葉は statusOf（battle.js）と同じ語彙にそろえる。
+          //   実プレイヤーに返るのは 'playing' / 'room' / 'menu' / 'offline' の4つだけで、
+          //   'online' は構造的に絶対に出ない値だった ── しかも画面側の STATUS 表
+          //   （public/js/friends.js）にその鍵が無いので、住人の行だけ状態欄が
+          //   **空文字・無色**で描かれる。APIを見なくても、フレンド検索に名前を
+          //   打つだけで住人だと分かってしまう。
+          status: online ? 'menu' : 'offline',
+          // 🎭 最終ログイン。実プレイヤーの lastSeen は**保存された固定値**なので、
+          //   ここで毎回 now から引くと、同じ名前を2回引いただけで値が経過時間ぶん
+          //   動く（しかも離席中の住人は全員ぴったり1時間前でそろう）。どちらも
+          //   実プレイヤーには起きない形。住人ごとに決まる時刻にして、
+          //   1分より細かくは動かさない。
+          lastSeen: residentSeenAt(r, online),
         },
         already: false,
         pending: false,

@@ -126,6 +126,11 @@ try {
   check('同じ日は同じシード・同じお題', b.seed === a.seed && b.modifier.id === a.modifier.id);
   const goldMult = a.modifier.id === 'gold' ? 2 : 1;   // 💰黄金の日はコイン2倍
   const TARGET = a.target;
+  // ⚠ 「未クリアの点」を数字で書かないこと。お題の目標はその日ごとに違い
+  //   （実測で 2,500〜9,000 の幅がある）、3000 と直書きしていたときは
+  //   **目標が3000以下の日だけこのテストが赤くなった**（日付が変わった翌朝に
+  //   何も直していないのに落ちる）。必ずその日の目標から出す。
+  const UNDER = Math.max(100, Math.floor(TARGET * 0.6));
 
   // ---- 予約しない提出は記録されない（放棄リトライ対策の本体） ---------------
   const cheat = await j('/api/register', { method: 'POST', body: { username: 'ノー予約太郎', password: 'pass1234' } });
@@ -140,7 +145,7 @@ try {
   const u = await j('/api/register', { method: 'POST', body: { username: 'デイリー一郎', password: 'pass1234' } });
   check('register', u.status === 200);
   const tok = u.token;
-  const p1 = await playDaily(tok, 3000);
+  const p1 = await playDaily(tok, UNDER);
   check('予約が attemptId を返す', !!p1.st.attemptId && p1.st.practice === false, JSON.stringify(p1.st));
   check('初回は recorded=true / 未クリアで streak=0', p1.daily && p1.daily.recorded === true && p1.daily.cleared === false && p1.daily.streak === 0, JSON.stringify(p1.daily));
   check('未クリアはボーナス0', p1.daily.bonusCoins === 0 && p1.daily.bonusGems === 0);
@@ -148,11 +153,11 @@ try {
   check('2回目の予約は practice', p2.st.practice === true && !p2.st.attemptId, JSON.stringify(p2.st));
   check('2回目は練習 (recorded=false)', p2.daily && p2.daily.recorded === false && p2.daily.reason === 'practice', JSON.stringify(p2.daily));
   const me1 = await j('/api/me', {}, tok);
-  check('記録は初回の3000のまま', me1.user.stats.dailyc && me1.user.stats.dailyc.score === 3000, JSON.stringify(me1.user.stats.dailyc));
+  check('記録は初回のまま', me1.user.stats.dailyc && me1.user.stats.dailyc.score === UNDER, JSON.stringify(me1.user.stats.dailyc));
   check('挑戦回数は2回', me1.user.stats.dailycPlays === 2, String(me1.user.stats.dailycPlays));
   check('デイリーは通常ハイスコアに入らない', me1.user.stats.bestScore === 0, `bestScore=${me1.user.stats.bestScore}`);
   const d1 = await j('/api/daily', {}, tok);
-  check('/api/daily が挑戦済みを返す', d1.played === true && d1.score === 3000);
+  check('/api/daily が挑戦済みを返す', d1.played === true && d1.score === UNDER);
 
   // ---- 開始したら消費される: 放棄しても今日はもう記録できない ---------------
   const quit = await j('/api/register', { method: 'POST', body: { username: '途中離脱くん', password: 'pass1234' } });
@@ -181,7 +186,7 @@ try {
   const lb = await j('/api/leaderboard?board=daily');
   check('board=daily が返る', lb.board === 'daily');
   const mine = lb.rows.find(r => r.username === 'デイリー一郎');
-  check('本人が dailyScore=3000 で載る', !!mine && mine.dailyScore === 3000, JSON.stringify(mine && { d: mine.dailyScore }));
+  check('本人が自分の点で載る', !!mine && mine.dailyScore === UNDER, JSON.stringify(mine && { d: mine.dailyScore, want: UNDER }));
   check('0点で放棄した人はボードに出ない', !lb.rows.some(r => r.username === '途中離脱くん'));
   const ghosts = lb.rows.filter(r => r.username !== 'デイリー一郎');
   check('住人（ゴースト行）が並ぶ', ghosts.length >= 5, `${ghosts.length}人`);

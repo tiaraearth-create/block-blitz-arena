@@ -846,8 +846,19 @@ export function composeFeed(ctx) {
     const text = fill(f.ja, { ...r, lang: 'ja' }, ctxOthers, extra, cache);
     if (!gen.surfaceFresh(text, ctx.now)) continue;
     gen.noteSurface(text, ctx.now);
+    // 🎭 id（テンプレの内部名）は載せない。
+    //   実プレイヤーの出来事を流す側（index.js / routes/guild.js の
+    //   battle.crowd.feed({icon, real, who, text, textEn})）には id が無いので、
+    //   ここだけ載せると「id を持つ行＝住人」の一覧表になる。
+    //   ⭐（real）を画面から消したのとまったく同じ理由（public/js/chat.js:52）。
+    //   画面はこの欄を読んでいない（showTicker / showFeedModal は icon・text・at だけ）。
     return {
-      id: f.id, icon: f.icon, at: ctx.now, real: false,
+      // 🎭 テンプレの内部名は 'feedTemplate' で持つ（SECRET_KEYS に入っている
+      //    ので、運営以外に返る JSON からは関門が必ず落とす）。以前は 'id' という
+      //    ただの欄だったため素通りし、**id を持つ行＝住人**の一覧表になっていた。
+      //    実プレイヤーの出来事を流す側（index.js / routes/guild.js の
+      //    battle.crowd.feed({icon, real, who, text, textEn})）にはこの欄が無い。
+      feedTemplate: f.id, icon: f.icon, at: ctx.now, real: false,
       text,
       textEn: fill(f.en, { ...r, lang: 'en' }, ctxOthers, extra, cache),
       who: r.name,
@@ -1349,8 +1360,16 @@ const EXTRA_FEED = [
   { id: "exmachina", icon: "⚙️", w: 1.2, min: 0.65, ja: "{me} が機械神エクスマキナを撃破！！", en: "{me} shut down Ex Machina the Machine God!!" },
   { id: "frione", icon: "🧊", w: 1.2, min: 0.65, ja: "{me} が氷雪女王フリオーネを討伐！二重呪縛を突破", en: "{me} melted Frione the Frost Queen!!" },
   { id: "weekly_win", icon: "🎖️", w: 0.5, min: 0.72, ja: "{me} が週間ランキング1位！称号「週間王者」を獲得", en: "{me} finished #1 this week and earned \"Weekly Champion\"!" },
-  { id: "abyss", icon: "🕳️", w: 2, min: 0.5, ja: "{me} が深淵に足を踏み入れた…", en: "{me} stepped into the Abyss…" },
-  { id: "heaven", icon: "😇", w: 1.5, min: 0.45, ja: "{me} が天国ダンジョンを踏破！", en: "{me} conquered the Heaven dungeon!" },
+  // 🕳️「深淵に足を踏み入れた」と 😇「天国ダンジョンを踏破」は外した。
+  //    住人は深淵に入れず（塔F100が要る。住人の塔記録は最大98）、天国も
+  //    踏破＝H100 には届かない（住人の天国記録は round(dungeonMax*0.7) で最大69）。
+  //    ☁天界踏破バッジも residents.js のバッジ生成に入っていない。
+  //    つまりこの2行だけ「裏取りすると必ず嘘」になり、実プレイヤーの快挙と
+  //    同じティッカーに混ざるので、そのまま住人の目印になっていた。
+  //    crowd.js の上のほうで towerlord / ach_dun100 / ach_abyss100 を
+  //    「頂は人間に残す」としてスロットから外しているのと同じ線。
+  //    ⚠ 住人が名乗る速報を足すときは、その記録を住人が本当に持てるかを
+  //      residents.js / ambient.js の生成式で確かめること。
   { id: "guild", icon: "⚜️", w: 3, min: 0, ja: "{me} がギルドに加入した", en: "{me} joined a guild" },
 ];
 FEED.push(...EXTRA_FEED);
