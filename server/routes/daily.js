@@ -21,6 +21,7 @@ import {
 } from '../adminevent.js';
 import {
   DAILY_PIECES, dailySeed, dailyModifierOf, dailyTargetOf, nextJstMidnight, blueprintFor,
+  DAILYC_ATTEMPT_MS,
 } from '../daily.js';
 import {
   SIZE,
@@ -82,6 +83,9 @@ weeklyDailyRouter.get('/api/daily', (req, res) => {
   const day = jstDayKey();
   const d = req.user && req.user.stats.dailyc;
   const today = d && d.day === day ? d : null;
+  // ⏳ 予約の有効期限。提出側（server/index.js の fresh 判定）と同じ物差し。
+  const attemptExpired = !!(today && today.pending && !today.cleared
+    && Date.now() - (today.at || 0) > DAILYC_ATTEMPT_MS);
   res.json({
     day,
     seed: dailySeed(day),
@@ -105,7 +109,14 @@ weeklyDailyRouter.get('/api/daily', (req, res) => {
       : (d && d.day === jstDayKey(Date.now() - 86400000) && d.cleared ? d.streak : 0),
     // 走行中かどうか。画面は「（挑戦中）」と添えて、伸びるのかリセットされるのか
     // を伝えられる。
-    inProgress: !!(today && today.pending && !today.cleared),
+    // ⏳ **予約の有効期限を見る。** 提出側（server/index.js の fresh 判定）は
+    //    DAILYC_ATTEMPT_MS を過ぎた予約を expired として記録しないのに、
+    //    こちらは期限を一度も見ていなかった。放棄したまま2時間が過ぎると、
+    //    もう記録できないのに画面は「連続クリア12日（挑戦中）」と言い続け、
+    //    実際には翌日そこで途切れる。
+    inProgress: !!(today && today.pending && !today.cleared && !attemptExpired),
+    // 期限切れの予約。画面はここを見て「この回はもう記録できません」と言える。
+    attemptExpired,
     bestStreak: (req.user && req.user.stats.dailycBestStreak) || 0,
   });
 });

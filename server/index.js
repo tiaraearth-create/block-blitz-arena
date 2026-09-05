@@ -24,7 +24,7 @@ import {
 import {
   SHOP_ITEMS, DEFAULT_OWNED, DEFAULT_EQUIPPED, BOOST_ITEMS,
   BP_TIERS, BP_XP_PER_TIER, BP_SEASON_DAYS,
-  BOSSES, TITLES, earnedTitles,
+  BOSSES, TITLES, earnedTitles, noteCollectionSets,
 } from './catalog.js';
 import { trackMissions } from './missions.js';
 import { ACHIEVEMENTS } from './achievements.js';
@@ -1075,7 +1075,13 @@ const BUGREPORT_CAP = 300;
 const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'zero7', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7', 'guildquest'];
 const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']);
 
-function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, stars, stageCode, eyes, beatChampion, trusted, preClamped, unrated }) {
+// 🏆 tourneyFinal … 大会で**決勝に勝った**か。「勝ったか（won）」とは別の欄。
+//    以前は won 自体を決勝限定にしていたので、準々決勝・準決勝で勝っても
+//    勝利系ミッション（win / pvpWin）も totalWins も1つも進まなかった
+//    ── 結果画面には「勝利！」と出るのに。バッジと優勝ボーナスと全体速報だけを
+//    この欄で絞る。クライアントは送れない（RESULT_FIELDS に無く、'tournament' は
+//    SERVER_JUDGED_MODES）。
+function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, stars, stageCode, eyes, beatChampion, trusted, preClamped, unrated, tourneyFinal }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   // mode はキー生成にも使う（下の `${mode}Prev`）。クライアント申告なので、
   // 長さを切っておかないと巨大文字列で stats を無限に太らせられる（実測で
@@ -1240,10 +1246,24 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   //   今日ぶんはもう受け取り済み（'*_day'）では、**待てば戻るかどうかがまるで違う**。
   //   画面は public/js/modes.js の rewards.capped を読む。
   let workshopCapped = false;
+  // ⭐ 下の「1日1回」の門は**報酬**を止めるためのもので、記録を止めるためのものではない。
+  //    ★（puzzleStars）の保存を門の内側の won で判定していたので、同じ日に同じ
+  //    ステージを解き直すと画面は★3を出すのにサーバーには一度も保存されず、
+  //    端末を変えると評価だけ ☆☆☆ に戻っていた（門のコメント自身が
+  //    「2回目以降も…★も進行も今までどおり通る」と書いていたのに）。
+  const wonClaimed = !!won;
   if (mode === 'blueprint') {
+    // 🏗 **遊んだ設計図の日**で数える（提出が届いた時刻ではなく）。
+    //    提出時刻で数えていたので、23:58 に始めて 0:02 に終わった1枚が
+    //    **翌日の枠を食い**、その回の報酬も失われていた（次の日に解いても
+    //    「今日ぶんは受け取り済み」と言われる）。デイリーが day + attemptId で
+    //    先に解決している問題で、ブループリントだけ素通しだった。
+    //    申告は「今日か昨日」だけ許す ── それより古い日を名乗っても枠は増えない。
     const today = jstDayKey();
+    const yday = jstDayKey(Date.now() - 86400000);
+    const bpDay = (day === today || day === yday) ? day : today;
     const bp = user.stats.bpDay;
-    if (!bp || bp.day !== today) user.stats.bpDay = { day: today, cleared: false };
+    if (!bp || bp.day !== bpDay) user.stats.bpDay = { day: bpDay, cleared: false };
     if (won) {
       // 理由を返す。ここは長らく黙って0にしていたので、クリアしたのに勝利ぶんが
       // 付かない理由が画面のどこにも出なかった（工房に印を足した理由と同じ形）。
@@ -1355,7 +1375,14 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // ブループリント側で「置いたマス」に点を厚くするのが筋（報酬式ではなく
   // モードの得点設計の話 — public/js/modes.js の担当へ）。
   const NOPLAY_SCORE = 200;
-  const idleResult = score < NOPLAY_SCORE && lines === 0;
+  // ⚠ **サーバーが裁いた勝ちは「遊んだ形跡ゼロ」にしない。**
+  //    trusted は server/battle.js からしか立たない（RESULT_FIELDS に無い）ので、
+  //    trusted かつ won なら「本当に試合があって勝った」ことが確定している。
+  //    この除外が無いと、決勝が不戦勝で終わった優勝者は
+  //    score 0 / lines 0 で idleResult に落ち、paceScale が 0 になって
+  //    コインもパスXPもアカウントXPも**全部 0**になっていた
+  //    （バッジと⭐100💎 だけが付く）。
+  const idleResult = score < NOPLAY_SCORE && lines === 0 && !(trusted && won);
   const paceScale = idleResult ? 0 : Math.max(0.25, Math.min(1, duration / BASE_FULL_SECONDS));
   const paced = n => Math.round(n * paceScale);
   let coins = Math.min(1000, paced(20) + Math.floor(score / 100) + (won ? paced(50) : 0));
@@ -1496,6 +1523,11 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   const bpFull = bpXp > 0 && user.battlePass.xp === bpBefore;
   bpXp = user.battlePass.xp - bpBefore;
 
+  // 🧺 図鑑の「そろえた」印を残す（catalog.js の noteCollectionSets）。
+  //    図鑑を開くまで印が付かないと、4種そろえてから開かずにブースターを使った人が
+  //    「1度もそろえていない」ことになる。1戦ごとに見ておけばまず取りこぼさない。
+  noteCollectionSets(user);
+
   const s = user.stats;
   s.gamesPlayed += 1;
   s.totalScore += score;
@@ -1630,7 +1662,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     user.gems += 300;
   }
   // Tournament: first championship earns a badge + one-time gems.
-  if (mode === 'tournament' && won && !user.badges.includes('tourney')) {
+  if (mode === 'tournament' && won && tourneyFinal && !user.badges.includes('tourney')) {
     user.badges.push('tourney');
     badge = 'tourney';
     gems += 100;
@@ -1762,7 +1794,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     // としか見えない（ダンジョンの4領域は v2.44 で直したが、★は残っていた）。
     // 上書きは**高いほうだけ**。同じステージを遅く解き直しても下がらない。
     const starsGot = stars;   // 上で clamp(stars, 3) 済み
-    if (won && st >= 1 && starsGot > 0) {
+    // ⚠ ここは wonClaimed（門にかかる前の申告）を見る。上のコメント参照。
+    if (wonClaimed && st >= 1 && starsGot > 0) {
       s.puzzleStars = s.puzzleStars || {};
       const key = String(st);
       if ((Number(s.puzzleStars[key]) || 0) < starsGot) s.puzzleStars[key] = starsGot;
@@ -1941,7 +1974,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   if (maxCombo >= 10 && maxCombo > prevCombo) {
     feedNotes.push({ icon: '🔥', ja: `${nm} が ${maxCombo} コンボを達成！`, en: `${nm} landed a ${maxCombo} combo!` });
   }
-  if (mode === 'tournament' && won) {
+  // 🏆 「優勝！」の速報は決勝に勝った回だけ（準々決勝の勝ちで流さない）。
+  if (mode === 'tournament' && won && tourneyFinal) {
     feedNotes.push({ icon: '🏆', ja: `${nm} がトーナメントで優勝！`, en: `${nm} won the tournament!`, react: ['champion', { you: nm }] });
   } else if (mode === 'royale' && won) {
     feedNotes.push({ icon: '💯', ja: `${nm} がバトルロイヤルで1位！`, en: `${nm} took #1 in battle royale!`, react: ['royale_win', { you: nm }] });
@@ -4100,11 +4134,18 @@ function settleSeasonHallOfFame() {
     //    退会した人の名前を伏せるときも「同姓同名の別人」と見分けが付かない。
     //    ⚠ 公開の /api/halloffame では resident と一緒に必ず落とすこと（下の
     //      読み出しでそうしている）── 未ログインで読める口に id は出さない。
-    boards.push({ id: b.id, name: b.name, nameEn: b.nameEn, entrants, top: top.map(t => ({ rank: t.rank, username: t.username, userId: t.userId || null, value: t.value, resident: t.resident })) });
+    // 🏛 **配ったかどうか**をボードごとに残す。以前は見送ったボードも同じ配列に
+    //    積んでいたので、お知らせ本文が全ボードまとめて「上位の挑戦者には
+    //    ジェムを…お届けしました」と書いてしまい、1件も配っていないボードの
+    //    上位者が「来ない報酬」を待つことになっていた。
+    //    とくに 'wins'（週間チャレンジ優勝回数）は 0 の人が行にすら入らないので、
+    //    実プレイヤーの母数が HOF_MIN_ENTRANTS を割りやすい。
+    const awarded = realEntrants >= HOF_MIN_ENTRANTS;
+    boards.push({ id: b.id, name: b.name, nameEn: b.nameEn, entrants, awarded, top: top.map(t => ({ rank: t.rank, username: t.username, userId: t.userId || null, value: t.value, resident: t.resident })) });
     // フィードの見出しはボードの表示どおり（住人が首位ならその名前）。
     if (top[0]) winners.push({ username: top[0].username, board: b.name, boardEn: b.nameEn });
     // 実プレイヤーが少なすぎるボードは表彰を見送る（1人で400💎を防ぐ）。
-    if (realEntrants < HOF_MIN_ENTRANTS) continue;
+    if (!awarded) continue;
     for (const t of realTop) {
       if (!t.userId) continue;                       // 住人には配らない
       const u = db.users[t.userId];
@@ -4138,6 +4179,22 @@ function settleSeasonHallOfFame() {
   db.meta.seasonMark = seasonMarkOf(cur);
 
   if (boards.length) {
+    // 🏛 「お届けしました」と書いてよいのは**実際に配ったボードがあるとき**だけ。
+    //    見送ったボードがあれば、なぜ何も来ないのかを一行で言う。
+    const paidBoards = boards.filter(b => b.awarded);
+    const skipped = boards.filter(b => !b.awarded);
+    const awardNoteJa = (paidBoards.length
+      ? `${paidBoards.map(b => `【${b.name}】`).join('')}で上位に入った挑戦者にはジェムを、その首位にはシーズン刻印バッジをお届けしました（ゲームを開くと受け取れます）。\n`
+      : '')
+      + (skipped.length
+        ? `${skipped.map(b => `【${b.name}】`).join('')}は挑戦者が少なかったため、今シーズンの表彰を見送りました。\n\n`
+        : '\n');
+    const awardNoteEn = (paidBoards.length
+      ? `Top challengers on ${paidBoards.map(b => b.nameEn).join(', ')} received gems, and the highest of them earned the season champion badge — open the game to claim.\n`
+      : '')
+      + (skipped.length
+        ? `${skipped.map(b => b.nameEn).join(', ')} had too few challengers, so no awards were given there this season.\n\n`
+        : '\n');
     const medals = ['1位', '2位', '3位'];
     const lineJa = boards.map(b => `【${b.name}】\n${b.top.map(t => `${medals[t.rank - 1]} ${t.username}（${fmtNum(t.value)}）`).join('\n')}`).join('\n\n');
     const lineEn = boards.map(b => `[${b.nameEn}]\n${b.top.map(t => `${medals[t.rank - 1]} ${t.username} (${fmtNum(t.value)})`).join('\n')}`).join('\n\n');
@@ -4145,8 +4202,8 @@ function settleSeasonHallOfFame() {
       id: crypto.randomUUID(),
       title: `${prev.name} 殿堂入り発表`,
       titleEn: `${prev.nameEn} Hall of Fame`,
-      body: `${prev.name}が終了しました。歴代の記録として殿堂に刻まれた顔ぶれです。\n\n${lineJa}\n\n各ボードで上位に入った挑戦者にはジェムを、その首位にはシーズン刻印バッジをお届けしました（ゲームを開くと受け取れます）。新シーズンもよろしくお願いします！`,
-      bodyEn: `${prev.nameEn} has ended — here are the names carved into the Hall of Fame.\n\n${lineEn}\n\nThe top challengers on each board received gems, and the highest of them earned the season champion badge — open the game to claim. See you in the new season!`,
+      body: `${prev.name}が終了しました。歴代の記録として殿堂に刻まれた顔ぶれです。\n\n${lineJa}\n\n${awardNoteJa}新シーズンもよろしくお願いします！`,
+      bodyEn: `${prev.nameEn} has ended — here are the names carved into the Hall of Fame.\n\n${lineEn}\n\n${awardNoteEn}See you in the new season!`,
       pinned: false, by: '運営', at: Date.now(),
       // 🪪 本文に焼き込んだ名前と持ち主（週間結果と同じ理由。上のコメント参照）。
       //    住人（userId なし）も本文には載るので、名前だけで持っておく。

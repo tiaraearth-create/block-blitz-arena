@@ -465,6 +465,15 @@ export function claimGuildQuest(db, user, weekId, questId) {
 export function guildQuestView(guild, weekId, viewer = null) {
   const q = readGuildQuests(guild, weekId);
   const rec = readMemberRec(viewer, weekId, guild.id);
+  // 🏰 **今週すでに「別のギルドで」金庫を開けているか。**
+  //    readMemberRec は gid が違うと null を返すので、ギルドを移った人は
+  //    claimed も false・claimable も true になり、画面は押せる「受取」を描いていた。
+  //    ところが claimGuildQuest は同じ記録を見て必ず 409 を返す
+  //    （「今週は別のギルドで金庫を開けています」）── 押せるのに必ず失敗する
+  //    ボタンになっていた。表示側にも同じ事実を渡す。
+  const other = viewer && viewer.guildQuests;
+  const lockedByOtherGuild = !!(other && other.week === weekId && other.gid && other.gid !== guild.id
+    && ((Array.isArray(other.claimed) && other.claimed.length) || other.badge));
   const quests = q.ids.map(id => {
     const def = questDefOf(id);
     if (!def) return null;
@@ -486,7 +495,9 @@ export function guildQuestView(guild, weekId, viewer = null) {
     badge: GUILD_QUEST_BADGE,
     badgeName: 'ギルドの誉れ', badgeNameEn: 'Guild Honors',
     badgeEarned: !!(rec && rec.badge),
-    claimable: quests.some(r => r.done && !r.claimed),
+    claimable: !lockedByOtherGuild && quests.some(r => r.done && !r.claimed),
+    // 受け取れない理由。画面はボタンの代わりにこれを出せる。
+    lockedByOtherGuild,
   };
 }
 

@@ -4631,14 +4631,49 @@ class DailyMode {
 //
 // 戻り値: { practice, attemptId } / 日付が変わっていれば null（呼び直す）。
 let dailyStarting = false;
+// 📅 その日の挑戦の予約に使う冪等キーを端末に控える。
+//
+//    サーバー（server/routes/daily.js）は最初から「同じ attemptId を添えて
+//    もう一度 start を叩いたら、同じ予約をそのまま返す」復帰路を持っていて、
+//    コメントにも「応答だけがネットワークで落ちた1タップで、その日の挑戦が
+//    0点のまま焼けてしまうのを防ぐ」と書いてある。ところが**クライアントは
+//    attemptId を送ってもいなければ控えてもいなかった**ので、その分岐は
+//    到達不能で、予約は通ったのに応答だけ落ちた回は
+//    「info.played が true → 練習」に落ちて1日ぶんが 0点で確定していた。
+//    先に鍵を作って控えてから送る。翌日ぶんは day で弾く。
+const DAILY_ATTEMPT_KEY = 'bba_daily_attempt';
+function keptDailyAttempt(day) {
+  try {
+    const v = JSON.parse(localStorage.getItem(DAILY_ATTEMPT_KEY) || 'null');
+    if (v && v.day === day && typeof v.id === 'string' && /^[0-9A-Za-z_-]{8,64}$/.test(v.id)) return v.id;
+  } catch { /* 壊れた控えは無いものとして扱う */ }
+  return '';
+}
+function keepDailyAttempt(day, id) {
+  try { localStorage.setItem(DAILY_ATTEMPT_KEY, JSON.stringify({ day, id })); } catch { /* 容量いっぱい */ }
+}
+function newAttemptId() {
+  try {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  } catch { /* 古い端末 */ }
+  return `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+}
+
 async function reserveDailyAttempt(info) {
   // ゲストの記録はサーバーに残らない（localStorage に控えるだけ）ので、
   // 「今日の初回かどうか」もローカルの控えで決める。
   if (!session.user) return { practice: !!dailyLocalRecord(info.day), attemptId: null };
+  // 控えてある鍵があれば、info.played が立っていても**まず聞き直す**
+  // ── その played は「予約だけ通った回」でも立つので、ここで諦めると
+  //    自分の挑戦を自分で練習に落としてしまう。
+  const kept = keptDailyAttempt(info.day);
   // 練習だと分かっている回はサーバーに聞かない — 連打で開始のレート制限に
   // 当たると、練習すらできなくなる。
-  if (info.played) return { practice: true, attemptId: null };
-  const res = await api('/api/daily/start', { method: 'POST', body: { day: info.day } });
+  if (info.played && !kept) return { practice: true, attemptId: null };
+  const attemptId = kept || newAttemptId();
+  // ⚠ 送る前に控える。送信中に落ちても、次の1タップで同じ鍵を出せる。
+  keepDailyAttempt(info.day, attemptId);
+  const res = await api('/api/daily/start', { method: 'POST', body: { day: info.day, attemptId } });
   // モーダルを開いたままJST 0:00 を跨いだ。古いシードで走らせても記録できない。
   if (res && res.stale) return null;
   return { practice: !!(res && res.practice), attemptId: (res && res.attemptId) || null };
@@ -12093,6 +12128,11 @@ class BlueprintMode {
     const rewards = await submitResult({
       mode: 'blueprint', score: e.score, lines: e.linesCleared, maxCombo: e.maxCombo,
       duration: secs, won,
+      // 🏗 **遊んだ設計図の日**を必ず添える。これが無いとサーバーは
+      //    「提出が届いた時刻」で1日1回を数えるので、23:58 に始めて 0:02 に
+      //    終わった1枚が翌日の枠を食い、その回の報酬も失われていた
+      //    （デイリーが同じ理由で day を送っているのと同じ話）。
+      day: this.bp.dayKey,
     });
     // await 中に✕→終了でメニューへ戻っていたら結果モーダルを出さない。
     if (currentMode !== this) return;

@@ -268,10 +268,15 @@ export const TITLES = [
   { id: 'towerlord',name: '百塔の覇者',         color: '#ffd75e', desc: 'ダンジョン塔100F制覇' },
   { id: 'ultimate', name: '極意の継承者',     color: '#43d9e8', desc: 'アルティメットを100回発動' },
   { id: 'ultgod',   name: '奥義を極めし者',   color: '#b06bff', desc: 'アルティメットを500回発動' },
-  { id: 'missionman', name: '任務遂行者',     color: '#5ee86e', desc: 'ミッションを50個クリア' },
-  { id: 'missiongod', name: 'ミッションの鬼', color: '#ff6bd4', desc: 'ミッションを300個クリア' },
-  { id: 'achiever', name: 'トロフィーハンター', color: '#ffa93d', desc: '実績を20個解除' },
-  { id: 'completionist', name: '完全主義者',  color: '#fff3b0', desc: '実績を40個解除' },
+  // ⚠ 判定は s.missionsDone（＝**受け取った**ミッションの数）。上の achiever と同じ理由。
+  { id: 'missionman', name: '任務遂行者',     color: '#5ee86e', desc: 'ミッション報酬を50個受け取る' },
+  { id: 'missiongod', name: 'ミッションの鬼', color: '#ff6bd4', desc: 'ミッション報酬を300個受け取る' },
+  // ⚠ 判定は user.achievements（＝**受け取り済み**の実績id）の数。
+  //    説明が「解除」だったので、実績画面の「解除 32 / 124 ・ 受取済 11」を見た人には
+  //    条件を満たしているのに付かない称号に見えていた。同じ配列を読む実績
+  //    ach_ach50 は最初から「実績を50個受け取る」と書いてあるので、そちらに揃える。
+  { id: 'achiever', name: 'トロフィーハンター', color: '#ffa93d', desc: '実績を20個受け取る' },
+  { id: 'completionist', name: '完全主義者',  color: '#fff3b0', desc: '実績を40個受け取る' },
   { id: 'loyal7',   name: '皆勤賞',           color: '#43d9e8', desc: '7日連続ログイン' },
   { id: 'loyal30',  name: '不動の常連',       color: '#ffd75e', desc: '30日連続ログイン' },
   { id: 'survivor', name: '生存本能',         color: '#c22f3d', desc: 'サバイバルでウェーブ20到達' },
@@ -411,6 +416,12 @@ function collectionOwnedIds(user, set) {
   return set.ids.filter(id => owned.includes(id));
 }
 
+// ⚠ **読むだけの関数にする。** 以前はここで setEver を書いていたが、
+//    呼び出し元が earnedTitles の1か所しか無く、しかもその手前に
+//    `if (!set.title || set.kind === 'title') continue;` があって set_boost は
+//    必ず飛ばされていた ── つまり setEver は**一度も書かれず・一度も読まれず**、
+//    「一度そろえたら取り消さない」という下のコメントの約束が丸ごと効いていなかった。
+//    書き込みは noteCollectionSets（明示の同期点）に切り出す。
 function collectionSetDone(user, set) {
   // 🧺 一度そろえたら、そのあと使っても達成は取り消さない。
   //
@@ -422,13 +433,26 @@ function collectionSetDone(user, set) {
   // 称号側の claimedSets と同じ考え方で、そろえた日を印として残す。
   if (set.kind === 'boost' && user && user.stats && user.stats.setEver
       && user.stats.setEver[set.id]) return true;
-  const done = set.ids.length > 0 && collectionOwnedIds(user, set).length >= set.ids.length;
-  if (done && set.kind === 'boost' && user) {
+  return set.ids.length > 0 && collectionOwnedIds(user, set).length >= set.ids.length;
+}
+
+// 🧺 「そろえた」という事実を残す（在庫が減っても取り消さないための印）。
+//    書き換えるので、**保存する場所からだけ**呼ぶこと。書いたら true を返す。
+//    いま呼んでいるのは applyGameResult（1戦ごと）と /api/collection（図鑑を
+//    開いた瞬間）の2か所 ── どちらも直後に saveDb する。
+export function noteCollectionSets(user) {
+  if (!user) return false;
+  let wrote = false;
+  for (const set of COLLECTION_SETS) {
+    if (set.kind !== 'boost') continue;
+    if (user.stats && user.stats.setEver && user.stats.setEver[set.id]) continue;
+    if (!(set.ids.length > 0 && collectionOwnedIds(user, set).length >= set.ids.length)) continue;
     user.stats = user.stats || {};
     user.stats.setEver = user.stats.setEver || {};
-    if (!user.stats.setEver[set.id]) user.stats.setEver[set.id] = Date.now();
+    user.stats.setEver[set.id] = Date.now();
+    wrote = true;
   }
-  return done;
+  return wrote;
 }
 
 // 図鑑の中身。各セットの所持数/総数と、まだ足りない id を返す純粋関数
@@ -444,7 +468,12 @@ export function collectionProgress(user) {
       ids: set.ids, ownedIds,
       missing: set.ids.filter(id => !ownedIds.includes(id)),
       owned: ownedIds.length, total: set.ids.length,
-      done: ownedIds.length >= set.ids.length && set.ids.length > 0,
+      // 🧺 在庫から数え直すのではなく collectionSetDone を通す
+      //    ── kind:'boost' は「一度そろえたら取り消さない」（setEver）。
+      //    ここが在庫直読みだったので、図鑑の受け取りを翌日にまわしたあと
+      //    ブースターを1個使うだけで 4/4 が 3/4 に戻り、1,500🪙 が
+      //    受け取れなくなっていた（claimCollection もこの done を読む）。
+      done: collectionSetDone(user, set),
       claimed: claimed.has(set.id),
       coins: set.coins, gems: set.gems,
       // titleName は日本語名。英語画面がそのまま埋め込めるよう英語名も返す

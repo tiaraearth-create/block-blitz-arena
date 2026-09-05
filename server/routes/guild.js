@@ -11,7 +11,7 @@ import {
   requireAuth, requireAdmin,
 } from '../auth.js';
 import {
-  SHOP_ITEMS, COLLECTION_SETS, collectionView, claimCollection,
+  SHOP_ITEMS, COLLECTION_SETS, collectionView, claimCollection, noteCollectionSets,
 } from '../catalog.js';
 import {
   getCustom,
@@ -213,6 +213,11 @@ function collectionSourceOf(kind, id) {
 
 collectionRouter.get('/api/collection', requireAuth, (req, res) => {
   migrateUser(req.user);
+  // 🧺 「そろえた」という事実を、図鑑を開いた瞬間に残す。
+  //    kind:'boost' のセットは在庫で数えるので、受け取りを翌日にまわしたあと
+  //    ブースターを1個使うだけで達成が剥がれていた（catalog.js の setEver）。
+  //    画面に 4/4 と出したその瞬間を印にするのがいちばん筋が通る。
+  if (noteCollectionSets(req.user)) saveDb();
   const view = collectionView(req.user);
   res.json({
     ...view,

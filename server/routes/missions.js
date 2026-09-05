@@ -270,7 +270,16 @@ missionsRouter.post('/api/battlepass/claim', requireAuth, maintenanceGuard, (req
       paid = { type: cur, amount, insteadOf: reward.id };
     }
   } else if (reward.type === 'badge') {
+    // 🏅 すぐ上の装備品と**まったく同じ形**にそろえる。ここだけ振り替えが
+    //    無かったので、bronze/silver/gold（10/20/30段の無料報酬）は
+    //    バトルパス以外に入手経路が無いのに、2シーズン目以降は毎回
+    //    「受け取りました」と出て**何も入らない**空振りになっていた。
     if (!user.badges.includes(reward.id)) user.badges.push(reward.id);
+    else {
+      const amount = 500;
+      user.coins = (user.coins || 0) + amount;
+      paid = { type: 'coins', amount, insteadOf: reward.id };
+    }
   }
   saveDb();
   res.json({ user: publicUser(user), reward: paid });

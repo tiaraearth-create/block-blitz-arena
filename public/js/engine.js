@@ -93,6 +93,11 @@ export class Engine {
     this.linesCleared = 0;
     this.maxCombo = 0;
     this.piecesPlaced = 0;
+    // 📊 サーバーへ送るテレメトリ。modes.js が `e.itemUses = (e.itemUses||0)+1` と
+    //    後付けで生やしていたので、saveState に載せ忘れても誰も気づかなかった。
+    //    ここで宣言しておくと、欄の存在が1か所で読める。
+    this.itemUses = 0;
+    this.perfectClears = 0;
     this.rerolls = 1;         // hand rerolls left this game
     this.infiniteReroll = false; // chaos-event: rerolls cost nothing while active
     this.scoreMult = 1;       // chaos-event score multiplier
@@ -429,6 +434,12 @@ export class Engine {
       chaosBig: this.chaosBig, chaosMini: this.chaosMini,
       comboBonusMult: this.comboBonusMult, streakShield: this.streakShield,
       ult: this.ult, ultRate: this.ultRate, ultUses: this.ultUses,
+      // 📊 サーバーへ送るテレメトリ（ミッション・実績の原資）。**預けること。**
+      //    itemUses / perfectClears は modes.js が後付けで生やしているだけの欄なので、
+      //    ここに無いと、しおりで中断・再開した走行では `items: e.itemUses || 0` が
+      //    必ず 0 になり、アイテム系ミッションにその走行ぶんが1つも届かなかった
+      //    （chain 以外の預けられる4モードで踏む）。
+      itemUses: this.itemUses || 0, perfectClears: this.perfectClears || 0,
       // ⏱ 期限つきの効果は**残り時間**で持つ。絶対時刻のまま預けると、
       //    翌日に開いたときには必ず切れている（あるいは、時計を戻すと
       //    永久に効いたままになる）。
@@ -454,6 +465,7 @@ export class Engine {
     this.chaosBig = !!st.chaosBig; this.chaosMini = !!st.chaosMini;
     this.comboBonusMult = n(st.comboBonusMult, 1); this.streakShield = !!st.streakShield;
     this.ult = n(st.ult); this.ultRate = n(st.ultRate, 1); this.ultUses = n(st.ultUses);
+    this.itemUses = n(st.itemUses); this.perfectClears = n(st.perfectClears);
     this.feverUntil = st.feverLeft > 0 ? Date.now() + n(st.feverLeft) : 0;
     this.fortressUntil = st.fortressLeft > 0 ? Date.now() + n(st.fortressLeft) : 0;
     // 手札が全部 null の状態で預かることは無いが、壊れた控えでも詰まないように。

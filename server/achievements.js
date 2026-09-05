@@ -125,9 +125,14 @@ export const ACHIEVEMENTS = [
   a('ach_ult1',     'ultimate', 'legend', 1,    300,  2,  '奥義開眼',     'Awakening',        'アルティメット初発動',  'Use your first ultimate', u => S(u).ultsUsed || 0),
   a('ach_ult100',   'ultimate', 'legend', 100,  2500, 20, '極意の継承者', 'Heir of Mastery',  'アルティメット100回',   'Use 100 ultimates',       u => S(u).ultsUsed || 0),
   a('ach_ult500',   'star', 'legend', 500,  9000, 80, '奥義を極めし者', 'Grand Master',   'アルティメット500回',   'Use 500 ultimates',       u => S(u).ultsUsed || 0),
-  a('ach_mis10',    'missions', 'legend', 10,   600,  5,  '任務開始',     'On Duty',          'ミッション10個クリア',  'Complete 10 missions',    u => S(u).missionsDone || 0),
-  a('ach_mis50',    'missions', 'legend', 50,   2200, 18, '任務遂行者',   'Mission Runner',   'ミッション50個クリア',  'Complete 50 missions',    u => S(u).missionsDone || 0),
-  a('ach_mis300',   'missions', 'legend', 300,  9000, 80, 'ミッションの鬼', 'Mission Demon',  'ミッション300個クリア', 'Complete 300 missions',   u => S(u).missionsDone || 0),
+  // ⚠ missionsDone を増やすのは claimMission（受け取り処理）の1か所だけで、
+  //   達成しても受け取らなければ増えない（日が変わると未受取の達成は消える）。
+  //   説明が「クリア」だったので、ミッション画面の「達成 3/3」を見た人には
+  //   条件を満たしているのに進まない実績に見えていた。同じ値を読む
+  //   ach_ach50（「実績を50個**受け取る**」）の言い方に揃える。
+  a('ach_mis10',    'missions', 'legend', 10,   600,  5,  '任務開始',     'On Duty',          'ミッション報酬を10個受け取る',  'Claim 10 mission rewards',    u => S(u).missionsDone || 0),
+  a('ach_mis50',    'missions', 'legend', 50,   2200, 18, '任務遂行者',   'Mission Runner',   'ミッション報酬を50個受け取る',  'Claim 50 mission rewards',    u => S(u).missionsDone || 0),
+  a('ach_mis300',   'missions', 'legend', 300,  9000, 80, 'ミッションの鬼', 'Mission Demon',  'ミッション報酬を300個受け取る', 'Claim 300 mission rewards',   u => S(u).missionsDone || 0),
 
   // ==== v2.6 不滅アップデート: +37種で全100種 ====================================
   // ---- プレイ ----

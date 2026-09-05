@@ -314,7 +314,13 @@ export function rerollMission(user, weekNum, id, opts = {}) {
   const counts = rerollCounts(ms);
   const costs = REROLL_COSTS[scope];
   const used = counts[scope];
-  if (used >= costs.length) return { error: 'きょうの引き直しは使い切りました' };
+  // 🔁 数え方はデイリーが日付キー・ウィークリーが週キー（rerollCounts）なので、
+  //    文言も分ける。画面の残り回数は「本日／今週」と出し分けているのに、
+  //    ここだけ固定で「きょうの」と言っていたので、週の枠を使い切った人が
+  //    翌日また引けると誤解する。
+  if (used >= costs.length) {
+    return { error: scope === 'weekly' ? '今週の引き直しは使い切りました' : 'きょうの引き直しは使い切りました' };
+  }
   const cost = costs[used];
   const currency = (opts && opts.currency) === 'gems' ? 'gems' : 'coins';
   const costGems = rerollGemCost(cost);
@@ -332,7 +338,14 @@ export function rerollMission(user, weekNum, id, opts = {}) {
   // 消えた id）もここでは普通に引き直せる ── むしろ掃除できて都合がよい。
   const pool = scope === 'daily' ? DAILY_POOL : WEEKLY_POOL;
   const taken = new Set(set.map(r => r.id));
-  const cands = pool.filter(d => !taken.has(d.id));
+  // 🏗 **その日もう達成できないお題は引かせない。**
+  //    設計図は1日1枚しか無く、勝利加算も1日1回（server/index.js の bpDay）なので、
+  //    今日ぶんを解いたあとに d_blueprint1 を引くと**その日は絶対に達成できない**
+  //    お題を引かされることになる（遺跡や工房は別ステージで埋め合わせできるが、
+  //    設計図だけは代わりが存在しない）。お金を払った引き直しがハズレ枠になる。
+  const bpDone = !!(user.stats && user.stats.bpDay
+    && user.stats.bpDay.day === todayId() && user.stats.bpDay.cleared);
+  const cands = pool.filter(d => !taken.has(d.id) && !(bpDone && d.id === 'd_blueprint1'));
   if (!cands.length) return { error: '引き直せるお題がもうありません' };
 
   // 同じ日に何度引いても同じ物が出ないよう、使用回数と対象行もシードに混ぜる。

@@ -268,6 +268,8 @@ const SERVER_MSG_EN = {
   // ---- 🔁 ミッションの引き直し（missions.js / index.js の /api/missions/reroll）----
   '受け取り済みのミッションは引き直せません': 'A claimed mission cannot be rerolled',
   'きょうの引き直しは使い切りました': 'No mission rerolls left today',
+  '今週の引き直しは使い切りました': 'No mission rerolls left this week',
+  '今週は別のギルドで金庫を開けています': 'You already opened a vault with another guild this week',
   '引き直せるお題がもうありません': 'No other missions left to draw',
   'ミッションを選んでください': 'Pick a mission first',
   'このミッションは引き直せません': 'That mission cannot be rerolled',

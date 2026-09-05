@@ -2175,9 +2175,14 @@ export function initBattle(server, deps) {
             // ボット/代打の手まで人間の実績（s.piecesPlaced）に入っていた。
             // 🚩 陣取りも共有盤面なので、置いた数は per-player の p.moves で数える。
             pieces: (match.mode === 'coop' || match.mode === 'land') ? (p.moves || 0) : (p.pieces || 0),
-            // Tournament: the badge/bonus fires only on winning the FINAL.
+            // 🏆 大会は「勝ったか」と「優勝したか」を**別の欄**で渡す。
+            //    以前は won 自体を決勝限定にしていたので、準々決勝・準決勝で勝っても
+            //    勝利系ミッション（win / pvpWin）も totalWins も1つも進まなかった
+            //    ── 結果画面には「勝利！」と出て、勝ち上がりの演出まで出るのに。
+            //    バッジ・優勝ボーナス・全体速報は index.js 側が tourneyFinal で絞る。
             // 自己対戦は勝敗を付けない（PvP勝利系ミッション/実績・勝利報酬を稼がせない）。
-            won: friendly ? false : (match.tourney ? (outcome === 1 && !!match.tourney.final) : outcome === 1),
+            won: friendly ? false : outcome === 1,
+            tourneyFinal: !!(match.tourney && match.tourney.final),
             drew: friendly ? false : outcome === 0.5,
             // 🏳️ 「この試合は勝敗を判定しない」。
             //    won:false / drew:false のまま渡すと mode:'pvp' の「負け」の枝に
@@ -3024,9 +3029,16 @@ export function initBattle(server, deps) {
         // 履歴）が付くが、決勝が不戦勝だと endMatch を通らないのでここで付ける。
         const cu = walkover && champ.user ? db.users[champ.user.id] : null;
         if (cu) {
+          // 🏆 不戦勝の優勝。**duration 0 を渡してはいけない** ──
+          //    applyGameResult は duration を 1秒に丸めたうえ、score 0 / lines 0 で
+          //    idleResult（＝遊んだ形跡なし）と見なして paceScale を 0 に落とすので、
+          //    コインもパスXPもアカウントXPも全部 0 になっていた。
+          //    「決勝を戦って勝った人」と同じ土俵にするため、決勝ラウンドの
+          //    持ち時間を実体として渡す（順位報酬に相当するバッジと💎は別枠で付く）。
           const rewards = applyGameResult(cu, {
-            trusted: true, mode: 'tournament', won: true, drew: false,
-            score: 0, lines: 0, maxCombo: 0, duration: 0, pieces: 0,
+            trusted: true, mode: 'tournament', won: true, drew: false, tourneyFinal: true,
+            score: 0, lines: 0, maxCombo: 0,
+            duration: TOURNEY_ROUND_SECS[TOURNEY_ROUND_SECS.length - 1], pieces: 0,
           });
           saveDb();
           send(champ, { type: 'tourney_champion', rewards, user: publicUser(cu) });

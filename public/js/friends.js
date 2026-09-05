@@ -146,9 +146,13 @@ function challengeBtn(key, e) {
 
 function boardRow(key, e, i) {
   const me = !!(session.user && e.id === session.user.id);
+  // 🏅 サーバーが付けた**競技順位**（同点は同順位）を使う。配列の添字を
+  //    そのまま順位にしていたので、まったく同じ点の2人に金と銀が割れていた。
+  //    旧サーバー相手のときだけ添字に落とす。
+  const rank = Number.isFinite(Number(e.rank)) && Number(e.rank) > 0 ? Number(e.rank) : i + 1;
   // 順位の絵は icons.js が唯一の引き口（medal_1/2/3）。4位以降は数字。
-  const mi = medalIconName(i + 1);
-  const medal = mi ? icon(mi, { size: 20 }) : `${i + 1}.`;
+  const mi = medalIconName(rank);
+  const medal = mi ? icon(mi, { size: 20 }) : `${rank}.`;
   return [
     `<div class="fr-row"${me ? ' style="border-color:rgba(255,255,255,0.28)"' : ''}>`,
     `  <span class="fr-lvl" style="min-width:26px;text-align:center">${medal}</span>`,

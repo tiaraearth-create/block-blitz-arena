@@ -247,10 +247,23 @@ socialRouter.post('/api/friends/settings', requireAuth, (req, res) => {
 // rivalBoard の行を部門ごとの順位表にほどく。0点の人は載せない ──
 // 未挑戦が「最下位」として並ぶと、遊んでいないことが晒される形になる。
 function rivalSection(rows, valueOf) {
-  return rows
+  const sorted = rows
     .filter(r => valueOf(r) > 0)
-    .sort((a, b) => valueOf(b) - valueOf(a))
-    .map(r => ({
+    .sort((a, b) => valueOf(b) - valueOf(a));
+  // 🏅 **同点は同順位（1,2,2,4）。** 順位を載せずに返していたので、画面は
+  //    配列の添字をそのまま順位にしていて、まったく同じ点の2人に金と銀が
+  //    割れていた（並び順は内部の都合で決まるので、開き直すと入れ替わる）。
+  //    公開ランキングは screens.js の lbRanks で同じ事故を直してある。
+  let rank = 0;
+  let prevVal = null;
+  const rankOfIdx = sorted.map((r, i) => {
+    const v = valueOf(r);
+    if (prevVal === null || v !== prevVal) { rank = i + 1; prevVal = v; }
+    return rank;
+  });
+  return sorted
+    .map((r, i) => ({
+      rank: rankOfIdx[i],
       id: r.id, username: r.username, level: r.level, badges: r.badges, title: r.title,
       status: r.status, lastSeen: r.lastSeen, me: r.me,
       value: valueOf(r), score: valueOf(r), rating: r.rating,

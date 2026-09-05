@@ -1974,6 +1974,10 @@ $('#btnDaily').onclick = async () => {
       <br>${t('次のお題まで', 'Next challenge in')} <b>${fmtWeeklyRemain(info.endsAt - Date.now())}</b>
       ${info.streak ? `<br>${t(`連続クリア${info.streak}日`, `${info.streak}-day clear streak`)}${
         info.inProgress ? `<small class="muted"> ${t('（挑戦中）', '(in progress)')}</small>` : ''}` : ''}
+      ${/* ⏳ 予約は2時間で切れる（DAILYC_ATTEMPT_MS）。切れたあとは何をしても
+             記録にならないのに、以前は「連続クリア12日（挑戦中）」と言い続けていた
+             ―― 本人には伸びると見えて、実際には翻日そこで途切れる。 */''}
+      ${info.attemptExpired ? `<br><small class="muted">${t('※ 開始から時間が経ちすぎたため、この回はもう記録されません', '* Too long since you started — this attempt can no longer be recorded')}</small>` : ''}
       ${session.user ? '' : `<br><small>${t('記録とランキングにはログイン', 'Log in for records & the ranking')}</small>`}
     </p>
     <div class="modal-buttons">

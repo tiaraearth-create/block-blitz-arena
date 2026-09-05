@@ -2924,7 +2924,12 @@ function renderMissions() {
   const bonus = daily ? data.dailyBonus : data.weeklyBonus;
   const bonusClaimed = daily ? data.dailyBonusClaimed : data.weeklyBonusClaimed;
   const allClaimed = rows.every(r => r.claimed);
-  const doneCount = rows.filter(r => r.claimed).length;
+  // 🎯 「達成」と「受取」は別の数。サーバーの missionsView は done（進捗が目標に
+  //    届いた）と claimed（報酬を受け取った）を別々に返しているのに、見出しも
+  //    リングも claimed を数えていたので、3つ全部クリアしても受け取るまで
+  //    「達成 0 / 3・0%」のままだった（実績タブのリングは達成数で描いている）。
+  const doneCount = rows.filter(r => r.done).length;
+  const claimedCount = rows.filter(r => r.claimed).length;
   // 🔁 リロール（I12）。回数と次の値段はサーバーが missions.rerolls で教えてくる
   // （デイリー／ウィークリーは別枠。1回目が0＝1日1回無料）。返してこない旧版では
   // 「1日1回無料」の既定表示で出し、可否と金額の判定はサーバーに任せる。
@@ -2957,7 +2962,7 @@ function renderMissions() {
       <div>
         <b>${daily ? tr('デイリーミッション', 'Daily Missions') : tr('ウィークリーミッション', 'Weekly Missions')}</b>
         <div class="muted" style="font-size:12px">
-          ${tr(`達成 ${doneCount} / ${rows.length}`, `Claimed ${doneCount} / ${rows.length}`)}
+          ${tr(`達成 ${doneCount} / ${rows.length}`, `Done ${doneCount} / ${rows.length}`)}${SEP}${tr(`受取 ${claimedCount}`, `claimed ${claimedCount}`)}
           ${SEP}${daily
             ? tr(`リセットまで ${fmtResetIn(data.dailyResetIn)}`, `Resets in ${fmtResetIn(data.dailyResetIn)}`)
             : tr('毎週月曜リセット', 'Resets every Monday')}
@@ -3161,14 +3166,29 @@ export function showRankRewardsModal(force = false) {
   if (!force && $('#modal-root').querySelector('.modal')) return;
   const total = pending.reduce((a, r) => ({ coins: a.coins + (r.coins || 0), gems: a.gems + (r.gems || 0) }), { coins: 0, gems: 0 });
   const medal = r => (r.rank <= 3 ? lbMedal(r.rank) : '');
+  // 🏛 「いつの順位か」。週間は週番号、殿堂はシーズン名（どちらも無ければ空）。
+  const rrWhen = r => r.week || r.seasonName || r.boardName || '';
+  // 🏛 「何の値か」。週間チャレンジだけが点数で、殿堂はボードによって
+  //    レート・ハイスコア・優勝回数と単位が違うので、点は付けない。
+  const rrBest = r => (r.best == null ? ''
+    : r.week ? `${fmt(r.best)}${tr('点', ' pts')}`
+      : `${fmt(r.best)}`);
+  // 殿堂ぶんが混じっているかで見出しを変える（週間の結果だと言い切らない）。
+  const anyHof = pending.some(r => !r.week);
   const m = showModal(`
     <h2>${ic('leaderboard', 20)} ${tr('ランキング報酬', 'Ranking Rewards')}</h2>
-    <p class="muted center" style="font-size:12px;margin-bottom:10px">${tr('週間チャレンジの最終結果が出ました！', 'The weekly challenge results are in!')}</p>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">${anyHof
+      ? tr('ランキングの最終結果が出ました！', 'The ranking results are in!')
+      : tr('週間チャレンジの最終結果が出ました！', 'The weekly challenge results are in!')}</p>
     <div class="rank-reward-list">
       ${pending.map(r => `
         <div class="rank-reward-row">
-          <span><b>${medal(r) ? `${medal(r)} ` : ''}${tr(`${r.rank}位`, `#${r.rank}`)}</b> <small class="muted">/ ${r.of}${tr('人中', ' players')}${SEP}${escapeHtml(r.week)}${SEP}${fmt(r.best)}${tr('点', ' pts')}</small></span>
-          <b>+${fmt(r.coins)}${ic('coins', 13)} +${fmt(r.gems)}${ic('gems', 13)}${r.badge ? ` +${badgeIcon(r.badge, 16)}` : ''}</b>
+          ${/* 🏛 週間と殿堂（シーズン）が同じ一覧に混ざる。殿堂ぶんには week 欄が
+                無いので `escapeHtml(r.week)` が文字列「undefined」になっていた。
+                単位も、殿堂はレートや優勝回数なのに必ず「点」が付いていた
+                （レート1,450 が「1,450点」）。行ごとに何の順位なのかで出し分ける。 */''}
+          <span><b>${medal(r) ? `${medal(r)} ` : ''}${tr(`${r.rank}位`, `#${r.rank}`)}</b> <small class="muted">/ ${r.of}${tr('人中', ' players')}${SEP}${escapeHtml(rrWhen(r))}${rrBest(r) ? `${SEP}${rrBest(r)}` : ''}</small></span>
+          <b>${r.coins ? `+${fmt(r.coins)}${ic('coins', 13)} ` : ''}+${fmt(r.gems)}${ic('gems', 13)}${r.badge ? ` +${badgeIcon(r.badge, 16)}` : ''}</b>
         </div>`).join('')}
     </div>
     <div class="modal-buttons">
@@ -5966,7 +5986,8 @@ function renderMyGuild() {
       <div>
         <b>${ic('seat_play', 14)} ${tr('週間クエスト', 'Weekly quests')}</b>
         <div class="muted" style="font-size:12px">${tr(`達成 ${q.doneCount} / ${q.total}`, `Done ${q.doneCount} / ${q.total}`)}${
-          q.badgeEarned ? tr(' ・ ギルドの誉れ 獲得済み', ' · Guild Honors earned') : ''}<br>${
+          q.badgeEarned ? tr(' ・ ギルドの誉れ 獲得済み', ' · Guild Honors earned') : ''}${
+          q.lockedByOtherGuild ? tr(' ・ 今週は別のギルドで受取済み', ' · already claimed with another guild this week') : ''}<br>${
           tr('達成したクエストの金庫は、メンバーが1人1回ずつ開けられます', 'Each completed quest is a vault every member can open once')}</div>
       </div>
     </div>
@@ -5981,11 +6002,16 @@ function renderMyGuild() {
             <div class="ms-prog">${fmt(quest.progress)} / ${fmt(quest.goal)}</div>
           </div>
           ${rewardChip(quest.coins, quest.gems)}
+          ${/* 🏰 今週すでに別のギルドで金庫を開けている人には、押せる「受取」を
+                 出さない。サーバーは必ず 409 で断る（guilds.js の claimGuildQuest）ので、
+                 押せるボタンを出すと「押しても必ず失敗する」だけになる。 */''}
           ${quest.claimed
             ? `<span class="ms-check">${ic('check', 14)}</span>`
-            : quest.done
-              ? `<button class="btn btn-sm btn-gold" data-gquest="${escapeHtml(String(quest.id))}">${tr('受取', 'Claim')}</button>`
-              : `<button class="btn btn-sm btn-ghost" disabled>${tr('未達成', 'Locked')}</button>`}
+            : quest.done && q.lockedByOtherGuild
+              ? `<button class="btn btn-sm btn-ghost" disabled title="${tr('今週は別のギルドで金庫を開けています', 'You already opened a vault with another guild this week')}">${tr('今週は不可', 'Locked')}</button>`
+              : quest.done
+                ? `<button class="btn btn-sm btn-gold" data-gquest="${escapeHtml(String(quest.id))}">${tr('受取', 'Claim')}</button>`
+                : `<button class="btn btn-sm btn-ghost" disabled>${tr('未達成', 'Locked')}</button>`}
         </div>`;
       }).join('')}
     </div>` : '';
