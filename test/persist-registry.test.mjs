@@ -305,6 +305,48 @@ const NEEDS_DEEP_MERGE = ['workshop', 'dailyReplays'];
   } else {
     check('C-3 復元マージの許可リストに死んだ欄が残っていない', true, '');
   }
+
+  // ── C-4/C-5: user.stats の中の **日付つきの止め金**（`〜Day`）。
+  //
+  // C-1..C-3 は user のトップレベル欄しか数えていなかった。ところが
+  // 「1日いくらまで」を止めている印はどれも user.stats の中に居る
+  // （grindDay / eventGemDay / puzWinDay / wsWinDay / bpDay / shopGiftDay /
+  //  champAnnDay / eyeShardDay）。ここが復元マージから落ちると、
+  // **復元した日だけ上限が丸ごともう一本ぶん開く** ── しかも増えたぶんは
+  // 正規の経路を通っているので、farming / idempotent / econguard の
+  // どのテストにも引っかからない。実際 eyeShardDay は v2.53 で足したあと
+  // backup.js に書き忘れたまま出荷されていた（v2.58 で追加）。
+  //
+  // 日付つきの止め金は名前で確実に見分けられる（`〜Day`）ので、
+  // ここだけは許可リスト無しの全数一致にする。
+  const DATE_METHODS = new Set(['getDay', 'getUTCDay', 'setDay']);
+  const dayKeys = new Map();
+  for (const { rel, src } of FILES) {
+    if (rel === 'server/backup.js') continue;
+    // user.stats は場所ごとに別名で持ち回っている（user.stats.bpDay / st.eventGemDay /
+    // gs.grindDay / s.eyeShardDay …）ので、**受け皿の名前では絞らない**。
+    // 頼るのは名前の付け方のほう ── 日付つきの止め金は必ず `〜Day` で終わる。
+    // 受け皿の手前まで見ようとすると user.stats.bpDay のような二段の参照を
+    // 取りこぼすので、`.〜Day` だけを見て、Date の組み込みメソッドだけ外す。
+    for (const m of src.matchAll(/\.([A-Za-z_][\w]*Day)\b/g)) {
+      if (DATE_METHODS.has(m[1])) continue;
+      if (!dayKeys.has(m[1])) dayKeys.set(m[1], new Set());
+      dayKeys.get(m[1]).add(rel);
+    }
+  }
+  check('C-4 日付つきの止め金を数え上げられた', dayKeys.size >= 6, `${dayKeys.size}件: ${[...dayKeys.keys()].sort().join(', ')}`);
+  // クライアント（画面）にしか無い一時的な日付印は対象外 ── ここで見ているのは
+  // server が db.json に書くものだけ。いまのところ除外は要らない。
+  const DAY_NOT_MERGED = new Map([
+    ['adminEventDay', '👑管理者イベントの「その日の予約」控え。止め金ではなく、日をまたぐと自分で捨てられる一時データ（C-2 の許可理由と同じ）。'],
+    ['joinedDay', '住人（server/residents.js）の在籍日数。seed から毎回組み立て直すので db.json に無く、復元とも無関係。'],
+  ]);
+  const dayMiss = [...dayKeys.keys()]
+    .filter(k => !new RegExp(`\\b${k}\\b`).test(BACKUP_CODE) && !DAY_NOT_MERGED.has(k)).sort();
+  check('C-5 日付つきの止め金が復元マージから漏れていない', dayMiss.length === 0,
+    dayMiss.length
+      ? `backup.js が一度も触っていない: ${dayMiss.join(', ')} — mergeEarned の「日付つきの止め金」の輪に足すこと（同じ日なら大きいほう／日が違えば新しいほう）`
+      : `${dayKeys.size}件すべて backup.js が扱っている`);
 }
 
 // ===========================================================================

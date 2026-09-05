@@ -508,6 +508,16 @@ export function resumeBookmark() {
   // 盤面と手札が入れ替わったので、掴んでいるものと選択は捨てる。
   const v = getView();
   if (v) { v.drag = null; v.sel = null; v.spawnAnim.clear(); }
+  // ⏱ 遊んだ長さを引き継ぐ（saveBookmark の playedMs のコメント）。
+  //    startedAt は「サーバーへ送る duration の起点」なので、預けた時点までの
+  //    長さぶんだけ後ろへずらす。ずらしても不正には使えない ── サーバー側で
+  //    duration は「前回の結果送信からの実経過＋90秒」までに切られるので、
+  //    実際に過ぎた時間より長い申告は通らない。
+  const playedMs = Math.max(0, Math.min(7200_000, Number(bm.playedMs) || 0));
+  if (playedMs > 0) {
+    if (Number.isFinite(m.startedAt)) m.startedAt -= playedMs;
+    if (Number.isFinite(m.playStartedAt)) m.playStartedAt -= playedMs;
+  }
   if (typeof m.bookmarkRestore === 'function') m.bookmarkRestore(bm.extra);
   if (typeof m.updateHud === 'function') m.updateHud();
   updateRerollHud(m.engine);
@@ -535,6 +545,16 @@ function saveBookmark(mode) {
       // モードが自分で足したいもの（階・ウェーブ・熱・深度・遺物…）。
       // 持たないモードは undefined でよい。
       extra: typeof mode.bookmarkExtra === 'function' ? mode.bookmarkExtra() : null,
+      // ⏱ ここまでに遊んだ長さ。**戻すときに必ず足し直す**（下の resumeBookmark）。
+      //    start() が startedAt を今にするので、預けずに書き直すと「30分遊んだ走行の
+      //    続きを1分で終えた」＝ duration 60秒 として送られる。サーバーは
+      //    duration からスコアの上限（メルトダウンなら 2,000点/秒）を決めるので、
+      //    32万点の続きが 12万点に切り詰められて記録が消えた ── しかも運営には
+      //    「レート上限で頭を押さえた」記録が残るので、正直に遊んだ人が不正の
+      //    印を付けられていた。サバイバルはさらに悪く、到達ウェーブの保存が
+      //    duration 20秒以上（realPlay）の門の内側なので、続きを20秒で終えると
+      //    W15 まで戻したウェーブが**まるごと記録されなかった**。
+      playedMs: Math.max(0, Math.min(7200_000, Date.now() - (Number(mode.startedAt) || Date.now()))),
       // 何の続きかを画面に出すための見出し。モードが自前の見出しを持たない
       // ときは、モード名だけでも必ず出す ── ここが空だと「続きから — ・4,321」と
       // 中黒が浮いて、何の続きなのか読めないカードになる。
@@ -1003,6 +1023,8 @@ export function rerollCurrent() {
   }
   audio.coin();
   toast(t('ピースを引き直しました！', 'New pieces drawn!'), 'ok', 1400);
+  // 🔁 録画を取っているモードには引き直しも渡す（デイリーの recordReroll）。
+  if (typeof currentMode.recordReroll === 'function') currentMode.recordReroll();
   updateRerollHud(e);
   if (e.over) handleEngineOver();
 }
@@ -3373,12 +3395,22 @@ function bossInstantMove(m, moveId) {
     toast(t('大地震！ブロックが崩落！', 'Quake! The board collapses!'), 'err', 1500);
   } else if (moveId === 'curse_hand' || moveId === 'curse_hand2') {
     const n = moveId === 'curse_hand2' ? 2 : 1;
-    const idxs = e.hand.map((p, i) => (p ? i : -1)).filter(i => i >= 0);
+    const now = Date.now();
+    // ❄ 候補は「いま自由に使える枠」だけ。**すでに凍っている枠を数に入れない**。
+    //
+    //    以前は手札の埋まっている枠を全部候補にしていたので、まだ凍っている枠を
+    //    もう一度選び直せた ── 呪縛（8秒）が明ける前に二重呪縛が来ると、
+    //    「最低1枠は残す」の数え方が既に凍っている枠まで空き扱いしてしまい、
+    //    3枠すべてが凍って**手が完全に止まった**。しかも hasAnyMove() は凍結を
+    //    見ないので終局判定も走らず、ボスの攻撃だけが当たり続ける ── 何も
+    //    できないまま殴られるだけの数秒になっていた（墓所の王・魔神のように
+    //    curse_hand と curse_hand2 を両方持つボスで再現する）。
+    const free = e.hand.map((p, i) => (p && !(p.frozenUntil > now) ? i : -1)).filter(i => i >= 0);
     let frozen = 0;
     // 最低1枠は自由に残す — 完全ロックは理不尽
-    for (let i = 0; i < n && idxs.length > 1; i++) {
-      const slot = idxs.splice((Math.random() * idxs.length) | 0, 1)[0];
-      e.hand[slot].frozenUntil = Date.now() + 8000;
+    for (let i = 0; i < n && free.length > 1; i++) {
+      const slot = free.splice((Math.random() * free.length) | 0, 1)[0];
+      e.hand[slot].frozenUntil = now + 8000;
       frozen++;
     }
     if (frozen) {
@@ -4237,6 +4269,14 @@ class DailyMode {
     this.moves.push({ h: index | 0, r: row | 0, c: col | 0, t: Math.max(0, Date.now() - this.startedAt) });
   }
 
+  // 🔁 引き直しも同じ列に記録する（rerollCurrent から呼ばれる）。
+  //    これが無いと、引き直した回の録画は**再生しても同じ走りにならない**
+  //    （sanitizeReplay のコメント）。
+  recordReroll() {
+    if (this.moves.length >= DAILY_REPLAY_MAX_MOVES) return;
+    this.moves.push({ rr: 1, t: Math.max(0, Date.now() - this.startedAt) });
+  }
+
   start() {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
@@ -4446,6 +4486,16 @@ class DailyMode {
     if (!mv) { this.ghostFinished = true; this.updateGhostHud(); return; }
     // 録画が壊れていても止まらない。打てない手が来たらそこで再生を終える。
     this.ghostEngine.over = false;
+    // 🔁 引き直しの印（ReplayMode.step と同じ）。
+    if (mv.rr) {
+      this.ghostEngine.reroll();
+      this.ghostIdx++;
+      const after = rep.moves[this.ghostIdx];
+      if (!after) { this.ghostFinished = true; this.updateGhostHud(); return; }
+      this.ghostTimer = setTimeout(() => this.ghostStep(),
+        Math.min(4000, Math.max(160, (after.t || 0) - (mv.t || 0))));
+      return;
+    }
     const res = this.ghostEngine.place(mv.h, mv.r, mv.c);
     if (!res) { this.ghostFinished = true; this.updateGhostHud(); return; }
     this.ghostScore = this.ghostEngine.score;
@@ -6732,7 +6782,15 @@ class OnlineMode extends VersusBase {
     const mark = e => `${e.you ? ic('user', 13) + '<b>' : ''}${escapeHtml(e.name)}${e.you ? '</b>' : ''}${e.rating != null ? ` <small class="muted">R${e.rating}</small>` : ''}`;
     const rows = msg.pairs.map(p =>
       `<div class="rs-row"><span>${mark(p[0])}</span><span style="opacity:.6">${ic('seat_play', 14)}</span><span>${mark(p[1])}</span></div>`).join('');
-    showModal(`
+    // ⚠ **showModal の戻り値を必ず受けること。** 受けずに `m.querySelector` と
+    //    書いていたので、この関数はブラケットを出した直後に毎回
+    //    ReferenceError で落ちていた ── つまり
+    //      ・「離脱する」に onclick が付かない（押しても何も起きない）
+    //      ・その下の audio.click() も鳴らない
+    //    という状態で、逃げ道として足したはずのボタンが**飾りになっていた**。
+    //    決勝の相手が切断して不戦勝で優勝すると、閉じ口の無いブラケットの前で
+    //    固まる（onTourneyChampion のコメント）。その最後の逃げ道がこれ。
+    const modal = showModal(`
       <h2>${ic('mode_tourney', 22)} ${t('トーナメント', 'Tournament')} — ${this.tourneyRoundName(msg.pairs.length)}</h2>
       <div class="result-stats">${rows}</div>
       <p class="muted center" style="margin-top:8px">${t('まもなく対戦開始…', 'Match starting soon…')}</p>
@@ -6742,7 +6800,7 @@ class OnlineMode extends VersusBase {
     // 出口を必ず1つ残す。このモーダルは画面を覆うので、ボタンが一つも無いと
     // ✕ さえ押せない ── 次の対戦が永久に来ない経路（不戦勝の優勝・外からの
     // 中止）に入ると、リロードしか逃げ道が無かった。
-    const leave = m.querySelector('#tqLeave');
+    const leave = modal.querySelector('#tqLeave');
     if (leave) leave.onclick = () => { audio.click(); closeModal(); this.quit(); };
     audio.click();
   }
@@ -9560,7 +9618,20 @@ window.__bbaSaveNow = () => {
   if (m.savable === false) return;
   try {
     if (view) view.inputLocked = true;
-    if (typeof m.finish === 'function') m.finish();
+    // ⚠ **「中断」の印を先に立てる。** これが無いと、勝敗を持つモードが
+    //    「更新で落ちた瞬間の点差」をそのまま結果にしていた。
+    //
+    //    いちばん悪いのは AI対戦（VsAiMode.finish）── outcome を現在の点差から
+    //    決めるので、120秒の勝負の20秒目でこちらが先行していたら、更新のたびに
+    //    **鬼／神に勝ったことになる**。won:true でサーバーへ送るので、バッジも
+    //    解禁も全体告知（「〇〇が鬼を撃破！」）も本物として付いてしまう。
+    //    逆にボス・ボスラッシュ・ダンジョンは won:undefined で「やられた…」に
+    //    なり、何もしていないのに討伐失敗の記録が残っていた。
+    //
+    //    aborted は ✕ からの途中終了と同じ印で、鳴らす音と帯の文言だけを
+    //    変える（記録も報酬も送る側は変わらない）。中断は引き分け、が既定。
+    m.aborted = true;
+    if (typeof m.finish === 'function') m.finish(false);
   } catch (err) {
     console.warn('shutdown save failed:', err && err.message);
   }
@@ -12033,6 +12104,8 @@ function sanitizeReplayClient(rep) {
   const moves = [];
   for (const m of rep.moves.slice(0, DAILY_REPLAY_MAX_MOVES)) {
     if (!m) continue;
+    // 🔁 引き直しの印（server/routes/daily.js の sanitizeReplay と同じ形）。
+    if (m.rr) { moves.push({ rr: 1, t: Math.max(0, m.t | 0) }); continue; }
     const h = m.h | 0, r = m.r | 0, c = m.c | 0;
     if (h < 0 || h > 2 || r < 0 || r > 7 || c < 0 || c > 7) return null;
     moves.push({ h, r, c, t: Math.max(0, m.t | 0) });
@@ -12217,6 +12290,15 @@ class ReplayMode {
     const e = this.engine;
     // 固定の録画なので、詰み判定で止めない（次の手が本当に打てるかで判断する）。
     e.over = false;
+    // 🔁 引き直しの印はそのまま引き直す（録画と同じ手札の並びに戻す）。
+    if (mv.rr) {
+      e.reroll();
+      this.idx++;
+      const after = this.replay.moves[this.idx];
+      if (!after) { this.timer = setTimeout(() => this.finish(), 900); return; }
+      this.timer = setTimeout(() => this.step(), Math.min(3000, Math.max(150, (after.t || 0) - (mv.t || 0))) / this.speed);
+      return;
+    }
     const res = e.place(mv.h, mv.r, mv.c);
     if (!res) { this.finish(); return; }
     res.over = false;

@@ -663,7 +663,11 @@ function mergeEarned(winner, loser) {
   //   ・同じ日なら大きいほう（迷ったら閉じる）
   //   ・勝った側に無ければ負けた側のものを引き継ぐ
   //   ・日が違うときは新しい日のほう（古い日は次の結果で作り直される）
-  for (const [key, fields] of [['grindDay', ['coins', 'bpXp', 'accXp']], ['eventGemDay', ['got']]]) {
+  // 👁 王座の欠片の1日の受取総額 (eyeShardDay = { day, got } /
+  //    上限は EYE_SHARD_DAILY_CAP)も同じ形。欠片は applyGameResult の中で
+  //    **唯一そのまま通貨を鋳造する行**なので（test/econguard.test.mjs）、
+  //    ここから落ちていると**復元した日だけ上限が丁度もう一本分開く**。
+  for (const [key, fields] of [['grindDay', ['coins', 'bpXp', 'accXp']], ['eventGemDay', ['got']], ['eyeShardDay', ['got']]]) {
     const ld = loser.stats && loser.stats[key];
     if (!isPlainObj(ld) || !okDay(ld.day)) continue;
     const wst4 = winner.stats || (winner.stats = {});

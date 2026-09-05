@@ -3304,7 +3304,19 @@ export function initBattle(server, deps) {
     // 「+1200🪙 +40💎」と表示されたうえで残高が1も動かなかった。
     // 帯の名前（優勝／入賞…）は出したいので payout 自体は送り、
     // 金額を出してよいかだけを別の印で伝える。
-    const payoutGranted = !!(me && e.ws.readyState === e.ws.OPEN);
+    //
+    //    ⚠ **接続が生きているかで判定してはいけない。**
+    //      ここに readyState === OPEN を入れていたので、回線が切れた人は
+    //      3分間走ったロイヤルの報酬を**一枚も受け取れなかった** ──
+    //      コインもジェムもXPもミッション進捗も、royalePlays /
+    //      royaleKills / royaleBest の記録も、一切付かない。この経路は
+    //      切断ハンドラからも呼ばれるので、携帯の画面ロック・
+    //      電波の切れ目・Wi-Fiの切り替わりで普通に踏む。
+    //      途中離脱は「生存者の中で最下位」という順位で既に罰しているので
+    //      （上の close ハンドラのコメント）、その順位の報酬を渡しても
+    //      抗えない。報酬は**アカウント**に入るもので、ソケットに入るものではない。
+    //      （下の send は閉じたソケットを当然に無視するので、流して問題ない。）
+    const payoutGranted = !!me;
     if (payoutGranted) {
       rewards = applyGameResult(me, {
         trusted: true,   // サーバーが順位を決めている（クライアント申告ではない）

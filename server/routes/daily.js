@@ -197,13 +197,22 @@ export function sanitizeReplay(raw, opts = {}) {
   const moves = [];
   for (const m of src) {
     if (!m || typeof m !== 'object') return null;
+    // 🔁 引き直し（リロール）の印。**着手と同じ列に混ぜて順番を保つ。**
+    //    デイリーは1回だけ引き直せる（engine.rerolls = 1）のに、録画は置いた手
+    //    しか残していなかった。引き直すと以降の手札が丸ごとズレるので、
+    //    再生側は同じ枠番号（h）から**違うピース**を取り出す ── しかも
+    //    たいてい置けてしまうので、途中で止まらずに最後まで進み、
+    //    「本人の記録とは違う盤面・違う点数の走り」が本人の名前で流れていた
+    //    （残像レースも同じ録画を使うので、存在しない相手と競っていた）。
+    const tt = Math.floor(Number(m.t));
+    const at = Number.isFinite(tt) ? Math.max(0, Math.min(REPLAY_MAX_MS, tt)) : 0;
+    if (m.rr) { moves.push({ rr: 1, t: at }); continue; }
     const h = Math.floor(Number(m.h));
     const r = Math.floor(Number(m.r));
     const c = Math.floor(Number(m.c));
     if (!(h >= 0 && h <= 2)) return null;
     if (!(r >= 0 && r < SIZE) || !(c >= 0 && c < SIZE)) return null;
-    const t = Math.floor(Number(m.t));
-    moves.push({ h, r, c, t: Number.isFinite(t) ? Math.max(0, Math.min(REPLAY_MAX_MS, t)) : 0 });
+    moves.push({ h, r, c, t: at });
   }
   const seed = Number.isFinite(Number(opts.seed)) ? Number(opts.seed) >>> 0
     : Number.isFinite(Number(raw.seed)) ? Number(raw.seed) >>> 0 : 0;
