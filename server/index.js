@@ -29,7 +29,7 @@ import {
 import { trackMissions } from './missions.js';
 import { ACHIEVEMENTS } from './achievements.js';
 import {
-  ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider, setTakenNamesProvider, crowdMood, ambientQueue, isQuietNow, residentByName, activeResidents, residentStats, archetype,
+  ghostRows, setLiveScale, getLiveScale, setCustom, getCustom, setWorldProvider, setTakenNamesProvider, setHumansProvider, crowdMood, ambientQueue, isQuietNow, residentByName, activeResidents, residentStats, archetype,
   // 🧩⛏ パズル遺跡と採掘場の値は ambient.js が唯一の正解（王座の計算と
   //     ランキングの行で同じ関数を通す ── 別々に書くと値がずれる）。
   boardResidents, puzzleStageOf, digDepthOf,
@@ -58,7 +58,7 @@ import {
 import {
   createPoll, eventPollOptions, vote as castVote, pollView, tickPoll, winnerOf, isOpen as pollOpen,
 } from './polls.js';
-import { jstDayKey } from './adminevent.js';
+import { jstDayKey, throneMax as aeThroneMax } from './adminevent.js';
 // 段位の帯（しきい値の唯一の正解）。migrateUser が「どこまで昇格を告知したか」の
 // 初期値を作るのに使う。手書きの表を持たない ── server/battle.js と同じ理由。
 import { bandOf } from '../public/js/ranks.js';
@@ -1031,7 +1031,7 @@ const BUGREPORT_CAP = 300;
 const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'zero7', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7', 'guildquest'];
 const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']);
 
-function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, stars, beatChampion, trusted, preClamped, unrated }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, stars, stageCode, beatChampion, trusted, preClamped, unrated }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   // mode はキー生成にも使う（下の `${mode}Prev`）。クライアント申告なので、
   // 長さを切っておかないと巨大文字列で stats を無限に太らせられる（実測で
@@ -1204,8 +1204,32 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   //   ミッションが**無言で**止まり、プレイヤーには「急にクリアが数えられなくなった」
   //   としか見えない。40回/時 まで緩め（採掘の連投を止める役目は残る）、
   //   当たったことは結果画面に出す（下の capped）。
+  //
+  // ✅ 本筋が通せるようになった。stageCode を RESULT_FIELDS に載せたので、
+  //    遺跡とまったく同じ形（その日そのステージの初回だけ勝利扱い）に置き換える。
+  //    時間の上限は「同じステージの連投」を止めるための代用品だったので、
+  //    本筋が入れば要らない ── しかも代用品のほうは、色々なステージを正直に
+  //    遊んだ人まで無言で止めていた。
+  //    コードを送ってこない回（古いクライアント・作者の試遊）は、これまでどおり
+  //    時間の上限で受ける。
   let workshopCapped = false;
-  if (mode === 'workshop' && won && !rateLimit(`wswin:${user.id}`, 40, 60 * 60 * 1000)) { won = false; workshopCapped = true; }
+  if (mode === 'workshop' && won) {
+    const code = typeof stageCode === 'string' ? stageCode.trim().toUpperCase().slice(0, 12) : '';
+    if (code) {
+      const today = jstDayKey();
+      let ww = user.stats.wsWinDay;
+      if (!ww || ww.day !== today || !Array.isArray(ww.codes)) {
+        ww = user.stats.wsWinDay = { day: today, codes: [] };
+      }
+      if (ww.codes.includes(code)) { won = false; workshopCapped = true; }
+      else {
+        ww.codes.push(code);
+        if (ww.codes.length > PUZ_WIN_DAY_KEEP) ww.codes.splice(0, ww.codes.length - PUZ_WIN_DAY_KEEP);
+      }
+    } else if (!rateLimit(`wswin:${user.id}`, 40, 60 * 60 * 1000)) {
+      won = false; workshopCapped = true;
+    }
+  }
 
   // 1回の送信ごとに付く「固定ぶん」（基礎 20🪙/30bpXp/20accXp と勝利ボーナス）は
   // プレイの長さを一切見ていなかった。スコア連動ぶんと違って回数だけで増えるので、
@@ -2734,6 +2758,10 @@ app.get('/api/status', (req, res) => {
     activeMatches: battle.displayMatches(),
     queueing: ambientQueue() + battle.queueSize(),
     mood: crowdMood().id,
+    // 👑 世界がどこまで段を割ったか。王座の宝物庫の棚が開く条件で、
+    //    「世界の進捗」なので秘匿情報ではない（宝物庫の画面は既にこれで
+    //    棚を出し分けている）。運営卓が現在値を出すのにも要る。
+    throneMax: aeThroneMax(db),
     maintenance: inMaintenance(),
     // True when SESSION_SECRET is set, i.e. logins survive redeploys.
     sessionsPersist: SESSIONS_PERSIST,
@@ -4311,6 +4339,15 @@ const RESULT_FIELDS = [
   'mode', 'score', 'lines', 'maxCombo', 'duration', 'won', 'drew',
   'bossId', 'floor', 'wave', 'ults', 'items', 'pieces', 'floors',
   'sprintDur', 'rank', 'depth', 'stage',
+  // 🛠️ 工房のステージ識別子（6文字の共有コード）。
+  //
+  //    クライアントは v2.3x から送っていたのに、この一覧に無かったので
+  //    **2ヶ月ずっと黙って捨てられていた**（pickResultFields はここに載って
+  //    いる欄しか写さない）。そのせいで「同じステージの初回だけ勝利扱い」に
+  //    できず、暫定の 40回/時 という時間の上限が勝利計上を握ったままだった。
+  //    報酬を増やせる申告ではなく「どのステージか」の目印なので名乗らせてよい
+  //    ── 同じコードを何度送っても2回目以降は勝ちにならない（下の wsWon）。
+  'stageCode',
   // ⭐ パズル遺跡のステージ評価（1〜3）。報酬にはつながらない見た目だけの
   // 記録で、サーバー側で 0〜3 に丸めてから「そのステージの最高値」としてしか
   // 使わないので、名乗らせてよい（★を増やしても1コインも増えない）。
@@ -4623,6 +4660,25 @@ function systemLog(action, detail) {
   } catch { /* 記録できなくても計測は続ける */ }
 }
 
+// 🏷️ 日付が変わってショップのセールが入れ替わった瞬間に、住人がそれに気づく。
+//
+//    REACTIONS.shop_sale は日英13本＋対象品を差し込む {saleitem} まで揃って
+//    いるのに、`react('shop_sale')` を呼ぶ場所がコードのどこにも無く、
+//    **一度も出たことがなかった**。セールは毎日 JST 0時に総入れ替えなので、
+//    その瞬間を見て1回だけ鳴らす。announce は出さない ── 運営からの宣伝では
+//    なく、ロビーで誰かが「セール更新きてる」と言うだけにしたい。
+let lastSaleDay = jstDayKey();
+setInterval(() => {
+  const day = jstDayKey();
+  if (day === lastSaleDay) return;
+  lastSaleDay = day;
+  if (!battleReady || !battle.crowd) return;
+  // 対象品を1つ添えると {saleitem} の行が出せる（無ければその行は使われない）。
+  const deals = currentDeals();
+  const pick = deals && deals.length ? deals[0] : null;
+  battle.crowd.react('shop_sale', pick ? { saleitem: { name: pick.name, nameEn: pick.nameEn } } : undefined);
+}, 60_000);
+
 setInterval(() => {
   const mem = process.memoryUsage();
   const ms = v => Math.round(v / 1e5) / 10;   // ns -> ms（小数第1位）
@@ -4803,6 +4859,20 @@ setWorldProvider(() => ({
 // プレイヤー名(db.users)を避けられるよう、現在の登録名の集合を供給する。
 // スナップショットではなく関数を渡し、毎回評価させる(新規登録・改名を追従)。
 setTakenNamesProvider(() => new Set(Object.values(db.users).map(u => (u.username || '').toLowerCase())));
+
+// 👥 いまつないでいる生身のプレイヤーの名前。ロビーの「賑わい」を住人の数では
+//    なく実人数で決めるために crowd.js が使う（ctx.humans）。1本のソケットを
+//    2度数えないよう secondary は除く。⚠ 人数そのものは台詞に出さない。
+setHumansProvider(() => {
+  if (!battleReady) return [];
+  const names = new Set();
+  for (const c of battle.clients) {
+    if (c.secondary || c.isBot) continue;
+    const n = c.user ? c.user.username : c.guestName;
+    if (n) names.add(n);
+  }
+  return [...names];
+});
 
 // ---------------------------------------------------------------------------
 // Bootstrap: seed admin account, start server

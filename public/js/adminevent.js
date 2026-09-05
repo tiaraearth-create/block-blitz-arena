@@ -450,7 +450,17 @@ export async function openChronicle() {
       case 'cut':    return `<li class="ch-cut">${t(`<b>${who}</b> が第${e.dan}段の封印を斬った`, `<b>${who}</b> cut the seal of stage ${e.dan}`)}${e.keystone ? ` <i>${t('急所', 'keystone')}</i>` : ''}</li>`;
       case 'missed': return `<li class="ch-miss">${t(`<b>${who}</b> が落とした`, `<b>${who}</b> missed`)}${e.victim ? t(` ── ${esc(e.victim)} が処刑された`, ` — ${esc(e.victim)} was executed`) : ''}</li>`;
       case 'dan':    return `<li class="ch-dan">${t(`第${e.dan}段 陥落`, `Stage ${e.dan} has fallen`)}${e.by ? t(`（とどめ: ${esc(e.by)}）`, ` (finished by ${esc(e.by)})`) : ''}</li>`;
-      case 'deal':   return `<li class="ch-deal">${t('取引が成立した', 'A bargain was struck')}${e.pick ? `: ${esc(e.pick)}` : ''}</li>`;
+      // 🤝 chronicle(run,'deal', {win, tally, q}) が書くのは win / tally / q。
+      //    ここは e.pick を読んでいたので**常に undefined** ＝ 断罪録には
+      //    「取引が成立した」としか出ず、飲んだのか断ったのかが永久に分からなかった。
+      case 'deal': {
+        const yes = e.win === 'yes';
+        const tally = e.tally && (e.tally.yes != null) ? `（${e.tally.yes} 対 ${e.tally.no}）` : '';
+        const q = e.q ? `<span class="ch-deal-q">${esc(String(e.q).slice(0, 60))}</span>` : '';
+        return `<li class="ch-deal">${q}${e.win
+          ? t(`取引を${yes ? '飲んだ' : '断った'}${tally}`, `The bargain was ${yes ? 'accepted' : 'refused'}${tally}`)
+          : t('取引が成立した', 'A bargain was struck')}</li>`;
+      }
       default:       return `<li>${esc(e.kind || '')} ${who}</li>`;
     }
   };

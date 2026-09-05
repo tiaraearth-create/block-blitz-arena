@@ -4145,6 +4145,89 @@ function normalizeClientErrors(data) {
 // **運営が中身を見られて、手で戻せる**ことがこの機能の前提 ── 家庭や学校の
 // 共有回線を誤って止めたときに、戻す手段が無いのがいちばん困る。
 // 出るのは指紋の頭8文字だけで、接続元のアドレスそのものは保存していない。
+// 👁️ ゼロの卓 ── 断罪まわりの運営操作をまとめた1枚。
+//
+// サーバーには3本とも前からあったのに、画面から呼ぶ場所が無かった:
+//   POST /api/admin/zero/say    … 好きな言葉を言わせる
+//   POST /api/admin/zero/speak  … 台詞表から言わせる（動作確認用）
+//   POST /api/admin/throne      … 世界の到達段（宝物庫の棚が開く条件）
+// 断罪はこのゲームの目玉なのに、運営が手で触る口が閉じたままだった。
+async function showZeroDeskModal() {
+  let throneMax = null;
+  try { const d = await api('/api/status'); throneMax = d && d.throneMax != null ? d.throneMax : null; }
+  catch { /* 取れなくても卓は開く */ }
+  const KINDS = ['verdict', 'missed', 'cut', 'revive', 'deal', 'dealYes', 'dealNo', 'dan', 'wrap'];
+  const m = showModal(`
+    <h2>${ic('mode_zero', 20)} ゼロの卓</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:10px">
+      断罪の運営操作。喋らせた言葉は全体チャットにゼロとして流れます。</p>
+
+    <h3 class="fr-h">言わせる</h3>
+    <input id="zdSay" type="text" maxlength="300" placeholder="……見ていました">
+    <input id="zdSayEn" type="text" maxlength="300" placeholder="英訳（省略可）" style="margin-top:6px">
+    <div class="modal-buttons" style="margin-top:6px">
+      <button class="btn btn-sm btn-primary" id="zdSayGo">言わせる</button>
+    </div>
+
+    <h3 class="fr-h">台詞表から（動作確認）</h3>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <select id="zdKind">${KINDS.map(k => `<option value="${k}">${k}</option>`).join('')}</select>
+      <select id="zdDan">${[0, 1, 2, 3, 4, 5, 6].map(d => `<option value="${d}">${d + 1}段</option>`).join('')}</select>
+      <button class="btn btn-sm btn-ghost" id="zdSpeakGo">出す</button>
+    </div>
+
+    <h3 class="fr-h">世界の到達段</h3>
+    <p class="muted" style="font-size:12px;margin:0 0 6px">
+      いま <b>${throneMax == null ? '—' : throneMax}</b> 段。王座の宝物庫の棚がここで開きます。
+      巻き戻すと、すでに交換した品は消えません。</p>
+    <div style="display:flex;gap:6px;align-items:center">
+      <select id="zdThrone">${[0, 1, 2, 3, 4, 5, 6, 7].map(n => `<option value="${n}"${n === throneMax ? ' selected' : ''}>${n}段</option>`).join('')}</select>
+      <button class="btn btn-sm btn-ghost" id="zdThroneGo">設定</button>
+    </div>
+
+    <div class="modal-buttons" style="margin-top:12px">
+      <button class="btn btn-primary" id="zdClose">閉じる</button>
+    </div>`);
+
+  const go = async (btn, fn) => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try { await fn(); } catch (err) { audio.error(); toast(err.message, 'err', 4000); }
+    btn.disabled = false;
+  };
+  m.querySelector('#zdSayGo').onclick = function () {
+    go(this, async () => {
+      const text = m.querySelector('#zdSay').value.trim();
+      if (!text) { audio.error(); return; }
+      const r = await api('/api/admin/zero/say', {
+        method: 'POST',
+        body: { text, en: m.querySelector('#zdSayEn').value.trim() || undefined },
+      });
+      audio.ok ? audio.ok() : audio.click();
+      toast(`ゼロ: ${r.text}`, 'ok', 4000);
+      m.querySelector('#zdSay').value = '';
+      m.querySelector('#zdSayEn').value = '';
+    });
+  };
+  m.querySelector('#zdSpeakGo').onclick = function () {
+    go(this, async () => {
+      const r = await api('/api/admin/zero/speak', {
+        method: 'POST',
+        body: { kind: m.querySelector('#zdKind').value, dan: Number(m.querySelector('#zdDan').value) },
+      });
+      toast(`ゼロ: ${r.text}`, 'ok', 4000);
+    });
+  };
+  m.querySelector('#zdThroneGo').onclick = function () {
+    go(this, async () => {
+      const n = Number(m.querySelector('#zdThrone').value);
+      const r = await api('/api/admin/throne', { method: 'POST', body: { throneMax: n } });
+      toast(`世界の到達段を ${r.before} → ${r.throneMax} に変更しました`, 'ok', 4000);
+    });
+  };
+  m.querySelector('#zdClose').onclick = closeModal;
+}
+
 async function showIpBansAdminModal() {
   let rows = [];
   let errMsg = '';
@@ -4581,6 +4664,24 @@ export function bindAdminActions() {
       }
     }
     if (ib) ib.onclick = () => { audio.click(); showIpBansAdminModal(); };
+  } catch { /* 同上 */ }
+
+  // 👁️ ゼロの卓。POST /api/admin/zero/say ・ /zero/speak ・ /api/admin/throne は
+  //    3本とも実装済みなのに**画面から呼ぶ場所が無く、curl 専用**だった。
+  //    断罪はこのゲームの目玉なのに、運営が手で動かす口が閉じている。
+  try {
+    let zb = $('#btnZeroDesk');
+    if (!zb) {
+      const anchor = $('#btnIpBans') || $('#btnClientErrors') || $('#btnBugReports');
+      if (anchor && anchor.parentNode) {
+        zb = document.createElement('button');
+        zb.className = 'btn btn-ghost btn-sm';
+        zb.id = 'btnZeroDesk';
+        zb.textContent = 'ゼロの卓';
+        anchor.parentNode.insertBefore(zb, anchor.nextSibling);
+      }
+    }
+    if (zb) zb.onclick = () => { audio.click(); showZeroDeskModal(); };
   } catch { /* 同上 */ }
   $('#btnPoll').onclick = () => { audio.click(); showPollAdminModal(); };
 

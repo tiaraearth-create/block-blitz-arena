@@ -595,7 +595,16 @@ export class GameView {
       return false;
     }
     if (this.engine.hand[index] !== piece) { audio.putback(); return false; }
-    if (!(r >= 0 && c >= 0) || !this.engine.canPlace(piece, r, c)) { audio.putback(); return false; }
+    // 🚫 置けない場所へ落とした。
+    //    onIllegal は宣言だけあって、代入も呼び出しも一度も無かった（死んだ口）。
+    //    「置けない場所へ続けて落としている＝盤面が読めていない」は、詰みの
+    //    予兆としてもチュートリアルの助け舟としても一番素直な合図なので、
+    //    ここで鳴らして使えるようにする。モードが何も繋がなければ従来どおり。
+    if (!(r >= 0 && c >= 0) || !this.engine.canPlace(piece, r, c)) {
+      audio.putback();
+      if (this.onIllegal) { try { this.onIllegal(index, r, c); } catch { /* 合図で走行を止めない */ } }
+      return false;
+    }
     // Co-op runs on a server-authoritative board: the hook forwards the
     // move and returns true, and the real placement arrives as a broadcast.
     if (this.onIntentPlace && this.onIntentPlace(index, r, c)) return true;

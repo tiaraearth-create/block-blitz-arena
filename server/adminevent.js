@@ -655,7 +655,11 @@ export function playerView(db, user, now = Date.now(), counts = null) {
     rewardMult: schedule.rewardMult,
     note: schedule.note || '',
     mode: {
-      id: mode.id, icon: mode.icon,
+      // 🖼 AE_MODES が持っているのは `iconName`（icons.js の名前）。`mode.icon` は
+      //    存在しない欄なので、この行はずっと undefined を配っていた。
+      //    いまはクライアントが AE_MODE_ICONS で id から自前に引いているので
+      //    実害は出ていないが、欄を出す以上は正しい値にする。
+      id: mode.id, icon: mode.iconName || null, iconName: mode.iconName || null,
       name: mode.name, nameEn: mode.nameEn,
       tagline: mode.tagline, taglineEn: mode.taglineEn,
       desc: mode.desc, descEn: mode.descEn,

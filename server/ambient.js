@@ -277,6 +277,19 @@ export function setWorldProvider(fn) { worldProvider = fn; }
 // なりすましが成立しうる（v2.15 で塞いだ住人名衝突と同型）。未設定時は素通し。
 let takenNamesProvider = null;
 export function setTakenNamesProvider(fn) { takenNamesProvider = fn; }
+
+// 👥 いまつないでいる**生身のプレイヤー**を数える口。
+//    buildCtx の humans はここまで配線されていたのに供給元が無く、
+//    常に空配列＝誰も読めない死に欄だった。battle.js が持っている接続の一覧を
+//    こちらへ流し込む（import の循環を作らないよう、関数を預ける形にする）。
+//    ⚠ 返すのは名前の配列。人数を台詞に出してはいけない（crowd.js の注記参照）。
+let humansProvider = null;
+export function setHumansProvider(fn) { humansProvider = fn; }
+function liveHumans() {
+  if (!humansProvider) return [];
+  try { const v = humansProvider(); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
 export function worldCtx(extra = {}) {
   const w = worldProvider() || {};
   const now = extra.now || Date.now();
@@ -284,7 +297,8 @@ export function worldCtx(extra = {}) {
     now, event: w.event, poll: w.poll, thrones: w.thrones || [],
     // 🏷️ その日のセール（無い日は null のまま＝セール用の行は出ない）。
     sale: w.sale || null,
-    active: activeResidents(now), humans: extra.humans || [],
+    // 👥 いま居る生身のプレイヤー。呼び出し側が明示したらそちらを優先する。
+    active: activeResidents(now), humans: extra.humans || liveHumans(),
   });
 }
 

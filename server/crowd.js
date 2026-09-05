@@ -285,6 +285,15 @@ const LINES = [
   { ja: '深夜テンションで{mode}', en: '{mode} on pure 3am energy', ctx: 'late', arch: ['nightowl', 'tryhard'] },
   { ja: 'おやすみ〜', en: 'good night all', ctx: 'night', w: 2 },
   { ja: '寝落ちしそう', en: 'about to fall asleep on the board', ctx: 'late' },
+  // 👥 生身が何人居るかで変わる行（ctx.humans / CTX_OK の 'busy'・'quiet'）。
+  //    人数は絶対に言わない ── 数字を出すと、そこから住人の頭数が逆算できる。
+  //    「賑わっている」「静かだ」という手触りだけを言う。
+  { ja: '今日はロビー賑わってるね', en: 'lobby feels busy today', ctx: 'busy', w: 2 },
+  { ja: 'なんか人多い気がする', en: 'feels like more people around', ctx: 'busy' },
+  { ja: '人が居ると気合い入るわ', en: 'having people around gets me going', ctx: 'busy', arch: ['tryhard', 'streamer'] },
+  { ja: '今日は静かだねえ', en: 'quiet one today', ctx: 'quiet', w: 2 },
+  { ja: '静かな時間帯も嫌いじゃない', en: 'i kinda like it when it\'s quiet', ctx: 'quiet', arch: ['lurker', 'nightowl', 'casual'] },
+  { ja: 'のんびりやろ', en: 'taking it easy today', ctx: 'quiet' },
   { ja: '週末だ！ガチる！', en: 'it\'s the weekend! time to lock in!', ctx: 'weekend', arch: ['tryhard', 'casual', 'explorer'] },
   { ja: '休日ブロック最高', en: 'blocks on a day off, unbeatable', ctx: 'weekend' },
   { ja: '花金！今日は遅くまでやる', en: 'friday night, staying up late for this', ctx: 'friday', not: ['kid'] },
@@ -431,6 +440,15 @@ const CTX_OK = (line, ctx) => {
     case 'noevent': return !ctx.event;
     case 'sale': return !!ctx.sale;
     case 'poll': return !!ctx.poll;
+    // 👥 いま実プレイヤーが他にも居る／自分ひとりしか居ない。
+    //    ctx.humans は buildCtx まで配線してあったのに供給側が無く、誰も
+    //    読んでいなかった（常に空配列＝完全な死に欄）。ロビーの「賑わい」は
+    //    住人の数ではなく**生身が何人居るか**で変わるほうが自然なので、
+    //    ここで生かす。
+    //    ⚠ 人数そのものは絶対に台詞に出さない。出すと「住人を除いた実人数」を
+    //      毎分公表することになり、そこから住人の頭数が逆算できる。
+    case 'busy': return (ctx.humans || []).length >= 2;
+    case 'quiet': return (ctx.humans || []).length <= 1;
     case 'weekend': return ctx.weekend;
     case 'friday': return ctx.friday;
     case 'mondayish': return ctx.mondayish;

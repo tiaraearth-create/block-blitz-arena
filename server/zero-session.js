@@ -112,7 +112,13 @@ export function createSession(deps, humanSocks, run = null) {
     const name = res ? res.name : pickPersona({ used }).name;
     used.add(name);
     entrants.push({
-      human: false, name, level: seat.level, residentId: res ? res.id : null,
+      // 🪪 住人の id。pickResidentBot が返すのは
+      //    { resident, name, registered, rating, level } なので、`res.id` は
+      //    **常に undefined** ＝ この欄は最初からずっと null だった。
+      //    そのせいで run.fallen[].id も常に null で、「消えた住人」を名簿から
+      //    引く手立てが無い（名前でしか辿れず、改名や同名に弱い）。
+      human: false, name, level: seat.level,
+      residentId: (res && res.resident && res.resident.id) || null,
       engine: new Engine((seed + i * 7919) >>> 0),
       moveEvery: seat.moveEvery,
       nextMoveAt: now() + COUNTDOWN * 1000 + random() * seat.moveEvery,
