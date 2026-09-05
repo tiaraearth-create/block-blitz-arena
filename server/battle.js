@@ -2098,7 +2098,20 @@ export function initBattle(server, deps) {
           const oppSock = match.players[1 - p.slot].sock;
           const oppRating = oppUser && oppUser.id !== me.id ? preRatings[1 - p.slot]
             : oppSock.isBot && oppSock.rating != null ? oppSock.rating : null;
-          if (oppRating != null) {
+          // ⚖️ **練習試合では Elo を動かさない。**
+          //
+          //    friendly の4つの枝のうち、'self'/'guest'/'room' はたまたま
+          //    oppRating が null になるか duel2 が偽になるのでここまで来ないが、
+          //    'repeat'（同じ回線の同じ相手と REPEAT_FREE 回を超えた）だけは
+          //    **match.rated の枝で相手も登録ユーザー**なので普通に到達する。
+          //    そのため、結果画面に「練習試合 — レート・戦績・勝利報酬が
+          //    動きません」と出しながら、同じモーダルに「+16 レート」と
+          //    「現在のレート 1,016」が並び、実際に Elo も帯も動いていた
+          //    （帯をまたげば全体告知まで流れる）。
+          //    止めていたのは下の pvpWins/pvpLosses と applyGameResult（unrated）だけで、
+          //    Elo のブロックは friendly を一度も見ていなかった。
+          //    「勝ち星が動かない試合ではレートも動かない」を逆向きにも守る。
+          if (oppRating != null && !friendly) {
             const beforeTier = rankInfoOf(me.stats.rating);
             ratingDelta = eloUpdate(me.stats.rating, oppRating, outcome);
             me.stats.rating = Math.max(0, me.stats.rating + ratingDelta);
@@ -3291,6 +3304,36 @@ export function initBattle(server, deps) {
     return { coins: 50, gems: 0, tier: 'entrant' };
   }
 
+  // 💯 ロイヤルの申告を取り込む。**'state' と 'royale_topout' の両方から通す。**
+  //
+  //    切り出した理由: 盤面を詰ませた**最後の1手の得点がサーバーに一度も届いていなかった**。
+  //    engine.place() は戻り値を返す前に over を立てるので、その手の
+  //    onPlace から呼ばれる pushState は先頭の
+  //    `if (this.engine.over || view.inputLocked) return;` で必ず引き返す。
+  //    対戦モードには時間切れに client.finish(score) を送る経路があるが、
+  //    ロイヤルには無く、royale_topout にもスコアが乗っていなかったので、
+  //    順位も順位報酬も「最後に state を送れた時点」の点で確定していた。
+  //    ⚙ 上限は元のまま（経過時間 × 500/秒／復活直後の工取り防止の天井）。
+  function royaleMergeState(r, e, msg) {
+    // Same rate ceiling the REST endpoint applies. Royale scores
+    // used to be client-declared with no cross-check at all, and a
+    // single forged frame could trigger a server-wide announcement.
+    const secs = Math.max(1, (Date.now() - r.startedAt) / 1000);
+    const cap = Math.floor(secs * 500);
+    const claimed = Math.min(1_000_000, Math.floor(Number(msg.score) || 0));
+    // 復活直後の猶予窓では没収後スコアより上げない（1割ペナルティの巻き戻し防止）。
+    const ceil = (e.reviveAt && Date.now() - e.reviveAt < 2500) ? e.score : cap;
+    e.score = Math.max(e.score, Math.min(claimed, ceil));
+    // lines も時間比例で頭打ちにする（下の royale_attack の
+    // 攻撃バジェットがこの値を元にするので、素通しだと
+    // 「1ラインも消さずに最大威力のお邪魔を撃ち続ける」が通る）
+    e.lines = Math.max(e.lines, Math.min(Math.floor(Number(msg.lines) || 0), linesCap(r.startedAt)));
+    e.combo = Math.max(e.combo, Math.floor(Number(msg.combo) || 0));
+    e.pieces = Math.max(e.pieces || 0, Math.min(20000, Math.floor(Number(msg.pieces) || 0)));
+    if (Array.isArray(msg.grid)) e.grid = sanitizeGrid(msg.grid);
+    e.lastSeen = Date.now();
+  }
+
   function endRoyaleFor(e, r, placement, ranked) {
     if (!e.alive) return;
     e.alive = false;
@@ -4044,25 +4087,7 @@ export function initBattle(server, deps) {
             const r = royales.get(ws.royaleId);
             if (r && !r.ended) {
               const e = r.entrants.find(x => x.ws === ws);
-              if (e && e.alive) {
-                // Same rate ceiling the REST endpoint applies. Royale scores
-                // used to be client-declared with no cross-check at all, and a
-                // single forged frame could trigger a server-wide announcement.
-                const secs = Math.max(1, (Date.now() - r.startedAt) / 1000);
-                const cap = Math.floor(secs * 500);
-                const claimed = Math.min(1_000_000, Math.floor(Number(msg.score) || 0));
-                // 復活直後の猶予窓では没収後スコアより上げない（1割ペナルティの巻き戻し防止）。
-                const ceil = (e.reviveAt && Date.now() - e.reviveAt < 2500) ? e.score : cap;
-                e.score = Math.max(e.score, Math.min(claimed, ceil));
-                // lines も時間比例で頭打ちにする（下の royale_attack の
-                // 攻撃バジェットがこの値を元にするので、素通しだと
-                // 「1ラインも消さずに最大威力のお邪魔を撃ち続ける」が通る）
-                e.lines = Math.max(e.lines, Math.min(Math.floor(Number(msg.lines) || 0), linesCap(r.startedAt)));
-                e.combo = Math.max(e.combo, Math.floor(Number(msg.combo) || 0));
-                e.pieces = Math.max(e.pieces || 0, Math.min(20000, Math.floor(Number(msg.pieces) || 0)));
-                if (Array.isArray(msg.grid)) e.grid = sanitizeGrid(msg.grid);
-                e.lastSeen = Date.now();
-              }
+              if (e && e.alive) royaleMergeState(r, e, msg);
             }
             return;
           }
@@ -4237,6 +4262,9 @@ export function initBattle(server, deps) {
           //    直前のお邪魔から一定時間内のときだけ「そのせいで潰れた」と見なす
           //    ので、自分で詰ませた回は今までどおり「脱落」のまま。
           if (e && e.alive) {
+            // 💯 詰ませた最後の1手ぶんを、罰（-10%）や順位確定より**先に**取り込む
+            //    （royaleMergeState のコメント）。上限は state と同じものを通す。
+            royaleMergeState(r, e, msg);
             const blame = (e.lastHitBy && e.lastHitBy.alive
               && Date.now() - (e.lastHitAt || 0) <= ROYALE_BLAME_MS) ? e.lastHitBy : null;
             royaleTopOut(r, e, blame);

@@ -1304,7 +1304,7 @@ function showChaosSetup() {
 
   const m = showModal(`
     <h2>${icon('mode_chaos', { size: 24 })} ${t('カオスモード', 'Chaos Mode')}</h2>
-    <p class="muted center" style="margin-bottom:10px">${t('一定間隔でルールが激変！コイン1.5倍！', 'The rules mutate on a timer! 1.5x coins!')}${best ? `<br>${t('自己ベスト', 'Personal best')}: <b style="color:var(--yellow)">${fmt(best)}</b>` : ''}</p>
+    <p class="muted center" style="margin-bottom:10px">${t('一定間隔でルールが激変！', 'The rules mutate on a timer!')}${best ? `<br>${t('自己ベスト', 'Personal best')}: <b style="color:var(--yellow)">${fmt(best)}</b>` : ''}</p>
     <div class="form-col">
       <div class="settings-row"><label>${t('プレイ時間', 'Duration')}</label><div class="seg" data-cs="duration">
         ${[60, 120, 180, 300].map(d => `<button data-v="${d}" ${duration === d ? 'class="active"' : ''}>${d / 60}${t('分', 'min')}</button>`).join('')}
@@ -1363,8 +1363,10 @@ function showChaosSetup() {
 //    「カオスイベント開催中」でなければボタンごと隠れていた ── イベントは
 //    運営が手で立てるものなので、実質ほとんどの日は**作り終えた1モードが
 //    存在しないのと同じ**だった。
-//    イベントで特別になるのは中身ではなく実入り（コイン1.5倍）のほうなので、
-//    入口は開けて、イベント中だけ帯で「いまは1.5倍」と伝える形にする。
+//    ⚠ かつては「イベント中だけコイン1.5倍」だったが、v2.54 で倍率そのものを
+//    やめた（ユーザー指示）。カオスの実入りは他のモードとまったく同じ。
+//    ここに倍率の宣伝を書き戻さないこと ── 画面の文言とサーバーの式が
+//    離れたまま2版のあいだ嘘をつき続けた（結果画面の「コイン1.5倍！」）。
 $('#btnChaos').onclick = () => {
   audio.click();
   showChaosSetup();

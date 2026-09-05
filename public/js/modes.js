@@ -399,6 +399,18 @@ function cappedRow(kind) {
     return row(t('今日のブループリントのクリア報酬は受け取り済みです', 'You already claimed today’s blueprint reward'),
       t('明日また入ります', 'Back tomorrow'));
   }
+  // 👁 潰した観測マスの数だけ入る王座の欠片には1日の上限がある。
+  //    黙って欄ごと消していたので「潰したのに入らない」が原因不明に見えた。
+  if (kind === 'eyeshard_day') {
+    return row(t('王座の欠片は今日ぶんの上限に達しました', 'Throne Shards have hit today’s cap'),
+      t('明日また入ります', 'Back tomorrow'));
+  }
+  // 🎫 シーズンのバトルパスを走り切った人。満タンを超えたXPは捨てられるので、
+  //    「+530」と出しながらバーが動かない状態を作らない（server/index.js の bpFull）。
+  if (kind === 'bp_full') {
+    return row(t('バトルパスは今シーズンぶんを走り切りました', 'Battle pass is maxed for this season'),
+      t('次のシーズンまで', 'Until next season'));
+  }
   return '';
 }
 
@@ -432,7 +444,15 @@ function rewardsRows(rewards) {
           参加ぶんの報酬（下の行）は入っているので、そこは打ち消さない。 */''}
     ${cappedRow(rewards.capped)}
     <div class="rs-row"><span>${ic('coins')} ${t('コイン', 'Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
-    ${rewards.streakBonus ? `<div class="rs-row"><span>${ic('fire')} ${t(`${rewards.streak}連勝ボーナス`, `${rewards.streak}-win streak bonus`)}</span><b>+${fmt(rewards.streakBonus)} ${ic('coins', 14)}</b></div>` : ''}
+    ${/* 🎉 イベントで**実際に上乗せされた**コイン。上の「コイン」に既に
+          含まれている内訳なので `+N のうち` と書く。倍率を文言で書かない
+          ── 倍率はイベントごとに違うし、廃止されても文言だけ残るから
+          （カオスの「コイン1.5倍！」が2版のあいだ嘘をつき続けた）。 */''}
+    ${rewards.eventCoins ? `<div class="rs-row"><span>${ic('star')} ${t('イベントボーナス', 'Event bonus')}</span><b>${t(`うち +${fmt(rewards.eventCoins)}`, `incl. +${fmt(rewards.eventCoins)}`)} ${ic('coins', 14)}</b></div>` : ''}
+    ${/* 🔥 連勝ボーナスは**上のコインに既に含まれている**内訳
+          （server/index.js の `coins += streakBonus`）。`+60 🪙` と書くと
+          上乗せに読めるので、イベントボーナスと同じ「うち +N」の書き方にそろえる。 */''}
+    ${rewards.streakBonus ? `<div class="rs-row"><span>${ic('fire')} ${t(`${rewards.streak}連勝ボーナス`, `${rewards.streak}-win streak bonus`)}</span><b>${t(`うち +${fmt(rewards.streakBonus)}`, `incl. +${fmt(rewards.streakBonus)}`)} ${ic('coins', 14)}</b></div>` : ''}
     ${/* サーバーの gems は「初回討伐」だけではない ── イベントの💎ドロップも
           バッジ報酬（デイリー7日・ダンジョン制覇・ロイヤル初1位…）も同じ欄に
           合算されて来る。討伐が存在しないソロやデイリーでも「初回討伐ボーナス」
@@ -503,8 +523,14 @@ export function resumeBookmark() {
   if (card) card.remove();
   BOOKMARK_START[bm.mode]();
   const m = currentMode;
-  if (!m || !m.engine) return false;
-  if (!m.engine.restoreState(bm.engine)) return false;
+  // ⚠ **失敗したらメニューまで戻す。**
+  //    ここに到達するときには BOOKMARK_START が**新品の走行**を始めて
+  //    盤面を出しているので、ただ false を返すと
+  //    「保存した走行は消えたうえ、見覚えの無い新しい走行が始まっている画面に
+  //    トーストだけが出る」という終わり方になる（控えは先頭で捨てている）。
+  const bail = () => { endToMenu(); return false; };
+  if (!m || !m.engine) return bail();
+  if (!m.engine.restoreState(bm.engine)) return bail();
   // 盤面と手札が入れ替わったので、掴んでいるものと選択は捨てる。
   const v = getView();
   if (v) { v.drag = null; v.sel = null; v.spawnAnim.clear(); }
@@ -1077,11 +1103,19 @@ function updateUltHud() {
   btn.classList.toggle('ult-boosted', e.ultRate > 1);
   // Admins run a permanently charged gauge.
   if (session.user && session.user.role === 'admin' && staffExtras()) e.ult = 100;
-  const pct = Math.max(0, Math.min(100, Math.round(e.ult)));
+  // ⚡ **表示と発動で同じ物差しを使う。**
+  //    ここだけ Math.round だったので、e.ult が 99.6 のときに
+  //    「MAX」―光る―押せる見た目になるのに、fireUltCurrent の
+  //    `if (e.ult < 100)` に弾かれて「ゲージが足りません（100%）」と出ていた
+  //    （engine.chargeUlt は1手ごとに 1.2 ずつ足すので端数が必ず出る）。
+  //    発動できるかどうかは生の値で判定し、数字は切り捨てる
+  //    ― 未満を 100 と書かないことが譲れない条件。
+  const ready = e.ult >= 100;
+  const pct = Math.max(0, Math.min(100, ready ? 100 : Math.floor(e.ult)));
   btn.style.setProperty('--ult-p', `${pct}%`);
-  $('#ultPct').textContent = pct >= 100 ? 'MAX' : pct;
-  btn.classList.toggle('ult-ready', pct >= 100);
-  btn.classList.toggle('off', pct < 100);
+  $('#ultPct').textContent = ready ? 'MAX' : pct;
+  btn.classList.toggle('ult-ready', ready);
+  btn.classList.toggle('off', !ready);
 }
 
 export function fireUltCurrent() {
@@ -1112,6 +1146,10 @@ export function fireUltCurrent() {
   void $('#btnUlt').offsetWidth;
   $('#btnUlt').classList.add('ult-fire');
   toast(out.msg, 'announce', 2600);
+  // 🔁 奥義はリロールを増やすことがある（⏳時間停止はソロだと +3）。
+  //    skills.js は engine しか触れないので、HUD はここで拾う ―
+  //    当てないと「+3リロール」と出ているのに 🔄 の数字が 0 のまま灰色で残る。
+  updateRerollHud(e);
   updateUltHud();
   if (e.over) handleEngineOver();
 }
@@ -1300,15 +1338,30 @@ export function useGameItem(id) {
     // できた。アイテムの倍率(2)が現在有効な倍率以上のときだけ延長する。
     const feverOn = e.feverUntil > Date.now();
     const cur = feverOn ? (e.feverMult || 1) : 1;
-    if (2 >= cur) {
-      e.feverMult = Math.max(cur, 2);
-      e.feverUntil = Math.max(e.feverUntil || 0, Date.now() + 15000);
+    // ⚠ **効き目が入らないなら消費させない。**
+    //    上の「下げない・延長しない」は正しいのだが、その if を外れたあとも
+    //    演出・トースト・関数末尾の spendItem までそのまま落ちていたので、
+    //    🔥オーバードライブ（×3）の最中に⭐（400🪙）を使うと
+    //    **1個消えて何も起きない**のに「15秒間スコア2倍！」と約束していた。
+    //    🧹クリーナーの `if (n === 0) { ... return; }` と同じ作法で先に逃げる。
+    if (2 < cur) {
+      audio.error();
+      toast(t(`すでに強い倍率（×${cur}）が効いています`, `A stronger multiplier (x${cur}) is already active`), 'err', 1800);
+      return;
     }
+    e.feverMult = Math.max(cur, 2);
+    e.feverUntil = Math.max(e.feverUntil || 0, Date.now() + 15000);
     view.screenFlash = 0.35;
     $('#hudScore').classList.add('fever');
     audio.combo(6);
     toast(t('フィーバー！15秒間スコア2倍！！', 'FEVER! 2x score for 15 seconds!!'), 'announce', 2400);
     setTimeout(() => {
+      // ⏱ 15秒後に**いまの状態を見る**。固定で消灯していたので、あとから
+      //    掛かったオーバードライブ（feverUntil を後ろへ伸ばす）の途中で
+      //    金色を消して「フィーバー終了」と出していた（倍率はまだ生きている）。
+      //    奥義側（ult_overdrive）は最初からこの形で書いてある。
+      const cu = currentMode && currentMode.engine;
+      if (cu && cu.feverUntil > Date.now()) return;
       $('#hudScore').classList.remove('fever');
       if (currentMode === m && !m.ended) toast(t('フィーバー終了', 'Fever over'), '', 1200);
     }, 15000);
@@ -1331,12 +1384,24 @@ export function useGameItem(id) {
     view.shake = 22; view.screenFlash = 0.7; audio.bossDefeated();
     toast(t(`神の一撃！ +${fmt(gained)}`, `${N_WIPE}! +${fmt(gained)}`), 'announce', 2000);
   } else if (id === 'item_god_time') {
-    if (m.endAt !== undefined && m.timerInt) { m.endAt += 120000; m.timeLeft += 120; if (m.updateTimerHud) m.updateTimerHud(); }
-    if (m.nextAtk) m.nextAtk += 60000;
-    if (m.nextAt) m.nextAt += 60000;
-    if (m.endAt === undefined && !m.nextAtk && !m.nextAt) e.rerolls += 10;
+    // ⏳ 止める時計が無いモード（ソロ）ではリロールに化ける。
+    //    文言を固定にしていたので、ソロで使うと実際には +10リロールなのに
+    //    「時間+120秒／敵を60秒封印」と出ていた（時計も敵も存在しない）。
+    //    奥義の⏳時間停止（skills.js）は最初から分岐ごとに文言を作っている。
+    const gtBits = [];
+    if (m.endAt !== undefined && m.timerInt) {
+      m.endAt += 120000; m.timeLeft += 120; if (m.updateTimerHud) m.updateTimerHud();
+      gtBits.push(t('時間+120秒', '+120s'));
+    }
+    if (m.nextAtk) { m.nextAtk += 60000; gtBits.push(t('敵を60秒封印', 'enemies frozen 60s')); }
+    if (m.nextAt) { m.nextAt += 60000; gtBits.push(t('次の波を60秒遅らせた', 'next wave delayed 60s')); }
+    if (m.endAt === undefined && !m.nextAtk && !m.nextAt) {
+      e.rerolls += 10;
+      updateRerollHud(e);
+      gtBits.push(t('リロール+10', '+10 rerolls'));
+    }
     view.screenFlash = 0.4; audio.combo(7);
-    toast(t('時の支配！時間+120秒／敵を60秒封印', `${N_TIME}! +120s / enemies frozen 60s`), 'announce', 2000);
+    toast(`${t('時の支配！', `${N_TIME}! `)}${gtBits.join(t('／', ' / '))}`, 'announce', 2000);
   } else if (id === 'item_god_hand') {
     const out = fireUlt('ult_rainbow', { engine: e, view, mode: m });
     e.godDraws = 12;
@@ -4221,7 +4286,10 @@ function dailyRng(seed) {
   };
 }
 
-function applyDailyModifier(engine, mod, seed = 0) {
+// ⚠ seed に既定値を置かない。置いていたころは、渡し忘れがエラーにならず
+//   「別の盤面で静かに進む」という壊れ方をしていた（ReplayMode がそれで壊れて
+//   いた）。呼ぶ側は3か所しか無いので必須でよい。
+function applyDailyModifier(engine, mod, seed) {
   const id = mod && mod.id;
   if (id === 'giant') engine.chaosBig = true;
   if (id === 'mini') engine.chaosMini = true;
@@ -4394,14 +4462,24 @@ class DailyMode {
       <div class="result-stats">
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)} / ${fmt(this.info.target)}</b></div>
         ${recorded && d ? `<div class="rs-row"><span>${ic('fire')} ${t('連続クリア', 'Clear streak')}</span><b>${d.cleared ? t(`${streak}日目`, `Day ${streak}`) : t('リセット…', 'Reset…')}</b></div>` : ''}
-        ${d && d.bonusCoins ? `<div class="rs-row"><span>${ic('mode_daily')} ${t('デイリーボーナス', 'Daily bonus')}</span><b>+${fmt(d.bonusCoins)} ${ic('coins', 14)}${d.bonusGems ? ` +${fmt(d.bonusGems)} ${ic('gems', 14)}` : ''}</b></div>` : ''}
+        ${/* 📅 デイリーボーナスは下の「コイン」「ジェム」に**既に含まれている**内訳
+             （server/index.js の `coins += bonusCoins; gems += bonusGems;`）。
+             上乗せに読めないよう「うち」と書く。 */''}
+        ${d && d.bonusCoins ? `<div class="rs-row"><span>${ic('mode_daily')} ${t('デイリーボーナス', 'Daily bonus')}</span><b>${t('うち', 'incl.')} +${fmt(d.bonusCoins)} ${ic('coins', 14)}${d.bonusGems ? ` +${fmt(d.bonusGems)} ${ic('gems', 14)}` : ''}</b></div>` : ''}
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
         ${sendQueued
           ? `<div class="rs-row"><span>${ic('offline')} ${t('未送信 — つながったら自動で送ります（報酬はそのとき入ります）', 'Not sent yet — it will be submitted automatically when you reconnect')}</span></div>`
           : sendFailed
           ? `<div class="rs-row"><span>${ic('warn')} ${t('送信に失敗しました — この回の報酬は付いていません', 'Submission failed — no rewards for this run')}</span></div>`
           : rewards ? `
+        ${cappedRow(rewards.capped)}
         <div class="rs-row"><span>${ic('coins')} ${t('コイン', 'Coins')}</span><b>+${fmt(rewards.coins)}</b></div>
+        ${/* 💎 **ジェムの行がここだけ無かった。** デイリーは報酬欄を rewardsRows() に
+             通さず自前で組んでいるので、7日連続クリアの +300💎 も、イベントの
+             💎ドロップも、画面に一度も出ないまま残高だけが増えていた。 */''}
+        ${rewards.gems ? `<div class="rs-row"><span>${ic('gems')} ${t('ジェム', 'Gems')}</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
+        ${rewards.shards ? `<div class="rs-row"><span>${ic('shards')} ${t('王座の欠片', 'Throne Shards')}</span><b>+${fmt(rewards.shards)}</b></div>` : ''}
+        ${rewards.eventCoins ? `<div class="rs-row"><span>${ic('star')} ${t('イベントボーナス', 'Event bonus')}</span><b>${t(`うち +${fmt(rewards.eventCoins)}`, `incl. +${fmt(rewards.eventCoins)}`)} ${ic('coins', 14)}</b></div>` : ''}
         <div class="rs-row"><span>${ic('battlepass')} ${t('パスXP', 'Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
         <div class="rs-row"><span>${ic('xp')} ${t('アカウントXP', 'Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>`
         : `<div class="rs-row"><span>${t('記録とランキングにはログイン', 'Log in for records & the ranking')}</span></div>`}
@@ -4415,6 +4493,12 @@ class DailyMode {
         <button class="btn btn-ghost" id="rRank">${ic('leaderboard', 15)} ${t('順位を見る', 'Standings')}</button>
         <button class="btn btn-daily" id="rAgain">${t('もう一度（練習）', 'Again (practice)')}</button>
       </div>`, { dismissable: false, peekable: true });
+    // 📅 7日連続クリアの永久バッジ。ボスラッシュ・ダンジョン・ロイヤルは
+    //    どれも rewards.badge を見て祝っているのに、デイリーだけ何も出ず、
+    //    バッジが付いたことがどこにも出ないまま終わっていた。
+    if (rewards && rewards.badge === 'daily7') {
+      setTimeout(() => toast(t('バッジ「デイリー皆勤」を獲得！', 'Badge earned: Daily Devotee!'), 'announce', 4000), 1200);
+    }
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
     m.querySelector('#rRank').onclick = () => {
       closeModal(); endToMenu();
@@ -5621,10 +5705,12 @@ class ChaosMode extends VersusBase {
         <div class="rs-row"><span>${t('発動したルール', 'Rules triggered')}</span><b>${t(`${fmt(this.modCount)}回`, `${fmt(this.modCount)}`)}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
-        ${/* submitResult は失敗した回に { failed } / 圏外の回に { queued } を返す。
-              どちらも truthy なので、素の `rewards ?` だと「報酬は付いていません」の
-              すぐ隣に「コイン1.5倍！」が並んでいた。実際に報酬が入った回だけ出す。 */''}
-        ${rewards && !rewards.failed && !rewards.queued ? `<div class="rs-row"><span>${t('イベントボーナス', 'Event bonus')}</span><b>${t('コイン1.5倍！', '1.5x coins!')}</b></div>` : ''}
+        ${/* 🌪️ 「コイン1.5倍！」の固定行はここから消した。
+              サーバーは v2.54 でカオスの倍率を**やめている**（server/index.js の
+              「カオスにコインの倍率は付けない」）のに、この行はイベントの有無すら
+              見ずに毎回出ていたので、等倍のコインの2行上に 1.5倍 と書いてあった。
+              イベントで実入りが増えた回は rewardsRows が rewards.eventCoins
+              （サーバーが実際に上乗せした額）から1行出す ── 文言ではなく数字で。 */''}
         ${rewardsRows(rewards)}
       </div>
       <div class="modal-buttons">
@@ -6269,7 +6355,18 @@ class OnlineMode extends VersusBase {
     //   順位報酬まで丸ごと変わってしまう。
     if (this.royaleTopoutPending) return;
     this.royaleTopoutPending = true;
-    this.client.send({ type: 'royale_topout' });
+    // 💯 詰ませた**最後の1手ぶんを一緒に送る**。engine.place() は戻り値を返す前に
+    //    over を立てるので、その手の onPlace から呼ばれる pushState は先頭の
+    //    `if (this.engine.over …) return;` で必ず引き返す ── つまり最後の1手の得点は
+    //    サーバーに一度も届かず、順位も順位報酬もその手の前の点で決まっていた。
+    //    サーバーは state とまったく同じ上限を通してから取り込む。
+    this.client.send({
+      type: 'royale_topout',
+      score: this.engine.score,
+      lines: this.engine.linesCleared,
+      combo: this.engine.streak,
+      pieces: this.engine.piecesPlaced,
+    });
     getView().inputLocked = true;   // unlocked again by royale_revive
   }
 
@@ -7683,8 +7780,16 @@ class OnlineMode extends VersusBase {
     $('#coopBar').classList.add('hidden');
     if (msg.user) { session.user = msg.user; updateTopbar(); }
     const c = msg.coop;
-    const isBest = c.score >= (c.best || 0) && c.score > 0;
+    // 🤝 **端末の控えも見て、書き込む前に判定する。**
+    //    サーバーの c.best は未登録プレイヤーだと常に 0（battle.js の
+    //    `best: me ? (me.stats.coopBest || 0) : 0`）なので、`c.score >= c.best` は
+    //    0点でない限り必ず真 ── ゲストは点が下がっても毎回「新記録！」と出ていた。
+    //    自己ベストの行だけは localStorage も見ていたので、同じ画面の中で
+    //    「新記録！」と「自己ベスト（もっと高い数字）」が並ぶことすらあった。
+    //    比較も `>` にそろえる（サーバーは `>` で更新するのに画面は `>=` だった）。
     const localBest = Number(localStorage.getItem('bba_coop_best') || 0);
+    const prevCoopBest = Math.max(c.best || 0, localBest);
+    const isBest = c.score > 0 && c.score > prevCoopBest;
     if (c.score > localBest) localStorage.setItem('bba_coop_best', String(c.score));
     if (isBest) { audio.victory(); confettiBurst(70); } else audio.gameOver();
     const mine = msg.players.find(p => p.slot === msg.you.slot);
@@ -7693,7 +7798,7 @@ class OnlineMode extends VersusBase {
       <div class="result-banner ${isBest ? 'win' : 'draw'}">${ic('mode_coop', 26)} ${isBest ? t('新記録！', 'NEW RECORD!') : t('おつかれさま！', 'GOOD GAME!')}</div>
       <div class="result-stats">
         <div class="rs-row"><span>${t('きょうりょくスコア', 'Shared score')}</span><b>${fmt(c.score)}</b></div>
-        <div class="rs-row"><span>${t('自己ベスト', 'Personal best')}</span><b>${fmt(Math.max(c.best || 0, localBest, c.score))}</b></div>
+        <div class="rs-row"><span>${t('自己ベスト', 'Personal best')}</span><b>${fmt(Math.max(prevCoopBest, c.score))}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(c.lines)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(c.combo)}</b></div>
         <div class="rs-row"><span>${t('置いたピース', 'Pieces placed')}</span><b>${t(`あなた ${mine ? mine.moves : 0} ・ ${partner ? escapeHtml(partner.name) : '?'} ${partner ? partner.moves : 0}`,
@@ -12250,7 +12355,13 @@ class ReplayMode {
     const v = getView();
     setModeTheme({ ...equippedTheme(), boardId: 'board_sunset' });
     this.engine = new Engine(this.replay.seed);
-    applyDailyModifier(this.engine, this.meta.modifier);
+    // 🪨 **その日の種を必ず渡す。** 瓦礫の置き場所は seed から決まるので
+    //    （applyDailyModifier の 'rubble'）、渡し忘れると既定の 0 で置いてしまい、
+    //    録画した本人とは**別の盤面**の上で再生することになる。着手が置けなく
+    //    なった時点で打ち切られるので、一覧の点数と結果の点数が食い違った
+    //    （6日に1日の瓦礫の日だけ壊れるので、ずっと気づかれなかった）。
+    //    本編（DailyMode.start）も残像レース（startGhostRace）も渡している。
+    applyDailyModifier(this.engine, this.meta.modifier, this.replay.seed);
     v.setEngine(this.engine);
     v.inputLocked = true;          // 読み取り専用 ── 触っても盤面は動かない
     v.onPlace = null;

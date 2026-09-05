@@ -1485,7 +1485,16 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   user.coins += coins;
   user.xp += accXp;
   syncBattlePass(user);
-  user.battlePass.xp = Math.min(BP_TIERS.length * BP_XP_PER_TIER, user.battlePass.xp + bpXp);
+  // 🎫 **実際に入ったぶんだけを返す。**
+  //    満タン（30段 × 500 = 15,000）を超えたぶんは黙って捨てているのに、
+  //    返り値の bpXp は切り捨て前のままだったので、シーズン後半に走り切った人は
+  //    どのモードを遊んでも「パスXP +530」と出続けるのにバーが1ミリも動かない、
+  //    という状態だった（しかも上の take() でその日の枠は満額消費していた）。
+  const bpMax = BP_TIERS.length * BP_XP_PER_TIER;
+  const bpBefore = user.battlePass.xp;
+  user.battlePass.xp = Math.min(bpMax, bpBefore + bpXp);
+  const bpFull = bpXp > 0 && user.battlePass.xp === bpBefore;
+  bpXp = user.battlePass.xp - bpBefore;
 
   const s = user.stats;
   s.gamesPlayed += 1;
@@ -2029,16 +2038,24 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   //      すぐ隣の💎ドロップが realPlay と GEMDROP_DAILY_CAP の二枚重ねなのと
   //      同じ形にそろえる。
   let eyeShards = 0;
+  let eyeCapped = false;
   if (mode === 'solo' && realPlay && eyes > 0) {
     const eyeToday = jstDayKey();
     if (!s.eyeShardDay || s.eyeShardDay.day !== eyeToday) s.eyeShardDay = { day: eyeToday, got: 0 };
     const eyeRoom = Math.max(0, EYE_SHARD_DAILY_CAP - (s.eyeShardDay.got || 0));
     eyeShards = Math.min(eyes * EYE_SHARDS_EACH, eyeRoom);
+    // 👁 上限に当たった回は**理由を返す**。黙って欄ごと消していたので、
+    //    「潰したのに欠片が入らない」が原因不明に見えていた。
+    //    🛠工房/🧩遺跡/🏗設計図 には既に capped の仕組みがあるので同じ経路に乗せる。
+    if (eyeShards < eyes * EYE_SHARDS_EACH) eyeCapped = true;
     if (eyeShards > 0) {
       s.eyeShardDay.got = (s.eyeShardDay.got || 0) + eyeShards;
       user.shards = (user.shards || 0) + eyeShards;
-      s.eyesCaught = (s.eyesCaught || 0) + eyes;
     }
+    // ⚠ 潰した数は**上限に当たった日でも数える**。実績「観測者」は
+    //    eyesCaught を見るので、内側に置いていたころは上限日の分だけ
+    //    進捗が止まっていた（欠片は止めても、やったことは記録する）。
+    s.eyesCaught = (s.eyesCaught || 0) + eyes;
   }
 
   return {
@@ -2058,7 +2075,9 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     // 🛠 上限に当たって勝利ぶんが付かなかったとき、その理由。黙って0にすると
     //    「クリアしたのに数えられない」が原因不明の不具合に見える。
     //    付かなかったときだけ載せる（false は載せない＝欄の有無も情報にしない）。
-    ...(workshopCapped ? { capped: workshopCapped === true ? 'workshop' : workshopCapped } : {}),
+    ...(workshopCapped ? { capped: workshopCapped === true ? 'workshop' : workshopCapped }
+      : eyeCapped ? { capped: 'eyeshard_day' }
+        : bpFull ? { capped: 'bp_full' } : {}),
   };
 }
 
