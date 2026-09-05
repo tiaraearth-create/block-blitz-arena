@@ -422,7 +422,18 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
   // server/party.js が自分で送っており、そこは長らくこの照合の外にあった
   // （＝あちらに受け口の無いフレームを足しても気づけない）。
   const partySrv = read('server/party.js');
-  const sent = new Set([...`${battle}\n${partySrv}`.matchAll(/type:\s*'([a-z_0-9]+)'/g)].map(m => m[1]));
+  // ⚠ **コメントを落としてから集める。** サーバー側のコメントには
+  //   「クライアントはこう送ってくる」という説明が
+  //   `{ type:'room_seat', idx:…, seat:… }` の形で書いてあり、素のまま拾うと
+  //   **クライアント→サーバーのメッセージまで「サーバーが送るフレーム」として
+  //   数えられる**（受け口が無い、と嘘の赤が出る）。
+  //   ⚠ CRLF を先に落とすこと。JS の正規表現では `\r` も行終端なので `.` が
+  //     跨げず、`//.*$` は行末に `\r` が残ったままだと **1件も当たらない**
+  //     （この罠で最初の版は素通りした）。read() は正規化していない。
+  const stripComments = src => src.replace(/\r\n/g, '\n').split('\n')
+    .map(l => l.replace(/\/\/.*$/, '')).join('\n');
+  const sent = new Set([...`${stripComments(battle)}\n${stripComments(partySrv)}`
+    .matchAll(/type:\s*'([a-z_0-9]+)'/g)].map(m => m[1]));
   // 受け口の書き方は3通りある（BattleClient の .on / net.js 内の直接判定 /
   // chat.js の switch）。どれか1つでもあれば「聞いている」とみなす。
   const handled = new Set([

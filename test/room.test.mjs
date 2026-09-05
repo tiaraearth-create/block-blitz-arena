@@ -111,20 +111,25 @@ try {
   const meBefore = await (await fetch(`${BASE}/api/me`, { headers: { Authorization: `Bearer ${reg.token}` } })).json();
   const playedBefore = ((meBefore.user || {}).stats || {}).gamesPlayed || 0;
 
-  // ---- A/B: 8人が1部屋に入り、あふれたぶんが観戦席になる ----
+  // ---- A/B: 定員いっぱいまで入り、あふれたぶんが観戦席になる ----
+  // v2.56 で定員が 8 → 16 になった（ユーザー要望）。**数を書き写さない** ──
+  // サーバーが room_update で返す max をそのまま使う。書き写した定数が実装と
+  // ずれて嘘をつくようになったテストが、このリポジトリには実際にあった。
   const host = await makeClient('ホスト'); clients.push(host);
   host.send({ type: 'create_room', settings: { mode: 'duel' } });
   const first = await host.wait('room_update');
   const code = first.code;
-  check('A-1 部屋ができる', !!code && first.seats === 2 && first.max === 8, `code=${code} seats=${first.seats} max=${first.max}`);
+  const MAX = first.max;
+  check('A-1 部屋ができる', !!code && first.seats === 2 && MAX >= 8, `code=${code} seats=${first.seats} max=${MAX}`);
 
-  for (let i = 2; i <= 7; i++) {
+  // 定員 -1 人まで入れる（最後の1枠は下の本登録アカウントが使う）。
+  for (let i = 2; i <= MAX - 1; i++) {
     const c = await makeClient(`参加${i}`); clients.push(c);
     c.send({ type: 'join_room', code });
     await c.wait('room_update');
     await sleep(120);   // join_room は 10秒に5回まで（連投制限）— 余裕を持って間隔をあける
   }
-  // 8人目は本登録アカウント（観戦者の戦績を見るため）。
+  // 最後の1人は本登録アカウント（観戦者の戦績を見るため）。
   const watcher = await makeClient(null, reg.token); clients.push(watcher);
   watcher.send({ type: 'join_room', code });
   // wait() は受け取った1件を取り出してしまうので、観戦者側の見え方は
@@ -133,22 +138,23 @@ try {
   await sleep(300);
 
   const full = host.last('room_update');
-  check('A-2 8人が1つの部屋に入れる', full.players.length === 8, `${full.players.length}人`);
+  check('A-2 定員いっぱいまで1つの部屋に入れる', full.players.length === MAX, `${full.players.length}/${MAX}人`);
   const play = full.players.filter(p => p.seat === 'play');
   const watch = full.players.filter(p => p.seat === 'watch');
   check('B-1 対戦席はモードどおり2人', play.length === 2, play.map(p => p.name).join(','));
-  check('B-2 あふれた6人は観戦席', watch.length === 6, watch.map(p => p.name).join(','));
+  check('B-2 あふれたぶんは観戦席', watch.length === MAX - 2, `${watch.length}人 / 期待 ${MAX - 2}人`);
   check('B-3 入室順に対戦席が埋まる（ホストは対戦席）',
     play[0].name === host.name && play[0].isHost, `${play.map(p => p.name).join(',')}`);
   check('B-4 自分の席が分かる（観戦者には watch と伝わる）',
     watcherView.yourSeat === 'watch', String(watcherView.yourSeat));
 
-  // ---- A: 9人目は断られる ----
-  const ninth = await makeClient('9人目'); clients.push(ninth);
-  ninth.send({ type: 'join_room', code });
-  const err9 = await ninth.wait('room_error', 8000);
-  check('A-3 9人目だけが「満員」で断られる', /満員/.test(err9.error || ''), err9.error);
-  ninth.ws.close();
+  // ---- A: 定員を1人超えたら断られる ----
+  const over = await makeClient('あふれた人'); clients.push(over);
+  over.send({ type: 'join_room', code });
+  const errOver = await over.wait('room_error', 8000);
+  check('A-3 定員を超えた1人だけが「満員」で断られる', /満員/.test((errOver || {}).error || ''),
+    (errOver || {}).error || 'なにも返らない');
+  over.ws.close();
 
   // ---- C: 席の入れ替えはホストだけ ----
   const second = clients[1];   // 参加2 = もう1つの対戦席

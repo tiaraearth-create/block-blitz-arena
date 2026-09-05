@@ -139,8 +139,8 @@ export const ONLINE_MODES = [
     // からあふれた人は観戦席に座る ── 以前は対戦席ぶんしか入れず、5人で
     // 集まると3人が入室すらできなかった。ここは「何人で集まれるか」を
     // 知りたくて読む行なので、席の内訳より先に定員を書く。
-    line: () => t('4文字の合言葉で最大8人まで集合。対戦席からあふれた人は観戦席で見られる。ルールはホストが決める。',
-      'Gather up to 8 friends with a 4-letter code. Anyone past the playing seats watches from the stands. The host picks the rules.'),
+    line: () => t('4文字の合言葉で最大16人まで集合。対戦する人数もホストが決められる（1v1は2〜16人、2v2チームは2〜16人）。対戦席からあふれた人は観戦席で見られる。',
+      'Gather up to 16 friends with a 4-letter code. The host also picks how many actually play (2–16 for 1v1 and for 2v2 teams). Anyone past the playing seats watches from the stands.'),
     rated: false,
   },
 ];
@@ -271,7 +271,7 @@ export function rulesSections() {
         t('バトルロイヤルは脱落しても終わりではありません。そのまま残った人の盤面を観戦できます。',
           'Getting knocked out of Battle Royale is not the end — you keep watching the survivors play.'),
         // 出典: server/battle.js の ROOM_MAX（=8）と reseat()
-        t('カスタムルームは1部屋8人まで。対戦席（1v1なら2人・2v2なら4人）からあふれた人は観戦席に座り、試合をそのまま見られます。',
+        t('カスタムルームは1部屋16人まで。対戦する人数はホストが選べます（1v1と2v2チームは2〜16人。攻撃戦・協力・陣取りは盤面の作り上2人固定）。あふれた人は観戦席に座り、試合をそのまま見られます。2v2チームでは席ごとにA/Bを入れ替えられます。',
           'A custom room holds 8. Anyone past the playing seats (2 for 1v1, 4 for 2v2) sits in the stands and watches the match live.'),
         t('ホストは席をいつでも入れ替えられます。交代で遊ぶときは、待っている人が観戦席で見ていられます。',
           'The host can move people between seats at any time, so whoever is waiting their turn can watch instead of sitting out.'),

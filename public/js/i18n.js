@@ -226,6 +226,7 @@ const SERVER_MSG_EN = {
   '対戦席に誰もいません（観戦席から誰かを対戦席へ）': 'No one is in a play seat — move someone from the stands first',
   'ホストのみ席を変更できます': 'Only the host can move seats',
   'ホストのみ設定を変更できます': 'Only the host can change the settings',
+  'チーム分けは2v2チームのときだけです': 'Teams can only be set in 2v2 team mode',
   '試合中は席を変更できません': 'Seats cannot be changed during a match',
   '試合中は設定を変更できません': 'Settings cannot be changed during a match',
   'その人はこのルームにいません': 'That player is not in this room',
@@ -496,7 +497,7 @@ export function applyStaticI18n() {
   const codeInput = document.getElementById('roomCodeInput');
   if (codeInput) codeInput.placeholder = 'CODE';
   const joinNote = document.querySelector('#roomJoin .muted');
-  if (joinNote) joinNote.innerHTML = 'Gather friends with the same code!<br>In team mode the first two players form Team A';
+  if (joinNote) joinNote.innerHTML = 'Gather friends with the same code — up to 16!<br>The host picks how many play and who is on which team';
   const roomCode = document.querySelector('.room-code');
   if (roomCode) roomCode.innerHTML = `Room code <b id="roomCodeLabel">----</b>`;
   set('#btnCopyRoomCode', 'Copy');

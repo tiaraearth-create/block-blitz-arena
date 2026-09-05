@@ -283,7 +283,9 @@ export function initBattle(server, deps) {
   // これが土台になって、リアクションの増幅・チャット制限のすり抜け・
   // 対戦報酬の並列採掘が成立していた。
   const MAX_SOCKETS = 400;              // 全体
-  const MAX_SOCKETS_PER_IP = 12;        // 同一IPあたり（家族や学校の共有を考慮して緩め）
+  //   合言葉ルームの定員を16人にしたので、**同じ回線から16人が入れる**高さにする。
+  //   1人が対戦用とチャット用で2本つなぐ設計なので、16人＝32本＋予備。
+  const MAX_SOCKETS_PER_IP = 40;        // 同一IPあたり（家族・学校・16人ルームを考慮）
   const MAX_SOCKETS_PER_USER = 6;       // 同一アカウントあたり（PC＋スマホ＋予備）
   const HELLO_GRACE_MS = 20_000;        // 名乗らない接続を切るまで
   const sockIp = ws => (ws && ws._ip) || '?';
@@ -1989,6 +1991,13 @@ export function initBattle(server, deps) {
         mode: match.mode, rated: !!match.rated, duration: match.duration, until: Date.now() + 30000,
         sides: match.players.map(p => ({
           sock: p.sock.isBot ? null : p.sock,
+          // 🎭 **その席そのもの**を控える。強さ（level）だけを控えて座り直させると、
+          //    名前・レート・称号・ギルド・戦績が全部引き直され、再戦した相手が
+          //    別人になる ── 人間相手の再戦では必ず同じ人が座るので、
+          //    「名前が変わった＝さっきの相手はボットだった」の判定器になっていた
+          //    （実測9/9で別人。ゲストとして遊ぶと R1042・称号あり → レート無し・
+          //     称号なし、と露骨に劣化することもあった）。
+          bot: p.sock.isBot ? p.sock : null,
           isBot: !!p.sock.isBot, level: p.sock.level || null,
           name: sockName(p.sock), team: p.team, ready: false,
         })),
@@ -2049,14 +2058,40 @@ export function initBattle(server, deps) {
       //    「Elo が動かない1対1では勝ち星も勝利報酬も動かない」の対象に揃える。
       const duel1v1 = (match.mode === 'duel' || match.mode === 'attack' || match.mode === 'land')
         && match.players.length === 2;
+      // 🚪 合言葉ルームの試合は **人数にもモードにもよらず** 練習試合。
+      //
+      //    以前は duel1v1（duel/attack/land の2人戦）だけを見ていたので、
+      //    2v2 や3人以上の部屋では friendly が付かず、勝ち星・連勝ボーナス・
+      //    totalWins・勝利系ミッション/実績/称号が全部入っていた。
+      //    実測: 席2の部屋で勝つと totalWins 0→0 のまま、席16の部屋で勝つと 0→1。
+      //    席数を選べるようにすると「1人＋ボット15人で必勝ボタン」になる。
+      //    下の宣言（Elo が動かない場所では勝ちに意味を持たせない）を、
+      //    部屋の試合ぜんたいへ広げる。match.roomCode は startRoom が張り、
+      //    endMatch でも消えない。
+      const inRoom = !!match.roomCode && !match.rated && !match.tourney;
       const oppSlot = 1 - p.slot;
-      const friendly = !me || !duel1v1 ? null
-        : selfPlay ? 'self'
-          : (!match.rated && !match.tourney) ? 'room'
-            : (!match.rated ? null
-              : (!match.players[oppSlot].sock.isBot && !humanUsers[oppSlot]) ? 'guest'
-                : repeatPair ? 'repeat'
-                  : null);
+      const friendly = !me ? null
+        : inRoom ? 'room'
+          : !duel1v1 ? null
+            : selfPlay ? 'self'
+              : (!match.rated && !match.tourney) ? 'room'
+                : (!match.rated ? null
+                  // 🎭 判定は「相手がボットか」ではなく **「相手にレートがあるか」**。
+                  //
+                  //   以前は `!isBot && !humanUsers[opp]` だったので、本物のゲストには
+                  //   練習試合の注記が出て勝ち星も付かないのに、**レートを持たない
+                  //   ボットの席**（未登録の住人・ゲスト風の使い捨て）では注記が出ず
+                  //   pvpWins だけが増えていた。対戦カードの見え方は
+                  //   「段位なし / Lv ― / R ―」で本物のゲストと完全に同一なので、
+                  //   『段位なしの相手 × 注記なし』の2条件で住人だと100%言い当てられた。
+                  //   実測: ランクマ60戦のうち20%が段位なしの相手で、そのうち9人は
+                  //   「ゲストNNNN」ではない名簿の住人。
+                  //
+                  //   Elo が動く条件（下の oppRating）は元から `rating != null` なので、
+                  //   そちらに揃える。これで **見え方・裁定・注記** の3つが必ず一致する。
+                  : sockRating(match.players[oppSlot].sock) == null ? 'guest'
+                    : repeatPair ? 'repeat'
+                      : null);
       if (me) {
         if (duel2) {
           const oppUser = humanUsers[1 - p.slot];
@@ -2527,21 +2562,52 @@ export function initBattle(server, deps) {
     let mode = ['duel', 'attack', 'team', 'coop', 'land'].includes(s.mode) ? s.mode : (s.team ? 'team' : 'duel');
     if (s.team === true && s.mode === undefined) mode = 'team';
     if (s.team === false && s.mode === undefined) mode = 'duel';
+    // 💺 対戦席の数。モードごとに「遊んで成立する」上限が違う。
+    //
+    //   duel … 何人でも成立する（各自の盤面で点を競うだけ）
+    //   team … 2チームに分かれるだけなので何人でも成立する
+    //   attack … **2人固定**。お邪魔は `p.team !== me.team` の全員へ同じだけ配られ、
+    //     上限は撃つ側にしかない（MAX_ATK_CELLS_PER_SEC=2）。8v8 では受け側が
+    //     最大16セル/秒 ＝ 64マスの盤面が約4秒で埋まる。受け側の上限を作るまで開けない。
+    //   coop / land … **2人固定**。1つの盤面を交互に使う作りで、
+    //     とくに陣取りは landCounts が owner の 1 と 2 しか数えず（3人目の領土は
+    //     どこにも入らない）、勝敗の裁定も players.length === 2 の中にある。
+    //   ⚠ ここを緩めるときは、上に挙げた実装のほうを先に直すこと。
+    const seatMax = mode === 'duel' || mode === 'team' ? ROOM_MAX : 2;
+    const seatMin = 2;
+    const seatWant = Number.isFinite(Number(s.seats)) ? Math.floor(Number(s.seats))
+      : (mode === 'team' ? 4 : 2);
     return {
       duration: DURATIONS.includes(Number(s.duration)) ? Number(s.duration) : MATCH_DURATION,
       mode,
       team: mode === 'team',
+      seats: Math.max(seatMin, Math.min(seatMax, seatWant)),
       botFill: s.botFill !== false,
       botLevel: ['random', 'easy', 'normal', 'hard', 'oni'].includes(s.botLevel) ? s.botLevel : 'random',
     };
   }
-  // 対戦席の数。モードどおり（1v1=2 / 2v2=4 / 協力=2 / 陣取り=2）。
-  const roomSeats = room => room.settings.mode === 'team' ? 4 : 2;
+  // 対戦席の数。ホストが選んだ値（cleanSettings がモードごとに丸めてある）。
+  const roomSeats = room => (room.settings && room.settings.seats) || (room.settings.mode === 'team' ? 4 : 2);
   // 部屋の定員（対戦席＋観戦席）。以前は対戦席ぶんしか入れず、あふれた人は
   // 「ルームが満員です」で**入室すらできなかった** ── 5人で集まって2人だけ
   // 遊ぶ、ができない。定員を8にして、あふれたぶんは観戦席に座らせる。
-  const ROOM_MAX = 8;
+  //    16人まで（2026-09-06 ユーザー要望）。上げたときに何が壊れるかは
+  //    実測済み ── 試合そのものは16人で最後まで成立し、全員が試合後に部屋へ戻る。
+  //    ⚠ 同一回線からの実効上限は MAX_SOCKETS_PER_IP。家や学校のように
+  //      みんなが同じ回線から入る場合はそちらが先に効くので、16人ぶんに上げてある。
+  const ROOM_MAX = 16;
   const roomPlaying = room => room.players.filter(p => !room.watch.has(p));
+
+  // 📍 部屋の中で人を指す。**席番号（broadcastRoom の players[].idx）が正**。
+  //    表示名はゲストどうしで重複できる（名前の予約は登録ユーザー・予約名・
+  //    住人名しか弾かない）ので、名前で引くと同名の先頭に当たり、
+  //    ホストが押した行と別の人が動く。古いクライアントのために名前も残す。
+  function roomTargetOf(room, msg) {
+    const i = Math.floor(Number(msg && msg.idx));
+    if (Number.isFinite(i) && i >= 0 && i < room.players.length) return room.players[i];
+    const name = String((msg && msg.name) == null ? '' : msg.name).slice(0, 40);
+    return name ? (room.players.find(p => sockName(p) === name) || null) : null;
+  }
 
   // 👑 ホストは「配列の0番目」ではなく、部屋が覚えている1人（room.host）。
   //
@@ -2617,9 +2683,17 @@ export function initBattle(server, deps) {
         // 「◯/8人・対戦席2」のような表示ができる。
         seats, max: ROOM_MAX,
         yourSeat: room.watch.has(ws) ? 'watch' : 'play',
-        players: room.players.map(p => ({
+        // 🏴 idx（席の連番）と team を載せる。
+        //    ⚠ 人を指すのに **表示名を使わない**。ゲスト名は重複できるので
+        //      （名前の予約は登録ユーザー・予約名・住人名しか弾かない）、
+        //      名前で引くと同名の先頭に当たって「押した行と別の人が動く」。
+        //    team は sanitize.js の SECRET_KEYS に無いので関門で落ちない
+        //    （チーム分けは全員に見えてよい情報）。
+        players: room.players.map((p, i) => ({
+          idx: i,
           name: sockName(p), isHost: p === hostSock, isYou: p === ws,
           seat: room.watch.has(p) ? 'watch' : 'play',
+          team: room.teams && room.teams.has(p) ? room.teams.get(p) : null,
         })),
         ...(roomWatchExtra(room, ws) || { inMatch: false }),
       });
@@ -2635,6 +2709,7 @@ export function initBattle(server, deps) {
     if (i !== -1) room.players.splice(i, 1);
     room.watch.delete(ws);
     room.benched.delete(ws);
+    if (room.teams) room.teams.delete(ws);
     // 試合中の部屋は、観戦者が全員抜けても消さない ── 対戦席の人たちが
     // room.away に控えていて、試合が終わったらここへ戻ってくる。
     // 消すと彼らは戻る先を失う（endRoomSpectate が rooms.has で引き返す）。
@@ -2665,14 +2740,32 @@ export function initBattle(server, deps) {
       send(ws, { type: 'room_error', error: `あと${need - play.length}人必要です（ボット補充をONにもできます）` });
       return;
     }
-    // Humans keep join order: in team mode the first two are team A. Co-op
-    // puts everyone on one side of one board.
-    const teamOf = i => coop ? 0 : room.settings.team ? (i < 2 ? 0 : 1) : i % 2;
-    const entries = play.map((p, i) => ({ sock: p, team: teamOf(i) }));
+    // 🏴 チーム分け。ホストが席ごとに決めていればそれを使い、
+    //    決めていない席は既定式（**前半A・後半B**）で埋める。
+    //    以前の既定は `i < 2 ? 0 : 1` で、席を4より増やすと必ず 2 vs N-2 になっていた
+    //    （実測 seats=6 で teams=[0,0,1,1,1,1]）。
+    //    協力プレイは1つの盤面を共有するので全員チーム0のまま。
+    const half = Math.ceil(need / 2);
+    const teamOf = (p, i) => {
+      if (coop) return 0;
+      if (p && room.teams && room.teams.has(p)) return room.teams.get(p);
+      return room.settings.team ? (i < half ? 0 : 1) : i % 2;
+    };
+    const entries = play.map((p, i) => ({ sock: p, team: teamOf(p, i) }));
     // 観戦者の名前もボットの名前空間から外す（同名の対戦相手が出ると
     // 観戦席の本人が盤面に二重に現れて見える）。
     const used = new Set(room.players.map(p => sockName(p)));
-    while (entries.length < need) entries.push({ sock: new Bot(room.settings.botLevel, used), team: teamOf(entries.length) });
+    // 🤖 ボットは**人数の少ないチーム**へ入れる。既定式のまま添字で決めると、
+    //    ホストが手で決めた席割りとズレて 3 vs 1 のような試合になる。
+    while (entries.length < need) {
+      let team = 0;
+      if (!coop) {
+        const a = entries.filter(e => e.team === 0).length;
+        const b = entries.filter(e => e.team === 1).length;
+        team = room.settings.team ? (a <= b ? 0 : 1) : entries.length % 2;
+      }
+      entries.push({ sock: new Bot(room.settings.botLevel, used), team });
+    }
     // 対戦席の人だけ部屋から出す（従来どおり）。観戦席の人は部屋に残り、
     // 部屋そのものが観戦のための入れ物になる ── 試合中も room_update が
     // 届き続けるので、watch / watchable をそこに載せられる。
@@ -4183,12 +4276,25 @@ export function initBattle(server, deps) {
           mine.ready = true;
           const other = offer.sides.find(sd => sd !== mine);
           if (other.isBot) {
-            // ボット相手は即再戦（同じ強さのボットを新しく座らせる）
             rematchOffers.delete(String(msg.rematchId));
-            createMatch({ mode: offer.mode, rated: offer.rated, duration: offer.duration, entries: [
-              { sock: ws, team: 0 },
-              { sock: new Bot(other.level || 'random', new Set([sockName(ws)])), team: 1 },
-            ] });
+            // 🎭 **同じ席に座り直してもらう**。控えてある Bot をそのまま使う
+            //    （startPlay が毎回 Engine とタイマーを作り直すので使い回せる）。
+            //    控えが失われているときだけ、従来どおり同じ強さで作り直す。
+            const seat = other.bot || new Bot(other.level || 'random', new Set([sockName(ws)]));
+            // ⏱ 人間相手の再戦は「相手が承諾するまで」待つ（押した側の画面は
+            //    『相手を待っています…』）。ボットだけ押した瞬間に成立していたので、
+            //    **待ち時間の有無**でも正体が分かった（実測46〜48ms）。人が承諾する
+            //    のと同じくらいの間を置く。
+            const waitMs = 900 + crypto.randomInt(1300);
+            setTimeout(() => {
+              // 待っているあいだにメニューへ戻った／別の試合に入った／切れた。
+              if (!ws || ws.readyState !== ws.OPEN) return;
+              if (ws.matchId || ws.roomCode || ws.tourneyId || ws.royaleId || ws.zeroId) return;
+              createMatch({ mode: offer.mode, rated: offer.rated, duration: offer.duration, entries: [
+                { sock: ws, team: 0 },
+                { sock: seat, team: 1 },
+              ] });
+            }, waitMs);
             return;
           }
           // matchId だけを見ていたので、相手が待っている間にルーム/大会/
@@ -4286,6 +4392,10 @@ export function initBattle(server, deps) {
             // 👑 作った人がホスト。配列の順番とは別に覚えておく（ensureHost）。
             host: ws,
             watch: new Set(), benched: new Set(), matchId: null, specTick: null,
+            // 🏴 席ごとのチーム（socket → 0|1）。ホストが決めたぶんだけ入る。
+            //    入っていない席は startRoom の既定式（前半A・後半B）で決まる。
+            //    watch / benched と同じ「socket を鍵にした集合」の作法。
+            teams: new Map(),
             // away … いま試合に出ていて部屋を離れている socket。
             //   endRoomSpectate が試合後に部屋へ戻す（交代で遊ぶための控え）。
             away: null,
@@ -4337,16 +4447,19 @@ export function initBattle(server, deps) {
           break;
         }
         // 👑 ホストが「誰を対戦席に出すか」を入れ替える。
-        //   { type:'room_seat', name:'<表示名>', seat:'play'|'watch' }
+        //   { type:'room_seat', idx:<席番号>, seat:'play'|'watch' }
         // ホスト以外が叩いても効かない（下の1行目で弾く）。
+        // ⚠ 人を指すのは **席番号（broadcastRoom の players[].idx）**。
+        //   表示名で引いていたころは、ゲスト名が重複できるせいで
+        //   同名の先頭に当たり「押した行と別の人が動く」ことがあった。
+        //   古いクライアントのために name も受け付ける（見つからなければ従来どおり断る）。
         case 'room_seat': {
           const room = roomOf(ws);
           if (!room) { send(ws, { type: 'room_error', error: 'ルームが見つかりません' }); return; }
           if (!isRoomHost(room, ws)) { send(ws, { type: 'room_error', error: 'ホストのみ席を変更できます' }); return; }
           if (room.matchId) { send(ws, { type: 'room_error', error: '試合中は席を変更できません' }); return; }
           const seat = msg.seat === 'watch' ? 'watch' : 'play';
-          const name = String(msg.name == null ? '' : msg.name).slice(0, 40);
-          const target = room.players.find(p => sockName(p) === name);
+          const target = roomTargetOf(room, msg);
           if (!target) { send(ws, { type: 'room_error', error: 'その人はこのルームにいません' }); return; }
           if (seat === 'watch') {
             room.watch.add(target);
@@ -4364,6 +4477,27 @@ export function initBattle(server, deps) {
             room.benched.delete(target);
           }
           reseat(room);
+          broadcastRoom(room);
+          break;
+        }
+        // 🏴 ホストが席のチーム（A/B）を決める。
+        //   { type:'room_team', idx:<席番号>, team:0|1 }
+        //   決めなかった席は startRoom の既定式（前半A・後半B）で埋まる。
+        case 'room_team': {
+          const room = roomOf(ws);
+          if (!room) { send(ws, { type: 'room_error', error: 'ルームが見つかりません' }); return; }
+          if (!isRoomHost(room, ws)) { send(ws, { type: 'room_error', error: 'ホストのみ席を変更できます' }); return; }
+          if (room.matchId) { send(ws, { type: 'room_error', error: '試合中は席を変更できません' }); return; }
+          if (room.settings.mode !== 'team') {
+            send(ws, { type: 'room_error', error: 'チーム分けは2v2チームのときだけです' });
+            return;
+          }
+          const target = roomTargetOf(room, msg);
+          if (!target) { send(ws, { type: 'room_error', error: 'その人はこのルームにいません' }); return; }
+          if (!room.teams) room.teams = new Map();
+          // 0/1 以外（未指定に戻す）は覚えている値を消す＝既定式に戻る。
+          if (msg.team === 0 || msg.team === 1) room.teams.set(target, msg.team);
+          else room.teams.delete(target);
           broadcastRoom(room);
           break;
         }

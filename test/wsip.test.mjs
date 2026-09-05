@@ -29,7 +29,17 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const results = [];
 const check = (name, ok, detail = '') => { results.push([ok ? '✅' : '❌', name, detail]); if (!ok) process.exitCode = 1; };
 
-const PER_IP = 12;   // server/battle.js の MAX_SOCKETS_PER_IP と揃える
+// ⚠ **数を書き写さない。** server/battle.js の MAX_SOCKETS_PER_IP から読む。
+//   合言葉ルームの定員を16人にしたときにこの値も上げたが、テスト側が 12 の
+//   まま取り残されて「上限が効いていない」と嘘の赤を出した（実際は効いていて、
+//   位置が動いただけ）。書き写した定数が実装とずれて嘘をつくようになった
+//   テストが、このリポジトリには他にもあった。
+const PER_IP = (() => {
+  const src = fs.readFileSync(new URL('../server/battle.js', import.meta.url), 'utf8');
+  const m = src.match(/MAX_SOCKETS_PER_IP = (\d+)/);
+  if (!m) throw new Error('MAX_SOCKETS_PER_IP を server/battle.js から読めません');
+  return Number(m[1]);
+})();
 
 const dataDirs = [];
 async function startServer(extraEnv, tag) {

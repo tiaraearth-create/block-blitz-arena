@@ -228,17 +228,33 @@ try {
     solo.send({ type: 'state', score: 900000, lines: 60, combo: 9 });
     await sleep(400);
     const r = await solo.wait('result', 25000);
-    check('⑥ ふつうのレート戦には練習試合の印が付かない', !('friendly' in r), `friendly=${r.friendly}`);
+    // 🎭 v2.56: 練習試合の判定を「相手がボットか」から
+    //   **「相手にレートがあるか」** へ変えた。
+    //
+    //   以前は、本物のゲストが相手なら練習試合の注記が出て勝ち星も付かないのに、
+    //   **レートを持たないボットの席**（未登録の住人・ゲスト風の使い捨て）では
+    //   注記が出ず勝ち星だけ増えていた。対戦カードの見え方は
+    //   「段位なし / Lv ― / R ―」で本物のゲストと完全に同一なので、
+    //   『段位なしの相手 × 注記なし』の2条件で住人だと100%言い当てられた。
+    //   （実測: ランクマ60戦のうち20%が段位なしの相手）
+    //   Elo が動く条件は元から rating != null なので、そちらに揃えてある。
+    //
+    //   席を埋める相手のレートの有無は**引き**なので、ここでは
+    //   「どちらを引いても筋が通っている」ことを見る（引きで落ちるテストにしない）:
+    //     レートあり → 注記なし・勝敗が1つ動く
+    //     レートなし → 注記 'guest'・勝敗は動かない（本物のゲストとまったく同じ）
+    const oppRated = (mf.players || []).some(p => !p.isYou && p.rating != null);
+    check('⑥ レートの有無と練習試合の印が一致する',
+      oppRated ? !('friendly' in r) : r.friendly === 'guest',
+      `相手のレート=${oppRated ? 'あり' : 'なし'} / friendly=${r.friendly}`);
 
     await sleep(600);
     const after = await statsOf(tok);
     const moved = (after.pvpWins || 0) + (after.pvpLosses || 0);
-    check('⑥ 勝敗がちゃんと記録される', moved === 1, `${after.pvpWins}勝${after.pvpLosses}敗`);
-    // ⚠ ここでレートの増減までは見ない。席を埋める相手が **未登録** だった回は
-    //   Elo が動かないのが正しい（server/battle.js の Bot は
-    //   `rating = persona.registered ? ... : null` で、null なら endMatch の
-    //   oppRating が null になり Elo を回さない）。引きによって落ちるテストに
-    //   なるので、レートが動くことは下の⑦で **登録済み2人** の実戦で見る。
+    check('⑥ レートが動く相手なら勝敗も記録される',
+      oppRated ? moved === 1 : moved === 0,
+      `相手のレート=${oppRated ? 'あり' : 'なし'} / ${after.pvpWins}勝${after.pvpLosses}敗`);
+    // ⚠ レートの増減までは見ない。決定的に見たいものは下の⑦（登録済み2人）で見る。
     solo.ws.close();
     await sleep(400);
   }

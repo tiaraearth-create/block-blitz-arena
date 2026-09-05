@@ -5901,31 +5901,47 @@ class OnlineMode extends VersusBase {
   renderRoomSeats(msg) {
     const { mode, playSeats, play, watch, max } = this.roomSeatPlan(msg);
     const host = !!msg.youAreHost;
-    const teamMark = n => (mode === 'team'
-      ? `<i class="rp-chip ${n < 2 ? 'a' : 'b'}"></i>`
+    // 🏴 チームの印。サーバーが席ごとの team を送ってくればそれを使い、
+    //    ホストが決めていない席は既定式（**前半A・後半B**）で見せる。
+    //    startRoom の既定式と同じ規則にしておくこと ── ここがズレると
+    //    「画面ではAなのに試合ではB」になる。
+    const half = Math.ceil(playSeats / 2);
+    const teamOf = (p, n) => (p && (p.team === 0 || p.team === 1) ? p.team : (n < half ? 0 : 1));
+    const teamMark = (p, n) => (mode === 'team'
+      ? `<i class="rp-chip ${teamOf(p, n) === 0 ? 'a' : 'b'}"></i>`
       : ic('seat_play', 18));
     const full = play.length >= playSeats;
     const row = (p, n, seat) => `
       <div class="room-player${p.isYou ? ' me' : ''}${seat === 'watch' ? ' watcher' : ''}">
-        <span class="rp-team">${seat === 'play' ? teamMark(n) : ic('seat_watch', 18)}</span>
+        <span class="rp-team">${seat === 'play' ? teamMark(p, n) : ic('seat_watch', 18)}</span>
         <span class="rp-name">${escapeHtml(p.name)}${p.isYou ? t('（あなた）', ' (you)') : ''}</span>
         ${p.isHost ? `<span class="rp-host">${ic('host_crown', 14)} ${t('ホスト', 'Host')}</span>` : ''}
-        ${host ? `<button class="rp-seat" data-seat-name="${escapeHtml(p.name)}"
+        ${host && mode === 'team' && seat === 'play' ? `<button class="rp-seat" data-team-idx="${p.idx}"
+            data-team-to="${teamOf(p, n) === 0 ? 1 : 0}"
+            title="${t('チームを入れ替える', 'Switch team')}"
+          >${teamOf(p, n) === 0 ? 'A → B' : 'B → A'}</button>` : ''}
+        ${host ? `<button class="rp-seat" data-seat-idx="${p.idx}"
             data-seat-to="${seat === 'play' ? 'watch' : 'play'}"
             ${seat === 'watch' && full ? 'disabled' : ''}
             title="${seat === 'play' ? t('観戦席へ移す', 'Move to the spectator seats') : t('対戦席へ移す', 'Move to a player seat')}"
           >${seat === 'play' ? `${ic('seat_watch', 14)} ${t('観戦席へ', 'Watch')}` : `${ic('seat_play', 14)} ${t('対戦席へ', 'Play')}`}</button>` : ''}
       </div>`;
-    const openSeat = `
+    // 💺 空き席は**1行にまとめる**。席を16まで選べるようにしたので、
+    //    1席1行のままだと空き15行で 740px ぶん伸び、ホストが「対戦開始！」に
+    //    届くまでスクロールすることになる（実測 375×812 で開始ボタンが y=1552）。
+    const openCount = Math.max(0, playSeats - play.length);
+    const openSeat = openCount ? `
       <div class="room-player open">
         <span class="rp-team">${ic('seat_open', 18)}</span>
-        <span class="rp-name">${t('空き席', 'Open seat')}</span>
-      </div>`;
+        <span class="rp-name">${openCount > 1
+          ? t(`空き席 ×${openCount}`, `${openCount} open seats`)
+          : t('空き席', 'Open seat')}</span>
+      </div>` : '';
     $('#roomPlayers').innerHTML = `
       <div class="room-seat-group">
         <div class="room-seat-title">${ic('seat_play', 14)} ${t('対戦席', 'Player seats')}<b>${play.length}/${playSeats}</b></div>
         ${play.map((p, n) => row(p, n, 'play')).join('')}
-        ${openSeat.repeat(Math.max(0, playSeats - play.length))}
+        ${openSeat}
       </div>
       <div class="room-seat-group">
         <div class="room-seat-title">${ic('seat_watch', 14)} ${t('観戦席', 'Spectator seats')}<b>${watch.length}</b>
@@ -5935,13 +5951,21 @@ class OnlineMode extends VersusBase {
           : `<p class="muted center rs-empty">${t('対戦席に入りきらない人はここで観戦します', 'Anyone who does not fit in a player seat watches from here')}</p>`}
       </div>`;
     if (!host) return;
-    $('#roomPlayers').querySelectorAll('[data-seat-name]').forEach(b => {
+    $('#roomPlayers').querySelectorAll('[data-seat-idx]').forEach(b => {
       b.onclick = () => {
         audio.click();
         // server/battle.js の case 'room_seat' と同じ形。断られたときは
         // room_error が返るので、こちらで先読みして席を動かさない
         // （動かすと、サーバーが弾いた席割りが一瞬だけ本物に見える）。
-        this.client.send({ type: 'room_seat', name: b.dataset.seatName, seat: b.dataset.seatTo });
+        // ⚠ 人を指すのは**席番号**。表示名はゲストどうしで重複できるので、
+        //   名前で送っていたころは同名の先頭に当たって別の人が動くことがあった。
+        this.client.send({ type: 'room_seat', idx: Number(b.dataset.seatIdx), seat: b.dataset.seatTo });
+      };
+    });
+    $('#roomPlayers').querySelectorAll('[data-team-idx]').forEach(b => {
+      b.onclick = () => {
+        audio.click();
+        this.client.send({ type: 'room_team', idx: Number(b.dataset.teamIdx), team: Number(b.dataset.teamTo) });
       };
     });
   }
@@ -6051,6 +6075,16 @@ class OnlineMode extends VersusBase {
       ${mode === 'attack' ? `<p class="muted center" style="font-size:11px">${t('2ライン以上を同時に消すと、相手の盤面にお邪魔ブロックが飛びます', 'Clearing 2+ lines at once dumps garbage on your opponent')}</p>` : ''}
       ${mode === 'coop' ? `<p class="muted center" style="font-size:11px">${t('2人で1つの盤面を交互に操作。ボット補充ONなら1人でも遊べます', 'Two players share one board, taking turns. Bot fill lets you play solo')}</p>` : ''}
       ${mode === 'land' ? `<p class="muted center" style="font-size:11px">${t('2人で1つの盤面を交互に操作。消したライン8マスが自分の色になり、領土が広いほうが勝ち（合言葉ルーム専用）', 'Two players share one board, taking turns. Every line you clear paints 8 squares your colour — most territory wins (code rooms only)')}</p>` : ''}
+      ${/* 💺 対戦席の数。モードごとに成立する上限が違う（サーバーの
+            cleanSettings が丸めるので、ここに出す選択肢もそれに合わせる）。
+            1つの盤面を交互に使う協力・陣取りと、お邪魔の量が人数で壊れる
+            攻撃戦は2人固定。 */''}
+      ${mode === 'duel' || mode === 'team' ? `
+      <div class="settings-row"><label>${t('対戦する人数', 'Players in the match')}</label><div class="seg" data-rs="seats">
+        ${(mode === 'team' ? [2, 4, 6, 8, 12, 16] : [2, 3, 4, 6, 8, 12, 16])
+          .filter(n => n <= (msg.max || 16))
+          .map(n => `<button data-v="${n}" ${Number(s.seats || (mode === 'team' ? 4 : 2)) === n ? 'class="active"' : ''} ${dis}>${n}</button>`).join('')}
+      </div></div>` : ''}
       <div class="settings-row"><label>${ic('mode_ai', 14)} ${t('ボット補充', 'Fill with bots')}</label><input type="checkbox" id="rsBotFill" ${s.botFill ? 'checked' : ''} ${dis}></div>
       <div class="settings-row"><label>${t('ボットの強さ', 'Bot strength')}</label><div class="seg" data-rs="botLevel">
         ${[['random', t('おまかせ', 'Any')], ['easy', t('弱', 'Easy')], ['normal', t('中', 'Mid')], ['hard', t('強', 'Hard')], ['oni', t('鬼', 'Oni')]].map(([v, l]) =>
@@ -6063,7 +6097,7 @@ class OnlineMode extends VersusBase {
         b.onclick = () => {
           const key = b.parentElement.dataset.rs;
           let v = b.dataset.v;
-          if (key === 'duration') v = Number(v);
+          if (key === 'duration' || key === 'seats') v = Number(v);
           audio.click();
           this.client.setRoom({ [key]: v });
         };
