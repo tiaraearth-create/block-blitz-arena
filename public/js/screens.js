@@ -12,8 +12,8 @@ import { icon, itemIconName, badgeIconName, hasIcon } from './icons.js';
 import { rankLadder } from './ranks.js';
 import { audio, TRACK_INFO } from './audio.js';
 import { getSettings, updateSettings } from './settings.js';
-import { reconnectChat, markNewsSeen } from './chat.js';
-import { t as tr, setLang, LANG, catName, catDesc } from './i18n.js';
+import { reconnectChat, markNewsSeen, sendWs, registerHandler } from './chat.js';
+import { t as tr, setLang, LANG, catName, catDesc, trServer } from './i18n.js';
 import { equippedUlt, setGuestUlt, ghostUnlocked } from './modes.js';
 // ultIcon（奥義の絵文字）は import しない。奥義の絵は itemIconName で
 // icons.js から引くようになった ── 絵文字のままだと 🛡️ が管理者ブースター
@@ -5782,8 +5782,98 @@ export async function openGuild(tab = guildTab) {
   }
   if (gen !== viewGen) return;
   if (tab === 'mine') renderMyGuild();
+  else if (tab === 'chat') renderGuildChat();
   else if (tab === 'rank') renderGuildRank();
   else renderGuildFind();
+}
+
+// 💬 ギルドの会話。
+//
+// 20人が集まる場所なのに、名前とptが並ぶ名簿しか無かった ── いっしょに
+// 何かをした実感が生まれる場所がどこにもない。実プレイヤーどうしを繋ぐ経路が
+// このゲームにいちばん足りていないので、いちばん人の集まる場所から埋める。
+// 仕組みはパーティーのチャットと同じ（持ち分も全体チャットと共有）。違うのは
+// 保存先だけ ── ギルドは何ヶ月も続くのでサーバーに残す。
+let guildChatLog = [];
+
+// 受け口は**読み込み時に張る**。タブを開くまで登録しない形にすると、
+// ギルドを開いていない人には発言が1つも届かず、しかも
+// test/clientwiring.test.mjs の「サーバーが送るフレームに受け口があるか」に
+// 引っかかる（実際に引っかかった）。張るだけなら画面が無くても害はない。
+registerHandler('guild_chat_history', m => {
+  guildChatLog = Array.isArray(m.chat) ? m.chat : [];
+  paintGuildChat();
+});
+registerHandler('guild_chat', m => {
+  if (!m.msg) return;
+  guildChatLog.push(m.msg);
+  if (guildChatLog.length > 50) guildChatLog.shift();
+  paintGuildChat();
+});
+registerHandler('guild_chat_tr', m => {
+  const x = guildChatLog.find(e => e.id === m.id);
+  if (x) { x.tr = m.text; paintGuildChat(); }
+});
+registerHandler('guild_error', m => toast(trServer(m.error), 'err', 3000));
+
+function renderGuildChat() {
+  const body = $('#guildBody');
+  if (!session.user) {
+    body.innerHTML = `<div class="ms-empty"><p>${tr('ギルドはアカウント登録で参加できます', 'Create an account to join a guild')}</p></div>`;
+    return;
+  }
+  if (!guildData || !guildData.mine) {
+    body.innerHTML = `<div class="ms-empty"><p>${tr('ギルドに入ると、ここでメンバーと話せます', 'Join a guild to talk with your members here')}</p></div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="gd-chat">
+      <div class="gd-msgs" id="gdMsgs"></div>
+      <div class="gd-input">
+        <input id="gdText" maxlength="200" placeholder="${tr('ギルドに話す…', 'Say something…')}">
+        <button class="btn btn-sm btn-primary" id="gdSend">${tr('送信', 'Send')}</button>
+      </div>
+      <p class="muted center" style="font-size:11px;margin:6px 0 0">${tr(
+        'ギルドの会話は通報時に運営が確認できます', 'Guild chat can be reviewed by staff when reported')}</p>
+    </div>`;
+  const send = () => {
+    const input = $('#gdText');
+    const v = input.value.trim();
+    if (!v) return;
+    // 送れなかったら文を消さない（消すと書いた内容が黙って失われる）。
+    if (!sendWs({ type: 'guild_chat', text: v })) {
+      toast(tr('接続中です。少し待ってからもう一度どうぞ', 'Reconnecting — try again in a moment'), 'err', 2400);
+      return;
+    }
+    input.value = '';
+  };
+  $('#gdSend').onclick = send;
+  $('#gdText').onkeydown = e => { if (enterIsLive(e)) send(); };
+  sendWs({ type: 'guild_chat_hello' });
+  paintGuildChat();
+}
+
+function paintGuildChat() {
+  const box = $('#gdMsgs');
+  if (!box) return;
+  if (!guildChatLog.length) {
+    box.innerHTML = `<p class="muted center" style="font-size:12px">${tr(
+      'まだ何も話されていません。最初のひとことをどうぞ', 'Nothing said yet — go first')}</p>`;
+    return;
+  }
+  const me = session.user ? session.user.username : '';
+  // 翻訳行は全体チャット・パーティーと同じ約束（設定でOFFなら出さず、
+  // 自分の言語で書かれた発言にも付けない）。
+  const showTr = getSettings().chatTranslate;
+  const myLang = /[ぁ-んァ-ヶ一-龠ー]/;
+  box.innerHTML = guildChatLog.map(m => [
+    `<div class="gd-msg ${m.from === me ? 'mine' : ''}">`,
+    `  <b>${escapeHtml(m.from)}</b>`,
+    `  <span>${escapeHtml(m.text)}</span>`,
+    (m.tr && showTr && myLang.test(m.text) !== myLang.test(m.tr)) ? `  <i class="gd-tr">${escapeHtml(m.tr)}</i>` : '',
+    '</div>',
+  ].join('')).join('');
+  box.scrollTop = box.scrollHeight;
 }
 
 function guildCard(g, { rank = null, clickable = true } = {}) {

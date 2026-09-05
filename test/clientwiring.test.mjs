@@ -418,13 +418,21 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
     'party.js', 'friends.js', 'adminevent.js']
     .map(f => read(`public/js/${f}`)).join('\n');
 
-  const sent = new Set([...battle.matchAll(/type:\s*'([a-z_0-9]+)'/g)].map(m => m[1]));
+  // 送る側は battle.js だけではない。パーティーの状態・チャット・招待は
+  // server/party.js が自分で送っており、そこは長らくこの照合の外にあった
+  // （＝あちらに受け口の無いフレームを足しても気づけない）。
+  const partySrv = read('server/party.js');
+  const sent = new Set([...`${battle}\n${partySrv}`.matchAll(/type:\s*'([a-z_0-9]+)'/g)].map(m => m[1]));
   // 受け口の書き方は3通りある（BattleClient の .on / net.js 内の直接判定 /
   // chat.js の switch）。どれか1つでもあれば「聞いている」とみなす。
   const handled = new Set([
     ...[...clientSrc.matchAll(/\.on\(\s*'([a-z_0-9]+)'/g)].map(m => m[1]),
     ...[...clientSrc.matchAll(/msg\.type\s*===\s*'([a-z_0-9]+)'/g)].map(m => m[1]),
     ...[...clientSrc.matchAll(/case\s*'([a-z_0-9]+)'/g)].map(m => m[1]),
+    // 4通り目: chat.js の常時つながっている socket に相乗りする口。
+    // party.js が前から使っていて、screens.js のギルドチャットも同じ形。
+    // これを見ていなかったので「受け口はあるのに無いと言われる」状態だった。
+    ...[...clientSrc.matchAll(/registerHandler\(\s*'([a-z_0-9]+)'/g)].map(m => m[1]),
   ]);
 
   // 受け口が要らないもの。**理由を書いてから**足すこと ── 理由を書けないなら

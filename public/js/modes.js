@@ -34,7 +34,7 @@ import { fireUlt, ultColor, ultExists, DEFAULT_ULT } from './skills.js';
 // サーバーの shard() は「そのユーザーの最初のソケット」に送るので、
 // ページ読み込み時に張るこちらへ届くことがある（下の ZeroMode を参照）。
 // chat.js は modes.js を import していないので循環しない（party.js と同じ）。
-import { registerHandler } from './chat.js';
+import { registerHandler, showProfileCard } from './chat.js';
 
 const MATCH_SECONDS = 120;
 
@@ -2568,11 +2568,18 @@ class VersusBase {
       card.dataset.slot = o.slot;
       card.innerHTML = `
         <canvas></canvas>
-        <div class="opp-name">${o.isAlly ? ic('mode_coop', 13) + ' ' : ''}${escapeHtml(o.name)}</div>
+        <div class="opp-name" data-who="${escapeHtml(o.name)}">${o.isAlly ? ic('mode_coop', 13) + ' ' : ''}${escapeHtml(o.name)}</div>
         <div class="opp-score" data-slot-score="${o.slot}">0</div>
         <div class="opp-combo" data-slot-combo="${o.slot}"></div>`;
       cards.appendChild(card);
       this.scores[o.slot] = 0;
+    }
+    // 👤 相手の名前をタップするとプロフィールが開く（＝そこからフレンドに誘える）。
+    //    ロビーのチャットでは前から名前をタップできたのに、**対戦カードだけ
+    //    できなかった** ── いま戦っている相手こそ、いちばん誘いたい人なのに。
+    for (const el of cards.querySelectorAll('.opp-name[data-who]')) {
+      el.style.cursor = 'pointer';
+      el.onclick = (ev) => { ev.stopPropagation(); showProfileCard(el.dataset.who); };
     }
     // 1対1 も設定どおりに扱う。以前は相手が1人だと強制的に cards になり、
     // しかも ⤢ ボタンも隠れていたので、いちばん人が遊ぶ 1対1 だけが
@@ -5691,9 +5698,10 @@ class OnlineMode extends VersusBase {
         ${[60, 120, 180].map(d => `<button data-v="${d}" ${s.duration === d ? 'class="active"' : ''} ${dis}>${d / 60}${t('分', 'min')}</button>`).join('')}
       </div></div>
       <div class="settings-row"><label>${t('モード', 'Mode')}</label><div class="seg" data-rs="mode">
-        ${[['duel', '1v1'], ['team', t('2v2チーム', '2v2 Team')], ['coop', t('協力', 'Co-op')], ['land', t('陣取り', 'Land Grab')]].map(([v, l]) =>
+        ${[['duel', '1v1'], ['attack', t('攻撃戦', 'Attack')], ['team', t('2v2チーム', '2v2 Team')], ['coop', t('協力', 'Co-op')], ['land', t('陣取り', 'Land Grab')]].map(([v, l]) =>
           `<button data-v="${v}" ${mode === v ? 'class="active"' : ''} ${dis}>${l}</button>`).join('')}
       </div></div>
+      ${mode === 'attack' ? `<p class="muted center" style="font-size:11px">${t('2ライン以上を同時に消すと、相手の盤面にお邪魔ブロックが飛びます', 'Clearing 2+ lines at once dumps garbage on your opponent')}</p>` : ''}
       ${mode === 'coop' ? `<p class="muted center" style="font-size:11px">${t('2人で1つの盤面を交互に操作。ボット補充ONなら1人でも遊べます', 'Two players share one board, taking turns. Bot fill lets you play solo')}</p>` : ''}
       ${mode === 'land' ? `<p class="muted center" style="font-size:11px">${t('2人で1つの盤面を交互に操作。消したライン8マスが自分の色になり、領土が広いほうが勝ち（合言葉ルーム専用）', 'Two players share one board, taking turns. Every line you clear paints 8 squares your colour — most territory wins (code rooms only)')}</p>` : ''}
       <div class="settings-row"><label>${ic('mode_ai', 14)} ${t('ボット補充', 'Fill with bots')}</label><input type="checkbox" id="rsBotFill" ${s.botFill ? 'checked' : ''} ${dis}></div>

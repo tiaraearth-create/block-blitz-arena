@@ -241,6 +241,9 @@ const SERVER_MSG_EN = {
   'この端末からの引き継ぎは1アカウント1回だけです（すでに実行済み）': 'This device can carry over to one account only, and it already has',
   '解放の申告が多すぎます。しばらく待ってください': 'Too many unlock claims — please wait a while',
   '送信が多すぎます': 'Too many submissions',
+  // ---- 💬 ギルドチャット ----
+  'ギルドに所属していません': 'You are not in a guild',
+  'ギルド機能を使うにはアカウント登録が必要です': 'You need an account to use guilds',
   // ---- 🏰 ギルド / 🗳 投票 / 💬 住人 ----
   '除名されたギルドには1時間参加できません': 'You cannot rejoin a guild you were removed from for one hour',
   'そのセットはありません': 'That set does not exist',
@@ -448,6 +451,7 @@ export function applyStaticI18n() {
   set('#screen-missions .sub-header h2', 'Missions');
   set('#screen-guild .sub-header h2', 'Guild');
   set('[data-gd="mine"]', 'My Guild');
+  set('[data-gd="chat"]', 'Chat');
   set('[data-gd="rank"]', 'Ranking');
   set('[data-gd="find"]', 'Find');
   // 🎒 インベントリはここに1行も無く、英語で遊ぶと画面ごと日本語のままだった。

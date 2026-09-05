@@ -55,6 +55,8 @@ import { getSchedule as getAeSchedule, liveSlotFor as aeLiveSlotFor,
 // （どちらに置くかの理由は backup.js の ONLINE_SPANS_MAX のコメント）。
 import { ONLINE_SPANS_MAX } from './backup.js';
 import { translateChat, translateLocal, detectLang } from './translate.js';
+// 💬 ギルドチャット（20人が集まる場所なのに、喋る手立てが1つも無かった）。
+import { guildChat, guildChatHistory } from './guilds.js';
 import { isOpen as pollIsOpen, vote as pollVote, residentChoice, residentVoteAt, isSwingVoter } from './polls.js';
 // 住人の正体を隠す共通の関門（詳しい理由は server/sanitize.js の冒頭）。
 import { scrubFor } from './sanitize.js';
@@ -2511,7 +2513,11 @@ export function initBattle(server, deps) {
   //     | 'land' (🚩 陣取りデュエル: 2人・1盤面・交互・消したラインが領土)
   // `team` is kept in sync for older clients that only know the boolean.
   function cleanSettings(s = {}) {
-    let mode = ['duel', 'team', 'coop', 'land'].includes(s.mode) ? s.mode : (s.team ? 'team' : 'duel');
+    // ⚔️ 'attack'（お邪魔を送り合う1v1）はマッチングでしか遊べなかった。
+    //    合言葉ルームは「友達と好きな形で遊ぶ場所」なのに、対戦の主役である
+    //    攻撃戦だけ選べない ── 実装は duel と同じ経路なので、選べる一覧に
+    //    入っていなかっただけ。roomSeats も duel と同じ2席になる。
+    let mode = ['duel', 'attack', 'team', 'coop', 'land'].includes(s.mode) ? s.mode : (s.team ? 'team' : 'duel');
     if (s.team === true && s.mode === undefined) mode = 'team';
     if (s.team === false && s.mode === undefined) mode = 'duel';
     return {
@@ -4489,6 +4495,47 @@ export function initBattle(server, deps) {
             case 'party_code': r = party.launchCode(uid, String(msg.code || '').slice(0, 12)); break;
           }
           if (r && r.error) send(ws, { type: 'party_error', error: r.error });
+          break;
+        }
+        // 💬 ギルドチャット。20人が集まる場所なのに喋る手立てが1つも無かった。
+        //    パーティーと同じ持ち分（全体チャットと共有）を使う ── 別枠にすると、
+        //    ギルドに入るだけで発言できる量が倍になる。
+        case 'guild_chat_hello': {
+          if (!ws.user) break;
+          const live = db.users[ws.user.id];
+          if (!live) break;
+          send(ws, { type: 'guild_chat_history', chat: guildChatHistory(db, live) });
+          break;
+        }
+        case 'guild_chat': {
+          if (!ws.user) {
+            send(ws, { type: 'guild_error', error: 'ギルド機能を使うにはアカウント登録が必要です' });
+            break;
+          }
+          const live = db.users[ws.user.id];
+          if (!live) { send(ws, { type: 'guild_error', error: 'ログインが必要です' }); break; }
+          if (!sockRate(ws, 'chatTimes', 5, 10_000) || !userRate(`chat:${ws.user.id}`, 5, 10_000)) {
+            send(ws, { type: 'guild_error', error: 'すこし早すぎます。少し待ってください' });
+            break;
+          }
+          const r = guildChat(db, live, msg.text, {
+            uuid: () => crypto.randomUUID(),
+            rateLimit: userRate,
+            // パーティーと同じく、翻訳は手元の対訳表だけ。外部の翻訳サーバーには
+            // 渡さない（ギルド内の私語が箱の外に出る）。
+            translateLocal: (s) => {
+              const tr = translateLocal(s, detectLang(s) === 'ja' ? 'en' : 'ja');
+              return tr && tr.text ? tr.text : null;
+            },
+          });
+          if (r.error) { if (r.error) send(ws, { type: 'guild_error', error: r.error }); break; }
+          saveDb();
+          // ギルド員全員へ。**全部の画面へ配る**（パーティーの状態と同じ理由 ──
+          // PCとスマホの2つ目のタブで喋れないのは、繋ぐための機能として本末転倒）。
+          for (const id of r.guild.members) {
+            sendToUser(id, { type: 'guild_chat', msg: r.entry }, { primaryOnly: false });
+            if (r.tr) sendToUser(id, { type: 'guild_chat_tr', id: r.entry.id, text: r.tr }, { primaryOnly: false });
+          }
           break;
         }
         case 'ping': send(ws, { type: 'pong' }); break;

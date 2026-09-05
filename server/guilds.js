@@ -155,6 +155,54 @@ export function kickMember(db, guild, actor, targetId) {
   return { ok: true };
 }
 
+// ---------------------------------------------------------------------------
+// 💬 ギルドチャット
+//
+// 20人が集まる場所なのに、**喋る手立てが1つも無かった**。名前とptだけが並ぶ
+// 名簿で、いっしょに何かをした実感が生まれない ── 実プレイヤーどうしを繋ぐ
+// 経路が、このゲームにいちばん足りていない。
+//
+// パーティーのチャット（server/party.js の chat）と同じ作りにする。違うのは
+// 保存先だけ: パーティーはメモリの上（畳めば消える）だが、ギルドは何ヶ月も
+// 続くので guild.chat に置いてディスクへ残す。
+//
+// 上限は50件。ここを緩めると db.json がギルドの数だけ太る（復元の天井にも
+// 効いてくる）。読み返す場所ではなく「いま居る人と喋る場所」なので50で足りる。
+export const GUILD_CHAT_RING = 50;
+export const GUILD_CHAT_MAX = 200;
+
+export function guildChat(db, user, text, deps = {}) {
+  const { uuid, now = () => Date.now(), rateLimit, translateLocal } = deps;
+  const guild = user && user.guildId ? db.guilds[user.guildId] : null;
+  if (!guild) return { error: 'ギルドに所属していません' };
+  // ミュートはここでも見る（全体チャット・パーティーと同じ扱い）。
+  if (user.muted) return { error: '管理者によりチャットが制限されています' };
+  if (rateLimit && !rateLimit(`gchat:${user.id}`, 20, 10_000)) return { error: 'すこし早すぎます' };
+  const body = String(text || '').trim().slice(0, GUILD_CHAT_MAX);
+  if (!body) return { error: '' };
+  guild.chat = Array.isArray(guild.chat) ? guild.chat : [];
+  const entry = {
+    id: uuid ? uuid() : `${now()}-${guild.chat.length}`,
+    from: user.username, fromId: user.id, text: body, at: now(),
+  };
+  guild.chat.push(entry);
+  if (guild.chat.length > GUILD_CHAT_RING) guild.chat.splice(0, guild.chat.length - GUILD_CHAT_RING);
+  // 翻訳は後追い。待ってから配ると発言の順番が入れ替わる（全体チャットで実際に起きた）。
+  let tr = null;
+  if (translateLocal) {
+    const r = translateLocal(body);
+    const txt = typeof r === 'string' ? r : (r && typeof r.text === 'string' ? r.text : null);
+    if (txt && txt !== body) tr = txt;
+  }
+  return { ok: true, guild, entry, tr };
+}
+
+export function guildChatHistory(db, user) {
+  const guild = user && user.guildId ? db.guilds[user.guildId] : null;
+  if (!guild) return [];
+  return (Array.isArray(guild.chat) ? guild.chat : []).slice(-GUILD_CHAT_RING);
+}
+
 export function addGuildPoints(db, user, pts, weekId) {
   const guild = user.guildId ? db.guilds[user.guildId] : null;
   if (!guild) return 0;

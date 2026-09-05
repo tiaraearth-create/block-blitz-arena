@@ -114,7 +114,16 @@ socialRouter.post('/api/friends/request', requireAuth, maintenanceGuard, (req, r
   if (!rateLimit('freq:' + req.user.id, 10, 60_000)) {
     return res.status(429).json({ error: 'すこし待ってからお試しください' });
   }
-  const target = userById(req.body.userId);
+  // 🤝 名前でも受ける。
+  //    プロフィールカード（対戦カード・ロビー・順位表のどこからでも開く）から
+  //    誘えるようにしたが、あちらが握っているのは名前だけで id は持っていない。
+  //    id を先に引かせるために窓口をもう1本作ると、その窓口の返事が
+  //    「実プレイヤーかどうか」を教えてしまう ── ここで解決するのが安全。
+  const target = req.body.userId
+    ? userById(req.body.userId)
+    : (typeof req.body.username === 'string'
+      ? Object.values(db.users).find(u => u.username === req.body.username.slice(0, 20) && !u.banned)
+      : null);
   // 知らない id への申請は 409（friends.js の REFUSED と同じ扱い）。404 に
   // していた頃は、住人や退会者を狙ったときだけ状態コードが違い、
   // 「申請を受け取らない設定の実プレイヤー」と見分けがついた。文言は元から

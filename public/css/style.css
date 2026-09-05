@@ -2759,6 +2759,26 @@ body[data-screen="game"] #topbar { display: none; }
 .pt-kick { background: none; border: none; color: #ff8f8f; cursor: pointer; font-size: 12px; padding: 2px 4px; }
 .pt-code { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
 .pt-code b { color: #f0b429; letter-spacing: .12em; }
+/* 💬 ギルドの会話。パーティーのチャットと同じ作り（あちらは畳める棚、
+   こちらは画面いっぱいなので高さだけ大きく取る）。 */
+.gd-chat { display: flex; flex-direction: column; }
+.gd-msgs {
+  min-height: 40vh; max-height: 56vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px; border: 1px solid var(--line); border-radius: 12px;
+  background: rgba(0, 0, 0, .18);
+}
+.gd-msg { font-size: 13px; line-height: 1.5; word-break: break-word; }
+.gd-msg b { color: #9fd8ff; margin-right: 6px; }
+.gd-msg.mine b { color: var(--gold); }
+.gd-msg .gd-tr { display: block; font-size: 11px; color: var(--muted); font-style: normal; }
+.gd-input { display: flex; gap: 6px; margin-top: 8px; }
+.gd-input input {
+  flex: 1 1 auto; min-width: 0; padding: 9px 11px; border-radius: 10px;
+  border: 1px solid var(--line); background: rgba(0, 0, 0, .3);
+  color: inherit; font-family: inherit; font-size: 13px;
+}
+
 .pt-msgs { max-height: 30vh; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
 .pt-msg { font-size: 12px; line-height: 1.45; }
 .pt-msg b { color: #9fd8ff; margin-right: 5px; }
