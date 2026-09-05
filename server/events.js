@@ -20,9 +20,16 @@ import { jstParts, jstDayKey, JST_OFFSET_MS, WEEKDAYS_JA, WEEKDAYS_EN } from './
 export const EVENT_TYPES = [
   {
     id: 'chaos', icon: '🌪️', iconName: 'mode_chaos', name: 'カオスタイム', nameEn: 'Chaos Time',
-    desc: 'カオスモードが全員に開放！コイン1.5倍',
-    descEn: 'Chaos Mode opens up for everyone — 1.5× coins',
-    bonus: { chaos: true },
+    // ⚠ このイベントは**数字の約束をしない**。
+    //   元は「開放＋コイン1.5倍」の2つを約束していたが、
+    //   開放は v2.48 で常時になり、倍率は v2.53 でやめた（ユーザー指示）。
+    //   いまこのイベントがやるのは「今日の目玉にする」ことだけ ──
+    //   メニューのカオスのボタンが光り（public/js/main.js の event-live）、
+    //   全体通知とニュースに流れる。実入りは他のモードと同じ。
+    //   報酬を付けるなら、他の全モードとの差を決めてからここに書くこと。
+    desc: '今日の目玉はカオスモード！15秒ごとにルールが変わる盤面へ飛び込もう',
+    descEn: 'Chaos Mode is today’s headliner — dive into a board whose rules rewrite every 15 seconds',
+    bonus: {},
   },
   {
     id: 'coinfes', icon: '🪙', iconName: 'coins', name: 'コイン祭り', nameEn: 'Coin Festival',

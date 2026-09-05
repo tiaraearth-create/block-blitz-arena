@@ -858,6 +858,36 @@ const FIRST_RESULT_GRACE_MS = 30 * 60 * 1000;
 // 300,000 は、この世界の実在プレイヤーの生涯ベスト（500戦で300,000）と同じ
 // 高さ。正直な初回プレイがここに触ることはまず無く、触っても記録は残る。
 const FIRST_RESULT_SCORE_CAP = 300_000;
+
+// 🎯 1回のプレイで記録できるスコアの絶対上限。
+//
+//   長らく 1,000,000 だった。ところがこの世界の設計上の「頂」は
+//   住人の自己ベストの天井（server/residents.js の capOf(r,'sc',900000)）＝
+//   900,000 のあたりに置いてあり、上限はそのすぐ上でしかない。
+//   つまり**上位の実プレイヤーは全員そこへ張り付く**。実際に
+//   「ハイスコアがちょうど 1,000,000 で4人並んでいる」という報告が来た
+//   ── 板が上位の順位を付けられなくなっていた（同点の第2キーも無かった）。
+//
+//   偽装を止めているのはこの絶対値ではなく、下の2枚:
+//     ・壁時計クランプ … duration は「前回の結果送信からの経過＋90秒」まで
+//     ・レート上限 ……… その duration × rateCap（2,000/秒）まで
+//   どちらも実際に流れた時間を超えられないので、絶対上限は最後の保険。
+//   保険としての意味は残したまま（5,000,000 は 2,000/秒で約42分ぶん）、
+//   正直な上位のプレイを切り詰めないところまで上げる。
+const SCORE_ABS_MAX = 5_000_000;
+
+// 🧾 頭を押さえた回の控え。**誰がどれだけ超えて申告したか**を残す。
+//   上限は正直な人と偽装した人を同じ数字に潰してしまう（999,999 も 50,000,000 も
+//   記録は同じ）ので、押さえたこと自体を記録しないと、運営から見て見分けが付かない。
+//   正直な人は天井を稀にかすめるだけだが、機械送信は毎回・桁違いに当たる。
+//   ログは既存の🧾操作ログ（db.meta.adminLog）に相乗りする（画面がもうある）。
+//   氾濫させないよう「2倍以上ズレた申告」に絞り、1人1時間に1件まで。
+const SCORE_CLAMP_LOG_RATIO = 2;
+function noteScoreClamp(user, mode, claimed, recorded, secs, why) {
+  if (!(claimed > recorded * SCORE_CLAMP_LOG_RATIO)) return;
+  if (!rateLimit(`clamplog:${user.id}`, 1, 60 * 60 * 1000)) return;
+  systemLog('スコアの頭押さえ', `${user.username} / ${mode} / 申告 ${claimed} → 記録 ${recorded}（${secs}秒・${why}）`);
+}
 // 🧩 パズル遺跡の「その日そのステージ番号の勝利は1回まで」の印が覚える件数。
 // backup.js の合流にも同名の頭押さえがある（あちらは細工したファイル対策）。
 const PUZ_WIN_DAY_KEEP = 200;
@@ -1098,7 +1128,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 同じ作法で頭を押さえる（実績 ach_chain5/10 の原資になるため）。
   maxChain = clamp(maxChain, 64);
   rank = ['S', 'A', 'B', 'C'].includes(rank) ? rank : null;
-  score = Math.max(0, Math.min(1_000_000, Math.floor(Number(score) || 0)));
+  const claimedScore = Math.max(0, Math.floor(Number(score) || 0));
+  score = Math.min(SCORE_ABS_MAX, claimedScore);
   lines = Math.max(0, Math.min(5000, Math.floor(Number(lines) || 0)));
   // 全消しは「盤面を空にした」瞬間なので、直前にそれなりの数のラインを
   // 消していないと成立しない。lines と相関させておけば、perfectClears だけを
@@ -1159,10 +1190,17 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 60,000 (60s) / 180,000 (180s) summit reachable but not forgeable, which is
   // exactly the ceiling the arena residents sit just under.
   const rateCap = mode === 'sprint' ? 1000 : mode === 'meltdown' ? 2000 : mode === 'chimera' ? 1000 : mode === 'dig' ? 2000 : 2000;
+  const beforeRate = score;
   if (score > duration * rateCap) score = Math.floor(duration * rateCap);
+  // 申告が記録より大きくズレた回だけ、運営の目に残す（上のコメント）。
+  if (claimedScore > score) {
+    noteScoreClamp(user, mode, claimedScore, score, duration,
+      claimedScore > SCORE_ABS_MAX ? '絶対上限' : beforeRate > score ? 'レート上限' : '頭押さえ');
+  }
   // 生涯の初回だけ、さらに低い天井をかぶせる（FIRST_RESULT_SCORE_CAP のコメント）。
-  // 持ち時間 1,890秒 × rateCap 2,000/秒 は絶対上限の 1,000,000 を上回るので、
-  // ここが無いと「一度も送っていないアカウント」は1リクエストで首位を取れる。
+  // 持ち時間 1,890秒 × rateCap 2,000/秒 = 3,780,000 は、新アカウントが
+  // 1リクエストで首位を取るには十分すぎる（絶対上限 SCORE_ABS_MAX を
+  // 5,000,000 へ上げたので、この門の必要性はむしろ上がっている）。
   if (firstEverResult && score > FIRST_RESULT_SCORE_CAP) score = FIRST_RESULT_SCORE_CAP;
 
   // 「1プレイの実体があった」判定。score も duration もここで確定するので、
@@ -1321,21 +1359,17 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   const paceScale = idleResult ? 0 : Math.max(0.25, Math.min(1, duration / BASE_FULL_SECONDS));
   const paced = n => Math.round(n * paceScale);
   let coins = Math.min(1000, paced(20) + Math.floor(score / 100) + (won ? paced(50) : 0));
-  // 🌪️ カオスの1.5倍は「カオスタイム開催中だけ」。
+  // 🌪️ カオスにコインの倍率は付けない（ユーザー指示・2026-09-06）。
   //
-  //   もとはモードに直付けだった。当時はそれで釣り合っていた ── カオスは
-  //   イベント中しか押せなかったので、「1.5倍のモードが遊べる」こと自体が
-  //   イベントの中身だったから。
-  //   v2.48 で入口を常時開けたときに、この倍率だけが取り残された。その結果、
-  //   **毎日いつでも遊べる 1.5倍のモード**ができていた（コインの実入りで
-  //   他の全モードを常に上回る＝他を遊ぶ理由が減る）。
-  //   イベントの説明文は元から「カオスモードが全員に開放！コイン1.5倍」で、
-  //   開放と倍率の2つを約束している。入口が常時開いたいま、イベントが配るのは
-  //   倍率のほう ── 文面はそのままで、実装をそちらに合わせる。
+  //   経緯: もとは `if (mode === 'chaos') coins *= 1.5` とモードに直付けだった。
+  //   当時はそれで釣り合っていた ── カオスはイベント中しか押せなかったので、
+  //   「1.5倍のモードが遊べる」こと自体がイベントの中身だったから。
+  //   v2.48 で入口を常時開けたときに倍率だけが取り残され、**毎日いつでも遊べる
+  //   1.5倍のモード**になっていた。v2.50.2 でイベント中だけに戻したが、
+  //   「1倍にしてほしい」という指示を受けて倍率そのものをやめる。
+  //   カオスは他のモードとまったく同じ実入りになる。
+  //   ⚠ ここを復活させるときは、他の全モードに対する実入りの差を必ず考えること。
   const bonus = eventBonus(currentEvent());
-  if (mode === 'chaos' && bonus.chaos) {
-    coins = Math.min(1500, Math.round(coins * 1.5));
-  }
   let bpXp = Math.min(800, paced(30) + Math.floor(score / 60) + lines * 5 + (won ? paced(100) : 0));
   let accXp = Math.min(600, paced(20) + Math.floor(score / 100) + (won ? paced(80) : 0));
 

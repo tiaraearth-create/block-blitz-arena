@@ -1,28 +1,28 @@
 // リポジトリのルートから:  node test/chaosbonus.test.mjs
 //
-// 🌪️ カオスモードの「コイン1.5倍」が、イベント中だけに掛かることの回帰テスト。
+// 🌪️ カオスモードに **コインの倍率が付いていない** ことの回帰テスト。
 //
-// ■ 何が起きていたか
-// もともと倍率はモードに直付けだった（`if (mode === 'chaos') coins *= 1.5`）。
+// ■ 経緯
+// もとは倍率がモードに直付けだった（`if (mode === 'chaos') coins *= 1.5`）。
 // 当時はそれで釣り合っていた ── カオスはイベント中しか押せなかったので、
 // 「1.5倍のモードが遊べる」こと自体がイベントの中身だったから。
-// v2.48 でカオスの入口を常時開けたとき、この倍率だけが取り残された。結果、
+// v2.48 で入口を常時開けたとき、この倍率だけが取り残された。結果、
 // **いつでも遊べる 1.5倍のモード** ができ、コインの実入りで他の全モードを
 // 恒常的に上回っていた（＝他を遊ぶ理由が減る）。
+// v2.50.2 でイベント中だけに戻し、v2.53 で「1倍にしてほしい」という指示を受けて
+// 倍率そのものをやめた。カオスは他のモードとまったく同じ実入りになる。
 //
-// ■ 通したい細い道
-//   ・緩すぎる → 常時1.5倍（元の壊れた状態）
-//   ・厳しすぎる → イベント中も1.5倍が乗らない。イベントの説明文は
-//     「カオスモードが全員に開放！コイン1.5倍」で倍率を約束しているので、
-//     開催中に乗らないのは約束破り
+// ■ 通したい細い道（両側に失敗がある）
+//   ・緩すぎる → カオスにだけ倍率が戻る（元の壊れた状態）
+//   ・厳しすぎる → 他のモードに掛かるはずのイベント倍率まで、カオスだけ
+//     掛からなくなる（コイン祭りの最中にカオスを遊んだ人だけ損をする）
 //
 // ■ ここで見るもの
 //   1. イベントなし: chaos と solo が同じスコアで同じコイン
-//   2. カオスタイム開催中: chaos だけが 1.5倍（solo は据え置き）
-//   3. 別のイベント（コイン祭り = bonus.coin 2倍）中: chaos に 1.5倍は乗らない
-//      ── 倍率は「カオスタイム」に紐づく。どのイベントでもいい訳ではない
-//   4. イベント終了後: 1 の状態に戻る
-//   5. ソースに無条件の分岐が残っていない
+//   2. カオスタイム開催中でも chaos は等倍のまま
+//   3. コイン祭り（bonus.coin 2倍）中は、chaos にも solo と同じ2倍が掛かる
+//   4. ソースにカオスへ倍率を掛ける行が1つも残っていない
+//   5. カオスタイムのイベントが数字の約束をしていない
 
 import { spawn } from 'child_process';
 import fs from 'fs';
@@ -108,43 +108,60 @@ try {
   const soloOff = await coinsFor('solo');
   const chaosOff = await coinsFor('chaos');
   check('イベントなし: カオスとソロのコインが同じ', chaosOff === soloOff, `solo ${soloOff} / chaos ${chaosOff}`);
-  check('イベントなし: カオスに1.5倍が乗っていない', chaosOff < Math.round(soloOff * 1.4), `chaos ${chaosOff}`);
 
   // -------------------------------------------------------------------------
-  // 2. カオスタイム開催中
+  // 2. カオスタイム開催中でも等倍のまま
   // -------------------------------------------------------------------------
   const ev = await eventOn('chaos');
   check('カオスタイムを開催できた', !!(ev.event && ev.event.type === 'chaos'), String(ev.event && ev.event.type));
   const soloOn = await coinsFor('solo');
   const chaosOn = await coinsFor('chaos');
   check('開催中: ソロは据え置き', soloOn === soloOff, `${soloOff} → ${soloOn}`);
-  check('開催中: カオスは1.5倍', chaosOn === Math.min(1500, Math.round(soloOn * 1.5)), `solo ${soloOn} / chaos ${chaosOn}`);
-  check('開催中: カオスがソロを上回っている', chaosOn > soloOn, `${soloOn} → ${chaosOn}`);
+  check('開催中: カオスも等倍のまま', chaosOn === soloOn, `solo ${soloOn} / chaos ${chaosOn}`);
 
   // -------------------------------------------------------------------------
-  // 3. 別のイベント中は乗らない（倍率は「カオスタイム」に紐づく）
+  // 3. 他のモードに掛かる倍率は、カオスにも同じだけ掛かる（塞ぎすぎていない）
   // -------------------------------------------------------------------------
   await eventOn('coinfes');
   const soloCoinfes = await coinsFor('solo');
   const chaosCoinfes = await coinsFor('chaos');
-  check('コイン祭り中: ソロにも倍率が乗る', soloCoinfes > soloOff, `${soloOff} → ${soloCoinfes}`);
-  check('コイン祭り中: カオスに1.5倍は乗らない', chaosCoinfes === soloCoinfes, `solo ${soloCoinfes} / chaos ${chaosCoinfes}`);
+  check('コイン祭り中: ソロに倍率が乗る', soloCoinfes > soloOff, `${soloOff} → ${soloCoinfes}`);
+  check('コイン祭り中: カオスにも同じだけ乗る', chaosCoinfes === soloCoinfes, `solo ${soloCoinfes} / chaos ${chaosCoinfes}`);
 
   // -------------------------------------------------------------------------
-  // 4. 終わったら元に戻る
+  // 4. 終わっても等倍のまま
   // -------------------------------------------------------------------------
   await eventOff();
   const chaosAfter = await coinsFor('chaos');
-  check('終了後: カオスはまた等倍', chaosAfter === soloOff, `${chaosAfter} / solo ${soloOff}`);
+  check('終了後: カオスは等倍', chaosAfter === soloOff, `${chaosAfter} / solo ${soloOff}`);
 
   // -------------------------------------------------------------------------
-  // 5. ソースに無条件の分岐が残っていない
+  // 5. ソースに倍率の分岐が残っていない
   // -------------------------------------------------------------------------
-  const srcIndex = fs.readFileSync(path.join(ROOT, 'server', 'index.js'), 'utf8').replace(/\r\n/g, '\n');
+  // ⚠ **コメントを落としてから**見る。この修正の経緯を説明するコメントには、
+  //   もとのコード（`if (mode === 'chaos') coins *= 1.5`）と「1.5倍」という語が
+  //   そのまま引用してある。素のまま正規表現に掛けると **自分の説明文に当たって**
+  //   赤くなる（実際に一度なった）。見たいのは動くコードのほうだけ。
+  const stripComments = src => src.split('\n').map(l => l.replace(/\/\/.*$/, '')).join('\n');
+  const srcIndex = stripComments(fs.readFileSync(path.join(ROOT, 'server', 'index.js'), 'utf8').replace(/\r\n/g, '\n'));
   check('無条件の mode === chaos で倍率を掛けていない',
     !/if \(mode === 'chaos'\) coins/.test(srcIndex), '');
-  check('倍率はイベントの bonus.chaos を見ている',
-    /mode === 'chaos' && bonus\.chaos/.test(srcIndex), '');
+  check('イベント条件つきの倍率も残っていない',
+    !/mode === 'chaos' && bonus\.chaos/.test(srcIndex), '');
+  check('カオスにコインを掛ける行が1つも無い',
+    !/mode === 'chaos'[^\n]*coins \*/.test(srcIndex), '');
+
+  // -------------------------------------------------------------------------
+  // 6. イベントが数字の約束をしていない
+  // -------------------------------------------------------------------------
+  const srcEvents = stripComments(fs.readFileSync(path.join(ROOT, 'server', 'events.js'), 'utf8').replace(/\r\n/g, '\n'));
+  const at = srcEvents.indexOf("id: 'chaos'");
+  // 型の終わりは「2字下げの },」。`indexOf('},')` だと `bonus: {},` の中で
+  // 先に当たってしまい、いちばん見たい行が切り落とされる（実際に一度なった）。
+  const chaosType = srcEvents.slice(at, srcEvents.indexOf('\n  },', at));
+  check('前提: カオスタイムの定義を切り出せた', at > 0 && /desc:/.test(chaosType), `${chaosType.length}文字`);
+  check('カオスタイムの説明に「1.5倍」が残っていない', !/1\.5/.test(chaosType), chaosType.replace(/\s+/g, ' ').slice(0, 90));
+  check('カオスタイムに報酬の bonus が付いていない', /bonus: \{\}/.test(chaosType), '');
 
 } catch (err) {
   check('テストが最後まで走った', false, err.message);
@@ -153,7 +170,7 @@ try {
   try { fs.rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
-console.log('\n🌪️ カオスの1.5倍コイン\n');
+console.log('\n🌪️ カオスのコインは等倍\n');
 for (const [m, n, d] of results) console.log(`${m} ${n}${d ? `  (${d})` : ''}`);
 const bad = results.filter(r => r[0] === '❌').length;
 console.log(`\n${results.length - bad}/${results.length} 件 OK`);
