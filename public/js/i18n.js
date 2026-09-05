@@ -407,6 +407,16 @@ export function applyStaticI18n() {
   set('[data-lb="daily"]', 'Daily');
   set('[data-lb="puzzle"]', 'Puzzle Ruins');
   set('[data-lb="dig"]', 'The Mines');
+  // 🆕 板を新設したモード（server/index.js の LB_BOARDS）。
+  set('[data-lb="survival"]', 'Survival');
+  set('[data-lb="meltdown"]', 'Meltdown');
+  set('[data-lb="chain"]', 'Chain Cascade');
+  set('[data-lb="rush"]', 'Boss Rush');
+  set('[data-lb="chimera"]', 'Chimera Lab');
+  set('[data-lb="blueprint"]', 'Blueprint');
+  set('[data-lb="under"]', 'The Depths');
+  set('[data-lb="heaven"]', 'The Ascent');
+  set('[data-lb="abyss"]', 'The Abyss');
   // tooltips + document title
   const attr = (sel, name, val) => { const el = document.querySelector(sel); if (el) el.setAttribute(name, val); };
   attr('#btnSettings', 'title', 'Settings');

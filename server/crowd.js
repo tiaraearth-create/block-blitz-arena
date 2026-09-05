@@ -1045,7 +1045,30 @@ const REPLIES = {
   poll: { ja: ['バナーから投票できるよ', '{opt}に入れた', '投票すると結果見えるよ'], en: ['vote from the banner on the menu!'] },
   coins: { ja: ['ミッションが一番効率いいよ', '連続ログインでボーナス増える', 'カオスイベント中はコイン1.5倍', '実績のまとめ受け取り忘れずに'], en: ['missions are the best coin source', 'login streaks boost the daily bonus'], arch: ['senpai', 'casual', 'tryhard', 'gacha'] },
   rating: { ja: ['ランクマで勝つと上がるよ', '1100でゴールド、1500でダイヤ', '連勝ボーナスもあるから勝ち続けると美味しい'], en: ['win ranked games and it climbs', '1500 is Diamond'], arch: ['tryhard', 'senpai', 'nightowl'] },
-  secret: { ja: ['なんか隠しコマンドあるらしい…', '↑↑↓↓…まではわかる', '神より上もあるって噂', 'AIの画面のタイトル連打したら何か出たって聞いた'], en: ['there is a secret code apparently…'], arch: ['streamer', 'casual', 'nightowl', 'tryhard'] },
+  // 🕯 隠し要素の噂。
+  //    👻幽霊屋敷は1モードまるごと、メニューのロゴ連打を**知らない人には
+  //    存在しないのと同じ**だった。秘密のままにしたいので答えは言わないが、
+  //    どこを触ればいいかだけは世界の側から漏らす。英語のプールが1本しか
+  //    なくて、英語で遊ぶ人には噂そのものが届いていなかったのも直す。
+  secret: {
+    ja: [
+      'なんか隠しコマンドあるらしい…',
+      '↑↑↓↓…まではわかる',
+      '神より上もあるって噂',
+      'AIの画面のタイトル連打したら何か出たって聞いた',
+      'メニューのロゴ、意味もなく叩いてたら音が変わった気がする',
+      'タイトルのロゴってただの絵じゃないっぽい？',
+      'しつこく叩き続けた人だけ知ってるモードがあるらしいよ',
+    ],
+    en: [
+      'there is a secret code apparently…',
+      'someone said the logo does something if you keep poking it',
+      'i swear the title logo made a weird noise when i spammed it',
+      'apparently there\'s a mode you only find by being stubborn',
+      'heard there\'s something past the hardest AI',
+    ],
+    arch: ['streamer', 'casual', 'nightowl', 'tryhard'],
+  },
   question: { ja: ['たぶんそうだと思う', 'わかる', 'それな', 'どうだろ？やってみるしかない', '先輩勢が知ってそう'], en: ['probably yeah', 'good question lol', 'try it and see!'] },
   generic: { ja: ['それな', 'わかるw', 'たしかに', '🔥', 'がんばれ！', 'いいね！', 'ないす', 'w', 'まじか', 'へぇ'], en: ['nice', 'lol', 'same here', 'good luck!', '🔥', 'fr', 'haha'] },
 };

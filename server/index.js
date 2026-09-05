@@ -4386,13 +4386,53 @@ function pickResultFields(body) {
 // ---------------------------------------------------------------------------
 app.use(adminEventRouter);
 
+// ---------------------------------------------------------------------------
+// 🏅 順位表の部門
+//
+// 以前は「どの部門があるか」「行のどの値を見るか」「どう並べるか」「誰を
+// 載せるか」の4つが、それぞれ別の三項演算子の鎖として同じ関数の中に散って
+// いた。部門を1つ足すたびに4か所を揃えなければならず、**1か所忘れると
+// 「板は出るのに全員0点で並ぶ」**という壊れ方をする。表に寄せる。
+//
+// key    … 行に載せる欄の名前（realRows / ghostRows と揃える）
+// stat   … user.stats のどこから取るか（関数でもよい）
+// resident … 住人側の値（ambient.js の BOARD_VALUE。無い部門は住人が並ばない）
+//
+// ⚠ 👻幽霊屋敷（ghostBest）は**わざと入れていない**。隠しモードなので、
+//   公開の順位表に部門があること自体が「そんなモードがある」という答えに
+//   なってしまう。記録はサーバーに残っているので、見つけた人の画面には出る。
+const LB_BOARDS = {
+  score:    { key: 'bestScore',   stat: s => s.bestScore || 0 },
+  rating:   { key: 'rating',      stat: s => s.rating || 0 },
+  dungeon:  { key: 'dungeonMax',  stat: s => s.dungeonMax || 0 },
+  weekly:   { key: 'weeklyBest',  stat: null },   // 週で切るので下で個別に作る
+  sprint:   { key: 'sprintBest',  stat: null },   // 60秒の板だけ
+  puzzle:   { key: 'puzzleStage', stat: s => s.puzzleStage || 0 },
+  dig:      { key: 'digDepth',    stat: s => s.digDepth || 0 },
+  daily:    { key: 'dailyScore',  stat: null },   // その日で切るので下で個別に作る
+  // 👇 ここから、記録はずっとサーバーに保存されていたのに**板が1枚も無かった**もの。
+  //    遊んだ手応えが数字として残るのに、誰とも比べられない状態が続いていた。
+  meltdown: { key: 'meltdownBest',   stat: s => s.meltdownBest || 0 },
+  chimera:  { key: 'chimeraBest',    stat: s => s.chimeraBest || 0 },
+  // ⛓️ 板に出すのは**最大連鎖数**（chainMax）。chainBest は連鎖モードの
+  //    ベストスコアで別物 ── 最初これを繋いで「5000連鎖」の板を作ってしまった。
+  chain:    { key: 'chainMax',       stat: s => s.chainMax || 0 },
+  survival: { key: 'survivalWave',   stat: s => s.survivalWave || 0 },
+  rush:     { key: 'rushDepth',      stat: s => s.rushDepth || 0 },
+  blueprint:{ key: 'blueprintClears', stat: s => s.blueprintClears || 0 },
+  // 🗼 ダンジョンは4領域あるのに、板は塔（dungeon）だけだった。
+  under:    { key: 'underMax',    stat: s => s.underMax || 0 },
+  heaven:   { key: 'heavenMax',   stat: s => s.heavenMax || 0 },
+  abyss:    { key: 'abyssMax',    stat: s => s.abyssMax || 0 },
+};
+
 app.get('/api/leaderboard', (req, res) => {
   // 無認証だが、全 db.users を走査＋ゴースト合成＋ソートする O(ユーザー数) の
   // 重い経路。他の公開読み取り(/api/profile 等)と同じIPレート制限で連打を抑える。
   if (!rateLimit(`lb:${req.ip}`, 60, 60000)) return res.status(429).json({ error: '少し待ってください' });
   finalizeWeeklyRankings();
   refreshThrones();   // Elo changes happen over websockets — catch up here
-  const board = ['rating', 'dungeon', 'weekly', 'sprint', 'puzzle', 'dig', 'daily'].includes(req.query.board) ? req.query.board : 'score';
+  const board = LB_BOARDS[req.query.board] ? req.query.board : 'score';
   const week = weekIdOf(currentWeekNum());
   const weeklyBestOf = u => (u.stats.weekly && u.stats.weekly.week === week ? u.stats.weekly.best : 0);
   // 📅 デイリーはその日の記録だけ（JST日が変わればボードごとリセット）。
@@ -4401,13 +4441,18 @@ app.get('/api/leaderboard', (req, res) => {
   // Time attack ranks on the headline 60-second board.
   const sprintBestOf = u => (u.stats.sprint && u.stats.sprint.s60) || 0;
   // Admins are excluded from public rankings.
+  // 部門ごとの「その人の値」を1本にまとめる。表に無い（週・日で切る）3つだけ
+  // ここで関数を与える ── 以前は filter / 値 / 並べ替えの3か所に同じ鎖が
+  // 散っていて、部門を足すたびに揃え忘れが起きる形だった。
+  const valueOf = {
+    weekly: weeklyBestOf,
+    sprint: sprintBestOf,
+    daily: dailyOf,
+  }[board] || (u => (LB_BOARDS[board].stat ? LB_BOARDS[board].stat(u.stats) : 0));
   let users = Object.values(db.users).filter(u => !u.banned && u.role !== 'admin' && u.stats.gamesPlayed > 0);
-  if (board === 'dungeon') users = users.filter(u => (u.stats.dungeonMax || 0) > 0);
-  if (board === 'weekly') users = users.filter(u => weeklyBestOf(u) > 0);
-  if (board === 'sprint') users = users.filter(u => sprintBestOf(u) > 0);
-  if (board === 'puzzle') users = users.filter(u => (u.stats.puzzleStage || 0) > 0);
-  if (board === 'dig') users = users.filter(u => (u.stats.digDepth || 0) > 0);
-  if (board === 'daily') users = users.filter(u => dailyOf(u) > 0);
+  // 総合スコアとレート以外は「まだ触っていない人」を並べない（0点の行で
+  // 板が埋まると、実際に遊んだ人の順位が見えなくなる）。
+  if (board !== 'score' && board !== 'rating') users = users.filter(u => valueOf(u) > 0);
   const titleOf = u => {
     const t = TITLES.find(x => x.id === u.equippedTitle);
     // id を落としていたので、画面側が英語名に引き当てられなかった。
@@ -4430,6 +4475,16 @@ app.get('/api/leaderboard', (req, res) => {
     puzzleStage: u.stats.puzzleStage || 0,
     digDepth: u.stats.digDepth || 0,
     dailyScore: dailyOf(u),
+    // 🆕 板が無かった記録たち。行に載せておけば、画面はどの部門でも
+    //    同じ1本の道（LB_BOARDS[board].key）で値を引ける。
+    meltdownBest: u.stats.meltdownBest || 0,
+    chimeraBest: u.stats.chimeraBest || 0,
+    chainMax: u.stats.chainMax || 0,
+    survivalWave: u.stats.survivalWave || 0,
+    rushDepth: u.stats.rushDepth || 0,
+    blueprintClears: u.stats.blueprintClears || 0,
+    underMax: u.stats.underMax || 0,
+    heavenMax: u.stats.heavenMax || 0,
     badges: u.badges,
     title: titleOf(u),
   }));
@@ -4456,24 +4511,13 @@ app.get('/api/leaderboard', (req, res) => {
     const g = ghostGuildOfResident(name);
     return g ? g.tag : null;
   };
-  const lbVal = r => board === 'rating' ? r.rating
-    : board === 'dungeon' ? r.dungeonMax
-    : board === 'weekly' ? r.weeklyBest
-    : board === 'sprint' ? (r.sprintBest || 0)
-    : board === 'puzzle' ? (r.puzzleStage || 0)
-    : board === 'dig' ? (r.digDepth || 0)
-    : board === 'daily' ? (r.dailyScore || 0)
-    : r.bestScore;
+  // 行から値を引く道は1本だけ（表の key）。以前はここにも並べ替えにも
+  // 同じ三項の鎖があり、部門を足すと3か所を揃える必要があった。
+  const lbKey = LB_BOARDS[board].key;
+  const lbVal = r => Number(r[lbKey]) || 0;
   const rows = realRows
     .concat(ghostRows(board, week, taken).map(r => ({ ...r, guildTag: ghostTagOf(r.username) })))
-    .sort((a, b) => board === 'rating' ? b.rating - a.rating
-      : board === 'dungeon' ? b.dungeonMax - a.dungeonMax
-      : board === 'weekly' ? b.weeklyBest - a.weeklyBest
-      : board === 'sprint' ? (b.sprintBest || 0) - (a.sprintBest || 0)
-      : board === 'puzzle' ? (b.puzzleStage || 0) - (a.puzzleStage || 0)
-      : board === 'dig' ? (b.digDepth || 0) - (a.digDepth || 0)
-      : board === 'daily' ? (b.dailyScore || 0) - (a.dailyScore || 0)
-      : b.bestScore - a.bestScore)
+    .sort((a, b) => lbVal(b) - lbVal(a))
     .slice(0, 100);
   // 👑 mark the throne holder's row + total crown counts (name colors scale).
   const throne = (db.meta.thrones || {})[board];

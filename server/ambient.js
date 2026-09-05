@@ -756,7 +756,16 @@ export function chooseReplies(text, now = Date.now(), forcedName = null) {
 
 // ×1 の世界（ピーク ≒850人）で、その板が何行埋まるか。板ごとの人気の差
 // ── ハイスコアは全員が持つ／ウィークリーは今週やった人だけ ── を持っている。
-const GHOST_COUNT = { score: 40, rating: 30, dungeon: 24, weekly: 18, sprint: 22, daily: 20 };
+// 部門ごとの「賑わい」。人気のある板ほど行数が多い。
+// 既定は 24（表に無い板はここに落ちる）。
+// 🆕 板を新設したモードは、いま実際に遊ばれている量に合わせて控えめに置く。
+//    ここを足し忘れても既定の24で埋まるので「その板だけ空」にはならないが、
+//    総合スコア(40)と同じ賑わいにすると新設の板だけ不自然に混む。
+const GHOST_COUNT = {
+  score: 40, rating: 30, dungeon: 24, weekly: 18, sprint: 22, daily: 20,
+  meltdown: 20, chimera: 16, chain: 16, survival: 22, rush: 18, blueprint: 14,
+  under: 18, heaven: 14, abyss: 10,
+};
 // 公開ランキングは100行で切られる。それ以上は作っても捨てられる。
 export const BOARD_MAX_ROWS = 100;
 
@@ -865,6 +874,18 @@ export function digDepthOf(r, st) {
 
 // 板 → その板で順位を決める値。ghostRows が行に載せる値と**同じ定義**にすること
 // （ずれると「並び順と表示値が食い違う板」ができる）。
+// 回数系（連鎖数・ウェーブ・撃破数・枚数）の板で使う写像。
+//
+// 素の強さ（bestScore）を floor〜cap の範囲へ押し込む。上に行くほど詰まる
+// （平方根）ので、上位だけが団子にならず、天井を超える数字も出ない。
+// SCORE_TOP は「実プレイヤーの上位が届くあたり」。ここを超える住人は
+// 天井に張り付くだけで、板が壊れた数字にはならない。
+const SCORE_TOP = 1_000_000;
+function scaleToCap(bestScore, floor, cap) {
+  const q = Math.max(0, Math.min(1, (Number(bestScore) || 0) / SCORE_TOP));
+  return Math.max(floor, Math.round(floor + (cap - floor) * Math.sqrt(q)));
+}
+
 const BOARD_VALUE = {
   score: (st) => st.bestScore,
   rating: (st) => st.rating,
@@ -873,6 +894,34 @@ const BOARD_VALUE = {
   sprint: (st) => st.sprintBest,
   puzzle: (st, r) => puzzleStageOf(r, st),
   dig: (st, r) => digDepthOf(r, st),
+  // 🆕 板が無かったモードたち（server/index.js の LB_BOARDS と対）。
+  //
+  //    ⚠ ここを足し忘れると **その板だけ実プレイヤーしか並ばない**。
+  //      他の板は住人で埋まっているので、対比で一目で分かってしまう
+  //      （＝「この板に出ている人だけが本物」という正体判定器になる）。
+  //    住人の記録は residentStats が持っている素の値から、モードごとの
+  //    手触りに合う倍率で導く。実測できる基準が無いので、既存の板と
+  //    同じ考え方（bestScore からの相対）で置く。
+  //    ⚠ スコア系（点）と回数系（連鎖数・ウェーブ・撃破数）を同じ割り算で
+  //      出すと、桁がまったく合わない。最初にそれをやって「5000連鎖」
+  //      「213ウェーブ」という**実在しえない板**を作ってしまった。
+  //      回数系は「そのモードでいちばん難しい実績のしきい値」を天井の目安に
+  //      置いて、素の強さ（bestScore の分位）をそこへ写す。
+  //        ・連鎖カスケード … ach_chain10（10連鎖）が最高。上限14。
+  //        ・サバイバル     … ach_wave30（W30）が最高。上限38。
+  //        ・ボスラッシュ   … ach_rush12（深度12）が最高。上限16。
+  //        ・ブループリント … 累積のクリア枚数なので、他と違って上限は緩い。
+  //      分位は「その住人の bestScore が SCORE_TOP のどのあたりか」で取る。
+  //      SCORE_TOP は実プレイヤーの上位が届くあたり（100万点）。
+  meltdown: (st) => Math.round((st.bestScore || 0) * 1.6),
+  chimera: (st) => Math.round((st.bestScore || 0) * 1.15),
+  chain: (st) => scaleToCap(st.bestScore, 3, 14),
+  survival: (st) => scaleToCap(st.bestScore, 6, 38),
+  rush: (st) => scaleToCap(st.bestScore, 2, 16),
+  blueprint: (st) => scaleToCap(st.bestScore, 1, 60),
+  under: (st) => Math.max(1, Math.round((st.dungeonMax || 0) * 0.85)),
+  heaven: (st) => Math.max(1, Math.round((st.dungeonMax || 0) * 0.7)),
+  abyss: (st) => Math.max(1, Math.round((st.dungeonMax || 0) * 0.45)),
 };
 
 let rankMemo = new Map();
@@ -932,6 +981,18 @@ export function ghostRows(board, weekId, taken, now = Date.now()) {
     // skill drift without new stat plumbing.
     puzzleStage: puzzleStageOf(r, st),
     digDepth: digDepthOf(r, st),
+    // 🆕 板が無かったモードたちの行。BOARD_VALUE と同じ式から出すので、
+    //    「並び順に使う値」と「行に出る値」が必ず一致する（別式にすると、
+    //    上位に並んでいるのに数字は下、という食い違いが出る）。
+    meltdownBest: BOARD_VALUE.meltdown(st, r),
+    chimeraBest: BOARD_VALUE.chimera(st, r),
+    chainMax: BOARD_VALUE.chain(st, r),
+    survivalWave: BOARD_VALUE.survival(st, r),
+    rushDepth: BOARD_VALUE.rush(st, r),
+    blueprintClears: BOARD_VALUE.blueprint(st, r),
+    underMax: BOARD_VALUE.under(st, r),
+    heavenMax: BOARD_VALUE.heaven(st, r),
+    abyssMax: BOARD_VALUE.abyss(st, r),
     badges: st.badges,
     title: st.title,
   });

@@ -443,7 +443,7 @@ function updateGhostButton() {
 // 出す合図に乗せてあるので、ログインの導線が増えてもここは直さなくてよい。
 window.addEventListener('bba:session-changed', updateGhostButton);
 
-function unlockGhost() { unlockHere('ghost'); }
+function unlockGhost() { unlockHere('ghost'); updateLogoHint(); }
 
 // ---------------------------------------------------------------------------
 // ロゴの13連打（幽霊屋敷）と、ロゴの長押し（神・創造神の紋）は同じ要素に
@@ -460,6 +460,21 @@ let suppressLogoClick = false;
 let logoHoldTimer = null;
 
 const logoEl = document.querySelector('.logo');
+
+// 🕯 ある程度遊んだ人にだけ、ロゴがかすかに息をする。
+//
+//    👻幽霊屋敷は1モードまるごと「ロゴ13連打」を知らないと一生出てこない。
+//    答えは言いたくないが、**触る場所があること**だけは伝わってほしい。
+//    30回遊んだ人に限るのは、初日から光っていると「押せ」の指示になって
+//    秘密ではなくなるから。解放済みの人にはもう出さない。
+function updateLogoHint() {
+  if (!logoEl) return;
+  const played = (session.user && session.user.stats && session.user.stats.gamesPlayed) || 0;
+  logoEl.classList.toggle('has-secret', played >= 30 && !ghostUnlocked());
+}
+// 「いま誰でログインしているか」が変わったら塗り直す（幽霊屋敷のボタンと同じ合図）。
+window.addEventListener('bba:session-changed', updateLogoHint);
+
 logoEl.addEventListener('click', () => {
   // 長押しで紋を出した回。ここで数えると13連打側が意図せず進む。
   if (suppressLogoClick) { suppressLogoClick = false; return; }
@@ -1084,17 +1099,16 @@ function updateEventBanner() {
       t(`期間限定「${ev.name}」開催中！ — 残り${fmtRemain(ev.endsAt - Date.now())}`,
         `Limited event "${ev.nameEn || ev.name}" is live! — ${fmtRemain(ev.endsAt - Date.now())} left`));
     banner.classList.remove('hidden');
-    // Only the chaos event opens the chaos button for everyone.
-    const chaosLive = ev.type === 'chaos';
-    btn.classList.toggle('hidden', !chaosLive && !staffExtras());
-    btn.classList.toggle('staff-only', !chaosLive);
+    // 🌀 カオスのボタンは常時出す（上の #btnChaos の注記を参照）。
+    //    カオスイベント中だけ「いまは実入りが良い」ことを見た目で伝える。
+    if (btn) {
+      btn.classList.remove('hidden', 'staff-only');
+      btn.classList.toggle('event-live', ev.type === 'chaos');
+    }
   } else {
     if (ev) window.__bbaEvent = null;   // expired locally — hide until next poll
     banner.classList.add('hidden');
-    // Outside an event only staff can reach chaos, and it is badged as such
-    // so it never looks like a live event that refuses to end.
-    btn.classList.toggle('hidden', !staffExtras());
-    btn.classList.toggle('staff-only', true);
+    if (btn) { btn.classList.remove('hidden', 'staff-only', 'event-live'); }
   }
   updateNextEventBanner();
 }
@@ -1262,9 +1276,15 @@ function showChaosSetup() {
   };
 }
 
+// 🌀 カオスは常時遊べる。
+//
+//    12種のお題・11枚の盤面・時間と間隔の選択まで完成しているのに、
+//    「カオスイベント開催中」でなければボタンごと隠れていた ── イベントは
+//    運営が手で立てるものなので、実質ほとんどの日は**作り終えた1モードが
+//    存在しないのと同じ**だった。
+//    イベントで特別になるのは中身ではなく実入り（コイン1.5倍）のほうなので、
+//    入口は開けて、イベント中だけ帯で「いまは1.5倍」と伝える形にする。
 $('#btnChaos').onclick = () => {
-  const chaosLive = window.__bbaEvent && window.__bbaEvent.type === 'chaos';
-  if (!chaosLive && !staffExtras()) { toast(t('カオスモードはイベント開催中のみ遊べます', 'Chaos Mode is only playable during a chaos event'), 'err'); return; }
   audio.click();
   showChaosSetup();
 };

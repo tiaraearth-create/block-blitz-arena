@@ -138,7 +138,7 @@
           <button class="btn btn-workshop btn-big" id="btnWorkshop">パズル工房</button>
           <button class="btn btn-dig btn-big" id="btnDig">採掘場</button>
           <button class="btn btn-ghostmode btn-big hidden" id="btnGhost">幽霊屋敷</button>
-          <button class="btn btn-chaos btn-big hidden" id="btnChaos">カオスモード</button>
+          <button class="btn btn-chaos btn-big" id="btnChaos">カオスモード</button>
           <button class="btn btn-online btn-big" id="btnOnline">オンライン対戦</button>
         </div>
         <nav class="menu-nav">
@@ -272,6 +272,19 @@
         <button class="tab" data-lb="daily">デイリー</button>
         <button class="tab" data-lb="puzzle">パズル遺跡</button>
         <button class="tab" data-lb="dig">採掘場</button>
+        <!-- 🆕 記録はずっとサーバーに保存されていたのに板が1枚も無かったモード。
+             遊んだ手応えが数字として残るのに、誰とも比べられなかった。
+             👻幽霊屋敷は隠しモードなので、公開の板には出さない（部門が
+             あること自体が「そんなモードがある」という答えになるため）。 -->
+        <button class="tab" data-lb="survival">サバイバル</button>
+        <button class="tab" data-lb="meltdown">メルトダウン</button>
+        <button class="tab" data-lb="chain">連鎖カスケード</button>
+        <button class="tab" data-lb="rush">ボスラッシュ</button>
+        <button class="tab" data-lb="chimera">キメラ工房</button>
+        <button class="tab" data-lb="blueprint">ブループリント</button>
+        <button class="tab" data-lb="under">地下</button>
+        <button class="tab" data-lb="heaven">天国</button>
+        <button class="tab" data-lb="abyss">深淵</button>
       </div>
       <div id="lbList" class="lb-list"><p class="muted center">読み込み中…</p></div>
     </section>
@@ -303,6 +316,11 @@
         <button class="tab" data-shop="fx">エフェクト</button>
         <button class="tab" data-shop="ult">奥義</button>
         <button class="tab" data-shop="item">アイテム</button>
+        <!-- 👑 王座の宝物庫。以前は管理者イベントのシートの中にしか入口が無く、
+             openAeSheet() が  なので **イベントが無い日は
+             欠片の残高すら見られなかった**。棚は世界の到達段で開くもので、
+             イベントの開催とは関係ない。 -->
+        <button class="tab" data-shop="throne">王座</button>
       </div>
       <div id="shopGrid" class="shop-grid"></div>
     </section>

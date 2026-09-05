@@ -1041,16 +1041,20 @@ let viewGen = 0;
 // ボードごとの「順位を決めている数字」。サーバー（server/index.js の
 // /api/leaderboard の sort）と同じ値を返すこと ── ここがずれると、
 // 並び順と同着判定が食い違って「同じ点なのに順位が違う」が起きる。
+// 🏅 部門 → 行のどの欄を読むか。server/index.js の LB_BOARDS と対になっている。
+//    片方だけ足すと「板は出るのに全員0点で並ぶ」ので、必ず両方そろえること。
+const LB_KEY = {
+  score: 'bestScore', rating: 'rating', dungeon: 'dungeonMax',
+  weekly: 'weeklyBest', daily: 'dailyScore', sprint: 'sprintBest',
+  puzzle: 'puzzleStage', dig: 'digDepth',
+  meltdown: 'meltdownBest', chimera: 'chimeraBest', chain: 'chainMax',
+  survival: 'survivalWave', rush: 'rushDepth', blueprint: 'blueprintClears',
+  under: 'underMax', heaven: 'heavenMax', abyss: 'abyssMax',
+};
+
 function lbValue(board, r) {
   if (!r) return 0;
-  if (board === 'rating') return Number(r.rating) || 0;
-  if (board === 'dungeon') return Number(r.dungeonMax) || 0;
-  if (board === 'weekly') return Number(r.weeklyBest) || 0;
-  if (board === 'daily') return Number(r.dailyScore) || 0;
-  if (board === 'sprint') return Number(r.sprintBest) || 0;
-  if (board === 'puzzle') return Number(r.puzzleStage) || 0;
-  if (board === 'dig') return Number(r.digDepth) || 0;
-  return Number(r.bestScore) || 0;
+  return Number(r[LB_KEY[board] || 'bestScore']) || 0;
 }
 
 /** 数字の見せ方（単位つき）。文字だけなので textContent にも入れられる。 */
@@ -1061,6 +1065,14 @@ function lbValueText(board, v) {
   if (board === 'sprint') return tr(`1分 ${fmt(v)}`, `1min ${fmt(v)}`);
   if (board === 'puzzle') return tr(`ステージ${fmt(v)}`, `Stage ${fmt(v)}`);
   if (board === 'dig') return `${fmt(v)}m`;
+  // 🆕 単位のある部門。数字だけだと何の記録か読めない。
+  if (board === 'under') return `B${fmt(v)}`;
+  if (board === 'heaven') return `H${fmt(v)}`;
+  if (board === 'abyss') return `A${fmt(v)}`;
+  if (board === 'chain') return tr(`${fmt(v)}連鎖`, `${fmt(v)} chain`);
+  if (board === 'survival') return tr(`W${fmt(v)}`, `W${fmt(v)}`);
+  if (board === 'rush') return tr(`${fmt(v)}体`, `${fmt(v)} bosses`);
+  if (board === 'blueprint') return tr(`${fmt(v)}枚`, `${fmt(v)} clears`);
   return fmt(v);
 }
 /** 一覧の右端。レートだけは段位バッジを添える（HTML）。 */
@@ -1756,8 +1768,50 @@ async function claimShopGift(btn) {
   }
 }
 
+// 👑 王座の宝物庫のタブ。
+//
+// 棚が開くのは「世界がどこまで段を割ったか」で決まり、管理者イベントが
+// 開催中かどうかとは無関係。それなのに入口が openAeSheet() の中にしか無く、
+// そこは `if (!ae) return` なので **イベントが無い日は欠片の残高すら
+// 見られなかった**。ショップの1タブとして常設する。
+async function renderThroneTab() {
+  const grid = $('#shopGrid');
+  grid.innerHTML = `<p class="muted center" style="grid-column:1 / -1">${tr('読み込み中…', 'Loading…')}</p>`;
+  let data = null;
+  try { data = await api('/api/throne/shop'); }
+  catch (err) {
+    grid.innerHTML = `<p class="muted center" style="grid-column:1 / -1">${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  // 待っている間に別のタブへ移っていたら、そちらを塗り替えない。
+  if (shopTab !== 'throne' || document.body.dataset.screen !== 'shop') return;
+  const items = Array.isArray(data.items) ? data.items : [];
+  const owned = items.filter(i => i.owned).length;
+  const openable = items.filter(i => i.unlocked && !i.owned).length;
+  grid.innerHTML = `
+    <div style="grid-column:1 / -1;display:flex;flex-direction:column;gap:10px;align-items:center;text-align:center;padding:14px">
+      <div style="font-size:26px">${ic('shards', 30)}</div>
+      <div><b style="font-size:20px">${fmt(data.shards || 0)}</b> <span class="muted">${tr('王座の欠片', 'Throne Shards')}</span></div>
+      <p class="muted" style="font-size:12px;margin:0;max-width:34em">${tr(
+        `世界が第${data.throneMax || 0}段まで割れています。段が進むほど棚が開きます ・ ${owned}/${items.length}品を所持`,
+        `The world has broken through stage ${data.throneMax || 0}. Deeper stages open more shelves — ${owned}/${items.length} owned`)}</p>
+      <button class="btn btn-throne" id="shopThroneOpen">${ic('shards', 16)} ${tr('宝物庫をひらく', 'Open the vault')}${
+        openable ? tr(`（${openable}品 交換できます）`, ` (${openable} available)`) : ''}</button>
+      ${data.shards ? '' : `<p class="muted" style="font-size:12px;margin:0">${tr(
+        '欠片は管理者イベントで手に入ります', 'Shards are earned in Admin Events')}</p>`}
+    </div>`;
+  const b = grid.querySelector('#shopThroneOpen');
+  if (b) b.onclick = () => { audio.click(); import('./adminevent.js').then(m => m.openThroneVault()); };
+}
+
 function renderShop() {
   if (shopTab === 'item') { renderBoosterShop(); return; }
+  // 👑 王座の宝物庫。棚が開くのは「世界がどこまで段を割ったか」で決まり、
+  //    管理者イベントが開催中かどうかとは無関係。それなのに入口が
+  //    openAeSheet() の中にしか無く、そこは `if (!ae) return` なので
+  //    **イベントが無い日は欠片の残高すら見られなかった**。
+  //    ショップのタブから直接開く（宝物庫の中身の描画は adminevent.js のまま）。
+  if (shopTab === 'throne') { renderThroneTab(); return; }
   const grid = $('#shopGrid');
   const u = session.user;
   const items = shopItems.filter(i => i.cat === shopTab);

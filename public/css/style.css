@@ -119,6 +119,22 @@ body {
    フィードではなくチャットが開く。 */
 .menu-content { padding-bottom: calc(86px + env(safe-area-inset-bottom, 0px)); }
 .logo { text-align: center; line-height: 1.15; }
+/* 🕯 30回遊んだ人にだけ、ロゴがかすかに息をする（👻幽霊屋敷への合図）。
+   答えは言わない ── 「ここは触れる」だけが伝わる強さに留める。
+   解放したら消える（main.js の updateLogoHint）。
+   動きを嫌う設定の人には出さない。 */
+.logo.has-secret .logo-block { animation: logoBreathe 4.5s ease-in-out infinite; }
+.logo.has-secret .logo-block:nth-child(2) { animation-delay: .35s; }
+.logo.has-secret .logo-block:nth-child(3) { animation-delay: .7s; }
+.logo.has-secret .logo-block:nth-child(4) { animation-delay: 1.05s; }
+.logo.has-secret .logo-block:nth-child(5) { animation-delay: 1.4s; }
+@keyframes logoBreathe {
+  0%, 88%, 100% { filter: none; }
+  94% { filter: brightness(1.18); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .logo.has-secret .logo-block { animation: none; }
+}
 .logo-block {
   display: inline-block; font-size: clamp(40px, 9vw, 72px); font-weight: 900;
   padding: 2px 10px; margin: 0 3px; border-radius: 14px; color: #fff;
@@ -1847,6 +1863,19 @@ body[data-screen="game"] #topbar { display: none; }
   .hud-timer { flex: 0 0 auto; }
   .ult-btn { padding: 6px 7px; gap: 2px; }
   .ult-btn b { font-size: 10px; }
+}
+
+/* 🌀 開催中の目印。カオスは常時遊べるようになったので、イベントで変わるのは
+   実入り（コイン1.5倍）だけ ── その差だけをボタンの上で伝える。
+   .staff-only と同じ作りだが色と字が違い、両方が付くことはない。 */
+.btn.event-live { position: relative; }
+.btn.event-live::after {
+  content: '1.5x';
+  position: absolute; top: -8px; right: 8px;
+  background: var(--accent, #43d9e8); color: #06121a;
+  font-size: 9px; font-weight: 900; letter-spacing: .06em;
+  padding: 2px 7px; border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
 /* Staff-only menu entries: badged so they never read as a live event. */
