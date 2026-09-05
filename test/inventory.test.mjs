@@ -133,8 +133,15 @@ try {
   const screensSrc = fs.readFileSync('public/js/screens.js', 'utf8');
   check('在庫画面の母数も throneOnly を外している',
     screensSrc.includes('!i.adminOnly && !i.throneOnly && !i.default'), '');
-  check('在庫の「あと何種」も throneOnly を数えていない',
-    screensSrc.includes('!i.adminOnly && !i.throneOnly).length'), '');
+  // v2.61: 除外条件を buyable（adminOnly / throneOnly / gachaOnly）に1本化した。
+  //   「押すと通常ショップに飛ぶが、そこでは買えない」という同じ理由が
+  //   ガチャ限定にも当てはまるのに、throneOnly にしか効いていなかった。
+  check('在庫の「あと何種」が買えない品を数えていない',
+    screensSrc.includes('const buyable = i => !i.adminOnly && !i.throneOnly && !i.gachaOnly;')
+    && screensSrc.includes('const missing = total - owned.filter(buyable).length;'), '');
+  check('在庫の分母・分子が同じ物差し',
+    screensSrc.includes('const total = all.filter(buyable).length;')
+    && screensSrc.includes('${owned.filter(buyable).length} / ${total}'), '');
 
   // 称号タブ
   const titles = await j('/api/titles', {}, tok);

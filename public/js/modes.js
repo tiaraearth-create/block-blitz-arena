@@ -7576,8 +7576,14 @@ class OnlineMode extends VersusBase {
     const body = ally
       ? t('サーバーが席を埋めます（そのぶんの点は止まります）',
         'The server is covering their turns — their score is paused')
+      // 🚪 ルームの試合は rated:false なので、相手が戻らなくても
+      //    「勝ち」はどこにも記録されない（quitWarning と同じ理由）。
+      //    消えない帯なので、嫌でも残り時間ずっと嘴を見せ続けることになる。
       : sec > 0
-        ? t(`${sec}秒ほど待ちます。戻らなければあなたの勝ちです`, `Waiting about ${sec}s — if they don’t return, you win`)
+        ? (this.kind === 'custom'
+          ? t(`${sec}秒ほど待ちます（ルームの試合なので勝敗は記録されません）`,
+            `Waiting about ${sec}s (room matches are friendlies — nothing is recorded)`)
+          : t(`${sec}秒ほど待ちます。戻らなければあなたの勝ちです`, `Waiting about ${sec}s — if they don’t return, you win`))
         : t('少しだけ待っています…', 'Waiting a moment…');
     showNetBanner(`${ic('warn', 14)} <b>${head}</b><span>${body}</span>`, 'warn');
   }
@@ -8100,6 +8106,15 @@ class OnlineMode extends VersusBase {
         : t('生存中の離脱は<b style="color:var(--red)">そのときの生存者の中で最下位</b>扱いになります',
             'Leaving while alive is recorded as <b style="color:var(--red)">last among the current survivors</b>');
     }
+    // 🚪 合言葉ルームの試合は rated:false で作られる（server/battle.js の startRoom）。
+    //    その結果、Elo も pvpWins/pvpLosses も totalWins も連勝も一切動かない
+    //    ── 離脱の代償は**ゼロ**なのに「敗北になります」と脅していた。
+    //    結果画面はこの試合を friendly:'room'（練習試合）と表示しているので、
+    //    警告のほうだけが食い違っていた。⚠ quit() のトーストと同じ順序で分岐すること。
+    if (this.kind === 'custom') {
+      return t('ルームの試合は<b>練習試合</b>です。離脱してもレート・戦績は動きません',
+        'Room matches are <b>friendlies</b> — leaving does not change rating or record');
+    }
     return t('離脱は<b style="color:var(--red)">敗北</b>になります', 'Leaving counts as a <b style="color:var(--red)">loss</b>');
   }
 
@@ -8114,6 +8129,8 @@ class OnlineMode extends VersusBase {
       //   **文面だけ**が実際の裁定と食い違っていた。
       const wasSpectating = this.spectatingRoom;
       const wasRoyaleDead = this.royaleDead;
+      // 🚪 合言葉ルームの試合か（destroy() の前に控える。上と同じ理由）。
+      const wasCustomRoom = this.kind === 'custom' && !this.isCoop && !this.isRoyale;
       // 🚪 「自分で降りた」ことをサーバーへ伝えてから閉じる。伝えないと
       //    回線事故と同じ扱い（再接続の猶予25秒）になり、相手が待たされる。
       //    観戦をやめるだけの回は試合に出ていないので送らない。
@@ -8136,10 +8153,14 @@ class OnlineMode extends VersusBase {
                 'Stopped spectating (your placement is already final)')
             : t('バトルロイヤルから離脱しました（そのときの生存者の中で最下位扱い）',
                 'You left the royale (recorded as last among the survivors at that moment)'))
+        // 🚪 ルームの試合は練習試合（上の quitWarning と同じ順序で分岐すること）。
+        : wasCustomRoom
+        ? t('ルームの試合から離脱しました（練習試合なので記録は動きません）',
+            'You left the room match (a friendly — nothing is recorded)')
         : t('対戦から離脱しました（敗北扱い・相手の不戦勝）', 'You left the match (counts as a loss)'),
         // 観戦をやめただけの回は警告色(err)にしない ── 何も失っていない。
         // '' は素のトースト（CSS にあるのは err と ok だけ）。
-        (this.spectatingRoom || (this.isRoyale && this.royaleDead)) ? '' : 'err', 2600);
+        (this.spectatingRoom || wasCustomRoom || (this.isRoyale && this.royaleDead)) ? '' : 'err', 2600);
       endToMenu();
     } else {
       this.client.cancelQueue();

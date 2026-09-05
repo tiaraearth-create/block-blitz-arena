@@ -1010,7 +1010,11 @@ function publicUser(user) {
     battlePass: adminBp, badges: user.badges,
     equippedTitle: user.equippedTitle || null,
     achievements: user.achievements,
-    rankRewards: user.rankRewards || [],
+    // 🎭 of（順位を決めた母集団の人数）は**渡さない**。順位報酬は住人を
+    //    外した実プレイヤーだけで数え直しているので、そのままだと
+    //    「3位 / 13人中」と出て、100行あるランキングの残りが何なのかが割れる。
+    //    運営の目（db.json と管理画面）には残っている。
+    rankRewards: (user.rankRewards || []).map(({ of, ...r }) => r),
     thrones: thronesOf(user.id),
     guild: user.guildId && db.guilds[user.guildId]
       ? { id: user.guildId, name: db.guilds[user.guildId].name, tag: db.guilds[user.guildId].tag, icon: db.guilds[user.guildId].icon, owner: db.guilds[user.guildId].ownerId === user.id }

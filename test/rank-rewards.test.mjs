@@ -115,7 +115,13 @@ try {
   const meB = await j('/api/me', {}, b.token);
   const rwB = meB.user.rankRewards;
   check('winner has 1 pending reward after rollover', meB.status === 200 && rwB.length === 1, JSON.stringify(rwB));
-  check('winner is rank 1 with champion badge pending', rwB[0] && rwB[0].rank === 1 && rwB[0].of === 2 && rwB[0].badge === 'weekly1' && rwB[0].coins === 2000 && rwB[0].gems === 300, JSON.stringify(rwB[0]));
+  check('winner is rank 1 with champion badge pending', rwB[0] && rwB[0].rank === 1 && rwB[0].badge === 'weekly1' && rwB[0].coins === 2000 && rwB[0].gems === 300, JSON.stringify(rwB[0]));
+  // 🎭 v2.61: of（順位を決めた母集団の人数）は**本人にも渡さない**。
+  //    順位報酬は住人を外した実プレイヤーだけで数え直しているので、
+  //    そのまま返すと「3位 / 13人中」と出て、住人込みで100行あるランキングの
+  //    残りが何なのか引き算で割れてしまう。記録（db.json）には残っている。
+  check('順位報酬に母集団の人数が載っていない（住人の秘匿）',
+    rwB[0] && rwB[0].of === undefined, JSON.stringify(rwB[0]));
   const meA = await j('/api/me', {}, a.token);
   check('runner-up is rank 2', meA.user.rankRewards.length === 1 && meA.user.rankRewards[0].rank === 2 && meA.user.rankRewards[0].coins === 1200, JSON.stringify(meA.user.rankRewards[0]));
 

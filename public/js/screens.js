@@ -413,6 +413,12 @@ function showStatsModal() {
   const history = Array.isArray(s.history) ? s.history : [];
   const xpInLevel = (u.xp || 0) % 1000;
   const played = Math.max(1, s.gamesPlayed || 0);
+  // 📊 累計スコアは**全モード込み**（server/index.js の `s.totalScore += score`）だが、
+  //    ハイスコアは順位対象のモードだけ（meltdown / chain / daily / ae_* を外している）。
+  //    その2つを同じタイル群に並べていたので、メルトダウンや連鎖カスケードを
+  //    よく遊ぶ人は「平均スコアがハイスコアより大きい」という読めない画面になっていた。
+  //    ラベルで物差しの違いを言う（サーバーに新しい累計を持たせるのが本筋だが、
+  //    それは記録の追加になるので、まず表示の辻褄を合わせる）。
   const avg = Math.round((s.totalScore || 0) / played);
   const winRate = (s.pvpWins || 0) + (s.pvpLosses || 0) > 0
     ? Math.round(((s.pvpWins || 0) / ((s.pvpWins || 0) + (s.pvpLosses || 0))) * 100) : null;
@@ -433,9 +439,9 @@ function showStatsModal() {
     </div>
     <div class="spark-wrap">${sparkline(history)}</div>
     <div class="stat-tiles">
-      ${tile(tr('ハイスコア', 'High score'), fmt(s.bestScore || 0), 'var(--gold)')}
-      ${tile(tr('平均スコア', 'Average'), fmt(avg))}
-      ${tile(tr('累計スコア', 'Total score'), fmt(s.totalScore || 0))}
+      ${tile(tr('ハイスコア（順位対象）', 'High score (ranked)'), fmt(s.bestScore || 0), 'var(--gold)')}
+      ${tile(tr('平均スコア（全モード）', 'Average (all modes)'), fmt(avg))}
+      ${tile(tr('累計スコア（全モード）', 'Total score (all modes)'), fmt(s.totalScore || 0))}
       ${tile(tr('プレイ回数', 'Games'), fmt(s.gamesPlayed || 0))}
       ${tile(tr('最大コンボ', 'Max combo'), fmt(s.maxCombo || 0), 'var(--yellow)')}
       ${tile(tr('累計ライン', 'Total lines'), fmt(s.totalLines || 0))}
@@ -1239,7 +1245,10 @@ export async function openLeaderboard(board = 'score') {
         prev = t.upTo === null ? prev : t.upTo;
         return `<span>${label} ${fmt(t.coins)}${ic('coins', 13)}+${fmt(t.gems)}${ic('gems', 13)}${t.badge ? `+${ic('badge_weekly1', 13)}` : ''}</span>`;
       }).join('');
-      rewardHead = `<div class="lb-rewards"><b>${tr('毎週月曜リセットで順位に応じた報酬！', 'Rank prizes at every Monday reset!')}</b>${chips}</div>`;
+      // ⚠ 最終順位はリセットの瞬間に確定するもので、いま見えている行の順位とは
+      //    限らない（週の残り時間で誰でも動く）。「いまの順位でこれが貰える」と
+      //    読める書き方にしない ── 実際の払い出しはリセット時の並びで決まる。
+      rewardHead = `<div class="lb-rewards"><b>${tr('毎週月曜リセットで、確定した順位に応じた報酬！', 'Prizes by final rank at every Monday reset!')}</b>${chips}</div>`;
     }
     list.innerHTML = navLinks + lbYouHtml(board, data.rows, ranks, data.you) + rewardHead + data.rows.map((r, i) => `
       <div class="lb-row ${session.user && r.username === session.user.username ? 'me' : ''} ${r.throne ? 'throne' : ''}" style="animation-delay:${Math.min(i * 40, 600)}ms">
@@ -1295,9 +1304,18 @@ function lbYouHtml(board, rows, ranks, you) {
   // 「あと◯点で載る」と書くと嘘になるので、そこは分けて言う。
   const full = rows.length >= 100;
   const cutoff = rows.length ? lbValue(board, rows[rows.length - 1]) : 0;
-  const why = full
-    ? tr(`${rows.length}位に入るには ${lbValueText(board, cutoff)} 以上`, `${lbValueText(board, cutoff)} or better gets you to #${rows.length}`)
-    : tr('このランキングの記録がまだありません — 1回遊べば載ります', 'No record on this board yet — play once to appear');
+  // ⚠ cutoff は**100位の人の値そのもの**。サーバーは同点を名前順で割ってから
+  //    100件で切る（server/index.js のソート）ので、同じ値でも名前が後ろなら
+  //    載らない ── 「以上」は誤りで、正しくは「超える」。しかも自分の値は
+  //    同じ画面の右端に出ているので、ちょうど同点の人には
+  //    「1,200点以上で載る」と「あなた 1,200点・圏外」が並んで見えていた。
+  const tied = full && mine === cutoff && mine > 0;
+  const why = tied
+    ? tr(`${lbValueText(board, cutoff)} で同点 — 同じ点は名前順なので、あと1つ上回れば載ります`,
+      `Tied at ${lbValueText(board, cutoff)} — ties break by name, so beat it by one to appear`)
+    : full
+      ? tr(`${rows.length}位に入るには ${lbValueText(board, cutoff)} を超える`, `Beat ${lbValueText(board, cutoff)} to reach #${rows.length}`)
+      : tr('このランキングの記録がまだありません — 1回遊べば載ります', 'No record on this board yet — play once to appear');
   return `<div class="lb-you out">
     <span class="lb-you-rank">—</span>
     <span class="lb-you-body"><span>${full ? tr('あなたは圏外です', 'You are outside the ranking') : tr('あなたはまだ載っていません', 'You are not on this board yet')}</span><small>${why}</small></span>
@@ -2071,17 +2089,24 @@ function renderInvGear() {
       : u ? (u.owned || []).includes(i.id) : !!i.default);
     // 👑 専用ショップの品はここでは数えない ── 「あとN種」を押すと
     // 通常ショップに飛ぶが、そこでは買えないので数に入れると嘘になる。
-    const total = all.filter(i => !i.adminOnly && !i.throneOnly).length;
+    // 🎰 **ガチャ限定も同じ理由で数えない。** すぐ上の理由が throneOnly にしか
+    //    効いていなかったので、skin_prism / board_aurora / fx_comet の3品が
+    //    「あとN種」に混ざっていた ── ショップの棚では「ガチャ限定」の
+    //    押せないボタンで出るので、飛んでも買えない。
+    const buyable = i => !i.adminOnly && !i.throneOnly && !i.gachaOnly;
+    const total = all.filter(buyable).length;
     const equippedId = cat === 'ult' ? equippedUlt()
       : u ? (u.equipped || {})[cat] : `${cat}_default`;
-    const missing = total - owned.filter(i => !i.adminOnly && !i.throneOnly).length;
+    const missing = total - owned.filter(buyable).length;
 
     const sec = document.createElement('div');
     sec.className = 'inv-sec';
     sec.innerHTML = `
       <div class="inv-sec-head">
         <span>${tr(CAT_TITLE[cat].ja, CAT_TITLE[cat].en)}</span>
-        <span class="muted">${invIsStaff() ? '∞' : `${owned.filter(i => !i.adminOnly && !i.throneOnly).length} / ${total}`}</span>
+        ${/* 分子も分母と同じ物差し（buyable）で数える。片方だけ絞ると
+             「22 / 19」のような読めない表示になる。 */''}
+        <span class="muted">${invIsStaff() ? '∞' : `${owned.filter(buyable).length} / ${total}`}</span>
       </div>
       <div class="inv-grid"></div>
       ${missing > 0 && !invIsStaff()
@@ -2637,8 +2662,12 @@ function renderBoosterShop() {
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
     el.innerHTML = `
       <div class="shop-preview booster-preview">${icon(itemIconName(item), { size: 48, label: catName(item) })}</div>
+      ${/* 👑 運営は通常ブースターも**消費しない**（server/routes/shop.js の
+             `if (user.role !== 'admin')`）。持ち物タブも走行中のHUDも全アイテムを
+             ∞ にしているのに、この棚だけ実数を出していたので、使っても減らないのに
+             「×0」と表示されて買えと言われる状態だった。 */''}
       <div class="shop-name">${staffItem ? `${ic('throne', 14)} ` : ''}${catName(item)}${
-        count !== null ? ` <span class="muted">×${staffItem ? '∞' : fmt(count)}</span>` : ''}</div>
+        count !== null ? ` <span class="muted">×${staffItem || invIsStaff() ? '∞' : fmt(count)}</span>` : ''}</div>
       <div class="shop-desc">${catDesc(item)}</div>
       ${saleBadge(deal)}
       ${staffItem
@@ -2755,6 +2784,10 @@ export function openGacha() {
       updateTopbar();
       m.querySelector('#gcCoins').innerHTML = `${ic('coins', 14)} ${fmt(data.user.coins)}`;
       setBars(data.pity, data.collection);
+      // 🎒 持ち物・図鑑を開いたまま回した回。session.user は更新されているのに
+      //    背後の DOM は描き直されないので、閉じたときに所持数もコレクション率も
+      //    引く前のままに見えていた（装備の afterEquip とまったく同じ扱いにする）。
+      if (document.body.dataset.screen === 'inventory') openInventory();
       // モーダルを開いたままイベントが始まる／終わることがあるので、値段も引き直す。
       // （表示だけ古いままだと、また「表示と請求額が違う」に戻ってしまう）
       api('/api/gacha/info').then(setPrices).catch(() => {});
@@ -3187,7 +3220,10 @@ export function showRankRewardsModal(force = false) {
                 無いので `escapeHtml(r.week)` が文字列「undefined」になっていた。
                 単位も、殿堂はレートや優勝回数なのに必ず「点」が付いていた
                 （レート1,450 が「1,450点」）。行ごとに何の順位なのかで出し分ける。 */''}
-          <span><b>${medal(r) ? `${medal(r)} ` : ''}${tr(`${r.rank}位`, `#${r.rank}`)}</b> <small class="muted">/ ${r.of}${tr('人中', ' players')}${SEP}${escapeHtml(rrWhen(r))}${rrBest(r) ? `${SEP}${rrBest(r)}` : ''}</small></span>
+          ${/* 🎭 「/ N人中」は出さない（サーバーが of を渡さなくなった）。
+                順位報酬は住人を外した実プレイヤーだけで数え直しているので、
+                その人数を出すとランキングの残りが何なのか分かってしまう。 */''}
+          <span><b>${medal(r) ? `${medal(r)} ` : ''}${tr(`${r.rank}位`, `#${r.rank}`)}</b> <small class="muted">${escapeHtml(rrWhen(r))}${rrBest(r) ? `${SEP}${rrBest(r)}` : ''}</small></span>
           <b>${r.coins ? `+${fmt(r.coins)}${ic('coins', 13)} ` : ''}+${fmt(r.gems)}${ic('gems', 13)}${r.badge ? ` +${badgeIcon(r.badge, 16)}` : ''}</b>
         </div>`).join('')}
     </div>
