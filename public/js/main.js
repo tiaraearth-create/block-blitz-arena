@@ -4,7 +4,7 @@ import { session, api, refreshMe, setToken, queuedResultCount, UNLOCK_LS_KEYS } 
 import { noteUnlockSource, locallyEarnedUnlocks } from './localdata.js';
 import { $, $$, showScreen, showModal, closeModal, popModal, toast, updateTopbar, fmt, staffExtras , goBack, initHistory, onModalClosed } from './dom.js';
 import { audio } from './audio.js';
-import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked, tutorialDone, pauseModeForDialog } from './modes.js';
+import { startSolo, startVsAi, startOnline, startBoss, startBossRush, startChaos, startDungeon, startWeekly, startDaily, startSurvival, startSprint, sprintBest, SPRINT_DURATIONS, cancelMatchmaking, quitCurrent, rerollCurrent, fireUltCurrent, DUNGEON_REALMS, startMeltdown, startChimera, startPuzzle, startDig, puzzleBestStage, startGhost, ghostUnlocked, tutorialDone, pauseModeForDialog, canBookmark, bookmarkCurrent, bookmarkOf, resumeBookmark } from './modes.js';
 import { showAdminPalette, quickAutopilot, showAutopilotPanel, startGodLoop } from './admintools.js';
 import { initClipHud } from './clipexport.js';
 import { showAuthModal, showSettingsModal, showGemShop, loadTitles, openLeaderboard, openShop, openInventory, openBattlePass, openAdmin, bindAdminActions, openGacha, openMissions, refreshMissionDot, openPoll, refreshPollBanner, showRestoreModal, openGuild, openNews, showRankRewardsModal } from './screens.js';
@@ -434,6 +434,37 @@ function carryOverLocalUnlocks() {
 }
 window.addEventListener('bba:session-changed', carryOverLocalUnlocks);
 
+// ---- 🔖 しおり: メニューの一番上に「続きから」 ----
+//
+// 預けた1本は、開いた瞬間に目に入る場所に出す。ここに出さないと
+// 「預けたのに、どこから戻るのか分からない」で終わる。
+// 器は index.html に無いのでここで作る（出すものが無い間は作りもしない）。
+export function refreshBookmarkCard() {
+  const menu = document.querySelector('#screen-menu .menu-buttons');
+  if (!menu) return;
+  const old = document.querySelector('#bookmarkCard');
+  const bm = bookmarkOf();
+  if (!bm) { if (old) old.remove(); return; }
+  const leftMs = 48 * 60 * 60 * 1000 - (Date.now() - bm.at);
+  const hours = Math.max(1, Math.round(leftMs / 3600000));
+  const soon = hours <= 12;
+  const el = old || document.createElement('button');
+  el.id = 'bookmarkCard';
+  el.className = `btn btn-big btn-primary${soon ? ' bookmark-soon' : ''}`;
+  el.style.width = '100%';
+  el.textContent = `${t('続きから', 'Continue')} — ${bm.label || ''}${bm.score ? ` ・ ${fmt(bm.score)}` : ''}`
+    + ` ・ ${t(`あと${hours}時間`, `${hours}h left`)}`;
+  el.onclick = () => {
+    audio.click();
+    if (!resumeBookmark()) {
+      toast(t('続きを開けませんでした', 'Could not resume that run'), 'err', 3000);
+      refreshBookmarkCard();
+    }
+  };
+  if (!old) menu.insertBefore(el, menu.firstChild);
+}
+window.addEventListener('bba:session-changed', refreshBookmarkCard);
+
 // ---- 👻 幽霊屋敷: メニューのロゴを13回連続タップで解放 ----
 function updateGhostButton() {
   $('#btnGhost').classList.toggle('hidden', !ghostUnlocked());
@@ -609,6 +640,8 @@ $('#btnGhost').onclick = () => {
 };
 
 updateGhostButton();   // 解放済み(またはadmin)なら最初から扉が見えている
+updateLogoHint();      // 🕯 30回遊んだ人にはロゴがかすかに息をする
+refreshBookmarkCard(); // 🔖 預けた1本があれば、開いた瞬間に見える場所へ
 
 const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
 // 超絶コマンド: コナミコマンドの後に BABA↓↑↓↑ を続ける
@@ -858,12 +891,31 @@ $('#btnQuit').onclick = () => {
     })()}
     <div class="modal-buttons">
       <button class="btn btn-ghost" id="qNo">${t('続ける', 'Keep playing')}</button>
+      ${/* 🔖 しおり。中断＝終了しか無かったので、長いモードは「まとまった
+            時間が取れる日」にしか触れなかった。1本だけ預けて、次のスキマで
+            同じ盤面から続けられる。 */''}
+      ${canBookmark() ? `<button class="btn btn-primary" id="qMark">${t('しおりをはさむ', 'Bookmark')}</button>` : ''}
       <button class="btn btn-ai" id="qYes">${t('終了する', 'Quit')}</button>
     </div>`);
   // 「続ける」で必ず時計を戻す。枠外タップ・Esc でも閉じられるので、
   // ボタンの onclick だけに書くと止まったままになる（＝永久に無敵）。
   m.querySelector('#qNo').onclick = closeModal;
   m.querySelector('#qYes').onclick = () => { closeModal(); quitCurrent(); };
+  const mark = m.querySelector('#qMark');
+  if (mark) mark.onclick = () => {
+    audio.click();
+    if (!bookmarkCurrent()) {
+      toast(t('しおりをはさめませんでした', 'Could not save a bookmark'), 'err', 3000);
+      return;
+    }
+    closeModal();
+    toast(t('しおりをはさみました ── メニューの「続きから」で戻れます（48時間）',
+      'Bookmarked — pick it up from “Continue” on the menu (48 hours)'), 'ok', 4500);
+    // メニューへ戻すのは bookmarkCurrent の中（endToMenu を通す）。
+    // view に差し込まれたフックまで畳む必要があるので、自前で showScreen
+    // するのでは足りない。
+    refreshBookmarkCard();
+  };
   if (resume) onModalClosed(resume);
 };
 
@@ -1180,6 +1232,10 @@ async function pollStatus() {
     $('#onlineBadge').classList.remove('hidden');
     setMood(data.mood);
     window.__bbaEvent = data.event || null;
+    // 👁️ 世界の到達段。ソロの観測マスの湧く間隔がこれで縮む
+    //    （modes.js の EyeWatch.every）。session に乗せるのは、モード側が
+    //    main.js を import できないため（循環になる）。
+    session.world = { throneMax: Number(data.throneMax) || 0 };
     // nextEvent を返さないサーバー（自動開催OFF・旧版）では undefined → null。
     window.__bbaNextEvent = data.nextEvent || null;
     updateEventBanner();

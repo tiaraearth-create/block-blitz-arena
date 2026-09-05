@@ -1798,7 +1798,8 @@ async function renderThroneTab() {
       <button class="btn btn-throne" id="shopThroneOpen">${ic('shards', 16)} ${tr('宝物庫をひらく', 'Open the vault')}${
         openable ? tr(`（${openable}品 交換できます）`, ` (${openable} available)`) : ''}</button>
       ${data.shards ? '' : `<p class="muted" style="font-size:12px;margin:0">${tr(
-        '欠片は管理者イベントで手に入ります', 'Shards are earned in Admin Events')}</p>`}
+        '欠片は管理者イベントと、ソロの盤面に混ざる瞳を潰したときに手に入ります',
+        'Shards come from Admin Events — and from the eyes that open on your solo board')}</p>`}
     </div>`;
   const b = grid.querySelector('#shopThroneOpen');
   if (b) b.onclick = () => { audio.click(); import('./adminevent.js').then(m => m.openThroneVault()); };

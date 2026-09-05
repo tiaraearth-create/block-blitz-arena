@@ -1,7 +1,7 @@
 // Game mode controllers: Solo, VS AI, Online (1v1 / 2v2 team / custom rooms),
 // plus the admin-only autopilot.
-import { Engine, shapeSize, Rng, SHAPES, ICE, ICE_CRACKED } from './engine.js';
-import { GameView, MiniBoard } from './game.js';
+import { Engine, shapeSize, Rng, SHAPES, ICE, ICE_CRACKED, EYE } from './engine.js';
+import { GameView, MiniBoard, setEyePhase } from './game.js';
 // 🧩 工房のエディタが盤面・ピースを DOM の小さなグリッドで描くのに使う。
 // engine.grid のマス値を canvas に描く経路は game.js の boardSkin() が担当
 // （PALETTE には 10/11 が無いので、そちらへ渡してはいけない）。
@@ -375,9 +375,120 @@ function rewardsRows(rewards) {
           と出ていたので、中立の表記にする。内訳を出すにはサーバーが
           eventGems / badge の内訳を返す必要がある。 */''}
     ${rewards.gems ? `<div class="rs-row"><span>${ic('gems')} ${t('ジェム', 'Gems')}</span><b>+${fmt(rewards.gems)}</b></div>` : ''}
+    ${/* 👑 王座の欠片。長らく管理者イベントでしか増えなかったが、ソロの
+          観測マスからも入るようになった。入った回だけ出す。 */''}
+    ${rewards.shards ? `<div class="rs-row"><span>${ic('shards')} ${t('王座の欠片', 'Throne Shards')}</span><b>+${fmt(rewards.shards)}</b></div>` : ''}
     <div class="rs-row"><span>${ic('battlepass')} ${t('パスXP', 'Pass XP')}</span><b>+${fmt(rewards.bpXp)}</b></div>
     <div class="rs-row"><span>${ic('xp')} ${t('アカウントXP', 'Account XP')}</span><b>+${fmt(rewards.accXp)}</b></div>
     ${shareRow()}`;
+}
+
+// ---------------------------------------------------------------------------
+// 🔖 しおり ── 走行を預けて、次のスキマで同じ盤面から続ける
+//
+// 40分のダンジョンも、ボスラッシュも、長いカオスも、いまは中断＝終了しかない。
+// つまり「まとまった時間が取れる日」にしか触れないモードが大量にある。
+// 電車で3分しか座れない人のために、1本だけ預けられるようにする。
+//
+// 預けるのは engine の状態（saveState）と、モードが自分で足す少数の控え。
+// 着手ログの再生では戻せない ── お邪魔・氷・冷却セル・観測マスは
+// Math.random() で盤面に書き込まれるので、同じ手を並べても盤面が一致しない。
+//
+// 1枚だけ・48時間で腐る。腐る前日はメニューのカードが赤くなる。
+// ⚠ 対象は「自分だけで完結する」モードに限る。サーバーが進行を持つモード
+//    （対戦・協力・断罪・管理者イベント）と、公平さが命のモード
+//    （デイリー・ウィークリー・タイムアタック）は預けない ── 前者は相手も
+//    サーバーも待ってくれないし、後者は「盤面を見てから続きを考える時間」を
+//    無制限に取れることになって、全員同じ条件という前提が壊れる。
+const BOOKMARK_KEY = 'bba_bookmark';
+const BOOKMARK_TTL_MS = 48 * 60 * 60 * 1000;
+// いま預けられるモード。**実際に戻せることを確かめたものだけ**を並べる。
+// ここに足すときは、そのモードに bookmarkExtra() / bookmarkRestore() を
+// 書いて、走行の途中で預けて戻して同じ盤面になることを確かめること
+// （engine 以外に進み具合を持っているモードは、それを写さないと
+//  「盤面は戻ったのに階だけ1階から」のような戻り方をする）。
+//
+// ダンジョンとボスラッシュは、いまはここに入れていない ── 遺物・ボスの残りHP・
+// 予告の状態まで写す必要があり、しかも既にチェックポイントで階ごとに再開できる。
+// 先に「engine だけで成立するモード」で形を確かめてから広げる。
+const BOOKMARKABLE = new Set(['solo', 'meltdown', 'survival', 'chain', 'ghost']);
+
+// 預けたモードごとの始め方。start() を呼んでから engine を差し替える。
+const BOOKMARK_START = {
+  solo: () => startSolo(),
+  meltdown: () => startMeltdown(),
+  survival: () => startSurvival(),
+  chain: () => startChain(),
+  ghost: () => startGhost(),
+};
+
+/** しおりから続きを始める。戻せたら true。 */
+export function resumeBookmark() {
+  const bm = bookmarkOf();
+  if (!bm || !BOOKMARK_START[bm.mode]) return false;
+  clearBookmark();          // 先に捨てる（途中で失敗しても腐った控えを残さない）
+  // メニューに残っているカードも一緒に片付ける。控えだけ消してカードが残ると、
+  // 走行中にメニューへ戻ったときに「押しても何も起きないカード」になる。
+  const card = document.getElementById('bookmarkCard');
+  if (card) card.remove();
+  BOOKMARK_START[bm.mode]();
+  const m = currentMode;
+  if (!m || !m.engine) return false;
+  if (!m.engine.restoreState(bm.engine)) return false;
+  // 盤面と手札が入れ替わったので、掴んでいるものと選択は捨てる。
+  const v = getView();
+  if (v) { v.drag = null; v.sel = null; v.spawnAnim.clear(); }
+  if (typeof m.bookmarkRestore === 'function') m.bookmarkRestore(bm.extra);
+  if (typeof m.updateHud === 'function') m.updateHud();
+  updateRerollHud(m.engine);
+  toast(t('続きから始めます', 'Picking up where you left off'), 'ok', 2600);
+  return true;
+}
+
+export function bookmarkOf() {
+  try {
+    const v = JSON.parse(localStorage.getItem(BOOKMARK_KEY) || 'null');
+    if (!v || !v.mode || !v.engine) return null;
+    if (Date.now() - (v.at || 0) > BOOKMARK_TTL_MS) { localStorage.removeItem(BOOKMARK_KEY); return null; }
+    return v;
+  } catch { return null; }
+}
+export function clearBookmark() { try { localStorage.removeItem(BOOKMARK_KEY); } catch { /* ignore */ } }
+
+function saveBookmark(mode) {
+  if (!mode || !mode.engine || !BOOKMARKABLE.has(mode.mode)) return false;
+  try {
+    localStorage.setItem(BOOKMARK_KEY, JSON.stringify({
+      at: Date.now(),
+      mode: mode.mode,
+      engine: mode.engine.saveState(),
+      // モードが自分で足したいもの（階・ウェーブ・熱・深度・遺物…）。
+      // 持たないモードは undefined でよい。
+      extra: typeof mode.bookmarkExtra === 'function' ? mode.bookmarkExtra() : null,
+      // 何の続きかを画面に出すための見出し。
+      label: typeof mode.bookmarkLabel === 'function' ? mode.bookmarkLabel() : '',
+      score: mode.engine.score | 0,
+    }));
+    return true;
+  } catch { return false; }   // 容量いっぱい／プライベートモード
+}
+
+/** ✕ の確認から呼ぶ。預けられたら true（メニューまで戻したうえで返す）。 */
+export function bookmarkCurrent() {
+  const m = currentMode;
+  if (!m || m.ended || !saveBookmark(m)) return false;
+  m.ended = true;
+  // 後片付けは endToMenu に任せる。ここで destroy() だけして自前でメニューへ
+  // 戻すと、モードが view に差し込んだフック（onIntentPlace / glowCells /
+  // coolCells / modeTheme …）が次のモードへ漏れる ── endToMenu はそれを
+  // 全部畳むために書かれている。
+  endToMenu();
+  return true;
+}
+
+export function canBookmark() {
+  const m = currentMode;
+  return !!(m && !m.ended && m.engine && BOOKMARKABLE.has(m.mode));
 }
 
 export function quitCurrent() {
@@ -1439,6 +1550,112 @@ export function stopAutopilot() {
 // Solo (endless)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 👁️ 観測マス（ゼロの眼）
+//
+// 1人用の盤面に、説明もトーストもなく瞳がひとつ開く。手を置くたび開いていき、
+// 開き切ると盤面が沈んで、そのマスはお邪魔ブロックになっている。開き切る前に
+// 消せば白い波紋と、王座の欠片。
+//
+// なぜこれを作るか:
+//   ・棚卸しに2回「王座の欠片が1人用モードから1粒も入らない」「モード同士が
+//     つながっていない」と書いてあり、その両方を**同じ1マス**で塞ぐ。
+//   ・湧く間隔が db.meta.throneMax（世界がどこまで段を割ったか）で縮む。
+//     👁️断罪という**運営枠の中の出来事が、断罪に一度も出ていない人のソロの
+//     盤面の手触りを変える**。他のどのモードにも無い接続で、他のゲームには
+//     移植できない形をしている。
+//
+// 🔒 秘匿: 湧く速さを在席住人の数や活動から導いてはいけない。導くと、盤面が
+//    「いま何人ボットが居るか」のメーターになる。必ず throneMax だけから決める。
+const EYE_BASE_EVERY = 28;      // 段0のとき、何手ごとに湧くか
+const EYE_MIN_EVERY = 7;        // 世界が進んでも、これより速くはしない
+const EYE_OPEN_MOVES = 6;       // 開き切るまでの手数
+const EYE_SHARDS = 2;           // 潰した1つぶんの王座の欠片
+
+class EyeWatch {
+  constructor(mode) {
+    this.mode = mode;
+    this.cell = -1;
+    this.age = 0;        // 湧いてから何手たったか
+    this.since = 0;      // 前に湧いてから何手たったか
+    this.caught = 0;     // 潰した数（結果画面と欠片の原資）
+    this.missed = 0;     // 開き切らせた数
+    setEyePhase(0);
+  }
+
+  // 世界の到達段が進むほど間隔が縮む。段が上がるのは断罪で人が削ったとき。
+  every() {
+    const dan = Math.max(0, Math.min(7, (session.world && session.world.throneMax) || 0));
+    return Math.max(EYE_MIN_EVERY, EYE_BASE_EVERY - 3 * dan);
+  }
+
+  // 1手ごと。置いた結果（result）を受ける。
+  onPlace(result) {
+    const e = this.mode.engine;
+    if (!e) return;
+    // 消えたなら、そこに眼があったかを見る。盤面の値で確かめる（消えた座標を
+    // 追うより、いま盤面に残っているかを見るほうが取りこぼさない）。
+    if (this.cell >= 0 && e.grid[this.cell] !== EYE) {
+      // 消された（潰した）。お邪魔に変わった場合はここへ来ない（値は 9 だが
+      // それは下の閉じる処理で自分が書いたときだけ）。
+      this.cell = -1;
+      this.age = 0;
+      this.caught++;
+      setEyePhase(0);
+      const v = getView();
+      if (v) { v.reviveFlash(); }
+      audio.coin();
+      return;
+    }
+    if (this.cell >= 0) {
+      this.age++;
+      setEyePhase(Math.min(1, this.age / EYE_OPEN_MOVES));
+      if (this.age >= EYE_OPEN_MOVES) this.close();
+      return;
+    }
+    this.since++;
+    if (this.since >= this.every()) this.spawn();
+  }
+
+  spawn() {
+    const e = this.mode.engine;
+    const empty = [];
+    for (let k = 0; k < 64; k++) if (!e.grid[k]) empty.push(k);
+    // 盤面が詰まりかけているときは湧かせない（置き場を奪って窒息させない）。
+    if (empty.length < 8) return;
+    const k = empty[(Math.random() * empty.length) | 0];
+    e.grid[k] = EYE;
+    // メルトダウンの spawnCool と**同じ順序**。湧かせる → 行を片付ける →
+    // 詰み判定。逆にすると、消えれば8マス空く盤面で窒息と誤判定する。
+    const cleared = e.resolveLines();
+    if (!e.hasAnyMove()) { e.grid[k] = 0; return; }
+    if (cleared && cleared.lineCount && e.grid[k] !== EYE) return;   // 湧いた瞬間に自分ごと消えた
+    this.cell = k;
+    this.age = 0;
+    this.since = 0;
+    setEyePhase(0);
+    const v = getView();
+    if (v && v.spawnAnim) v.spawnAnim.set(k, v.time);
+  }
+
+  // 開き切った。そのマスはお邪魔ブロックになる。
+  close() {
+    const e = this.mode.engine;
+    if (this.cell >= 0 && e.grid[this.cell] === EYE) e.grid[this.cell] = 9;
+    this.cell = -1;
+    this.age = 0;
+    this.since = 0;
+    this.missed++;
+    setEyePhase(0);
+    const v = getView();
+    if (v) { v.screenFlash = 0.3; if (v.shake !== undefined) v.shake = 8; }
+    audio.bossAttack();
+    // 盤面が変わったので、詰みの判定は game.js の見張り（_checkOver）に任せる。
+  }
+
+  destroy() { setEyePhase(0); }
+}
+
 class SoloMode {
   constructor() { this.mode = 'solo'; }
 
@@ -1457,6 +1674,8 @@ class SoloMode {
     v.inputLocked = false;
     v.onPlace = r => this.onPlace(r);
     v.onGameOver = () => this.finish();
+    // 👁️ 観測マス。ソロにだけ混ざる（説明もトーストも出さない）。
+    this.eye = new EyeWatch(this);
     this.updateHud();
     updateRerollHud(this.engine);
     updateAutoBtn();
@@ -1476,7 +1695,10 @@ class SoloMode {
     $('#hudSub').textContent = `BEST ${fmt(Math.max(this.best(), this.engine.score))}`;
   }
 
-  onPlace() { this.updateHud(); }
+  onPlace(result) {
+    if (this.eye) this.eye.onPlace(result);
+    this.updateHud();
+  }
 
   async finish() {
     if (this.ended) return;
@@ -1487,6 +1709,9 @@ class SoloMode {
     const rewards = await submitResult({
       mode: 'solo', score: e.score, lines: e.linesCleared,
       maxCombo: e.maxCombo, duration: (Date.now() - this.startedAt) / 1000, won: false,
+      // 👁️ 潰した観測マスの数。王座の欠片の原資になるので、
+      // サーバー側で 1走行の上限まで丸めてから払う。
+      ...(this.eye && this.eye.caught ? { eyes: this.eye.caught } : {}),
     });
     // await 中に✕→終了でメニューへ戻っていたら、結果モーダルをメニューの上に
     // 出さない（currentMode 無しで start() する壊れた run を防ぐ）。
@@ -1499,8 +1724,12 @@ class SoloMode {
         <div class="rs-row"><span>${t('スコア', 'Score')}</span><b>${fmt(e.score)}</b></div>
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
+        ${this.eye && (this.eye.caught || this.eye.missed)
+          ? `<div class="rs-row"><span>${ic('mode_zero', 14)} ${t('観測', 'Observed')}</span><b>${this.eye.caught}／${this.eye.caught + this.eye.missed}</b></div>` : ''}
         ${rewardsRows(rewards)}
       </div>
+      ${this.eye && this.eye.caught
+        ? `<p class="muted center" style="font-size:12px;margin:2px 0 0">……見ていました</p>` : ''}
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
         <button class="btn btn-primary" id="rAgain">${t('もう一度', 'Play again')}</button>
@@ -1529,6 +1758,23 @@ class MeltdownMode {
     this.mode = 'meltdown';
     this.usesIntent = true;
   }
+
+  // 🔖 しおり。engine 以外でこの走行を成り立たせているものだけを預ける。
+  bookmarkExtra() {
+    return { heat: this.heat, maxHeat: this.maxHeat, placedSince: this.placedSince,
+      coolCells: [...(this.coolCells || [])] };
+  }
+  bookmarkRestore(x) {
+    if (!x) return;
+    this.heat = Number(x.heat) || 0;
+    this.maxHeat = Number(x.maxHeat) || 0;
+    this.placedSince = Number(x.placedSince) || 0;
+    this.coolCells = new Set((x.coolCells || []).map(n => n | 0));
+    this.pruneCool();
+    const v = getView(); if (v) v.coolCells = this.coolCells;
+    this.updateHud();
+  }
+  bookmarkLabel() { return t(`メルトダウン 熱${Math.round(this.heat)}%`, `Meltdown — ${Math.round(this.heat)}% heat`); }
 
   start() {
     showScreen('game');
@@ -7610,6 +7856,17 @@ class SurvivalMode {
     this.wave = 0;
   }
 
+  // 🔖 しおり。次の波までの残りは**残り時間**で持つ
+  //    （絶対時刻のまま預けると、翻日開いた瞬間に波が一気に降る）。
+  bookmarkExtra() { return { wave: this.wave, nextIn: Math.max(0, this.nextAt - Date.now()) }; }
+  bookmarkRestore(x) {
+    if (!x) return;
+    this.wave = Number(x.wave) || 0;
+    this.nextAt = Date.now() + Math.max(3000, Number(x.nextIn) || 15000);
+    this.updateHud();
+  }
+  bookmarkLabel() { return t(`サバイバル W${this.wave}`, `Survival — wave ${this.wave}`); }
+
   start() {
     showScreen('game');
     $('#oppPanel').classList.add('hidden');
@@ -10735,6 +10992,16 @@ class ChainMode {
     this.noItems = true;
     this.timers = [];
   }
+
+  // 🔖 しおり。連鎖の途中（cascading）は預けない ── 落ちている途中の
+  //    盤面を写しても、戻したときに続きから落とせない。
+  bookmarkExtra() { return this.cascading ? null : { maxChain: this.maxChain, chainScore: this.chainScore }; }
+  bookmarkRestore(x) {
+    if (!x) return;
+    this.maxChain = Number(x.maxChain) || 0;
+    this.chainScore = Number(x.chainScore) || 0;
+  }
+  bookmarkLabel() { return t(`連鎖カスケード 最大${this.maxChain}連鎖`, `Chain Cascade — best ${this.maxChain}`); }
 
   after(ms, fn) { const id = setTimeout(fn, ms); this.timers.push(id); return id; }
   clearTimers() { for (const id of this.timers) clearTimeout(id); this.timers = []; }

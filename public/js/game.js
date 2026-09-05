@@ -1,5 +1,5 @@
 // GameView: canvas renderer + input controller for one board (player or spectator).
-import { SIZE, shapeSize, ICE, ICE_CRACKED } from './engine.js';
+import { SIZE, shapeSize, ICE, ICE_CRACKED, EYE } from './engine.js';
 import { PALETTE, getSkin, getBoard } from './themes.js';
 import { ParticleSystem } from './particles.js';
 import { audio } from './audio.js';
@@ -131,9 +131,64 @@ function withIce(draw) {
   return wrapped;
 }
 
+// ---------------------------------------------------------------------------
+// 👁️ 観測マス（engine.js の EYE=12）
+// ---------------------------------------------------------------------------
+// 氷とまったく同じ理由でスキン関数を横取りする（PALETTE は 9 番までしか無く、
+// 12 を渡すと PALETTE[ci] の分割代入がその場で落ちる ── しかも render() の
+// 例外は握り潰されるので、**盤面だけが黙って白くなる**）。
+// ⚠ 包む順は withEye を**いちばん外側**にすること。内側に入れると
+//   withIce が先に 12 を素の draw へ渡してしまい、上の事故がそのまま起きる。
+export function drawEyeBlock(ctx, x, y, s, alpha = 1, phase = 0) {
+  const a = Math.max(0, Math.min(1, Number(alpha) >= 0 ? Number(alpha) : 1));
+  if (a <= 0.02 || !(s > 0)) return;
+  const pad = Math.max(1, s * 0.06);
+  const bs = s - pad * 2;
+  const cx = x + s / 2, cy = y + s / 2;
+  ctx.save();
+  ctx.globalAlpha = a;
+  // 台。盤面から浮かないよう、暗い石の色に寄せる。
+  ctx.fillStyle = 'rgba(18,16,28,0.92)';
+  ctx.beginPath();
+  const r = Math.max(2, bs * 0.18);
+  ctx.roundRect(x + pad, y + pad, bs, bs, r);
+  ctx.fill();
+  // 眼。開き具合は phase（0=閉じ 1=見開き）。
+  const open = Math.max(0.08, Math.min(1, Number(phase) || 0));
+  const ew = bs * 0.42;
+  const eh = ew * (0.16 + 0.62 * open);
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, ew, eh, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(232,226,255,0.94)';
+  ctx.fill();
+  // 瞳。開くほど締まる。
+  ctx.beginPath();
+  ctx.arc(cx, cy, Math.max(1, eh * 0.62), 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(28,10,42,0.96)';
+  ctx.fill();
+  ctx.restore();
+}
+
+const _eyeSkins = new WeakMap();
+function withEye(draw) {
+  let wrapped = _eyeSkins.get(draw);
+  if (!wrapped) {
+    wrapped = function (ctx, x, y, s, ci, alpha = 1) {
+      if (ci === EYE) { drawEyeBlock(ctx, x, y, s, alpha, eyePhase()); return; }
+      draw(ctx, x, y, s, ci, alpha);
+    };
+    _eyeSkins.set(draw, wrapped);
+  }
+  return wrapped;
+}
+// 開き具合はモード側（EyeWatch）が動かす。描画側は読むだけ。
+let _eyePhase = 0;
+export function setEyePhase(v) { _eyePhase = Math.max(0, Math.min(1, Number(v) || 0)); }
+function eyePhase() { return _eyePhase; }
+
 // 盤面のマス値（engine.grid 由来）を描くときは必ずこれを通す。
 // 手札・ゴーストは piece.color(1..8) しか出さないので素の getSkin() で足りる。
-export function boardSkin(skinId) { return withIce(getSkin(skinId)); }
+export function boardSkin(skinId) { return withEye(withIce(getSkin(skinId))); }
 
 export class GameView {
   constructor(canvas, opts = {}) {

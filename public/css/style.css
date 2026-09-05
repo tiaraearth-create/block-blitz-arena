@@ -1865,6 +1865,13 @@ body[data-screen="game"] #topbar { display: none; }
   .ult-btn b { font-size: 10px; }
 }
 
+/* 🔖 しおりが腐りかけている（残り12時間以下）。急かしはしないが、
+   気づかないうちに消えていた、にはしない。 */
+#bookmarkCard.bookmark-soon {
+  border: 1px solid var(--red);
+  box-shadow: 0 0 0 1px rgba(255, 90, 90, .25) inset;
+}
+
 /* 🌀 開催中の目印。カオスは常時遊べるようになったので、イベントで変わるのは
    実入り（コイン1.5倍）だけ ── その差だけをボタンの上で伝える。
    .staff-only と同じ作りだが色と字が違い、両方が付くことはない。 */

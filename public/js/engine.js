@@ -12,6 +12,14 @@ export const SIZE = 8;
 // resolveLines() の判定は素通りし、従来どおりの挙動になる。
 export const ICE = 10;
 export const ICE_CRACKED = 11;
+// 👁️ 観測マス（ゼロの眼）。1人用の盤面にだけ、説明なく開く。
+//
+//   マス値としては**ふつうのブロックとまったく同じ**に扱う ── resolveLines は
+//   「ICE 以外は消える」判定なので、12 を足しても既存の17モードが素通りする
+//   （engine のゴールデンマスターに一切触らない）。違うのは見た目と、
+//   モード側が「これは眼だ」と知って数えることだけ。
+//   氷が通ったのと同じ道（定数 → game.js のスキン横取り → 描画）を写す。
+export const EYE = 12;
 
 // mulberry32 — fast deterministic PRNG
 export class Rng {
@@ -393,4 +401,64 @@ export class Engine {
   // 注意: server/battle.js の sanitizeGrid() は 9 までしか通さないので、
   // 対戦の相手ミニ盤面に氷を映したいならサーバー側の上限も上げる必要がある。
   snapshot() { return this.grid.slice(); }
+
+  // ---------------------------------------------------------------------------
+  // 🔖 走行を丸ごと預ける／戻す（しおり）
+  //
+  // 40分のダンジョンも、電車で3分しか座れない人が触れるようにしたい。
+  // 中断＝終了しか無かったので、長いモードは「まとまった時間が取れる日」しか
+  // 遊べなかった。
+  //
+  // 着手ログの再生で戻す案も考えたが、それでは足りない ── お邪魔・氷・
+  // 冷却セル・観測マスのように **Math.random() で盤面へ書き込むもの**が
+  // あるので、同じ手を並べても盤面が一致しない。状態そのものを写す。
+  //
+  // rng は Rng の内部が uint32 ひとつ（s）だけなので、それを持てば
+  // ピース列も1つ違わず続く。hand はピースの実体を持つが、cells は
+  // 生成のたびに同じ形になるので、形と色だけ保存して組み直す。
+  saveState() {
+    return {
+      v: 1,
+      seed: this.rng.s >>> 0,
+      grid: this.grid.slice(),
+      hand: this.hand.map(p => (p ? { cells: p.cells.map(c => c.slice()), color: p.color, frozenUntil: 0 } : null)),
+      score: this.score, streak: this.streak, linesCleared: this.linesCleared,
+      maxCombo: this.maxCombo, piecesPlaced: this.piecesPlaced,
+      rerolls: this.rerolls, infiniteReroll: this.infiniteReroll,
+      scoreMult: this.scoreMult, feverMult: this.feverMult,
+      chaosBig: this.chaosBig, chaosMini: this.chaosMini,
+      comboBonusMult: this.comboBonusMult, streakShield: this.streakShield,
+      ult: this.ult, ultRate: this.ultRate, ultUses: this.ultUses,
+      // ⏱ 期限つきの効果は**残り時間**で持つ。絶対時刻のまま預けると、
+      //    翌日に開いたときには必ず切れている（あるいは、時計を戻すと
+      //    永久に効いたままになる）。
+      feverLeft: Math.max(0, this.feverUntil - Date.now()),
+      fortressLeft: Math.max(0, this.fortressUntil - Date.now()),
+    };
+  }
+
+  restoreState(st) {
+    if (!st || st.v !== 1 || !Array.isArray(st.grid) || st.grid.length !== SIZE * SIZE) return false;
+    this.rng = new Rng(st.seed >>> 0);
+    this.grid = st.grid.slice();
+    this.hand = (st.hand || []).map(p => (p && Array.isArray(p.cells)
+      ? { cells: p.cells.map(c => c.slice()), color: p.color | 0, frozenUntil: 0 }
+      : null));
+    while (this.hand.length < 3) this.hand.push(null);
+    const n = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+    this.score = n(st.score); this.streak = n(st.streak);
+    this.linesCleared = n(st.linesCleared); this.maxCombo = n(st.maxCombo);
+    this.piecesPlaced = n(st.piecesPlaced);
+    this.rerolls = n(st.rerolls); this.infiniteReroll = !!st.infiniteReroll;
+    this.scoreMult = n(st.scoreMult, 1); this.feverMult = n(st.feverMult, 2);
+    this.chaosBig = !!st.chaosBig; this.chaosMini = !!st.chaosMini;
+    this.comboBonusMult = n(st.comboBonusMult, 1); this.streakShield = !!st.streakShield;
+    this.ult = n(st.ult); this.ultRate = n(st.ultRate, 1); this.ultUses = n(st.ultUses);
+    this.feverUntil = st.feverLeft > 0 ? Date.now() + n(st.feverLeft) : 0;
+    this.fortressUntil = st.fortressLeft > 0 ? Date.now() + n(st.fortressLeft) : 0;
+    // 手札が全部 null の状態で預かることは無いが、壊れた控えでも詰まないように。
+    if (this.hand.every(p => !p)) this.refillHand();
+    this.over = !this.hasAnyMove();
+    return true;
+  }
 }

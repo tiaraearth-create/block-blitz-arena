@@ -12,6 +12,10 @@ export const session = {
   token: localStorage.getItem(TOKEN_KEY) || null,
   user: null,       // public user object from server
   season: null,
+  // 🌍 世界の進み具合（/api/status が返す throneMax など）。main.js が
+  //    25秒ごとに書き込み、モード側が読む ── モードから main.js を import
+  //    すると循環になるので、共有の置き場としてここを使う。
+  world: { throneMax: 0 },
 };
 
 export function setToken(token) {

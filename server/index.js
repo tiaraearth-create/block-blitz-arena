@@ -861,6 +861,10 @@ const FIRST_RESULT_SCORE_CAP = 300_000;
 // 🧩 パズル遺跡の「その日そのステージ番号の勝利は1回まで」の印が覚える件数。
 // backup.js の合流にも同名の頭押さえがある（あちらは細工したファイル対策）。
 const PUZ_WIN_DAY_KEEP = 200;
+// 👁️ 1走行で潰せる観測マスの上限。長く粘るほど無限に増える蛇口にしない
+// （段0なら28手ごとなので、普通に遊んでここに当たることはほぼ無い）。
+const EYE_MAX_PER_RUN = 12;
+const EYE_SHARDS_EACH = 2;
 function seedLastResultAt(user) {
   const s = user.stats;
   if (Number.isFinite(s.lastResultAt) && s.lastResultAt > 0) return s.lastResultAt;
@@ -1031,7 +1035,7 @@ const BUGREPORT_CAP = 300;
 const ADMIN_KNOWN_BADGES = ['bronze', 'silver', 'gold', 'oni', 'kami', 'souzou', 'maou', 'rush', 'dungeon', 'tourney', 'royale', 'adminevent', 'abyss', 'under', 'heaven', 'zero', 'zero7', 'weekly1', 'puzzle', 'dig', 'crown2', 'crown3', 'crown5', 'crown7', 'ghost', 'daily7', 'guildquest'];
 const SERVER_JUDGED_MODES = new Set(['royale', 'tournament', 'pvp', 'team', 'raid', 'coop', 'attack']);
 
-function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, stars, stageCode, beatChampion, trusted, preClamped, unrated }) {
+function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duration, won, drew, bossId, floor, wave, ults, items, pieces, floors, sprintDur, rank, depth, stage, day, attemptId, perfectClears, stars, stageCode, eyes, beatChampion, trusted, preClamped, unrated }) {
   const extraBossId = typeof bossId === 'string' ? bossId : null;
   // mode はキー生成にも使う（下の `${mode}Prev`）。クライアント申告なので、
   // 長さを切っておかないと巨大文字列で stats を無限に太らせられる（実測で
@@ -1074,6 +1078,11 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   stage = clamp(stage, 9999);
   // ⭐ パズル遺跡のステージ評価。0〜3 しか意味を持たない。
   stars = clamp(stars, 3);
+  // 👁️ 潰した観測マスの数。1手に1つより多くは絶対に湧かないので、
+  //    「その走行で置いた手数」が申告の天井になる（pieces は上で clamp 済み）。
+  //    さらに1走行あたりの上限で頭を押さえる ── 長く粘るほど無限に増える
+  //    蛇口にはしない。
+  eyes = Math.min(clamp(eyes, EYE_MAX_PER_RUN), Math.floor((pieces || 0) / 2));
   // ⛓️連鎖カスケードの最大連鎖数。chainMult の上限が ×64（= 2^(連鎖-1)）なので
   // 現実的な連鎖数は高々そのあたり。クライアント申告なので他のテレメトリと
   // 同じ作法で頭を押さえる（実績 ach_chain5/10 の原資になるため）。
@@ -1885,8 +1894,25 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   });
   saveDb();
   refreshThrones(true);   // 👑 did this run take (or defend) a #1 spot?
+  // 👁️ 観測マスを潰したぶんの王座の欠片。
+  //
+  //    棚卸しに「王座の欠片が1人用モードから1粒も入らない」と書いてあり、
+  //    実際そのとおりで、管理者イベントに出られない日は1粒も増えなかった。
+  //    ソロで潰した数だけ配る ── 世界が段を割るほど眼が濃く湧くので、
+  //    👁️断罪という運営枠の中の出来事が、断罪に一度も出ていない人の
+  //    ソロの実入りにまで届く。
+  let eyeShards = 0;
+  if (mode === 'solo' && eyes > 0) {
+    eyeShards = eyes * EYE_SHARDS_EACH;
+    user.shards = (user.shards || 0) + eyeShards;
+    s.eyesCaught = (s.eyesCaught || 0) + eyes;
+  }
+
   return {
     coins, bpXp, accXp, score, badge, gems: gems + eventGems,
+    // 欠片は「入ったときだけ」載せる（0 の行を毎回出すと、何も起きていない
+    // 走行の結果画面にまで欄が増える）。
+    ...(eyeShards ? { shards: eyeShards } : {}),
     streak: s.winStreak || 0, streakBonus,
     missionsCompleted,
     eventCoins, eventGems,
@@ -4339,6 +4365,14 @@ const RESULT_FIELDS = [
   'mode', 'score', 'lines', 'maxCombo', 'duration', 'won', 'drew',
   'bossId', 'floor', 'wave', 'ults', 'items', 'pieces', 'floors',
   'sprintDur', 'rank', 'depth', 'stage',
+  // 👁️ 潰した観測マスの数。**王座の欠片の、1人用モードで初めての蛇口**。
+  //
+  //    棚卸しに「王座の欠片が1人用モードから1粒も入らない」と書いてあり、
+  //    実際、管理者イベントに出られない日は1粒も増えなかった。
+  //    報酬になる申告なので、下で 0〜EYE_MAX_PER_RUN に丸めたうえで
+  //    「その走行に実際に置いた手数」でも頭を押さえる（1手に1つより多くは
+  //    絶対に湧かないので、それ以上の申告は嘘だと分かる）。
+  'eyes',
   // 🛠️ 工房のステージ識別子（6文字の共有コード）。
   //
   //    クライアントは v2.3x から送っていたのに、この一覧に無かったので
