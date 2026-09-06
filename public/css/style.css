@@ -435,6 +435,29 @@ body {
 }
 #oppCards.strip .opp-card.ally { background: rgba(94,232,110,0.1); border-color: rgba(94,232,110,0.35); }
 #oppCards.strip .opp-card canvas { display: none; }
+
+/* 👁 注目の1枚。
+   16人ルームでは相手が15人いる。全員ぶんを並べると1枚 42px（1マス5.25px）
+   にしかならず、「小さすぎて何も読めない」状態だった。逆に大きいまま並べると
+   相手パネルだけで画面の半分近く（実測 359px / 812px）を占める。
+   **1枚だけ大きく出し、残りは名前と点の帯にする。** 多人数戦で本当に見たいのは
+   「首位がどこまで積んでいるか」と「攻撃してきた相手の盤面」で、15枚を
+   同時に眺めることではない。 */
+#oppCards.strip .opp-card.is-focus {
+  flex: 0 0 100%; flex-direction: column; align-items: center;
+  background: none; border: none; border-radius: 10px; padding: 0 0 2px;
+  order: -1;              /* 帯より上に置く（DOMの順を変えずに済む） */
+}
+#oppCards.strip .opp-card.is-focus canvas {
+  display: block; width: var(--opp-focus, 150px); height: var(--opp-focus, 150px);
+  margin: 0 auto; border-radius: 10px; background: rgba(0,0,0,0.25);
+}
+#oppCards.strip .opp-card.is-focus .opp-name { font-size: 12px; max-width: none; }
+#oppCards.strip .opp-card.is-focus .opp-score { font-size: 19px; }
+#oppCards.strip .opp-card.is-focus .opp-combo { font-size: 11px; }
+/* 押せることを見せる。留めている間は枠を出す。 */
+#oppCards.strip.focus-mode .opp-card { cursor: pointer; }
+#oppCards.strip .opp-card.is-pinned { outline: 2px solid var(--accent, #43d9e8); outline-offset: 2px; }
 /* Three chips have to share ~337px, so the name yields before the score does. */
 #oppCards.strip .opp-name { font-size: 10.5px; max-width: 56px; flex: 0 1 auto; }
 #oppCards.strip .opp-score { font-size: 13px; flex: 0 0 auto; }
@@ -1719,8 +1742,11 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
 }
 
 @media (max-width: 520px) {
-  .opp-card canvas { width: 60px; height: 60px; }
-  #oppCards.compact .opp-card canvas { width: 48px; height: 48px; }
+  /* ⚠ ここで幅を直に書くと、枚数から決めた --opp-cell を**上書きしてしまう**
+     （同じ詳細度で後に来るので勝つ）。16人ルームでカードが縮まず、
+     折り返しても収まらなくなる。既定値だけを下げて、変数は生かす。 */
+  .opp-card canvas { width: var(--opp-cell, 60px); height: var(--opp-cell, 60px); }
+  #oppCards.compact .opp-card canvas { width: var(--opp-cell, 48px); height: var(--opp-cell, 48px); }
   .hud-score { font-size: 28px; }
 
   /* ---- menu fits a phone: smaller logo/buttons, scroll if needed ---- */
@@ -1812,7 +1838,7 @@ body[data-screen="game"] #topbar { display: none; }
   .boss-panel { right: calc(6px + env(safe-area-inset-right, 0px)); top: 46px; }
   #oppCards.strip { flex-direction: column; align-items: stretch; }
   #oppCards.strip .opp-card { justify-content: space-between; }
-  .opp-card canvas, #oppCards.compact .opp-card canvas { width: 44px; height: 44px; }
+  .opp-card canvas, #oppCards.compact .opp-card canvas { width: var(--opp-cell, 44px); height: var(--opp-cell, 44px); }
   .game-canvas-wrap { min-height: 180px; }
   /* 横持ちでは相手パネル(左)とボスパネル(右)が絶対配置で浮くので、
      アイテムバーがその下敷きになって押せなくなっていた ──

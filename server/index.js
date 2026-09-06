@@ -1082,6 +1082,51 @@ const GRIND_DAILY_CAP = {
   bpXp: grindCap('GRIND_BPXP_DAY', 120000),
   accXp: grindCap('GRIND_ACCXP_DAY', 90000),
 };
+// ---------------------------------------------------------------------------
+// 1日の枠を数える口
+// ---------------------------------------------------------------------------
+//
+// ⚠ これまで枠を数える処理は applyGameResult の**中**に閉じていた。そのため
+//   「applyGameResult を呼んだあとに、その外でさらに足す」経路が上限を
+//   まるごと素通りしていた:
+//     ・ロイヤルの順位報酬（battle.js。1位 1,200🪙+40💎）
+//     ・PvP の連勝ボーナス（200🪙 × 勝ち続けるだけ）
+//   どちらも**繰り返し稼げる**ので、1日の上限（150,000🪙 / 120💎）を
+//   決めてあることの意味が半分失われていた。枠を数える口を外に出して、
+//   足す側が必ずここを通るようにする。
+//
+// 一度きりの到達報酬（バッジ付きの節目・自己ベスト更新）は**通さない**。
+// あれは「繰り返し稼ぐ」ものではないので、枠を食わせると節目を踏んだ日だけ
+// 普通の稼ぎが消える、という理不尽になる。
+
+/** 🪙/XP の枠から取れるだけ取る。戻り値＝実際に入る量。 */
+function grindTake(user, key, want) {
+  const gs = user.stats;
+  const day = jstDayKey();
+  if (!gs.grindDay || gs.grindDay.day !== day) gs.grindDay = { day, coins: 0, bpXp: 0, accXp: 0 };
+  const cap = GRIND_DAILY_CAP[key];
+  if (!(cap > 0)) return Math.max(0, Math.floor(want) || 0);
+  const got = Math.max(0, Math.min(Math.floor(want) || 0, cap - (Number(gs.grindDay[key]) || 0)));
+  gs.grindDay[key] = (Number(gs.grindDay[key]) || 0) + got;
+  return got;
+}
+
+/**
+ * 💎 の枠から取れるだけ取る。戻り値＝実際に入る量。
+ * 数える先は 💎ドロップと**同じ入れ物**（stats.eventGemDay）にする ──
+ * 「1日に湧く💎の総量」を決めたいのであって、湧き口ごとに別々の上限を
+ * 持たせたいわけではない。分けると、口を1つ足すたびに上限が積み上がる。
+ */
+function gemTake(user, want) {
+  const st = user.stats;
+  const day = jstDayKey();
+  if (!st.eventGemDay || st.eventGemDay.day !== day) st.eventGemDay = { day, got: 0 };
+  const got = Math.max(0, Math.min(Math.floor(want) || 0,
+    GEMDROP_DAILY_CAP - (Number(st.eventGemDay.got) || 0)));
+  st.eventGemDay.got = (Number(st.eventGemDay.got) || 0) + got;
+  return got;
+}
+
 // 🐛報告箱の上限。バグ報告と通報が同じ配列を使うので、値は必ず1つに保つ。
 const BUGREPORT_CAP = 300;
 // サーバーが配りうるバッジの全一覧。管理画面の編集欄（routes/admin.js）と、
@@ -1478,21 +1523,15 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     // スコアを申告するだけの偽の結果は素通りする。💎は課金通貨なので、
     // 「1日にいくらまで湧くか」を決めておかないと歯止めにならない。
     // `s`（= user.stats）の宣言はこの下なので、ここでは使えない（一時的死角）。
-    const st = user.stats;
-    const today = jstDayKey();
-    if (!st.eventGemDay || st.eventGemDay.day !== today) st.eventGemDay = { day: today, got: 0 };
-    const room = Math.max(0, GEMDROP_DAILY_CAP - st.eventGemDay.got);
-    eventGems = Math.min(Math.floor(bonus.gemDrop), room);
+    eventGems = gemTake(user, bonus.gemDrop);
     // 💎 上限に当たった回は**理由を返す**。イベントのバナーは
     //    「1プレイごとにジェムが3個ドロップ」と言い続けるのに、40戦ほどで
     //    上限に達したあとは開催時間が何時間残っていても黙って0になり、
     //    なぜ止まったのかも、いつ戻るのかも出なかった。
     //    隣の👁欠片は既に同じ形で理由を立てている（eyeCapped）。
     if (eventGems < Math.floor(bonus.gemDrop)) gemCapped = true;
-    if (eventGems > 0) {
-      st.eventGemDay.got += eventGems;
-      user.gems += eventGems;
-    }
+    // 枠を減らすのは gemTake の中でやっている（ここで二重に引かない）。
+    if (eventGems > 0) user.gems += eventGems;
   }
 
   // Guild: every game feeds the weekly race, and the guild's level pays a
@@ -1549,19 +1588,12 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 数えたいから ── 倍率の前で数えると、イベント中だけ上限が実質2倍になる。
   // 日付は 💎ドロップと同じ JST の1日。`s`（= user.stats）の宣言はこの下なので
   // ここでは user.stats を直に見る（eventGemDay のブロックと同じ作法・一時的死角）。
-  {
-    const gs = user.stats;
-    const gday = jstDayKey();
-    if (!gs.grindDay || gs.grindDay.day !== gday) gs.grindDay = { day: gday, coins: 0, bpXp: 0, accXp: 0 };
-    const take = (key, want) => {
-      const got = Math.max(0, Math.min(Math.floor(want) || 0, GRIND_DAILY_CAP[key] - (Number(gs.grindDay[key]) || 0)));
-      gs.grindDay[key] = (Number(gs.grindDay[key]) || 0) + got;
-      return got;
-    };
-    coins = take('coins', coins);
-    bpXp = take('bpXp', bpXp);
-    accXp = take('accXp', accXp);
-  }
+  // 枠を数える口は grindTake（モジュールの高さ）に1本化してある。
+  // ここに書き写すと、外から足す経路（ロイヤルの順位報酬・連勝ボーナス）が
+  // 別の数え方をして、上限が実質2倍になる。
+  coins = grindTake(user, 'coins', coins);
+  bpXp = grindTake(user, 'bpXp', bpXp);
+  accXp = grindTake(user, 'accXp', accXp);
 
   user.coins += coins;
   user.xp += accXp;
@@ -1648,7 +1680,10 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
       s.winStreak = (s.winStreak || 0) + 1;
       if (s.winStreak > (s.winStreakBest || 0)) s.winStreakBest = s.winStreak;
       if (s.winStreak >= 2) {
-        streakBonus = Math.min(200, s.winStreak * 20);
+        // ⚠ ここは applyGameResult が枠を数え終わった**あと**なので、
+        //   素直に足すと1日の上限を素通りする。勝ち続けるだけ増える
+        //   （＝繰り返し稼げる）ので、枠を通す。
+        streakBonus = grindTake(user, 'coins', Math.min(200, s.winStreak * 20));
         coins += streakBonus;
         user.coins += streakBonus;
       }
@@ -5194,6 +5229,9 @@ const server = http.createServer(app);
 const battle = initBattle(server, {
   db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, userFromToken,
   MATCH_DURATION,
+  // 1日の枠を数える口。ロイヤルの順位報酬がここを通らないと、
+  // 上限（150,000🪙 / 120💎）を素通りして無制限に湧く。
+  grindTake, gemTake,
   // 🪪 ゲスト名にも登録と同じ厳しさを当てるための2本。
   //   claimName … NFKC で畳み、見えない文字（ゼロ幅など）を落とす
   //   isClaimableName … 長さと文字種（英数字・かな・カナ・漢字）
@@ -5591,6 +5629,7 @@ setContext({
   finalizeWeeklyRankings, refreshThrones,
   // 結果送信の共通処理
   applyGameResult, pickResultFields, seedLastResultAt, GEMDROP_DAILY_CAP, sanitizeReplay,
+  grindTake, gemTake,
   // 知らせるもの・残すもの
   postRealFeed, adminLog, ADMIN_LOG_MAX, BUGREPORT_CAP,
   // 運営まわりの語彙

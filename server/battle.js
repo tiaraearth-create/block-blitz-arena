@@ -132,6 +132,10 @@ const ONLINE_SPAN_MIN_MS = Math.max(0, envNum('ONLINE_SPAN_MIN_MS', 20_000));
 
 export function initBattle(server, deps) {
   const { db, saveDb, applyGameResult, publicUser, levelOf, sanitizeName, MATCH_DURATION } = deps;
+  // 1日の枠を数える口。index.js に1本化してある（別々に数えると上限が実質2倍になる）。
+  // 古い index.js と組み合わせても落ちないよう、無ければ素通しにする。
+  const grindTake = deps.grindTake || ((u, k, want) => Math.max(0, Math.floor(want) || 0));
+  const gemTake = deps.gemTake || ((u, want) => Math.max(0, Math.floor(want) || 0));
   // 予約名判定（無ければ何も予約しない安全側デフォルト）。index.js が渡す。
   const reservedName = deps.reservedName || (() => false);
   // 🪪 名乗る名前の正規化と文字種検査（server/index.js の claimName /
@@ -3416,8 +3420,17 @@ export function initBattle(server, deps) {
         duration: Math.max(1, (Date.now() - r.startedAt) / 1000), won: placement === 1,
       });
       // Placement ladder on top of the normal per-run payout.
-      me.coins += payout.coins;
-      me.gems += payout.gems;
+      //
+      // ⚠ ここは applyGameResult の**外**なので、素直に足すと1日の上限
+      //   （150,000🪙 / 120💎）をまるごと素通りする。ロイヤルは待ち時間さえ
+      //   切れれば何度でも走れるので、1位 1,200🪙+40💎 が無制限に湧いていた。
+      //   💎は1日120個の設計なのに、ロイヤル3勝で使い切る量が上限の外から
+      //   入っていたことになる。順位報酬も「繰り返し稼げる」ものなので枠を通す。
+      //   （バッジ付きの一度きりの節目は別。あちらは通さない。）
+      const paidCoins = grindTake(me, 'coins', payout.coins);
+      const paidGems = gemTake(me, payout.gems);
+      me.coins += paidCoins;
+      me.gems += paidGems;
       const s = me.stats;
       s.royalePlays = (s.royalePlays || 0) + 1;
       s.royaleKills = (s.royaleKills || 0) + (e.kills || 0);

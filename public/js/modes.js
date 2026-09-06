@@ -1364,6 +1364,21 @@ function sizeOppCards(cards, n) {
   cards.classList.toggle('crowded', n > 7);
 }
 
+// 👁 相手が何人以上なら「1枚だけ大きく」に切り替えるか。
+//   5人までは全員ぶん並べても 74px を保てる（実測）。6人からは縮み始めるので、
+//   そこからは1枚を大きく見せるほうが役に立つ。
+const OPP_FOCUS_FROM = 6;
+
+/**
+ * 注目の盤面の一辺。相手パネルが画面を食いすぎないように、
+ * **画面の高さから決める**（横は 375px の端末でも 150px は入る）。
+ */
+function focusBoardPx() {
+  const h = (typeof window !== 'undefined' && window.innerHeight) || 800;
+  // 812pxの端末で 150px（1マス18.75px）、大きい画面では 200px まで。
+  return Math.max(110, Math.min(200, Math.round(h * 0.185)));
+}
+
 function oppSkinId(o) {
   let on = true;
   try { on = getSettings().oppSkins !== false; } catch { /* 設定が読めなければ使う */ }
@@ -3358,6 +3373,7 @@ class VersusBase {
     this.oppList.sort((a, b) => (b.isAlly ? 1 : 0) - (a.isAlly ? 1 : 0));
     cards.classList.toggle('compact', this.oppList.length > 1);
     sizeOppCards(cards, this.oppList.length);
+    this.pinnedSlot = null;   // 「この人を見る」で留めた相手（null＝首位を自動で追う）
     for (const o of this.oppList) {
       const card = document.createElement('div');
       card.className = `opp-card ${o.isAlly ? 'ally' : ''}`;
@@ -3405,7 +3421,13 @@ class VersusBase {
   applyOppDensity(density) {
     this.density = density;
     const cards = $('#oppCards');
-    cards.classList.toggle('strip', density === 'strip');
+    // 👁 相手が多いときの「カード表示」は、全員を小さく並べるのではなく
+    //    **1枚だけ大きく＋残りは帯**にする（見た目の骨格は strip を借りる）。
+    const focusMode = density !== 'strip' && (this.oppList || []).length >= OPP_FOCUS_FROM;
+    this.focusMode = focusMode;
+    cards.classList.toggle('strip', density === 'strip' || focusMode);
+    cards.classList.toggle('focus-mode', focusMode);
+    if (focusMode) cards.style.setProperty('--opp-focus', `${focusBoardPx()}px`);
     const btn = $('#btnOppDensity');
     if (btn) {
       btn.textContent = density === 'strip' ? '⤢' : '▾';
@@ -3413,14 +3435,88 @@ class VersusBase {
         ? t('仲間の盤面を表示', 'Show ally boards')
         : t('コンパクト表示にする', 'Switch to compact');
     }
+    // ⚠ 印を**先に**付ける。MiniBoard.render() は canvas の実寸が 0 のときに
+    //   何もせず戻る（見えていない板を描いても無駄なので、正しい振る舞い）。
+    //   ところが注目の canvas は `.is-focus` が付くまで display:none のままで、
+    //   先に MiniBoard を作ると初回の setGrid が空振りし、**相手が次の手を
+    //   打つまで（最大2.6秒）大きい盤が真っ暗**になる。実機で実際に空だった。
+    if (focusMode) this.paintFocus();
+    else {
+      for (const el of cards.querySelectorAll('.opp-card')) el.classList.remove('is-focus', 'is-pinned');
+    }
+
+    // ⚠ **採寸の前にレイアウトを流し切る。**
+    //   クラス（.is-focus）と --opp-focus を付けた直後に
+    //   getBoundingClientRect() を読むと、ブラウザはまだレイアウトを
+    //   流しておらず、注目の板が 150×75 と測れていた（実測: canvas の
+    //   ビットマップが 300×150 になり、盤は真っ暗のまま）。
+    //   offsetHeight を1回読むと、その場で同期的にレイアウトが確定する。
+    //   ⚠ requestAnimationFrame で後追いするのは**当てにならない** ──
+    //     タブが背面にあると rAF は一度も呼ばれない（実測で確認）。
+    //     試合の開始直後に画面を切り替えた人の板が、永久に真っ暗になる。
+    void cards.offsetHeight;
+
+    // 注目のときは1枚ぶんしか盤を作らない（15枚ぶんの描画をやめる）。
+    const want = focusMode ? new Set([this.focusSlot()]) : null;
     for (const o of (this.oppList || [])) {
       const canvas = cards.querySelector(`.opp-card[data-slot="${o.slot}"] canvas`);
       if (!canvas) continue;
-      if (density === 'strip') {
+      const keep = density !== 'strip' && (!want || want.has(o.slot));
+      if (!keep) {
         delete this.miniBoards[o.slot];
       } else if (!this.miniBoards[o.slot]) {
         this.miniBoards[o.slot] = new MiniBoard(canvas, { skinId: oppSkinId(o) });
         this.miniBoards[o.slot].setGrid(this.lastGrids && this.lastGrids[o.slot] ? this.lastGrids[o.slot] : new Array(64).fill(0));
+      }
+    }
+    // 注目の板だけ、作ったあとにもう一度だけ描き直す。
+    // MiniBoard.render() は canvas の実寸が 0 なら何もせず戻る（正しい）。
+    // 注目の canvas は直前まで display:none で、上の1回目が空振りすることが
+    // 実機で起きていた（ビットマップが既定の 300×150 のまま＝一度も描かれて
+    // いない印）。ここは同期で、レイアウトも流し終えているので確実に描ける。
+    if (focusMode) {
+      const b = this.miniBoards[this.focusSlot()];
+      if (b) { try { b.render(); } catch { /* 画面が畳まれた後 */ } }
+    }
+  }
+
+  /** いま大きく見せる相手の slot。留めていなければ首位を追う。 */
+  focusSlot() {
+    const list = this.oppList || [];
+    if (!list.length) return null;
+    if (this.pinnedSlot != null && list.some(o => o.slot === this.pinnedSlot)) return this.pinnedSlot;
+    // 首位（点がいちばん高い相手）。同点なら並び順の先頭で安定させる
+    // ── ここを毎回引き直すと、同点の間ずっと2枚が入れ替わり続ける。
+    let best = list[0].slot, bestScore = -1;
+    for (const o of list) {
+      const sc = Number((this.scores || {})[o.slot]) || 0;
+      if (sc > bestScore) { bestScore = sc; best = o.slot; }
+    }
+    return best;
+  }
+
+  /** 注目の1枚に印を付け直す。盤の作り直しは applyOppDensity 側でやる。 */
+  paintFocus() {
+    const cards = $('#oppCards');
+    if (!cards) return;
+    const slot = this.focusSlot();
+    for (const el of cards.querySelectorAll('.opp-card')) {
+      const s = Number(el.dataset.slot);
+      el.classList.toggle('is-focus', s === slot);
+      el.classList.toggle('is-pinned', this.pinnedSlot != null && s === this.pinnedSlot);
+      // 押したら留める／もう一度押したら自動に戻す。
+      // ⚠ 名前の部分は前からプロフィールを開くので、そちらは邪魔しない。
+      if (!el.dataset.focusWired) {
+        el.dataset.focusWired = '1';
+        el.addEventListener('click', ev => {
+          if (!this.focusMode) return;
+          if (ev.target.closest('.opp-name[data-who]')) return;   // 名前はプロフィール
+          const k = Number(el.dataset.slot);
+          this.pinnedSlot = (this.pinnedSlot === k) ? null : k;
+          audio.click();
+          this.applyOppDensity(this.density);
+          getView().resize();
+        });
       }
     }
   }
@@ -3451,6 +3547,16 @@ class VersusBase {
       this.lastGrids = this.lastGrids || {};
       this.lastGrids[slot] = state.grid;
       if (this.miniBoards[slot]) this.miniBoards[slot].setGrid(state.grid);
+      // 👁 自動追尾のときは、首位が変わったら大きい盤も乗り換える。
+      //    ⚠ 乗り換えは**首位が本当に変わったときだけ**。毎回作り直すと、
+      //      相手の1手ごとに canvas を作り直して点滅する。
+      if (this.focusMode && this.pinnedSlot == null) {
+        const want = this.focusSlot();
+        if (want !== this._shownFocus) {
+          this._shownFocus = want;
+          this.applyOppDensity(this.density);
+        }
+      }
     }
   }
 

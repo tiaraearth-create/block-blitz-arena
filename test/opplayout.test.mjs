@@ -116,6 +116,79 @@ const net = strip(read('public/js/net.js'));
 }
 
 // ===========================================================================
+// D. 👁 注目の1枚（多人数戦）
+// ===========================================================================
+//
+// 15人ぶんを並べると1枚 42px（1マス5.25px）にしかならず、
+// 「小さすぎて何も読めない」状態だった。1枚だけ大きく出し、残りは
+// 名前と点の帯にする。多人数戦で本当に見たいのは「首位がどこまで積んで
+// いるか」と「攻撃してきた相手の盤面」で、15枚を同時に眺めることではない。
+{
+  check('D-1 ★何人から切り替えるかが決まっている',
+    /const OPP_FOCUS_FROM = \d+;/.test(modes),
+    (modes.match(/const OPP_FOCUS_FROM = \d+;/) || [''])[0]);
+  check('D-2 注目の大きさを画面の高さから決める',
+    /function focusBoardPx\(\)/.test(modes) && /innerHeight/.test(modes), '');
+  check('D-3 ★注目のときは盤を1枚しか作らない（15枚ぶん描かない）',
+    /const want = focusMode \? new Set\(\[this\.focusSlot\(\)\]\) : null;/.test(modes), '');
+  check('D-4 留めていなければ首位を追う', /focusSlot\(\) \{[\s\S]{0,600}?bestScore/.test(modes), '');
+  check('D-5 押すと留まる／もう一度押すと自動に戻る',
+    /this\.pinnedSlot = \(this\.pinnedSlot === k\) \? null : k;/.test(modes), '');
+  // ⚠ 名前はプロフィールを開く。留める操作がそれを奪わないこと。
+  check('D-6 名前を押したときはプロフィールを邪魔しない',
+    /ev\.target\.closest\('\.opp-name\[data-who\]'\)/.test(modes), '');
+  // ⚠ 首位が入れ替わるたびに作り直すと、相手の1手ごとに canvas が点滅する。
+  check('D-7 ★首位が変わったときだけ乗り換える（毎手作り直さない）',
+    /if \(want !== this\._shownFocus\)/.test(modes), '');
+}
+{
+  // ⚠ MiniBoard.render() は canvas の実寸が 0 なら何もせず戻る。注目の canvas は
+  //   .is-focus が付くまで display:none なので、**印を先に付けてから**盤を作る。
+  //   逆にすると初回が空振りして、相手が次の手を打つまで真っ暗になる。
+  const paintAt = modes.indexOf('this.paintFocus();');
+  const makeAt = modes.indexOf('new MiniBoard(canvas, { skinId: oppSkinId(o) })');
+  check('D-8 ★印を付けてから盤を作る（初回が空振りしない）',
+    paintAt > 0 && makeAt > 0 && paintAt < makeAt, `paint@${paintAt} make@${makeAt}`);
+  // 作ったあとにもう一度描き直す保険。requestAnimationFrame は**当てにならない**
+  // （背面のタブでは一度も呼ばれない。実測で確認した）ので、同期で呼ぶこと。
+  check('D-9 作ったあと同期で描き直す（rAF に頼らない）',
+    /if \(focusMode\) \{\s*\n\s*const b = this\.miniBoards\[this\.focusSlot\(\)\];/.test(modes), '');
+}
+{
+  // ⚠ 狭い画面用の指定が幅を直に書いていて、枚数から決めた --opp-cell を
+  //   後勝ちで上書きしていた（＝スマホでは何人でも 60px / 44px のまま）。
+  const bad = [...css.matchAll(/\.opp-card canvas[^{]*\{[^}]*\}/g)]
+    .map(m => m[0]).filter(b => /width:\s*\d+px/.test(b));
+  check('D-10 ★狭い画面の指定が --opp-cell を潰していない', bad.length === 0,
+    bad.join(' / '));
+}
+
+// ===========================================================================
+// E. 1日の枠を素通りしない
+// ===========================================================================
+{
+  const idx = read('server/index.js');
+  const bat = read('server/battle.js');
+  // ⚠ 枠を数える処理が applyGameResult の中に閉じていたため、その外で足す
+  //   経路（ロイヤルの順位報酬・PvP連勝ボーナス）が上限をまるごと素通りしていた。
+  check('E-1 ★枠を数える口が外から使える形になっている',
+    /function grindTake\(user, key, want\)/.test(idx) && /function gemTake\(user, want\)/.test(idx), '');
+  check('E-2 ★ロイヤルの順位報酬が枠を通る',
+    /const paidCoins = grindTake\(me, 'coins', payout\.coins\);/.test(bat)
+    && /const paidGems = gemTake\(me, payout\.gems\);/.test(bat), '');
+  check('E-3 ★PvP連勝ボーナスが枠を通る',
+    /streakBonus = grindTake\(user, 'coins', Math\.min\(200, s\.winStreak \* 20\)\);/.test(idx), '');
+  check('E-4 battle.js に枠の口が渡っている', /grindTake, gemTake,/.test(idx), '');
+  // 数え方を2か所に書かない（書くと上限が実質2倍になる）。
+  check('E-5 applyGameResult の中に古い take が残っていない',
+    !/const take = \(key, want\) =>/.test(idx), '');
+  // 一度きりの到達報酬（バッジ付き）は通さない ── 通すと節目を踏んだ日だけ
+  // 普通の稼ぎが消える。
+  check('E-6 バッジの一度きり報酬は枠を通していない',
+    /badge = 'rush';\s*\n\s*gems = 300;\s*\n\s*user\.gems \+= 300;/.test(idx), '');
+}
+
+// ===========================================================================
 // C. 🐉 ボス選択へ戻れる
 // ===========================================================================
 {
