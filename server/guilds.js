@@ -476,7 +476,13 @@ export function claimGuildQuest(db, user, weekId, questId) {
 
   // 3本すべて達成＆すべて受け取ったらギルド限定バッジ。
   let badge = null;
-  const allDone = q.ids.every(id => { const d = questDefOf(id); return d && questProgress(guild, weekId, q, d) >= d.goal; });
+  // ⚠ 目標は questGoalOf（人数ぶんに縮めたもの）で見る。素の d.goal のままだと、
+  //    3本とも受け取れているのにバッジだけ永久に出ない（20人未満のギルドは
+  //    素の goal に届かないため）。guildQuestView の done とそろえる。
+  const allDone = q.ids.every(id => {
+    const d = questDefOf(id);
+    return d && questProgress(guild, weekId, q, d) >= questGoalOf(d, q.size);
+  });
   if (allDone && q.ids.every(id => rec.claimed.includes(id))) {
     if (!Array.isArray(user.badges)) user.badges = [];
     if (!user.badges.includes(GUILD_QUEST_BADGE)) { user.badges.push(GUILD_QUEST_BADGE); badge = GUILD_QUEST_BADGE; }
@@ -634,21 +640,29 @@ function ghostQuestState(guild, weekId, now) {
   // シードは seedKey（`ghost0` …）で引く。公開 id は起動ごとに変わるので、
   // そちらを種にすると再起動でクエストの抽選も進捗も別物になる。
   const seedKey = guild.seedKey || guild.id;
+  // 🕵 目標は **実ギルドとまったく同じ式**（questGoalOf）で縮める。
+  //    ここだけ素の def.goal を返していたので、「20人未満なのに目標が満額の
+  //    ギルド＝住人のギルド」という総当たりの判別器になっていた
+  //    （実ギルドは v2.63 から必ず人数ぶんに縮む）。
   const quests = pickQuestIds(seedKey, weekId).map(id => {
     const def = questDefOf(id);
     if (!def) return null;
+    const goal = questGoalOf(def, guild.members.length);
     const ratio = (0.35 + unit(`${seedKey}-${def.id}`, weekId) * 0.95) * power * weekFrac;
-    const progress = Math.max(0, Math.min(def.goal, Math.round(def.goal * ratio)));
+    const progress = Math.max(0, Math.min(goal, Math.round(goal * ratio)));
     return {
       id: def.id, name: def.name, nameEn: def.nameEn,
-      goal: def.goal, progress, coins: def.coins, gems: def.gems,
-      done: progress >= def.goal, doneAt: null, claimed: false,
+      goal, progress, coins: def.coins, gems: def.gems,
+      done: progress >= goal, doneAt: null, claimed: false,
     };
   }).filter(Boolean);
   const doneCount = quests.filter(r => r.done).length;
   return {
     week: weekId, quests, total: quests.length, doneCount,
     allDone: quests.length > 0 && doneCount === quests.length,
+    // 🕵 欄をそろえる。guildQuestView が返すのにこちらに無い欄は、
+    //    それだけで「住人のギルド」の目印になる（ghostGuildViews の注記と同じ）。
+    lockedByOtherGuild: false,
     badge: GUILD_QUEST_BADGE, badgeName: 'ギルドの誉れ', badgeNameEn: 'Guild Honors',
     badgeEarned: quests.length > 0 && doneCount === quests.length,
     claimable: false,

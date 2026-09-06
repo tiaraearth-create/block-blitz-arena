@@ -3448,6 +3448,17 @@ export async function refreshMissionDot() {
       if (ms.daily.every(r => r.claimed) && !ms.dailyBonusClaimed) pending++;
       if (ms.weekly.every(r => r.claimed) && !ms.weeklyBonusClaimed) pending++;
     }
+    // 🔁 **取ってきた新しい値で控えを上書きする。**
+    //
+    //    一覧は missionsCache / achCache を見て描くが、捨てる場所は
+    //    resetScreenCaches()（ログアウトとアカウント削除）しか無かった。
+    //    遊んで進捗が動いても控えは古いままなので、赤いドット（この関数が
+    //    毎回 /api/missions を叩き直して点けている）は①と出ているのに、
+    //    開くと「0/30・未達成」で受取ボタンも出ない ── 直すには再読み込みか
+    //    ログアウトしかなかった。日付をまたいでも昨日のミッションが出続ける。
+    //    ここは既に最新を持っているので、詰め替えるだけで通信は増えない。
+    if (ms) missionsCache = ms;
+    if (ach) achCache = ach;
     if (ach) pending += ach.rows.filter(r => r.done && !r.claimed).length;
     if (session.user && Array.isArray(session.user.rankRewards)) pending += session.user.rankRewards.length;
     dot.classList.toggle('hidden', pending === 0);

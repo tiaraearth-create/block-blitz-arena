@@ -232,8 +232,23 @@ const partySrv = read('server/party.js');
   check('D-14 モード側が「復活した」を返す',
     (modes.match(/\/\/ 戻り値 true ＝「復活したので死亡音は鳴らさないで」/g) || []).length === 2, '');
 
-  check('D-15 戻るで履歴を積み直さない（空押しを溜めない）',
-    /const to = screenStack\.pop\(\) \|\| 'menu';\n\s+poppingBack = true;\n\s+showScreen\(to, \{ push: false \}\);\n\s+poppingBack = false;\n\s+\}\);/.test(dom), '');
+  {
+    // 同じ1行は goBack() にもあるので、popstate ハンドラだけを切り出して数える。
+    const popAt = dom.indexOf("window.addEventListener('popstate'");
+    const pop = popAt >= 0 ? dom.slice(popAt, popAt + 3000) : '';
+    check('D-15 戻るで履歴を積み直さない（空押しを溜めない）',
+      /poppingBack = true;\n\s+showScreen\(to, \{ push: false \}\);\n\s+poppingBack = false;/.test(pop)
+      && (pop.match(/const to = screenStack\.pop\(\) \|\| 'menu';/g) || []).length === 1, '');
+    // ⚠ 降ろす位置は **leaveViaScreenButton() より前**。あの関数は
+    //   showScreen('menu') まで同期で走り、その中で history.go(-screenStack.length)
+    //   を呼ぶので、降ろす前に通すと popstate が消費した1つと二重になり、
+    //   タブで開いている人はゲームのページごと前のサイトへ抜ける
+    //   （PWA では死んだ「戻る」が1回残る）。
+    check('D-15b 画面を動かす前に降ろしている',
+      pop.indexOf("const to = screenStack.pop() || 'menu';") >= 0
+      && pop.indexOf("const to = screenStack.pop() || 'menu';")
+        < pop.indexOf('if (leaveViaScreenButton()) return;'), '');
+  }
 
   check('D-16 チャットは読み返し中に引き戻さない',
     /const wasAtBottom = me \|\| box\.scrollHeight - box\.scrollTop - box\.clientHeight <= NEAR_BOTTOM;/.test(chat), '');

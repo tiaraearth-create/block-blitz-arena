@@ -107,7 +107,13 @@ check('C-2 wonClaimed は門より前に控える',
   index.indexOf('const wonClaimed = !!won;') > 0
   && index.indexOf('const wonClaimed = !!won;') < index.indexOf("workshopCapped = 'puzzle_day'"), '');
 check('D-1 ブループリントの枠は申告された設計図の日で数える',
-  /const bpDay = \(day === today \|\| day === yday\) \? day : today;/.test(index), '');
+  /const bpDay = \(\(day === today \|\| day === yday\) && day >= curDay\) \? day : today;/.test(index), '');
+// ⚠ 「今日か昨日」だけでは**枠が無限に戻る** ── 申告日はクライアントが決めるので、
+//   today → yday → today … と交互に名乗るだけで bpDay が毎回変わり、止め金が
+//   作り直されて cleared が false に戻る（blueprintClears は順位表の部門なので、
+//   板がそのまま偽装できていた）。日付は戻さない、を条件に足してある。
+check('D-1b 日付は戻せない（単調）',
+  /const curDay = \(bp && bp\.day\) \|\| '';/.test(index) && /day >= curDay/.test(index), '');
 check('D-2 古い日付を名乗っても枠は増えない（今日か昨日だけ）',
   /const yday = jstDayKey\(Date\.now\(\) - 86400000\);/.test(index), '');
 check('D-3 クライアントが遊んだ設計図の日を添えている',

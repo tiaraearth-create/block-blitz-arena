@@ -901,6 +901,17 @@ function seedLastResultAt(user) {
   const now = Date.now();
   const age = Math.max(0, now - (Number.isFinite(user.createdAt) ? user.createdAt : now));
   s.lastResultAt = now - Math.min(age, FIRST_RESULT_GRACE_MS);
+  // 🎁 **配った持ち時間が尽きる時刻**を覚えておく。
+  //
+  //    これが無いと、初回の低い天井（FIRST_RESULT_SCORE_CAP）を素通りできた ──
+  //    1件目を duration=1秒 の捨て結果で送ると、贈り物の 1,890秒 のうち1秒しか
+  //    減らない。2件目はもう「生涯の初回」ではないので天井が外れ、残り 1,889秒 を
+  //    丸ごと申告できる（1,890 × レート上限 2,000/秒 = 3,780,000点）。
+  //    新規アカウントが 2リクエストでランキングの首位を取れる形だった。
+  //
+  //    lastResultAt がこの時刻を越えるまでは「贈り物の中から出てきたスコア」と
+  //    みなして天井をかぶせ続ける。使い切ったら消す（DBに残さない）。
+  s.graceUntil = now;
   return s.lastResultAt;
 }
 
@@ -1162,6 +1173,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // このアカウントが「まだ一度も結果を送っていない」か。seedLastResultAt は
   // 呼ぶと基準を書き込んでしまうので、その前に見ておく（下の初回上限で使う）。
   let firstEverResult = false;
+  // 「生涯の初回ではないが、初回に配った持ち時間をまだ使っている」状態。
+  let onGrace = false;
   if (!preClamped) {
     const now = Date.now();
     firstEverResult = !(Number.isFinite(user.stats.lastResultAt) && user.stats.lastResultAt > 0);
@@ -1192,6 +1205,12 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     //    予算式にしても壊れない ── 控えの束が実時間を分け合うだけで、
     //    合計の申告時間は実時間を1秒も超えられない。
     user.stats.lastResultAt = Math.min(now, last + Math.ceil(duration) * 1000);
+    // 🎁 まだ「配った持ち時間」の中にいるか（seedLastResultAt の注記）。
+    //    ここが真の間は、生涯の初回でなくても初回と同じ天井をかぶせる。
+    if (Number.isFinite(user.stats.graceUntil)) {
+      if (last < user.stats.graceUntil) onGrace = true;
+      if (user.stats.lastResultAt >= user.stats.graceUntil) delete user.stats.graceUntil;
+    }
   }
   // Cheat guard: cap plausible score rate. This is only a coarse "no human
   // scores THIS fast" backstop — the real anti-forge is the wall-clock clamp
@@ -1223,7 +1242,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // 持ち時間 1,890秒 × rateCap 2,000/秒 = 3,780,000 は、新アカウントが
   // 1リクエストで首位を取るには十分すぎる（絶対上限 SCORE_ABS_MAX を
   // 5,000,000 へ上げたので、この門の必要性はむしろ上がっている）。
-  if (firstEverResult && score > FIRST_RESULT_SCORE_CAP) score = FIRST_RESULT_SCORE_CAP;
+  if ((firstEverResult || onGrace) && score > FIRST_RESULT_SCORE_CAP) score = FIRST_RESULT_SCORE_CAP;
 
   // 「1プレイの実体があった」判定。score も duration もここで確定するので、
   // 以降どこからでも使える。💎ドロップ・累積カウンタ（下）に加えて、
@@ -1277,8 +1296,20 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     //    申告は「今日か昨日」だけ許す ── それより古い日を名乗っても枠は増えない。
     const today = jstDayKey();
     const yday = jstDayKey(Date.now() - 86400000);
-    const bpDay = (day === today || day === yday) ? day : today;
     const bp = user.stats.bpDay;
+    const curDay = (bp && bp.day) || '';
+    // ⚠ 「今日か昨日なら通す」だけでは **枠が無限に戻る**。
+    //    申告日 day はクライアントが決めるので、today → yday → today … と
+    //    交互に名乗るだけで毎回 bpDay が変わり、下の `bp.day !== bpDay` が
+    //    毎回真になって cleared が false に戻っていた。つまりブループリントの
+    //    「1日1回」は事実上 **無制限**（1時間あたりのリクエスト上限だけが壁）で、
+    //    totalWins・ブループリント達成数・ギルドポイント・勝利系ミッション・
+    //    コインがいくらでも積めた。
+    //
+    //    足すのは「日付は戻さない」＝単調という条件ひとつ。
+    //    圏外で日付をまたいで貯めた控えの束（昨日ぶんが遅れて届く）はこれまで
+    //    どおり通るが、**今日を記録したあとに昨日を名乗っても枠は戻らない**。
+    const bpDay = ((day === today || day === yday) && day >= curDay) ? day : today;
     if (!bp || bp.day !== bpDay) user.stats.bpDay = { day: bpDay, cleared: false };
     if (won) {
       // 理由を返す。ここは長らく黙って0にしていたので、クリアしたのに勝利ぶんが

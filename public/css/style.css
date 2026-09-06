@@ -56,6 +56,18 @@ body {
   padding-left: calc(14px + env(safe-area-inset-left, 0px));
   padding-right: calc(14px + env(safe-area-inset-right, 0px));
 }
+/* 👤 名前は**必ず縮む**。#topbar は space-between の flex で、子（#userChip と
+   .currency）の自動最小幅は min-content ＝ 名前の実幅そのもの。空白の無い
+   ラテン文字の16文字名だと縮みようが無く、右側の ⚙（#btnSettings）が画面外へ
+   押し出されて押せなくなっていた（375px 幅の端末）。⚙ はメニューから設定へ行く
+   唯一の入口なので、そこだけで詰む。日本語名は逆に1文字ずつ折り返して
+   トップバーが 64px → 110px 以上に伸び、メニュー全体が下へずれていた。
+   他人の名前を出す .lb-name / .opp-name / .fr-name … は全部この3点セットを
+   持っているのに、トップバーだけ抜けていた。 */
+#userChip { min-width: 0; }
+#userName {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .chip {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--panel); border: 1px solid var(--line);

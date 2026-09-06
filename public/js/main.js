@@ -1815,7 +1815,24 @@ function ensureHudSettings() {
     //    （止めないと、設定を読んでいる数秒でボスの技が着弾する）。
     const resume = pauseModeForDialog();
     showSettingsModal();
-    if (resume) onModalClosed(resume);
+    // 🧷 **モーダルが1枚も無くなるまで再開しない。**
+    //
+    //    onModalClosed のフックは「次のモーダルに入れ替わったとき」にも流れる
+    //    （showModal が先頭で closeModal を呼ぶため）。設定モーダルは
+    //    サウンドトラック・クレジット・バグ報告・改名・ローカルデータ削除・
+    //    アカウント削除の6本を子に持つので、どれを押しても resume が走り、
+    //    **ジュークボックスに覆われたまま走行の時計が動き出す**（ボスの予告技は
+    //    着弾し、サバイバルの波は降り、メルトダウンの熱は上がる）。
+    //    入れ替わりなのか本当に閉じたのかは、次の間（setTimeout 0）まで
+    //    待てば分かる ── そのときまだ何か出ていれば、繋ぎ直して先送りする。
+    if (resume) {
+      const later = () => setTimeout(() => {
+        const root = document.getElementById('modal-root');
+        if (root && root.firstChild) { onModalClosed(later); return; }
+        resume();
+      }, 0);
+      onModalClosed(later);
+    }
   };
 }
 

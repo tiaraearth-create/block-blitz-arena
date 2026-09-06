@@ -11,6 +11,7 @@
 
 import { residentStats, archetype, tierOf, jstHour, jstWeekday } from './residents.js';
 import { SHOP_ITEMS, BOSSES, RAID_BOSSES, TITLES } from './catalog.js';
+import { TRANSLATE_ENGINE } from './translate.js';
 import { enName } from '../public/js/catalog-en.js';
 import { ACHIEVEMENTS } from './achievements.js';
 // チャット3.0 (v2.6): 再出防止メモリ + 話題スレッド + 生成合成エンジン
@@ -537,7 +538,14 @@ const CHAMPION_LINES = [
 // バイリンガル合成: 選んだ素材の ja/en 両面を「同じスロット値」で描画し、
 // 相手言語の面をネイティブ翻訳（tr）として同梱する。辞書の後付け翻訳より
 // はるかに自然 — 素材にはもともと人間が書いた英語がある。
-// 返り値: { text, tr: {lang, text, engine:'native'} | null }
+// 返り値: { text, tr: {lang, text, engine} | null }
+//
+// 🕵 engine は **実プレイヤーの翻訳と同じ値**（translate.js の TRANSLATE_ENGINE）を
+//    載せる。ここに 'native' と書いていたので、chat.js が
+//    `engine !== 'table' ? '翻訳' : '簡易翻訳'` でラベルを出し分けた結果、
+//    住人の発言だけが「翻訳」、実プレイヤーの発言は「簡易翻訳」になっていた ──
+//    1行ごとに100%当たる住人の判別器。対訳の作り方（辞書か対のテンプレか）は
+//    公開面から見分けられてはいけない。
 
 // 英語で「前置き, 本文」と繋ぐときの受け（日本語の「前置き、本文」に相当）。
 // 素材の英文は7割が大文字始まりなので、そのまま繋ぐと文の途中に大文字が
@@ -578,7 +586,7 @@ function renderBoth(r, ctx, src, extra = {}, opener = null, tail = null) {
   const same = !other || other === text;
   return {
     text: stylize(text, r),
-    tr: same ? null : { lang: primaryEn ? 'ja' : 'en', text: other, engine: 'native' },
+    tr: same ? null : { lang: primaryEn ? 'ja' : 'en', text: other, engine: TRANSLATE_ENGINE },
   };
 }
 
@@ -596,7 +604,7 @@ function pairTr(r, ctx, extra, cache, otherLines, otherLang, poolKey, srcText = 
   if (!text || (srcText && text.trim() === String(srcText).trim())) return null;
   // 日本語の訳のはずが日本語を1文字も含まない（＝英語のまま）ものも配らない。
   if (otherLang === 'ja' && !/[ぁ-んァ-ヶ一-龠ー]/.test(text)) return null;
-  return { lang: otherLang, text, engine: 'native' };
+  return { lang: otherLang, text, engine: TRANSLATE_ENGINE };
 }
 
 // 1本の発言を合成する。トピック本文 / フォロー / 生活雑談 / 旧LINESの
@@ -786,7 +794,7 @@ export function composeDialogue(ctx) {
       const cache = {};
       const s = stylize(fill(tpl, r, useCtx, {}, cache), r);
       // 台本に対訳面（3要素目）があればネイティブtrとして同梱
-      const tr = tplOther ? { lang: otherLang, text: fill(tplOther, { ...r, lang: otherLang }, useCtx, {}, cache), engine: 'native' } : null;
+      const tr = tplOther ? { lang: otherLang, text: fill(tplOther, { ...r, lang: otherLang }, useCtx, {}, cache), engine: TRANSLATE_ENGINE } : null;
       gen.noteSurface(s, ctx.now);
       gen.noteSpoken(r.id, ctx.now);
       return { resident: r, text: s, tr, delay };

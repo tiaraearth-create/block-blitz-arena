@@ -184,6 +184,17 @@ export function initHistory(onGameBack) {
       if (onGameBack) onGameBack();
       return;
     }
+    // 🔙 **先に積みを1枚降ろしてから**画面を動かす。
+    //
+    //    leaveViaScreenButton() は #btnCancelQueue / #btnRoomBack を押すだけに
+    //    見えて、その先が cancelMatchmaking → quit → endToMenu →
+    //    showScreen('menu') まで**同期で**走る。メニューへ畳むときは
+    //    `history.go(-screenStack.length)` で履歴も同じだけ巻き戻すので、
+    //    降ろす前に呼ぶと popstate が既に消費した1つと二重になり、
+    //    **履歴が1つ余計に戻る** ── タブで開いている人はゲームのページごと
+    //    前のサイトへ抜け（アプリが消え）、PWA では死んだ「戻る」が1回残る。
+    //    画面内のキャンセルを直接押したときだけ正常、という食い違いもこれ。
+    const to = screenStack.pop() || 'menu';
     // キュー／ルームからは必ず抜けてから出る。抜けた先はメニューなので、
     // 履歴も積み直さない（次の戻るでアプリを閉じてよい）。
     if (leaveViaScreenButton()) return;
@@ -198,7 +209,7 @@ export function initHistory(onGameBack) {
     //
     //   これで「履歴の深さ ＝ screenStack.length」が常に保たれる。
     //   メニュー復帰時の history.go(-depth) も同じ前提で数えている。
-    const to = screenStack.pop() || 'menu';
+    //   （`to` は leaveViaScreenButton の手前で降ろしてある ── 上の注記）
     poppingBack = true;
     showScreen(to, { push: false });
     poppingBack = false;

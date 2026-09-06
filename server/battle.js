@@ -54,7 +54,7 @@ import { getSchedule as getAeSchedule, liveSlotFor as aeLiveSlotFor,
 // 2箇所で違う数を持つと復元のたびに件数が動くので、定数は1つだけ持つ
 // （どちらに置くかの理由は backup.js の ONLINE_SPANS_MAX のコメント）。
 import { ONLINE_SPANS_MAX } from './backup.js';
-import { translateChat, translateLocal, detectLang } from './translate.js';
+import { translateChat, translateLocal, detectLang, TRANSLATE_ENGINE } from './translate.js';
 // 💬 ギルドチャット（20人が集まる場所なのに、喋る手立てが1つも無かった）。
 import { guildChat, guildChatHistory } from './guilds.js';
 import { isOpen as pollIsOpen, vote as pollVote, residentChoice, residentVoteAt, isSwingVoter } from './polls.js';
@@ -713,7 +713,9 @@ export function initBattle(server, deps) {
       // 憑依（運営の自由文）には対訳が無い。ここだけは辞書翻訳でも出したほうが
       // 英語側に何も届かないよりましなので、自動翻訳を許す。
       autoTr: !en,
-      ...(en ? { tr: { lang: 'en', text: String(en).slice(0, 300), engine: 'native' } } : {}),
+      // engine は実プレイヤーの翻訳と同じ値にそろえる（crowd.js の注記と同じ理由 ──
+      // ここだけ別の値だと「翻訳」「簡易翻訳」のラベルで話者の素性が割れる）。
+      ...(en ? { tr: { lang: 'en', text: String(en).slice(0, 300), engine: TRANSLATE_ENGINE } } : {}),
     });
   }
   // 台詞テーブルから1行選んで喋る（日英そろって出る）
@@ -3270,6 +3272,16 @@ export function initBattle(server, deps) {
     if (target.human) {
       if (target.ws.readyState === target.ws.OPEN) {
         send(target.ws, { type: 'royale_garbage', cells, from: from ? from.name : null, lines });
+      } else if (Array.isArray(target.pending) && target.dcUntil && Date.now() < target.dcUntil) {
+        // 🔌 **繋ぎ直しの猶予中に飛んできたお邪魔は、捨てずに預かる。**
+        //    閉じたソケットへ送って落としていたので、切断している間だけ
+        //    誰の攻撃も当たらなかった ── 生存を competing するモードで
+        //    「止まっている＝無傷」は、そのまま**切断が最強の防御**になる。
+        //    戻ってきた瞬間にまとめて降らせれば、待った得も損も消える。
+        //    上限は暴走よけ（猶予は最長25秒なので普通はここまで溜まらない）。
+        if (target.pending.length < 12) {
+          target.pending.push({ cells, from: from ? from.name : null, lines });
+        }
       }
       return;
     }
@@ -3451,7 +3463,8 @@ export function initBattle(server, deps) {
       gone.sort((a, b) => a.score - b.score);
       for (const e of gone) {
         endRoyaleFor(e, r, royaleAlive(r).length, ranked);
-        royaleFeed(r, { kind: 'left', victim: e.name, alive: royaleAlive(r).length });
+        // 🎭 'left' は使わない（close ハンドラの注記 ── 実プレイヤーの目印になる）。
+        royaleFeed(r, { kind: 'ko', victim: e.name });
       }
     }
 
@@ -3821,6 +3834,12 @@ export function initBattle(server, deps) {
         secs: Math.max(0, Math.round(ROYALE_DURATION + COUNTDOWN - (Date.now() - r.startedAt) / 1000)),
         alive: royaleAlive(r).length,
       });
+      // 🔌 猶予中に預かったお邪魔をまとめて降らせる（royaleHit の注記）。
+      //    席は差し替えただけでクライアント側の engine は生きているので、
+      //    royale_garbage をそのまま流せば普通に積まれる。
+      const held = Array.isArray(e.pending) ? e.pending : [];
+      e.pending = [];
+      for (const g of held) send(ws, { type: 'royale_garbage', ...g });
       return true;
     }
     return false;
@@ -4924,12 +4943,34 @@ export function initBattle(server, deps) {
             //    本人は自分が何位だったかも、何がもらえたかも分からない。
             //    順位の裁定（離脱＝生存者中最下位）そのものは変えないので、
             //    「逃げ得にしない」設計は保たれる ── 待つのは確定の**時刻**だけ。
+            //    ⚠ ただし猶予は **対戦とまったく同じ関門**をくぐらせる。
+            //      ここだけ無条件で 25秒 を配っていたので、1日の回数
+            //      （RECONNECT_GRACE_PER_DAY／openReconnectGrace が守っているもの）を
+            //      素通りできた ── 切るたびに無敵時間が何度でも手に入る。
+            let held = false;
             if (ws.user) {
-              e.dcUntil = Date.now() + RECONNECT_GRACE_MS;
-            } else {
+              // 試合が終わる時刻を越えて待っても戻ってこられない。
+              const endAt = r.startedAt + (COUNTDOWN + ROYALE_DURATION) * 1000;
+              const until = Math.min(Date.now() + RECONNECT_GRACE_MS, endAt);
+              const user = db.users[ws.user.id];
+              if (user && !user.banned
+                && until - Date.now() >= RECONNECT_GRACE_MIN_MS
+                && takeGraceQuota(user)) {
+                e.dcUntil = until;
+                e.pending = [];       // 猶予中のお邪魔の預かり箱（royaleHit）
+                held = true;
+              }
+            }
+            if (!held) {
               const ranked = royaleRanked(r);
               endRoyaleFor(e, r, ranked.length, ranked);
-              royaleFeed(r, { kind: 'left', victim: e.name, alive: ranked.length - 1 });
+              // 🎭 「離脱」は **実プレイヤーにしか起きない出来事**だった。
+              //    住人は席を立たない（潰れて 'ko' になるだけ）ので、
+              //    速報に「◯◯ が離脱」と出た名前は例外なく実プレイヤー ──
+              //    ⭐印（real:true）を消したのとまったく同じ形の漏れ。
+              //    攻撃者のいない 'ko'（＝「◯◯ 脱落」）は住人の topout と
+              //    見分けが付かないので、そちらに寄せる。
+              royaleFeed(r, { kind: 'ko', victim: e.name });
             }
           }
         }

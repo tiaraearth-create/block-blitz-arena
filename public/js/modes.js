@@ -654,6 +654,16 @@ export function pauseModeForDialog() {
   // ここを false に書き直す ── そうしないと閉じたときに施錠が戻る。
   m._dialogLockWas = v ? v.inputLocked : false;
   if (v) v.inputLocked = true;
+  // ⏸ **自走する setTimeout の鎖は、絶対時刻の一覧では止まらない。**
+  //
+  //    AI対戦の手番（aiLoop）とデイリーの残像（ghostStep）は「次の1手を
+  //    setTimeout で予約し、その中でまた予約する」形なので、PAUSABLE_DEADLINES
+  //    には現れない。止めていたのは自分の時計だけで、⚙を開いて音量を1分いじると
+  //    神（moveMs 700）は約85手ぶん先に進み、こちらは一手も打てないまま
+  //    数万点差で負けが確定していた ── しかも endAt を後ろへずらすぶん
+  //    試合が実時間で延びるので、**通常より多い手数**を打つ。
+  //    モード側に口を1つ用意して、持っている鎖は自分で畳んでもらう。
+  if (typeof m.pauseTimers === 'function') { try { m.pauseTimers(); } catch { /* 走行は止めない */ } }
 
   // ⏱ 期限は「閉じたときにまとめて」ではなく、**開いている間ずっと**
   //    進む時間ぶんだけ押し続ける。
@@ -702,6 +712,7 @@ export function pauseModeForDialog() {
     m._dialogPaused = false;
     clearInterval(iv);
     shift(Date.now() - last);   // 最後の端数（刻みの残り）
+    if (typeof m.resumeTimers === 'function') { try { m.resumeTimers(); } catch { /* 同上 */ } }
     if (v) v.inputLocked = m._dialogLockWas === true;
     m._dialogLockWas = undefined;
   };
@@ -3310,6 +3321,12 @@ class AiMode extends VersusBase {
     this.introTimer = setTimeout(() => { el.remove(); next(); }, 2300);
   }
 
+  // ⏸ ダイアログを開いている間は手番の鎖を畳む（pauseModeForDialog の注記）。
+  //    残り時間は測らない ── 次の一手の間合いは毎回ゆらぎで引き直すので、
+  //    畳んだところから引き直すのがそのまま自然な再開になる。
+  pauseTimers() { clearTimeout(this.aiTimer); this.aiTimer = null; }
+  resumeTimers() { if (!this.ended && !this.aiTimer) this.aiLoop(); }
+
   aiLoop() {
     const jitter = 0.75 + Math.random() * 0.5;
     this.aiTimer = setTimeout(() => {
@@ -4666,7 +4683,7 @@ class DailyMode {
     this.ghostBoard = new MiniBoard(cards.querySelector('canvas'));
     this.ghostBoard.setGrid(this.ghostEngine.snapshot());
     getView().resize();
-    this.ghostTimer = setTimeout(() => this.ghostStep(), Math.max(200, rep.moves[0].t || 600));
+    this.ghostSchedule(Math.max(200, rep.moves[0].t || 600));
     toast(t(`${g.username || '残像'} の走りと同時対走！`, `Racing ${g.username || 'the ghost'}'s replay!`), 'announce', 2600);
   }
 
@@ -4683,8 +4700,7 @@ class DailyMode {
       this.ghostIdx++;
       const after = rep.moves[this.ghostIdx];
       if (!after) { this.ghostFinished = true; this.updateGhostHud(); return; }
-      this.ghostTimer = setTimeout(() => this.ghostStep(),
-        Math.min(4000, Math.max(160, (after.t || 0) - (mv.t || 0))));
+      this.ghostSchedule(Math.min(4000, Math.max(160, (after.t || 0) - (mv.t || 0))));
       return;
     }
     const res = this.ghostEngine.place(mv.h, mv.r, mv.c);
@@ -4696,8 +4712,31 @@ class DailyMode {
     const next = rep.moves[this.ghostIdx];
     // 録画の t（開始からの経過ms）どおりの間合いで進める。極端な間は詰める。
     const wait = next ? Math.min(4000, Math.max(160, (next.t || 0) - (mv.t || 0))) : 0;
-    if (next) this.ghostTimer = setTimeout(() => this.ghostStep(), wait);
+    if (next) this.ghostSchedule(wait);
     else { this.ghostFinished = true; this.updateGhostHud(); }
+  }
+
+  // 残像の次の一手を予約する。**いつ来るか**を控えておくのは、ダイアログで
+  // 止めたときに「残りいくつ」を測って畳み、閉じたところから続けるため
+  // （測らずに畳むと、閉じた瞬間に残像が一手ぶん飛ぶ）。
+  ghostSchedule(ms) {
+    clearTimeout(this.ghostTimer);
+    this._ghostAt = Date.now() + ms;
+    this.ghostTimer = setTimeout(() => this.ghostStep(), ms);
+  }
+
+  pauseTimers() {
+    if (!this.ghostTimer) return;
+    clearTimeout(this.ghostTimer);
+    this.ghostTimer = null;
+    this._ghostLeft = Math.max(0, (this._ghostAt || 0) - Date.now());
+  }
+
+  resumeTimers() {
+    if (this.ended || this.ghostTimer || this._ghostLeft == null) return;
+    const left = this._ghostLeft;
+    this._ghostLeft = null;
+    this.ghostSchedule(left);
   }
 
   updateGhostHud() {

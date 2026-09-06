@@ -112,9 +112,16 @@ const zs = read('server/zero-session.js');
   //   「止めた数 ＝ 戻す数」を見る** ── 増えたときに赤くなってほしいのは
   //   「止めたのに戻していない」ときだけ。
   {
+    // v2.63.2: 戻し方が2通りになった。
+    //   ・その場で渡す        … `if (resume) onModalClosed(resume);`
+    //   ・1枚も無くなるまで先送り … `if (resume) { const later = () => …; onModalClosed(later); }`
+    //   走行中の⚙は**先送りでないといけない** ── フックは「次のモーダルに
+    //   入れ替わったとき」にも流れるので、設定の子ダイアログへ移った瞬間に
+    //   盤面が覆われたまま走行が再開してしまう（painpoints K-10b が本体を見張る）。
+    //   ここで見たいのは今までどおり「止めた数 ＝ 戻す口を用意した数」。
     const pairs = src => [
       (src.match(/const resume = pauseModeForDialog\(\);/g) || []).length,
-      (src.match(/if \(resume\) onModalClosed\(resume\);/g) || []).length,
+      (src.match(/if \(resume\) (?:onModalClosed\(resume\);|\{)/g) || []).length,
     ];
     const [pm, rm] = pairs(main);
     const [pd, rd] = pairs(modes);

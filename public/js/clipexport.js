@@ -427,9 +427,21 @@ function flushPending() {
 }
 
 function gameIsLive() {
-  if (document.body.dataset.screen !== 'game') return false;
-  const m = getCurrentMode();
-  return !!(m && !m.ended);
+  // ⚠ **`!m.ended` を条件にしてはいけない。**
+  //
+  //    結果モーダル（NEW RECORD・スコア・報酬・「もう一度」）は
+  //    `this.ended = true` の直後に、data-screen='game' のまま出る。
+  //    つまり `!m.ended` を見ると **結果を読んでいる最中がいちばん「安全」**
+  //    と判定され、そこへクリップのモーダルを出しに行っていた。
+  //    showModal は先頭で closeModal を呼ぶ（dom.js）ので、結果モーダルは
+  //    #rAgain / #rMenu ごと消える ── 報酬も自己ベストも一度も読めず、
+  //    「もう一度」も押せず、動かない盤面に取り残される。
+  //    このファイルの冒頭が「これを防ぐために作った」と書いている事故そのもの。
+  //
+  //    ゲーム画面にいる間は、終わっていようと帯（readyBar）で待たせる。
+  //    メニューへ戻った時点で deliver() の MutationObserver が流すので、
+  //    「遊び終わってからクリップが出る」流れはそのまま保たれる。
+  return document.body.dataset.screen === 'game';
 }
 
 function deliver(blob, mode) {

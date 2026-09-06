@@ -76,7 +76,18 @@ check('B-1 ロイヤルも「試合中」に数える',
 check('B-2 終わったら降ろす（繋ぎ直しを繰り返さない）',
   /msg\.type === 'result' \|\| msg\.type === 'royale_over'/.test(net), '');
 check('B-3 切断は即確定させず猶予を置く',
-  /e\.dcUntil = Date\.now\(\) \+ RECONNECT_GRACE_MS;/.test(battle), '');
+  /const until = Math\.min\(Date\.now\(\) \+ RECONNECT_GRACE_MS, endAt\);/.test(battle)
+  && /e\.dcUntil = until;/.test(battle), '');
+// ⚠ 猶予は**無条件に配ってはいけない**。1v1 と同じ回数の関門（takeGraceQuota）を
+//   通さないと、切るたびに 25秒 の無敵が何度でも手に入る ── しかも猶予中に
+//   飛んできたお邪魔は閉じたソケットへ送られて捨てられるので、生存を競う
+//   モードで「切断が最強の防御」になっていた。預かって、戻ったら降らせる。
+check('B-3b 猶予にも1日の回数の関門がある',
+  /takeGraceQuota\(user\)[\s\S]{0,80}?e\.dcUntil = until;/.test(battle), '');
+check('B-3c 猶予中のお邪魔を捨てずに預かる',
+  /target\.pending\.push\(\{ cells, from: from \? from\.name : null, lines \}\);/.test(battle), '');
+check('B-3d 戻ってきたら預かったぶんを降らせる',
+  /for \(const g of held\) send\(ws, \{ type: 'royale_garbage', \.\.\.g \}\);/.test(battle), '');
 check('B-4 猶予が明けたら今までどおり確定する',
   /if \(e\.dcUntil && now < e\.dcUntil\) continue;/.test(battle), '');
 check('B-5 **猶予中はロビーを畳まない**（ここが抜けると報酬がゼロになる）',
@@ -206,7 +217,14 @@ check('K-8 その文言が「何をすればいいか」を言う', /下のボ�
 check('K-9 走行中に設定へ行ける', /function ensureHudSettings\(\)/.test(mainJs)
   && /btnHudSettings: 'settings',/.test(mainJs), '');
 check('K-10 その設定も走行の時計を止める',
-  /const resume = pauseModeForDialog\(\);\s*\n\s*showSettingsModal\(\);\s*\n\s*if \(resume\) onModalClosed\(resume\);/.test(mainJs), '');
+  /const resume = pauseModeForDialog\(\);\s*\n\s*showSettingsModal\(\);/.test(mainJs), '');
+// ⚠ 再開を onModalClosed にそのまま渡すと **盤面が覆われたまま再開する**。
+//   フックは「次のモーダルに入れ替わったとき」にも流れる（showModal が先頭で
+//   closeModal を呼ぶ）ので、設定の子（ジュークボックス・クレジット・改名…）
+//   6本のどれを押しても、その瞬間に走行の時計が動き出していた。
+//   モーダルが1枚も無くなるまで先送りすること。
+check('K-10b 子ダイアログへ移っただけでは再開しない',
+  /if \(root && root\.firstChild\) \{ onModalClosed\(later\); return; \}/.test(mainJs), '');
 check('K-11 採掘場の天井に印が出る', /markCeiling\(\) \{/.test(modes) && /v\.dangerCells = cells\.size \? cells : null;/.test(modes), '');
 check('K-12 キメラの置けない候補が分かる', /fits: this\.engine\.placements\(\{ cells: o\.cells \}\)\.length > 0/.test(modes), '');
 check('K-13 ブースターをまとめて買える', /body: \{ itemId: item\.id, count: n \}/.test(screens), '');

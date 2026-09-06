@@ -69,13 +69,17 @@ for (const period of Object.keys(PERIOD_HOURS)) {
         scan(step.text, `dlg/${period}`);
         if (step.tr) scan(step.tr.text, `dlg-tr/${period}`);
         dlgCount++;
-        if (step.tr && step.tr.engine === 'native') dlgTr++;
+        if (step.tr && step.tr.text) dlgTr++;
+        if (step.tr && step.tr.engine === 'native') bad.push(`dlg-tr/${period}: engine=native`);
       }
     }
   }
 }
 check(`composeDialogue fuzz (${dlgCount} texts)`, bad.length === 0 && dlgCount > 100, bad.slice(0, 3).join(' | ') || `nulls=${dlgNull}`);
-// 台本会話も生成会話もネイティブ対訳つき（エセ翻訳への転落を防ぐ）
+// 台本会話も生成会話も対訳つき（辞書のエセ翻訳への転落を防ぐ）。
+// ⚠ 目印に tr.engine を使ってはいけない ── engine は実プレイヤーの翻訳と
+//   **同じ値**でなければならず（違うと chat.js のラベルで素性が割れる）、
+//   crowd.js が作る tr は例外なく対のテンプレ由来なので、有無で足りる。
 check(`dialogue native-tr coverage ≥ 90%`, dlgTr / Math.max(1, dlgCount) >= 0.9, `${dlgTr}/${dlgCount}`);
 
 // ---- composeFeed ----
@@ -112,7 +116,8 @@ for (const kind of KINDS) {
       scan(step.text, `react/${kind}`);
       if (step.tr) scan(step.tr.text, `react-tr/${kind}`);
       reactN++;
-      if (step.tr && step.tr.engine === 'native') reactTr++;
+      if (step.tr && step.tr.text) reactTr++;
+      if (step.tr && step.tr.engine === 'native') bad.push(`react-tr/${kind}: engine=native`);
     }
   }
 }
@@ -137,7 +142,8 @@ for (const trigger of TRIGGERS) {
       scan(rep.text, `reply/"${trigger.slice(0, 12)}"`);
       if (rep.tr) scan(rep.tr.text, `reply-tr/"${trigger.slice(0, 12)}"`);
       replyN++;
-      if (rep.tr && rep.tr.engine === 'native') replyTr++;
+      if (rep.tr && rep.tr.text) replyTr++;
+      if (rep.tr && rep.tr.engine === 'native') bad.push(`reply-tr: engine=native`);
     }
   }
   if (!answered) bad.push(`no replies ever for "${trigger}"`);
