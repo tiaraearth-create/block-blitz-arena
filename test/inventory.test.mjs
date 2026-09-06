@@ -123,7 +123,9 @@ try {
   // いるのに違う数字が2画面に出る。母数はサーバー側の定義に合わせる。
   // throneOnly（👑管理者イベント専用ショップの品）は、ショップでもガチャでも
   // 手に入らない。分母に入れると「あと7種」がいつまでも減らない見え方になる。
-  const collectibles = shop.items.filter(i => !i.adminOnly && !i.throneOnly && !i.default).length;
+  // 🔄 交換所限定も分母から外す。週替わりなので、逃した週の品は後から取れず、
+  //    入れると「あと n 種」が永久に減らない（throneOnly を外したのと同じ理由）。
+  const collectibles = shop.items.filter(i => !i.adminOnly && !i.throneOnly && !i.exchangeOnly && !i.default).length;
   const gacha = await j('/api/gacha/info', {}, tok);
   check('ガチャがコレクション集計を返す', !!(gacha.collection && typeof gacha.collection.total === 'number'),
     JSON.stringify(gacha.collection));
@@ -131,13 +133,19 @@ try {
     gacha.collection.total === collectibles, `inv=${collectibles} gacha=${gacha.collection.total}`);
   // 上の規則は画面側にも同じ形で入っていなければ意味がない。
   const screensSrc = fs.readFileSync('public/js/screens.js', 'utf8');
-  check('在庫画面の母数も throneOnly を外している',
-    screensSrc.includes('!i.adminOnly && !i.throneOnly && !i.default'), '');
+  // v2.67: 条件を18か所に手書きでコピーしていた状態をやめ、画面側は
+  //   collectibleGear / buyableGear の2つに1本化した（サーバー側は
+  //   server/catalog.js の isCollectibleGear / isBuyableGear と対）。
+  //   見るのは「共通判定が定義されていて、そこに4つの経路が全部入っているか」。
+  check('在庫画面の母数が共通判定を通っている',
+    /const collectibleGear = i => [\s\S]{0,200}?!i\.adminOnly[\s\S]{0,80}?!i\.throneOnly[\s\S]{0,80}?!i\.exchangeOnly/.test(screensSrc)
+    && screensSrc.includes('return shopItems.filter(collectibleGear);'), '');
   // v2.61: 除外条件を buyable（adminOnly / throneOnly / gachaOnly）に1本化した。
   //   「押すと通常ショップに飛ぶが、そこでは買えない」という同じ理由が
   //   ガチャ限定にも当てはまるのに、throneOnly にしか効いていなかった。
   check('在庫の「あと何種」が買えない品を数えていない',
-    screensSrc.includes('const buyable = i => !i.adminOnly && !i.throneOnly && !i.gachaOnly;')
+    /const buyableGear = i => [\s\S]{0,220}?!i\.adminOnly[\s\S]{0,90}?!i\.throneOnly[\s\S]{0,90}?!i\.gachaOnly[\s\S]{0,90}?!i\.exchangeOnly/.test(screensSrc)
+    && screensSrc.includes('const buyable = buyableGear;')
     && screensSrc.includes('const missing = total - owned.filter(buyable).length;'), '');
   check('在庫の分母・分子が同じ物差し',
     screensSrc.includes('const total = all.filter(buyable).length;')

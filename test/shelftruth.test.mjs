@@ -36,8 +36,13 @@ const shop = stripComments(read('server/routes/shop.js'));
 // ===========================================================================
 // A. 持ち物の「あとN種」
 // ===========================================================================
+// v2.67: まとめ先がこの関数の中の const から、ファイル冒頭の共通判定
+//   buyableGear へ上がった（サーバーの server/catalog.js の isBuyableGear と対）。
+//   入手経路が4つになったので、条件を関数ごとに持つと必ずどれかが遅れる。
+//   見る性質は同じ ──「判定は1か所にしか書かない」。
 check('A-1 買える品の判定が1か所にまとまっている',
-  /const buyable = i => !i\.adminOnly && !i\.throneOnly && !i\.gachaOnly;/.test(screens), '');
+  /const buyableGear = i => [\s\S]{0,220}?!i\.adminOnly[\s\S]{0,90}?!i\.throneOnly[\s\S]{0,90}?!i\.gachaOnly[\s\S]{0,90}?!i\.exchangeOnly/.test(screens)
+  && /const buyable = buyableGear;/.test(screens), '');
 check('A-2 分母がそれを使う', /const total = all\.filter\(buyable\)\.length;/.test(screens), '');
 check('A-3 「あとN種」もそれを使う', /const missing = total - owned\.filter\(buyable\)\.length;/.test(screens), '');
 check('A-4 見出しの分子も同じ物差し',

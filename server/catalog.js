@@ -90,6 +90,20 @@ export const SHOP_ITEMS = [
   { id: 'ult_condemn',     cat: 'ult',   name: '断罪の一撃', desc: '縦横1列ずつを問答無用で消し飛ばす', price: 0, currency: 'coins', throneOnly: true, dan: 5, shards: 400 },
   { id: 'board_chronicle', cat: 'board', name: '断罪録の間',   desc: '紫の封印色に沈んだ、静かな記録の間',     price: 0, currency: 'coins', throneOnly: true, dan: 6, shards: 500 },
   { id: 'fx_crown',        cat: 'fx',    name: '王冠還る',     desc: '砕けた王冠が組み上がる消去エフェクト', price: 0, currency: 'coins', throneOnly: true, dan: 7, shards: 700 },
+  // ---- 🔄 交換所限定（exchangeOnly: 週替わりで交換所にだけ並ぶ）----
+  //   コインとジェムの使い道。強さには影響しない board / fx だけ。
+  //   exPrice / exCurrency が交換所での値段（price は 0 のまま ── 通常の
+  //   棚では買えないので、そちらの値段は持たない）。
+  { id: 'board_glass',   cat: 'board', name: '硝子の間',   desc: '淡く冷たい青緑を透かす静かな部屋', price: 0, currency: 'coins', exchangeOnly: true, exPrice: 26000, exCurrency: 'coins' },
+  { id: 'board_ember',   cat: 'board', name: '熾火の夜',   desc: '消えかけの炭がくすぶる深い夜',     price: 0, currency: 'coins', exchangeOnly: true, exPrice: 34000, exCurrency: 'coins' },
+  { id: 'board_paper',   cat: 'board', name: '和紙の間',   desc: '生成りの紙に墨がにじむ明るい面',     price: 0, currency: 'coins', exchangeOnly: true, exPrice: 480, exCurrency: 'gems' },
+  { id: 'board_tide', cat: 'board', name: '満ち潮', desc: '藍から銀へ、月に洗われる夜の海面', price: 0, currency: 'coins', exchangeOnly: true, exPrice: 24000, exCurrency: 'coins' },
+  { id: 'board_circuit', cat: 'board', name: '基板', desc: '緑の絶縁膜に、はんだの金が光る', price: 0, currency: 'coins', exchangeOnly: true, exPrice: 30000, exCurrency: 'coins' },
+  { id: 'board_dusk', cat: 'board', name: '逢魔が時', desc: '紫の空と燃え残りの橙が触れ合う刻', price: 0, currency: 'coins', exchangeOnly: true, exPrice: 520, exCurrency: 'gems' },
+  { id: 'fx_ink',     cat: 'fx', name: '墨飛沫',     desc: '墨が散ってにじむ消去エフェクト',       price: 0, currency: 'coins', exchangeOnly: true, exPrice: 28000, exCurrency: 'coins' },
+  { id: 'fx_shatter', cat: 'fx', name: '硝子片',     desc: '割れた硝子が四方へ弾け飛ぶ',           price: 0, currency: 'coins', exchangeOnly: true, exPrice: 36000, exCurrency: 'coins' },
+  { id: 'fx_ripple',  cat: 'fx', name: '波紋',       desc: '静かな輪が左右へ広がって消える',       price: 0, currency: 'coins', exchangeOnly: true, exPrice: 400, exCurrency: 'gems' },
+  { id: 'fx_spark',   cat: 'fx', name: '線香花火',   desc: '細かな火花が何度も弾ける',             price: 0, currency: 'coins', exchangeOnly: true, exPrice: 560, exCurrency: 'gems' },
   // ---- Admin-exclusive gear (adminOnly: hidden from everyone else, unbuyable) ----
   { id: 'skin_admin',    cat: 'skin',  name: 'レインボー【管理者】', desc: '虹色に輝く運営専用ブロック', price: 0, currency: 'coins', adminOnly: true },
   { id: 'board_admin',   cat: 'board', name: '王の間【管理者】',     desc: '黄金に輝く運営専用ステージ', price: 0, currency: 'coins', adminOnly: true },
@@ -97,10 +111,49 @@ export const SHOP_ITEMS = [
   { id: 'ult_admin',     cat: 'ult',   name: '全能【管理者】', desc: '盤面消滅＋ゲージ即再充填の運営専用奥義', price: 0, currency: 'coins', adminOnly: true },
 ];
 
+// ---------------------------------------------------------------------------
+// 🧭 「どの品が、どこに出てよいか」
+// ---------------------------------------------------------------------------
+// 入手経路は4つある。どれか1つに属する品は、他の3つには**絶対に出さない**。
+//
+//   adminOnly    運営専用。どこにも出ない
+//   throneOnly   👑王座の欠片でだけ交換できる
+//   gachaOnly    🎰ガチャのSSRでだけ出る
+//   exchangeOnly 🔄交換所でだけ買える（v2.67〜。コインとジェムの使い道）
+//
+// ⚠ この条件は以前 18か所に手書きでコピーされていた。経路を1つ足すたびに
+//   18か所を直すことになり、1つ忘れると「ガチャで交換所限定が出る」
+//   「棚に並ぶのに買えない」といった形で静かに壊れる（このリポジトリで
+//   いちばん多い事故の形）。**判定はここにしか書かない。**
+//   test/catalog-gates.test.mjs が、外で手書きしていないかを見張っている。
+
+/** 普通のショップの棚に並び、コインやジェムで買える装備か。 */
+export const isBuyableGear = i => !!i && !i.default
+  && !i.adminOnly && !i.throneOnly && !i.gachaOnly && !i.exchangeOnly;
+
+/** 🎰ガチャの抽選対象になる装備か（gachaOnly はここでだけ出る）。 */
+export const isGachaPoolGear = i => !!i && !i.default
+  && !i.adminOnly && !i.throneOnly && !i.exchangeOnly;
+
+/**
+ * 📖図鑑の「集めきった」の母数に数える装備か。
+ * ⚠ 交換所限定は**数えない**。週替わりなので、逃した週の品を後から
+ *   取れず、達成不能な図鑑になってしまう。
+ */
+export const isCollectibleGear = i => !!i && !i.default
+  && !i.adminOnly && !i.throneOnly && !i.exchangeOnly;
+
+/** 住人が話題にしてよい装備か（誰でも手に入るものだけ）。 */
+export const isTalkableGear = i => isBuyableGear(i);
+
+/** 🔄交換所に並ぶ装備か。 */
+export const isExchangeGear = i => !!i && !!i.exchangeOnly;
+
 // 装備スロット一覧（/api/equip が受け付けるスロット）
 // 👑 王座の欠片で買えるものだけ。ここに入ったものは /api/shop にも
 // ガチャの抽選対象にも絶対に出さない（出したら専用の意味が消える）。
 export const THRONE_ITEMS = SHOP_ITEMS.filter(i => i.throneOnly);
+export const EXCHANGE_ITEMS = SHOP_ITEMS.filter(isExchangeGear);
 
 export const EQUIP_SLOTS = ['skin', 'board', 'fx', 'ult'];
 
@@ -327,7 +380,7 @@ export const TITLES = [
 
 // 一般プレイヤーが普通に買える装備（管理者専用・ガチャ限定・王座限定を除く）。
 const normalGear = cat => SHOP_ITEMS
-  .filter(i => i.cat === cat && !i.adminOnly && !i.gachaOnly && !i.throneOnly)
+  .filter(i => i.cat === cat && isBuyableGear(i))
   .map(i => i.id);
 
 // 第2引数は public/js/icons.js のアイコン名。以前は 🎨 のような絵文字で、
@@ -362,7 +415,7 @@ export const COLLECTION_SETS = [
   cset('set_slayer', 'relic_atk', 'title', ['bosshunt', 'maoslayer', 'rushhero'],
     '討伐者の称号', 'Slayer Titles', 'ボス討伐の称号をすべて得る', 'Earn every boss-slaying title', 4000, 10),
   // 図鑑そのもの。管理者専用だけを除いた全装備（ガチャ限定・王座限定も含む）。
-  cset('set_master', 'collection', 'item', SHOP_ITEMS.filter(i => !i.adminOnly).map(i => i.id),
+  cset('set_master', 'collection', 'item', SHOP_ITEMS.filter(i => !i.adminOnly && !i.exchangeOnly).map(i => i.id),
     '図鑑コンプリート', 'Full Catalog', 'カタログの装備をすべて集める', 'Own every item in the catalog', 30000, 300, 'curator'),
 ];
 

@@ -829,6 +829,35 @@ Object.assign(ICONS, {
         <circle cx="16.6" cy="5.4" r="1.9" fill="var(--ic-b)"/>
         <circle cx="6" cy="4.2" r="1.4" fill="var(--ic-b)"/>`,
   },
+  // 🔄交換所限定のエフェクト4種。既存15種と作りが被らないよう、
+  //   墨＝滲む塊 / 硝子＝角のある破片 / 波紋＝同心円 / 線香花火＝放射の細線、
+  //   と骨格そのものを分けてある（色だけ変えた別物にしない）。
+  fx_ink: {
+    a: '#4a5568', b: '#111827',
+    p: `<path d="M12 3.4c3.1 3.6 5.2 6.2 5.2 8.9a5.2 5.2 0 0 1-10.4 0c0-2.7 2.1-5.3 5.2-8.9z" fill="var(--ic-b)"/>
+        <circle cx="17.8" cy="17.6" r="2.6" fill="var(--ic-a)"/>
+        <circle cx="6.6" cy="18.4" r="1.9" fill="var(--ic-a)"/>
+        <circle cx="20.4" cy="8.2" r="1.3" fill="var(--ic-a)"/>`,
+  },
+  fx_shatter: {
+    a: '#cfe9ff', b: '#7bb8ff',
+    p: `<path d="M12 2.6 15.4 9 12 12.2 8.6 9z" fill="var(--ic-a)"/>
+        <path d="M16.6 10.4 21.4 13.2 18.2 18.4 14.6 14.2z" fill="var(--ic-b)"/>
+        <path d="M7.4 10.6 9.4 14.4 5.6 18.8 2.8 13.6z" fill="var(--ic-b)"/>
+        <path d="M11.2 14.4 14 17.2 12 21.4 9.6 17.6z" fill="var(--ic-a)"/>`,
+  },
+  fx_ripple: {
+    a: '#8fe3d8', b: '#39b5a6',
+    p: `<ellipse cx="12" cy="12" rx="9.4" ry="4.2" fill="none" stroke="var(--ic-b)" stroke-width="1.7"/>
+        <ellipse cx="12" cy="12" rx="5.8" ry="2.6" fill="none" stroke="var(--ic-a)" stroke-width="1.8"/>
+        <ellipse cx="12" cy="12" rx="2.2" ry="1" fill="var(--ic-a)"/>`,
+  },
+  fx_spark: {
+    a: '#ffe08a', b: '#ff8a3d',
+    p: `<circle cx="12" cy="12" r="2.6" fill="var(--ic-a)"/>
+        <path d="M12 2.8v4.4M12 16.8v4.4M2.8 12h4.4M16.8 12h4.4" stroke="var(--ic-b)" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M5.5 5.5l3 3M15.5 15.5l3 3M18.5 5.5l-3 3M8.5 15.5l-3 3" stroke="var(--ic-a)" stroke-width="1.5" stroke-linecap="round"/>`,
+  },
   // 彗星【ガチャ限定】：四芒星の核＋後ろへ広がる塗りの尾。
   // ult_meteor は「クレーターのある丸い岩＋細い線3本」なので作りから違う。
   // 尾を1枚の葉のような形にすると fx_leaf と紛らわしくなるので、

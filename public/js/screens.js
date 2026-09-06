@@ -1966,6 +1966,7 @@ function renderShop() {
   //    **イベントが無い日は欠片の残高すら見られなかった**。
   //    ショップのタブから直接開く（宝物庫の中身の描画は adminevent.js のまま）。
   if (shopTab === 'throne') { renderThroneTab(); return; }
+  if (shopTab === 'exchange') { renderExchangeTab(); return; }
   const grid = $('#shopGrid');
   const u = session.user;
   const items = shopItems.filter(i => i.cat === shopTab);
@@ -1993,7 +1994,9 @@ function renderShop() {
       : u ? u.equipped[item.cat] === item.id : !!item.default;
     const cur = item.currency === 'gems' ? ic('gems', 14) : ic('coins', 14);
     // 値引きは「まだ買っていない・買える品」にだけ意味がある。
-    const deal = (!owned && !item.adminOnly && !item.throneOnly && !item.gachaOnly) ? dealFor(item) : null;
+    const deal = (!owned && buyableGear(item)) ? dealFor(item) : null;
+    // 🔄 交換所の品はここでは買えないが、**棚には出す**。「そういう品がある」と
+    //    分かる場所が無いと、交換所を開くきっかけが生まれない（ガチャ限定と同じ扱い）。
     const el = document.createElement('div');
     el.className = `shop-item ${equipped ? 'equipped' : ''}`;
     el.dataset.shopId = item.id;   // 「本日のピックアップ」から目当ての札へ送るための目印
@@ -2013,14 +2016,135 @@ function renderShop() {
               ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${ic('throne', 13)} ${tr('イベント専用', 'Event only')}</button>`
             : item.gachaOnly
               ? `<button class="btn btn-sm btn-ghost shop-gachaonly" disabled>${ic('gacha', 13)} ${tr('ガチャ限定', 'Gacha only')}</button>`
+            : item.exchangeOnly
+              ? `<button class="btn btn-sm btn-ghost shop-gachaonly" data-act="exchange">${ic('reroll', 13)} ${tr('交換所へ', 'To exchange')}</button>`
               : `<button class="btn btn-sm btn-gold" data-act="buy">${priceLabel(cur, item, deal)}</button>`}
     `;
     grid.appendChild(el);
     renderPreview(el.querySelector('.shop-preview'), item);
     const btn = el.querySelector('[data-act]');
-    if (btn) btn.onclick = () => (btn.dataset.act === 'buy' ? buyItem(item, btn) : equipItem(item, btn));
+    if (btn) {
+      btn.onclick = () => (btn.dataset.act === 'buy' ? buyItem(item, btn)
+        : btn.dataset.act === 'exchange' ? openShop('exchange', { keepScreen: true })
+          : equipItem(item, btn));
+    }
   });
   startDealTimer();
+}
+
+
+// ---------------------------------------------------------------------------
+// 🔄 交換所
+// ---------------------------------------------------------------------------
+// コインとジェムの「使い道」。ここでしか手に入らない見た目が週替わりで並ぶ。
+// 品揃えはサーバーが週の番号から決めるので**全員同じ**（自分だけ出ない、が無い）。
+// 強さには影響しない（board / fx だけ）＝ 貯め込んだ人が有利にならない。
+let exchangeData = null;
+let exchangeTimer = 0;
+
+function exchangeRemain(endsAt) {
+  const ms = Math.max(0, Number(endsAt) - Date.now());
+  const d = Math.floor(ms / 86400000);
+  const h = Math.floor(ms / 3600000) % 24;
+  const m = Math.floor(ms / 60000) % 60;
+  return d > 0 ? tr(`あと${d}日${h}時間`, `${d}d ${h}h left`)
+    : h > 0 ? tr(`あと${h}時間${m}分`, `${h}h ${m}m left`)
+      : tr(`あと${m}分`, `${m}m left`);
+}
+
+async function renderExchangeTab() {
+  const grid = $('#shopGrid');
+  grid.innerHTML = `<p class="muted center" style="grid-column:1 / -1">${tr('読み込み中…', 'Loading…')}</p>`;
+  if (!session.user) {
+    grid.innerHTML = `<div style="grid-column:1 / -1">${loginPrompt(tr('交換所', 'Exchange'))}</div>`;
+    const b = grid.querySelector('#msLogin');
+    if (b) b.onclick = () => showAuthModal();
+    return;
+  }
+  try {
+    exchangeData = await api('/api/exchange');
+  } catch (err) {
+    grid.innerHTML = `<p class="muted center" style="grid-column:1 / -1">${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  if (shopTab !== 'exchange' || document.body.dataset.screen !== 'shop') return;
+  paintExchange();
+}
+
+function paintExchange() {
+  const grid = $('#shopGrid');
+  const d = exchangeData;
+  if (!d) return;
+  grid.innerHTML = '';
+  const head = document.createElement('div');
+  head.style.cssText = 'grid-column:1 / -1;padding:8px 10px;border:1px dashed var(--accent,#43d9e8);border-radius:12px;background:rgba(67,217,232,0.07)';
+  head.innerHTML = `
+    <b>${ic('reroll', 15)} ${tr('今週の交換所', "This week's exchange")}</b>
+    <span class="muted" style="float:right;font-size:12px" id="exRemain">${exchangeRemain(d.endsAt)}</span>
+    <p class="muted" style="font-size:11px;margin:4px 0 0;line-height:1.5">
+      ${tr('ここでしか手に入らない見た目が週替わりで並びます。品揃えは全員同じ。強さには影響しません。',
+    'Looks you can only get here, rotating weekly. Same stock for everyone. Cosmetic only.')}
+    </p>`;
+  grid.appendChild(head);
+
+  if (!d.items.length) {
+    const p = document.createElement('p');
+    p.className = 'muted center';
+    p.style.gridColumn = '1 / -1';
+    p.textContent = tr('今週は品揃えがありません', 'Nothing in stock this week');
+    grid.appendChild(p);
+    return;
+  }
+
+  for (const [idx, it] of d.items.entries()) {
+    const cur = it.currency === 'gems' ? ic('gems', 14) : ic('coins', 14);
+    const el = document.createElement('div');
+    el.className = 'shop-item';
+    el.dataset.shopId = it.id;
+    el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
+    el.innerHTML = `
+      <div class="shop-preview" data-pv="${it.id}"></div>
+      <div class="shop-name">${ic('reroll', 13)} ${catName(it)}</div>
+      <div class="shop-desc">${catDesc(it)}</div>
+      ${it.owned
+    ? `<button class="btn btn-sm btn-primary" data-act="equip">${tr('装備する', 'Equip')}</button>`
+    : `<button class="btn btn-sm btn-gold" data-act="ex" ${it.afford ? '' : 'disabled'}>${cur} ${fmt(it.price)}</button>`}
+      ${it.owned || it.afford ? '' : `<div class="muted" style="font-size:10px">${tr('足りません', 'Not enough')}</div>`}`;
+    grid.appendChild(el);
+    renderPreview(el.querySelector('.shop-preview'), it);
+    const btn = el.querySelector('[data-act]');
+    if (!btn) continue;
+    btn.onclick = () => (btn.dataset.act === 'ex' ? exchangeBuy(it, btn) : equipItem(it, btn));
+  }
+
+  clearInterval(exchangeTimer);
+  exchangeTimer = setInterval(() => {
+    const el = $('#exRemain');
+    if (!el || document.body.dataset.screen !== 'shop' || shopTab !== 'exchange') { clearInterval(exchangeTimer); return; }
+    el.textContent = exchangeRemain(exchangeData.endsAt);
+  }, 30000);
+}
+
+async function exchangeBuy(item, btn) {
+  if (!session.user) { showAuthModal(); return; }
+  const label = tr(
+    `${item.name} を引き換えます。${item.currency === 'gems' ? 'ジェム' : 'コイン'}${fmt(item.price)}を消費します。よろしいですか？`,
+    `Exchange for ${catName(item)}? It costs ${fmt(item.price)} ${item.currency}.`);
+  if (!confirm(label)) return;
+  btn.disabled = true;
+  try {
+    const res = await api('/api/exchange/buy', { method: 'POST', body: { itemId: item.id } });
+    if (res && res.user) session.user = res.user;
+    if (res && res.exchange) exchangeData = res.exchange;
+    audio.coin();
+    toast(tr(`${item.name} を引き換えました！`, `Got ${catName(item)}!`), 'ok');
+    updateTopbar();
+    paintExchange();
+  } catch (err) {
+    audio.error();
+    toast(err.message, 'err');
+    btn.disabled = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2140,12 +2264,23 @@ function ensureInvDexTab() {
   } catch { /* タブ列の形が変わっても他のタブは死なせない */ }
 }
 
+// 🧭 「どの品がどこに出てよいか」。**サーバーの server/catalog.js と対**で、
+//    条件を書くのはこの2か所だけ（以前は18か所に手書きでコピーされていた）。
+//    入手経路は4つ: adminOnly / throneOnly（👑欠片）/ gachaOnly（🎰SSR）/
+//    exchangeOnly（🔄交換所）。1つに属する品は他の3つには出さない。
+const buyableGear = i => !!i && !i.default
+  && !i.adminOnly && !i.throneOnly && !i.gachaOnly && !i.exchangeOnly;
+// 📖 図鑑の母数。交換所限定は**数えない** ── 週替わりなので、逃した週の品を
+//    後から取れず、達成できない図鑑になってしまう。
+const collectibleGear = i => !!i && !i.default
+  && !i.adminOnly && !i.throneOnly && !i.exchangeOnly;
+
 // 管理者は「全ショップ所持・通貨無限」という表示上の嘘を持つので、
 // 完成度を数字で出すと必ず嘘になる。そこだけ別扱いにする。
 const invIsStaff = () => !!session.user && session.user.role === 'admin';
 
 function invCollectibles() {
-  return shopItems.filter(i => !i.adminOnly && !i.throneOnly && !i.default);
+  return shopItems.filter(collectibleGear);
 }
 
 function renderInvSummary() {
@@ -2189,7 +2324,9 @@ function renderInvGear() {
     //    効いていなかったので、skin_prism / board_aurora / fx_comet の3品が
     //    「あとN種」に混ざっていた ── ショップの棚では「ガチャ限定」の
     //    押せないボタンで出るので、飛んでも買えない。
-    const buyable = i => !i.adminOnly && !i.throneOnly && !i.gachaOnly;
+    // 🔄 交換所限定も同じ（棚では「交換所へ」の案内になる）。判定は
+    //    このファイル冒頭の buyableGear に1本化してある。
+    const buyable = buyableGear;
     const total = all.filter(buyable).length;
     const equippedId = cat === 'ult' ? equippedUlt()
       : u ? (u.equipped || {})[cat] : `${cat}_default`;

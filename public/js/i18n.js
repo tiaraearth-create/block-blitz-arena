@@ -141,6 +141,10 @@ const SERVER_MSG_EN = {
   // 落としたので1本に戻す。
   'メンテナンス中です。しばらくお待ちください': 'Under maintenance — please wait',
   'コインが足りません': 'Not enough coins',
+  // 🔄 交換所
+  '今週の交換所には並んでいない品です': 'That item is not in this week\'s exchange',
+  'この品は引き換えできません': 'That item cannot be exchanged',
+  '交換所の品です（交換所でのみ引き換え）': 'Exchange item — available only in the exchange',
   'ジェムが足りません': 'Not enough gems',
   'すでに所持しています': 'You already own this',
   'すでにプレミアムです': 'You already have Premium',

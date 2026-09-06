@@ -16,6 +16,7 @@ import {
 } from '../auth.js';
 import {
   SHOP_ITEMS, BOOST_ITEMS, EQUIP_SLOTS, GEM_PACKS, THRONE_ITEMS,
+  isBuyableGear, isGachaPoolGear, isCollectibleGear,
 } from '../catalog.js';
 import {
   eventBonus,
@@ -28,12 +29,15 @@ import {
 } from '../daily.js';
 import { enName } from '../../public/js/catalog-en.js';   // ライブフィード/ギフトの英語名
 import { ctx } from '../context.js';
+import { exchangeView, buyExchange } from '../exchange.js';
 
 // index.js のモジュールスコープにしか無いもの。値は起動時に一度だけ
 // 流し込む（init… は server.listen より前・battle 生成より後に呼ばれる）。
 let db, migrateUser, fmtNum, publicUser, postRealFeed, rateLimit, currentEvent, GEMDROP_DAILY_CAP;
+let currentWeekNum, weekIdOf, WEEK_MS;
 export function initShopRoutes() {
-  ({ db, migrateUser, fmtNum, publicUser, postRealFeed, rateLimit, currentEvent, GEMDROP_DAILY_CAP } = ctx);
+  ({ db, migrateUser, fmtNum, publicUser, postRealFeed, rateLimit, currentEvent, GEMDROP_DAILY_CAP,
+    currentWeekNum, weekIdOf, WEEK_MS } = ctx);
 }
 
 // ミドルウェアだけは上の遅延束縛にできない ── ハンドラ本体と違って、
@@ -352,7 +356,7 @@ const DEAL_OFF_MIN = 20;
 const DEAL_OFF_MAX = 30;
 // 抽選の対象外: 管理者専用・👑王座専用・🎰ガチャ限定・既定所持品（価格0）。
 function dealEligible(i) {
-  return !i.adminOnly && !i.throneOnly && !i.gachaOnly && !i.default && i.price > 0;
+  return isBuyableGear(i) && i.price > 0;
 }
 
 let dealsMemo = { day: null, list: null };
@@ -503,6 +507,39 @@ shopRouter.post('/api/items/use', requireAuth, (req, res) => {
 
 // ---- Capsule machine (coin gacha) ----
 
+
+// ---------------------------------------------------------------------------
+// 🔄 交換所 — コインとジェムの使い道（server/exchange.js の注記を参照）
+// ---------------------------------------------------------------------------
+// 品揃えは週の番号だけで決まる純粋関数なので、db には何も書かない。
+// 「今週何が並ぶか」をサーバーが覚えていないぶん、復元やバックアップで
+// 品揃えがズレることも起きない。
+
+// 今週が終わる時刻。currentWeekNum と同じ式から逆算する（写経しない ──
+// 片方だけ直すと「残り時間だけ嘘をつく」形になる）。
+function exchangeEndsAt() {
+  const n = currentWeekNum();
+  return (n + 1) * WEEK_MS + 4 * 24 * 60 * 60 * 1000;
+}
+
+shopRouter.get('/api/exchange', requireAuth, (req, res) => {
+  migrateUser(req.user);
+  res.json(exchangeView(req.user, weekIdOf(currentWeekNum()), exchangeEndsAt()));
+});
+
+shopRouter.post('/api/exchange/buy', requireAuth, maintenanceGuard, (req, res) => {
+  // 連打で二重に引かれないよう、購入と同じ帯のレート制限をかける。
+  if (!rateLimit(`exbuy:${req.user.id}`, 30, 60 * 1000)) {
+    return res.status(429).json({ error: '少し待ってください' });
+  }
+  migrateUser(req.user);
+  const week = weekIdOf(currentWeekNum());
+  const out = buyExchange(req.user, week, req.body && req.body.itemId);
+  if (out.error) return res.status(400).json({ error: out.error });
+  saveDb();
+  res.json({ ...out, user: publicUser(req.user), exchange: exchangeView(req.user, week, exchangeEndsAt()) });
+});
+
 const GACHA_COST_1 = 500;
 const GACHA_COST_10 = 4500;
 
@@ -562,7 +599,7 @@ function gachaPull(user, lucky = false, floor = 0, gemBudget = null) {
   if (roll < 97) {   // SSR: unowned cosmetic (or a booster bundle when complete)
     // adminOnly gear must never drop; gachaOnly gear drops ONLY here.
     // throneOnly をここに混ぜると「イベントでしか手に入らない」が嘘になる。
-    const unowned = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly && !user.owned.includes(i.id));
+    const unowned = SHOP_ITEMS.filter(i => isGachaPoolGear(i) && !user.owned.includes(i.id));
     if (unowned.length === 0) {
       // 図鑑コンプ済み。ここで💎を確実に配ると、コイン→💎の両替レートが
       // 固定される（22.8🪙/💎）＝実質の両替機になる。通貨は配らず、
@@ -634,7 +671,7 @@ shopRouter.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
   if (ur) postRealFeed(user, [{ icon: '🌟', ja: `${user.username} が UR を引き当てた！！`, en: `${user.username} hit the UR jackpot!!`, react: null, always: true }]);
   // 英語面に日本語のアイテム名が挿さっていた。カタログの英名を使う。
   else if (ssr) postRealFeed(user, [{ icon: '🎰', ja: `${user.username} がガチャで SSR「${ssr.name}」を引いた！`, en: `${user.username} pulled SSR "${enName(ssr)}"!` }]);
-  const collectibles = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly);
+  const collectibles = SHOP_ITEMS.filter(isCollectibleGear);
   res.json({
     results, user: publicUser(user), cost, lucky: !!bonus.gachaLuck,
     pity: { count: user.gachaPity || 0, max: GACHA_PITY },
@@ -646,7 +683,7 @@ shopRouter.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {
 shopRouter.get('/api/gacha/info', (req, res) => {
   const bonus = eventBonus(currentEvent());
   const mult = bonus.gachaDiscount || 1;
-  const collectibles = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly);
+  const collectibles = SHOP_ITEMS.filter(isCollectibleGear);
   res.json({
     cost1: Math.round(GACHA_COST_1 * mult),
     cost10: Math.round(GACHA_COST_10 * mult),
@@ -667,6 +704,7 @@ shopRouter.post('/api/shop/buy', requireAuth, maintenanceGuard, (req, res) => {
   if (item.adminOnly) return res.status(403).json({ error: '管理者専用の装備です（非売品）' });
   if (item.throneOnly) return res.status(403).json({ error: '管理者イベント専用ショップの品です（王座の欠片でのみ交換）' });
   if (item.gachaOnly) return res.status(403).json({ error: 'ガチャ限定の装備です（SSRで入手）' });
+  if (item.exchangeOnly) return res.status(403).json({ error: '交換所の品です（交換所でのみ引き換え）' });
   const user = req.user;
   if (user.owned.includes(item.id)) return res.status(409).json({ error: 'すでに所持しています' });
   // 🏷 セール価格は必ずここで引き直す。クライアントが送ってきた金額は見ない

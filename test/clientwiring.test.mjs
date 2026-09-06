@@ -324,7 +324,8 @@ check("RESULT_FIELDS に 'attemptId' がある", /'attemptId'/.test(fields), '')
   // 価格の帯。0円は default/ガチャ限定/王座/管理者だけのはずで、通常品に
   // 0円が混ざると「無料で全部揃う」になる。
   const freeNormal = [...cat.matchAll(/\{ id: '((?:skin|board|fx)_\w+)',[^}]*?price: 0,[^}]*?\}/g)]
-    .filter(m => !/default: true|gachaOnly|throneOnly|adminOnly|eventOnly/.test(m[0]))
+    // 🔄 exchangeOnly も 0円でよい（交換所での値段は exPrice が持つ）。
+    .filter(m => !/default: true|gachaOnly|throneOnly|adminOnly|eventOnly|exchangeOnly/.test(m[0]))
     .map(m => m[1]);
   check('通常販売品に0円が混ざっていない', freeNormal.length === 0, freeNormal.join(', '));
 }

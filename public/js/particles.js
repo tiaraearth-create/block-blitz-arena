@@ -57,6 +57,10 @@ export class ParticleSystem {
       case 'fx_leaf': this.leaves(x, y, size); break;
       case 'fx_prism': this.prism(x, y, size); break;
       case 'fx_foam': this.foam(x, y, size); break;
+      case 'fx_ink': this.ink(x, y, size); break;
+      case 'fx_shatter': this.shatter(x, y, size); break;
+      case 'fx_ripple': this.ripple(x, y, size); break;
+      case 'fx_spark': this.sparkler(x, y, size); break;
       default: this.spark(x, y, size, light, dark);
     }
     this.trim();
@@ -95,6 +99,117 @@ export class ParticleSystem {
     }
   }
 
+
+  // ---- 🔄 交換所限定のエフェクト（v2.67）--------------------------------
+  // 🖌 墨飛沫: 墨の粒がゆっくり広がって沈み、にじんで消える。
+  //    ⚠ 色を明るい側へ寄せてある。BOARDS は23枚とも暗色（bg[1] は
+  //      #010603〜#1f1206）で、'glow' は shadowColor が p.color と同じ
+  //      ＝暗い粒には暗いにじみしか付かない。元案の '#0b0e1c' は
+  //      board_default の bg[1] '#0b0e1f' と差3、'#151b33' は bg[0]
+  //      '#141a33' と差1 ── どちらも盤と同色で1粒も見えなかった。
+  //      淡墨〜中墨を主役にして、深墨は「陰」として少数だけ混ぜる。
+  ink(x, y, size) {
+    // 0〜2 が主役（どの盤より明るいので必ず出る）、3 は陰の深墨。
+    const sumi = ['#7f8bb4', '#a2adcf', '#ccd4e9', '#39406b'];
+    for (let i = 0; i < this.n(9); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.2 + Math.random() * 0.5) * size * 2;      // ほとんど飛ばない
+      this.particles.push({
+        x: x + Math.cos(a) * size * 0.2, y: y + Math.sin(a) * size * 0.2,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        g: size * 1.8,                                        // ゆっくり沈む
+        life: 1, decay: 0.8 + Math.random() * 0.5,            // 長めに残って滲む
+        size: size * (0.10 + Math.random() * 0.16),
+        // ⚠ 色を粒番号（i % 4）で決めない。設定「粒少なめ」は
+        //    particleFactor()=0.35 → n(9)=3 で i が 0,1,2 しか回らず、
+        //    4粒に1粒のはずの色が一度も出なくなる。数に依らない抽選にする。
+        color: (Math.random() < 0.25) ? sumi[3] : sumi[(Math.random() * 3) | 0],
+        kind: 'glow', rot: 0, vr: 0,
+      });
+    }
+    this.trim();
+  }
+  // 🪟 硝子片: 割れた破片が四方へ弾け、大きく回りながら落ちる。
+  //    ・スパーク（g=size*14・decay 1.8〜3.0）より落ちが遅く、長く残る
+  //    ・プリズム（虹色・粒 0.08〜0.18・初速 最大 size*13.2）に対して、
+  //      色は氷白〜青灰だけ、初速は最大 size*6（半分以下）、
+  //      粒は 0.07〜0.22（大小の比 3.1倍。プリズムは 2.25倍）
+  //    ・回転は vr ±9 rad/s（既存の最大は封印砕きの ±7）。寿命のあいだに
+  //      およそ1回転して「重い破片が転がりながら落ちる」に見える
+  //    ⚠ 粒の下限を 0.07 より小さくしないこと。棚のプレビューは 168px の
+  //      canvas を CSS 84px に縮めて出すので（style.css の .shop-preview）、
+  //      size=21 のとき 0.05 は 0.5 CSS px になり、棚では消えてしまう。
+  shatter(x, y, size) {
+    const glass = ['rgba(232,246,255,0.95)', 'rgba(255,255,255,0.90)', 'rgba(160,208,238,0.85)', 'rgba(110,166,205,0.80)'];
+    for (let i = 0; i < this.n(10); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.5 + Math.random() * 1.0) * size * 4;
+      this.particles.push({
+        x, y,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - size * 1.5,   // いったん浮いてから落ちる
+        g: size * 4,
+        life: 1, decay: 1.2 + Math.random() * 0.5,
+        size: size * (0.07 + Math.random() * 0.15),                // 大小の比 3.1倍（棚でも消えない下限）
+        color: glass[(Math.random() * glass.length) | 0],
+        kind: 'square', rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 18,
+      });
+    }
+    this.trim();
+  }
+  // 〰 波紋: 上下にはほとんど動かず、左右へ静かに広がって消える輪。
+  //    他の14種が全部「飛び散る」ので、これだけ重力をほぼ 0 にしてある。
+  //    ⚠ kind:'bubble' は draw() が「輪＋左上の白いハイライト」しか描けない
+  //      ＝ fx_bubble / fx_foam と**絵そのものは同じ**。見分けられるのは動きと
+  //      色だけなので、色は水色の2品（160,220,255 / 210,240,255）から外した
+  //      深い青緑＋白い波頭にし、粒も一回り大きくして「少数の大きな輪」に寄せた。
+  ripple(x, y, size) {
+    const water = ['rgba(88,206,214,0.80)', 'rgba(42,146,186,0.72)', 'rgba(226,252,255,0.85)'];
+    // 左右へ同数ずつ。this.n(8) は設定で奇数になる（少なめ=3・多め=15）ので、
+    // 半分を数えてから2倍する ── そのまま i%2 で振ると片側だけ1粒多くなり、
+    // 粒が3個しかない「少なめ」では左2・右1 とはっきり偏って見える。
+    const half = Math.max(1, Math.round(this.n(8) / 2));
+    for (let i = 0; i < half * 2; i++) {
+      const dir = (i % 2) ? 1 : -1;                     // 左右に同数ずつ
+      const sp = (0.5 + Math.random() * 0.9) * size * 3;
+      this.particles.push({
+        x, y: y + (Math.random() - 0.5) * size * 0.5,
+        vx: dir * sp, vy: (Math.random() - 0.5) * size * 0.25,
+        g: size * 0.12,                                 // ほぼ無重力。わずかに沈むだけ
+        life: 1, decay: 0.9 + Math.random() * 0.4,
+        size: size * (0.15 + Math.random() * 0.17),
+        color: water[(Math.random() * water.length) | 0],
+        kind: 'bubble', rot: 0, vr: 0,
+      });
+    }
+    this.trim();
+  }
+  // 🎇 線香花火: 中心の火球から、細かい火花が短く何度も弾ける。
+  //    ⚠ メソッド名は sparkler。既存の spark(x, y, size, light, dark)（fx_default）と
+  //      衝突するため。id は fx_spark、呼び出しは this.sparkler(...)。
+  sparkler(x, y, size) {
+    const hues = ['#ffd98a', '#ff9d3d', '#fff6d0', '#ff6a2a'];
+    // 中心に残る火球（1粒だけ、火花より少し長生き）
+    this.particles.push({
+      x, y, vx: 0, vy: -size * 0.3, g: size * 0.8,
+      life: 1, decay: 1.5, size: size * 0.08,
+      color: '#ffb347', kind: 'glow', rot: 0, vr: 0,
+    });
+    for (let i = 0; i < this.n(14); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.3 + Math.random() * 0.9) * size * 3;     // 小さく短く
+      const r = size * (0.1 + Math.random() * 0.35);         // 弾ける位置をずらして
+      this.particles.push({                                  // 何段にも弾けて見せる
+        x: x + Math.cos(a) * r, y: y + Math.sin(a) * r,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        g: size * 2,
+        life: 1, decay: 2.2 + Math.random() * 1.4,           // すぐ消える＝密度で見せる
+        size: size * (0.04 + Math.random() * 0.05),
+        color: hues[(Math.random() * hues.length) | 0],
+        kind: 'glow', trail: true, rot: 0, vr: 0,
+      });
+    }
+    this.trim();
+  }
   // ガチャ限定: 長い尾を引く彗星が斜めに走り抜ける
   comet(x, y, size) {
     const hues = ['#9be8ff', '#d0f4ff', '#7cc8ff', '#fff3c4'];

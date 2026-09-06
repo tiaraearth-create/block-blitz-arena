@@ -187,7 +187,8 @@ try {
   // --- ガチャに混ざっていないこと ---
   // 引ける母数から throneOnly が抜けているかを、母数の数で見る。
   const info = await api('/api/gacha/info', { token: tk });
-  const expected = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly).length;
+  // 🔄 交換所限定も分母から外す（throneOnly と同じ理由 ── ガチャでは引けない）。
+  const expected = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly && !i.exchangeOnly).length;
   check('ガチャのコレクション母数に王座の品が入っていない',
     info.d.collection && info.d.collection.total === expected,
     `total=${info.d.collection && info.d.collection.total} expected=${expected}`);

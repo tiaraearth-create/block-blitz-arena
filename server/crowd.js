@@ -10,7 +10,7 @@
 // }
 
 import { residentStats, archetype, tierOf, jstHour, jstWeekday } from './residents.js';
-import { SHOP_ITEMS, BOSSES, RAID_BOSSES, TITLES } from './catalog.js';
+import { SHOP_ITEMS, BOSSES, RAID_BOSSES, TITLES, isTalkableGear } from './catalog.js';
 import { TRANSLATE_ENGINE } from './translate.js';
 import { enName } from '../public/js/catalog-en.js';
 import { ACHIEVEMENTS } from './achievements.js';
@@ -90,7 +90,7 @@ const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 // と言わせると設定が壊れ、未解放段の品名ネタバレにもなる。後者は名前に【ガチャ限定】
 // が付くので「買った」系の文面と矛盾する。index.js のガチャ抽選フィルタと同型。
 function cosmeticItem() {
-  const pool = SHOP_ITEMS.filter(i => !i.default && !i.adminOnly && !i.throneOnly && !i.gachaOnly && i.cat !== 'ult');
+  const pool = SHOP_ITEMS.filter(i => isTalkableGear(i) && i.cat !== 'ult');
   return pick(pool);
 }
 
@@ -110,7 +110,7 @@ function saleItem(ctx) {
     .map(x => (x && typeof x === 'object')
       ? (x.id ? (SHOP_ITEMS.find(i => i.id === x.id) || x) : x)
       : SHOP_ITEMS.find(i => i.id === x))
-    .filter(i => i && i.name && !i.throneOnly && !i.gachaOnly && !i.adminOnly);
+    .filter(i => i && i.name && isTalkableGear(i));
   return items.length ? pick(items) : cosmeticItem();
 }
 
