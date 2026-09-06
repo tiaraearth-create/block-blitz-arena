@@ -226,6 +226,28 @@ const net = strip(read('public/js/net.js'));
     !/toggles\.guilds \?/.test(route), '');
 }
 
+// ===========================================================================
+// G. 🏆 大会に出ていることが、遊んでいる最中に分かる
+// ===========================================================================
+//
+// ⚠ 対戦カードの見出しは msg.mode（下敷きの対戦形式）だけを見ていた。
+//   トーナメントの1回戦は mode:'pvp' なので**「クラシック」と出て**いた。
+//   msg.tourney（{round, final}）は同じメッセージに入っているのに、
+//   使われるのは結果画面だけ（「準々決勝で敗退しました」）。
+//   つまり遊んでいる最中は、ふつうの1対1と見分けが付かなかった ──
+//   実装はあるのに見えないので「大会は話題に出るのに実際には無い」と読める。
+{
+  check('G-1 ★対戦カードが大会の回戦を出す',
+    /const modeName = tourneyRoundName\(msg\.tourney\) \|\| onlineModeName\(msg\.mode\);/.test(modes), '');
+  // 回戦名の表は結果画面と共有する（別々に持つと片方だけ増えて食い違う）。
+  check('G-2 回戦名の表が1つ', /const TOURNEY_ROUNDS_JA = \['準々決勝', '準決勝', '決勝'\];/.test(modes)
+    && /const roundNames = TOURNEY_ROUNDS_JA\.map/.test(modes), '');
+  // ⚠ round は 0 始まり。`|| ''` で落とすと準々決勝が消える。
+  check('G-3 ★round 0（準々決勝）を falsy で落としていない',
+    /Number\.isInteger\(i\) && TOURNEY_ROUNDS_JA\[i\]/.test(modes)
+    && !/tourney\.round \|\| ''/.test(modes), '');
+}
+
 for (const [mark, name, detail] of results) console.log(`${mark} ${name}${detail ? ' — ' + detail : ''}`);
 const failed = results.filter(r => r[0] === '❌').length;
 console.log(`\n${results.length - failed}/${results.length} 件`);

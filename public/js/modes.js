@@ -1379,6 +1379,26 @@ function focusBoardPx() {
   return Math.max(110, Math.min(200, Math.round(h * 0.185)));
 }
 
+// 🏆 大会の回戦名。**結果画面と対戦カードで同じ表を見る**
+//   （別々に持つと、片方だけ増やしたときに「準々決勝で敗退」と
+//    「2回戦」が同じ試合について食い違う）。
+const TOURNEY_ROUNDS_JA = ['準々決勝', '準決勝', '決勝'];
+const TOURNEY_ROUNDS_EN = ['the quarterfinal', 'the semifinal', 'the final'];
+
+/**
+ * 対戦カードの見出しに出す「大会の何回戦か」。大会でなければ null。
+ * ⚠ round は 0 始まり。`msg.tourney.round || ''` のように書くと 0（準々決勝）が
+ *   falsy で落ちるので、必ず数として見ること。
+ */
+function tourneyRoundName(tourney) {
+  if (!tourney) return null;
+  const i = Number(tourney.round);
+  const ja = Number.isInteger(i) && TOURNEY_ROUNDS_JA[i] ? TOURNEY_ROUNDS_JA[i] : null;
+  const en = Number.isInteger(i) && TOURNEY_ROUNDS_EN[i] ? TOURNEY_ROUNDS_EN[i] : null;
+  if (!ja) return t('トーナメント', 'Tournament');
+  return t(`トーナメント ${ja}`, `Tournament — ${en.replace(/^the /, '')}`);
+}
+
 function oppSkinId(o) {
   let on = true;
   try { on = getSettings().oppSkins !== false; } catch { /* 設定が読めなければ使う */ }
@@ -8545,7 +8565,7 @@ class OnlineMode extends VersusBase {
       : msg.mode === 'raid'
       ? { win: `${icon(msg.boss ? bossIconName(msg.boss.id) : 'mode_raid', { size: 26 })} ${t('レイドボス討伐！', 'Raid boss down!')}`, lose: t('討伐失敗…', 'Raid failed…'), draw: 'DRAW' }
       : { win: 'YOU WIN!', lose: 'YOU LOSE…', draw: 'DRAW' };
-    const roundNames = [t('準々決勝', 'the quarterfinal'), t('準決勝', 'the semifinal'), t('決勝', 'the final')];
+    const roundNames = TOURNEY_ROUNDS_JA.map((ja, i) => t(ja, TOURNEY_ROUNDS_EN[i]));
     const tourneyNote = msg.tourney && msg.outcome !== 'win'
       ? `<p class="muted center">${t(`${roundNames[msg.tourney.round] || ''}で敗退しました`, `Knocked out in ${roundNames[msg.tourney.round] || 'the bracket'}`)}</p>`
       : msg.tourney ? `<p class="muted center">${t('8人トーナメントを制覇！', 'You conquered the 8-player bracket!')}</p>` : '';
@@ -11243,7 +11263,16 @@ function showVersusCard(msg) {
     const v = x.value(p);
     return v != null && v !== '';
   }));
-  const modeName = onlineModeName(msg.mode);
+  // 🏆 大会のときは「何回戦か」を出す。
+  //
+  // ⚠ ここは msg.mode（下敷きの対戦形式）だけを見ていた。トーナメントの
+  //   1回戦は mode:'pvp' なので、**カードには「クラシック」と出る**。
+  //   msg.tourney（{round, final}）は同じメッセージに入っているのに、
+  //   使われるのは結果画面だけ（「準々決勝で敗退しました」）だった。
+  //   つまり **遊んでいる最中は、自分が大会に出ていることが分からない**。
+  //   ふつうの1対1と見分けが付かないので、「大会は話題に出るのに実際には
+  //   無い」と受け取られる。実装はあるのに、見えていなかった。
+  const modeName = tourneyRoundName(msg.tourney) || onlineModeName(msg.mode);
 
   const el = document.createElement('div');
   el.className = 'vs-card';
