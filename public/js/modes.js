@@ -10,7 +10,7 @@ import { chooseMove, AI_LEVELS, planImmortalMove } from './ai.js';
 import { audio } from './audio.js';
 // queuedResultCount は「圏外で落ちた結果が控えに入ったか」を確かめるために引く。
 // 結果画面が「報酬は付いていません」と「あとで自動で送ります」を取り違えないため。
-import { session, api, refreshMe, BattleClient, queuedResultCount } from './net.js';
+import { session, api, refreshMe, BattleClient, queuedResultCount, RETRY_LATER } from './net.js';
 import { $, showScreen, showModal, closeModal, toast, countdownOverlay, fmt, updateTopbar, confettiBurst, rankOf, rankBadge, rankLabel, staffExtras , applyScoreFit, onModalClosed, enterIsLive } from './dom.js';
 import { t, trServer, catName } from './i18n.js';
 // ショップに並ぶ英語名の出典。HUD・トーストが名前を自前で手書きしていたため、
@@ -342,17 +342,31 @@ async function submitResult(payload) {
     // 控えに入った回まで「報酬は付いていません」と言い切ると、**あとから
     // 本当に入る報酬** を「消えた」と伝えることになる（逆に、控えに入って
     // いない回を「あとで送ります」と言うのはもっと悪い）。
-    // 見分け方は net.js の約束そのまま:
-    //   ・status 0 …… 通信が届かなかった回（netError）。控えの対象。
-    //   ・それ以外 … サーバーが返事をした回（429/503/400…）。控えない。
+    // 見分け方は net.js の約束そのまま（RETRY_LATER を**共有**する）:
+    //   ・0 / 429 / 503 … 時間が解決する。控えの対象。
+    //   ・それ以外（400/401/403…）… 送り直しても通らない。控えない。
     // 実際に控えられたかは queuedResultCount() で確かめてから言う。
-    const offline = err && err.status === 0;
-    const queued = offline && queuedResultCount() > 0;
+    //
+    // ⚠ 以前は status 0 だけを控えの対象にしていた。**サーバーの更新中**は
+    //   /api/result が 503 を返すので、再デプロイのたびに、そのとき遊び
+    //   終わった人は全員「この回の報酬は付いていません」を見ていた。
+    //   更新するとエラーが出る、の正体がこれ。
+    const status = err ? err.status : undefined;
+    const queued = RETRY_LATER.has(status) && queuedResultCount() > 0;
     if (queued) {
-      toast(t('通信が切れています。この回の結果は、つながったら自動で送ります',
-        // 'announce'（紫の枠）にするのは、これが「失敗の報せ」ではなく
-        // 「見落とされたら困る案内」だから。css に .toast.warn は無い。
-        'You are offline — this run will be submitted automatically once you reconnect'), 'announce', 4500);
+      // 理由が違えば言うことも違う。「圏外」と言われて心当たりが無いと、
+      // 何が起きたのか分からないまま結果だけ消えたように見える。
+      const msg = status === 503
+        ? t('サーバーの更新中です。この回の結果は、終わりしだい自動で送ります',
+          'The server is updating — this run will be submitted automatically once it is back')
+        : status === 429
+          ? t('少し混み合っています。この回の結果は、落ち着きしだい自動で送ります',
+            'Busy right now — this run will be submitted automatically in a moment')
+          : t('通信が切れています。この回の結果は、つながったら自動で送ります',
+            'You are offline — this run will be submitted automatically once you reconnect');
+      // 'announce'（紫の枠）にするのは、これが「失敗の報せ」ではなく
+      // 「見落とされたら困る案内」だから。css に .toast.warn は無い。
+      toast(msg, 'announce', 4500);
       return { queued: true };
     }
     toast(t('結果を送信できませんでした。この回の報酬は付いていません',
@@ -1321,6 +1335,35 @@ export function updateItemBar() {
  *   自分で持っている名前だけを引く）。ここでの既定への差し替えは
  *   「設定で切ったとき」だけの意味しかない。
  */
+/**
+ * 🪟 相手カード1枚の大きさを、枚数から決める。
+ *
+ * ⚠ #oppCards は折り返さない1行だった。.opp-panel は max-width 430px なのに
+ *   カスタムルームは最大16人（相手15人）入るので、15枚が1行に押し込まれて
+ *   **隣どうしが重なり**、どれが誰の盤面か分からなくなっていた。
+ *   折り返しは CSS で入れたが、それだけだと 74px×15 が3行になって
+ *   盤面の上を丸ごと占領する。枚数に応じて縮める。
+ *
+ * 段は「行数がなるべく増えない」ように選ぶ。パネルは盤面の**上**にあるので、
+ * 行が増えたぶんだけ盤面が縮む ── 縦の狭い端末では、少し小さいカードより
+ * 3行に伸びるほうがつらい。パネルの内側 ≒410px・隙間 10px での実測:
+ *   74px→1行5枚 / 50px→1行7枚 / 42px→1行8枚
+ * これで 8人までは必ず1行、15人（＝16人ルームの満員）でも2行に収まる。
+ *
+ * 8マスの盤なので 42px は1マス 5.25px。細かい模様は潰れるが、
+ * 「どこまで埋まっているか」は読める ── 重なって何も読めない今よりはよい。
+ * そもそも多人数の既定は strip（カードを出さない）で、cards はその人が
+ * 自分で選んだときだけ。
+ */
+function sizeOppCards(cards, n) {
+  const px = n <= 5 ? 74 : n <= 7 ? 50 : 42;
+  cards.style.setProperty('--opp-cell', `${px}px`);
+  // 名前と点も小さくする。**カードより先に文字が溢れる**ので、
+  // .many のほうでカードの幅を --opp-cell に固定してある（style.css）。
+  cards.classList.toggle('many', n > 5);
+  cards.classList.toggle('crowded', n > 7);
+}
+
 function oppSkinId(o) {
   let on = true;
   try { on = getSettings().oppSkins !== false; } catch { /* 設定が読めなければ使う */ }
@@ -3314,6 +3357,7 @@ class VersusBase {
     // opponents, which reads as "the middle one is an enemy".
     this.oppList.sort((a, b) => (b.isAlly ? 1 : 0) - (a.isAlly ? 1 : 0));
     cards.classList.toggle('compact', this.oppList.length > 1);
+    sizeOppCards(cards, this.oppList.length);
     for (const o of this.oppList) {
       const card = document.createElement('div');
       card.className = `opp-card ${o.isAlly ? 'ally' : ''}`;
@@ -4099,10 +4143,30 @@ class BossMode {
       </div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" id="rMenu">${t('メニュー', 'Menu')}</button>
+        <button class="btn btn-ghost" id="rBossList">${t('ボス選択', 'Boss list')}</button>
         <button class="btn ${won ? 'btn-primary' : 'btn-ai'}" id="rAgain">${hasNext ? t('次のボスへ', 'Next boss') : won ? t('もう一度', 'Play again') : this.aborted ? t('もう一度', 'Play again') : t('リベンジ', 'Revenge!')}</button>
       </div>`, { dismissable: false, peekable: true });
     if (won) setTimeout(() => { const el = m.querySelector('.boss-rank'); if (el) { el.classList.add('show'); audio.victory(); } }, 500);
     m.querySelector('#rMenu').onclick = () => { closeModal(); endToMenu(); };
+    // 🐉 ボス選択へ戻る。
+    //
+    // これが無いと、別のボスに行きたいだけでも
+    //   メニュー → ボス戦 → 一覧
+    // と3手かかる。倒したボスを選び直したい（周回・討伐タイムの更新）のは
+    // ボス戦では普通の遊び方なので、結果画面から1手で戻れるようにする。
+    //
+    // ⚠ **先にメニューへ戻してから**開く（「次のボスへ」と同じ作法）。
+    //   ゲーム画面のままボス選択を開くと、それを閉じた人（背景タップ／端末の
+    //   戻る／通信が切れて一覧が出ないとき）が、固まった盤面だけの画面に
+    //   取り残される ── destroy() 済みなので ✕→「終了する」も効かず、
+    //   リロード以外に抜ける手が無くなる。
+    m.querySelector('#rBossList').onclick = () => {
+      closeModal();
+      endToMenu();
+      // いま倒した／挑んだボスに印を付けて開く。__bbaOpenBossSelect が
+      // 無い経路（main.js が読み込まれる前）でも、メニューには戻れている。
+      if (window.__bbaOpenBossSelect) window.__bbaOpenBossSelect(this.bossIndex);
+    };
     m.querySelector('#rAgain').onclick = () => {
       closeModal();
       if (hasNext && window.__bbaOpenBossSelect) {

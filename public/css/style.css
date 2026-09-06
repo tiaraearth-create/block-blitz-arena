@@ -368,10 +368,36 @@ body {
   width: 100%; max-width: 430px; margin: 0 auto 6px;
   flex-shrink: 0;
 }
-#oppCards { display: flex; flex-direction: row; justify-content: center; gap: 14px; width: 100%; }
+/* ⚠ flex-wrap が無かった。.opp-panel は max-width 430px なのに、カスタム
+   ルームは最大16人（＝相手15人）まで入る。折り返せないので15枚が1行に
+   押し込まれ、隣どうしが重なって盤面が読めなくなっていた。
+   折り返しと、枚数に応じた1枚の大きさ（--opp-cell）の両方が要る
+   ── 折り返すだけでは 74px×15 が3行になって、盤面の上を丸ごと占領する。 */
+#oppCards {
+  display: flex; flex-direction: row; flex-wrap: wrap;
+  justify-content: center; align-items: flex-start;
+  /* 横の隙間は 8px。実測でカードの置ける幅は 408px しかなく、
+     10px にすると 74px×5枚 が 410px になって**2pxだけ**溢れ、
+     1対1〜5人の普通の対戦まで2行に折り返していた。
+     8px なら 5枚=402 / 7枚(50px)=398 / 8枚(42px)=392 で、どの段も収まる。 */
+  gap: 6px 8px; width: 100%;
+}
 .opp-card { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
-.opp-card canvas { width: 74px; height: 74px; border-radius: 8px; }
-#oppCards.compact .opp-card canvas { width: 58px; height: 58px; }
+/* 既定は従来どおり 74px。JS が人数を見て --opp-cell を上書きする。 */
+.opp-card canvas { width: var(--opp-cell, 74px); height: var(--opp-cell, 74px); border-radius: 8px; }
+#oppCards.compact .opp-card canvas { width: var(--opp-cell, 58px); height: var(--opp-cell, 58px); }
+/* 枚数が増えたときは、カードの幅を**盤の大きさに固定**する。
+   ⚠ そうしないと、カードの幅を決めるのは canvas ではなく**点数の文字**になる
+   （実測: 盤 42px に対しカードは 45px ── "123,456" が 13px で 45px あった）。
+   1枚が数px広いだけで1行に入る枚数が減り、15人が2行に収まらず3行になる。
+   文字は幅の中で縮める。点は消さない（観戦で見たいのは点と埋まり具合）。 */
+#oppCards .opp-card { width: var(--opp-cell, 74px); box-sizing: border-box; }
+#oppCards.many .opp-name { font-size: 10px; }
+#oppCards.many .opp-score { font-size: 12px; }
+#oppCards.many .opp-combo { font-size: 9px; }
+/* 8人以上はさらに詰まるので、点の文字だけもう一段落とす。 */
+#oppCards.crowded .opp-name { font-size: 9px; }
+#oppCards.crowded .opp-score { font-size: 10.5px; letter-spacing: -0.3px; }
 .opp-card.ally { background: rgba(94,232,110,0.08); border: 1px solid rgba(94,232,110,0.35); border-radius: 10px; padding: 4px 2px; }
 .opp-name { font-size: 11px; font-weight: 700; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .opp-score { font-size: 17px; font-weight: 900; color: var(--red); }

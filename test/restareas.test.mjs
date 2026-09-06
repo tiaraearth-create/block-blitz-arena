@@ -229,8 +229,13 @@ check('J-2 退会後にゲスト時代の控えを戻す',
 check('J-3 控えを外すのは送信の後',
   /const drop = \(\) => writeResultQueue\(readResultQueue\(\)\.filter\(e => e\.body\.runId !== entry\.body\.runId\)\);/.test(net)
   && /queueOffline: false \}\);\s*\n\s*drop\(\);/.test(net), '');
+// v2.74 で判定を RETRY_LATER（0/429/503 の1つの表）にまとめた。
+// 見るべき性質は同じ「一時的な失敗では控えを消さない」で、式の書き方だけが
+// 変わっている。表そのものの中身と、送る前／送り直しの両方が同じ表を見て
+// いることは test/opplayout.test.mjs の B節が押さえている。
 check('J-4 一時的な失敗では控えを消さない',
-  /if \(err\.status === 0 \|\| err\.status === 429 \|\| err\.status === 503\) break;/.test(net), '');
+  /if \(RETRY_LATER\.has\(err\.status\)\) break;/.test(net)
+  && /RETRY_LATER = new Set\(\[0, 429, 503\]\)/.test(net), '');
 check('J-5 捨てたときの知らせにモードを載せる',
   /function noteResultsDropped\(count, reason, mode\)/.test(net), '');
 check('J-6 デイリー以外は専用の文面にしない',

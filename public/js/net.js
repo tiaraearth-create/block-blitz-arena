@@ -137,6 +137,13 @@ function netError(msg) {
 // 増えるのは「正直に遊んだ人が、圏外で遊んだ回の報酬を受け取れる」ことだけ。
 const RESULT_PATH = '/api/game/result';
 const RESULT_QUEUE_KEY = 'bba_result_queue';
+// ⏳ 「こちらの都合ではなく、時間が解決する」返事。控えて送り直してよい。
+//   0   … 通信が届かなかった（圏外・回線断）
+//   429 … 送りすぎ
+//   503 … メンテナンス中／再デプロイ中
+// 送る前の判定（api）と、送り直しの判定（flushResultQueue）で**同じ表**を見る。
+// 別々に書いていたので「1回目は捨てるのに2回目以降は取っておく」になっていた。
+export const RETRY_LATER = new Set([0, 429, 503]);
 // 控える件数の上限。圏外で遊べるのは1人用モードだけなので、20件もあれば
 // 現実の「圏外のひとまとまり」は収まる（これを超えると古いほうから落ちる）。
 const RESULT_QUEUE_MAX = 20;
@@ -267,7 +274,7 @@ export async function flushResultQueue() {
         // まだ圏外(0) / 送りすぎ(429) / メンテ中(503) は、こちらの都合ではなく
         // 時間が解決する ── 控えに戻して次の機会に回す。
         // 控えはまだ外していないので、戻す操作は要らない（そのまま次の機会に回る）。
-        if (err.status === 0 || err.status === 429 || err.status === 503) break;
+        if (RETRY_LATER.has(err.status)) break;
         // 401/403/400 … 送り直しても通らない。ここで捨てる（残すと永遠に叩き続ける）。
         // ただし黙っては捨てない ── 件数だけが減って、報酬も記録も付かない
         // 理由がどこにも出ないのがいちばん困る。
@@ -341,6 +348,22 @@ export async function api(path, { method = 'GET', body, timeout, queueOffline = 
   }
   clear();
   if (!res.ok) {
+    // ⏳ サーバーが「いまは無理」と返した回も控える。
+    //
+    // ⚠ ここが抜けていた。控えるのは**通信が落ちた回だけ**（status 0）で、
+    //   返事が返った回は一律「この回の報酬は付いていません」と伝えていた。
+    //   ところが下の flushResultQueue は、まさに 0 / 429 / 503 を
+    //   「こちらの都合ではなく時間が解決する」として控えに戻している ──
+    //   つまり**同じ状態なのに、1回目だけ捨てて2回目以降は取っておく**という
+    //   食い違いがあった。
+    //
+    //   いちばん効くのが**サーバーの更新中**。再デプロイのあいだ /api/result は
+    //   503（メンテナンス）を返すので、そのとき遊び終わった人は全員
+    //   「報酬は付いていません」を見る。更新のたびに、遊んでいた人の1回が
+    //   消えて、しかもそれがエラーとして目に入る。
+    //   同じ runId で送り直しても二重加算にはならない（サーバーの冪等キー）
+    //   ので、控えて次の機会に回すのが正しい。
+    if (queueOffline && RETRY_LATER.has(res.status)) queueOfflineResult(path, method, body);
     if (data.season) session.season = data.season;   // /api/me sends it even when logged out
     // サーバーは errorEn を添えてくることがある（そのために作った）のに、
     // ここで一度も読んでいなかったので、英語面に日本語のエラーが出ていた。
