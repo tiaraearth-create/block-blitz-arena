@@ -100,7 +100,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 
 const db = loadDb();
-setLiveScale(db.meta.popScale === undefined ? 1 : db.meta.popScale);
+// ⚠ 復元経路（?? 1）と**同じ扱い**にする。`=== undefined` だけを見ていたので、
+//   popScale が null の db.json は Number(null)=0 で「にぎわいOFF」で起動し、
+//   同じファイルを復元経路で読むと ×1 になる ── 起動と復元で世界が変わっていた。
+setLiveScale(db.meta.popScale ?? 1);
 if (db.meta.ambient) setCustom(db.meta.ambient);
 
 // 住人と実プレイヤーの同名を解消する（起動時に1回）。

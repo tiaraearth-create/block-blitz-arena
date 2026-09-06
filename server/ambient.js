@@ -10,6 +10,7 @@
 // runtime (db.meta.popScale via /api/admin/pop).
 
 import {
+  MAX_ROSTER,
   buildRoster, customResident, residentStats, residentDailyScore, onlineResidents, residentsForLevel,
   archetype, ARCHETYPES, jstHour, jstWeekday, jstDay, unit, mulberry32, strHash, JA_NAMES, EN_NAMES,
   isChampion, residentRecord, CHAMPION,
@@ -139,11 +140,19 @@ export function isQuietNow(now = Date.now()) {
 // still has enough named residents to chat, vote and fill the boards.
 // buildRoster is deterministic per index, so growing only APPENDS residents —
 // r0..r63 keep their identity (and the admin's removed-list stays valid).
-// 住人の実数の上限。240 だと rosterSize() が ×14 で頭打ちになり、そこから先は
-// 倍率を上げても「表示人数」しか増えなかった（住人240人・オンライン118人・
-// チャット速度が全部張り付く）。600 なら ×88 まで住人が増え続ける。
-// 実測: 生成 1ms / 141KB（起動時に1度だけ・以後キャッシュ）、名前の重複ゼロ。
-const MAX_ROSTER = 600;
+// 住人の実数の上限。
+//
+// 240 → 600 → 2000 と上げてきた。600 だと rosterSize() が **×88 で頭打ち**に
+// なり、そこから先は倍率をいくつにしても住人が1人も増えなかった
+// （管理画面は ×2000 まで選べるのに、×88 と ×2000 が同じ世界だった）。
+// 2000 なら ×977 まで増え続ける。
+//
+// 実測（この上限まで）:
+//   生成 2.0ms / 485KB（起動時に1度だけ・以後キャッシュ）
+//   id → 住人 の索引は Map（上の residentById）なので、大きくしても引く速さは変わらない
+// ⚠ 実体は server/residents.js の MAX_ROSTER。**数字をここに書き写さない** ──
+//   名簿の大きさに追随する上限が他に2つある（chatgen の記憶・住人の戦績台帳）。
+//   別々に持つと、片方だけ上げたときに古い住人から静かに記憶が消える。
 export function rosterSize() {
   const scale = effectiveScale();
   return Math.min(MAX_ROSTER, Math.round(64 * Math.max(1, Math.sqrt(scale))));
@@ -191,7 +200,24 @@ export function activeResidents(now = Date.now()) {
   return list;
 }
 
-export function residentById(id) { return getRoster().find(r => r.id === id) || null; }
+// 🔎 id → 住人 の索引。名簿と同じ寿命で作り直す。
+//
+// ⚠ ここは `getRoster().find(...)` の線形探索だった。呼び出し側の
+//   guildVotesFor（server/battle.js）は投票者ぶん回すので O(投票者×名簿)。
+//   実測で名簿600人・2万回 24ms。名簿の上限を上げるとそのまま効いてくる。
+//   同じファイルの少し上に「naive な走査でイベントループが詰まった」と
+//   書いてあるのと同じ形が、こちら側に残っていた。
+let byIdCache = null;
+let byIdFor = null;
+export function residentById(id) {
+  const roster = getRoster();
+  if (byIdFor !== roster) {
+    byIdCache = new Map();
+    for (const r of roster) byIdCache.set(r.id, r);
+    byIdFor = roster;
+  }
+  return byIdCache.get(id) || null;
+}
 
 // 名前の予約表。getRoster() ではなく MAX_ROSTER の全600人で引く。
 //
@@ -759,14 +785,31 @@ export function crowdPace(now = Date.now()) {
 //    ×500 のメニューには「待機中 18,640人」と出ているのに、キューに入ると
 //    毎回きっかり数秒待たされる ── 18,640人が並んでいる列で数秒かかるのは、
 //    人数のほうが嘘だと言っているのと同じ。
-// 倍率の 0.35 乗で割る（×1 で 1.0 ＝ 従来どおり、×20 で 2.9倍速、×500 以上は
-// 下限 1.2秒に張り付く）。下限を残すのは、0秒で成立すると「用意されていた席」
-// だと分かるため ── 秘匿のほうが優先。
+// 倍率の 0.35 乗で割る（×1 で 1.0 ＝ 従来どおり、×20 で 2.9倍速）。
+// 下限を残すのは、0秒で成立すると「用意されていた席」だと分かるため ──
+// 秘匿のほうが優先。
+//
+// ⚠ ところが下限が**固定値**だったので、混んでいる世界では逆効果だった。
+//   実測: ×316 以上では 20,000回引いても値が**1種類（毎回きっかり1200ms）**。
+//   「毎回まったく同じ秒数で成立する」のは、0秒で成立するのと同じくらい
+//   はっきり「用意されていた席」だと言っている。下限を置いた理由を、
+//   下限そのものが裏切っていた。
+//
+//   下限にも**揺れ**を持たせる。速い世界では
+//     1200ms 〜 1200+FLOOR_SPAN
+//   のあいだに散るので、待ち時間はいつまでも「引かれた値」に見える。
+//   ⚠ 揺れ幅は下限より十分小さく取る（速さの体感を壊さない）。
 export const MATCH_WAIT_FLOOR_MS = 1200;
+export const MATCH_WAIT_FLOOR_SPAN_MS = 900;
 export function matchWaitMs(baseMs = 4000, spanMs = 5000, rnd = Math.random) {
   const scale = effectiveScale();
   const speed = scale > 0 ? Math.max(0.5, Math.min(8, Math.pow(scale, 0.35))) : 1;
-  return Math.max(MATCH_WAIT_FLOOR_MS, Math.round((baseMs + rnd() * spanMs) / speed));
+  const want = Math.round((baseMs + rnd() * spanMs) / speed);
+  // 下限に当たったときだけ、下限の上に揺れを載せる。
+  // ⚠ rnd() をもう一度引く。同じ引きを使い回すと、割り算で潰れた順序が
+  //   そのまま揺れにも出て、結局きれいな階段になる。
+  const floor = MATCH_WAIT_FLOOR_MS + Math.round(rnd() * MATCH_WAIT_FLOOR_SPAN_MS);
+  return Math.max(floor, want);
 }
 
 // ---------------------------------------------------------------------------

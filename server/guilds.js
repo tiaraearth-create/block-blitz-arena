@@ -576,6 +576,65 @@ const GHOST_DEFS = [
   { name: 'Sunrise Squad',   tag: 'SUNRS', icon: '🌅', desc: 'early birds only' },
   { name: '不屈の挑戦者',     tag: 'GRIT',  icon: '🔥', desc: '負けても次がある' },
   { name: 'ブロック美学会',   tag: 'ARTS',  icon: '🎨', desc: '積み方に品を' },
+  // v2.80: 住人が2,000人まで増えたので、受け皿もそのぶん要る。
+  //
+  // ⚠ 24ギルドでは 24×20＝480席しかなく、2,000人のうち**76%が無所属**に
+  //   なっていた（実測 24.0%）。一方、使い捨ての席は「ギルドに入っている住人から
+  //   タグを借りる」経路なので加入率が下がらず 32.5%。
+  //   test/personaparity.test.mjs の A-5 が z=-4.95 で赤くした ──
+  //   **ギルドに入っているかどうかが、住人と使い捨てを見分ける統計になる**。
+  //   席を増やして直すのが正しい。ゴーストだけ GUILD_MAX_MEMBERS を超えると
+  //   順位表に「26/20」と出て、それはそれで一発の目印になる。
+  { name: '週末ブロッカーズ', tag: 'WKEND', icon: '📅', desc: '土日だけ本気' },
+  { name: 'Neon Drift',      tag: 'NEOND', icon: '🌃', desc: 'city lights, clean lines' },
+  { name: '一手入魂',         tag: 'ISSHU', icon: '🎯', desc: '置く前に3秒考える' },
+  { name: 'まったり積み隊',   tag: 'MATTA', icon: '🫖', desc: 'お茶を淹れてから' },
+  { name: 'Frost Circuit',   tag: 'FROST', icon: '❄️', desc: 'keep it cold, keep it clean' },
+  { name: '無心の会',         tag: 'MUSHN', icon: '🧘', desc: '考えるな、感じろ' },
+  { name: '通勤電車部',       tag: 'TRAIN', icon: '🚃', desc: '片手で3駅ぶん' },
+  { name: 'Ember Union',     tag: 'EMBER', icon: '🔥', desc: 'burn slow, burn long' },
+  { name: '積み木の国',       tag: 'KUNI',  icon: '🧸', desc: 'こどもの頃を思い出す' },
+  { name: '深夜2時の会',      tag: 'AM2',   icon: '🌙', desc: 'あと1戦だけ、を10回' },
+  { name: 'Lucky Seven',     tag: 'LUCK7', icon: '🍀', desc: 'we roll and we pray' },
+  { name: '完全消去主義',     tag: 'PERFC', icon: '✨', desc: '盤面を空にして終わる' },
+  { name: 'ひとやすみ島',     tag: 'ISLND', icon: '🏝️', desc: '疲れたらここへ' },
+  { name: 'Aurora Line',     tag: 'AUROR', icon: '🌈', desc: 'seven colors, one line' },
+  { name: '猫の手クラブ',     tag: 'NEKO',  icon: '🐈', desc: '気まぐれに強い' },
+  { name: '真夜中の設計者',   tag: 'ARCHT', icon: '📐', desc: '崩さない積み方を探す' },
+  { name: 'Steady Hands',    tag: 'STEDY', icon: '🤝', desc: 'no panic, no rush' },
+  { name: '雷速連鎖団',       tag: 'RAIJN', icon: '⚡', desc: '考える前に指が動く' },
+  { name: 'おやつ休憩所',     tag: 'OYATU', icon: '🍩', desc: '1戦ごとに一口' },
+  { name: 'Deep Blue Div.',  tag: 'DEEPB', icon: '🌊', desc: 'dive until it clears' },
+  { name: '不夜城ギルド',     tag: 'FUYA',  icon: '🏙️', desc: '灯りは消さない' },
+  { name: '石橋を叩く会',     tag: 'BRIDG', icon: '🪨', desc: '安全な手しか置かない' },
+  { name: 'Comet Tail',      tag: 'COMET', icon: '☄️', desc: 'one long streak' },
+  { name: '和菓子同盟',       tag: 'WAGSH', icon: '🍵', desc: '甘いものと積み木' },
+  { name: '逆転狙い隊',       tag: 'REVRS', icon: '🔄', desc: '最後の10秒が本番' },
+  { name: 'Iron Stack',      tag: 'IRONS', icon: '🛡️', desc: 'defense wins games' },
+  { name: '朝焼け同好会',     tag: 'DAWN',  icon: '🌄', desc: '徹夜明けの1戦' },
+  { name: '積読ならぬ積木',   tag: 'TUMKI', icon: '📚', desc: '崩さず積むのが趣味' },
+  { name: 'Silent Runners',  tag: 'SILNT', icon: '🤫', desc: 'no chat, just clears' },
+  { name: '七色の階段',       tag: 'STAIR', icon: '🪜', desc: '色を並べて登る' },
+  { name: '負けず嫌いの集い', tag: 'MAKEZ', icon: '😤', desc: '連敗しても抜けない' },
+  { name: 'Paper Lantern',   tag: 'LNTRN', icon: '🏮', desc: 'warm light, cool head' },
+  { name: '定石研究部',       tag: 'JOSEK', icon: '📖', desc: '最善手を持ち寄る' },
+  { name: 'ゆるふわ連合',     tag: 'YURUF', icon: '☁️', desc: '順位は見ない主義' },
+  { name: 'Last Second',     tag: 'LASTS', icon: '⏳', desc: 'clutch or bust' },
+  { name: '鉄壁の守り',       tag: 'TEPPK', icon: '🧊', desc: 'お邪魔は全部返す' },
+  { name: '花火職人',         tag: 'HANAB', icon: '🎆', desc: '派手に消すのが好き' },
+  { name: 'Quiet Storm',     tag: 'QSTRM', icon: '🌀', desc: 'calm face, fast hands' },
+  { name: '駆け出しの丘',     tag: 'HILL',  icon: '🌱', desc: 'はじめての人はここへ' },
+  { name: '職人気質',         tag: 'SHOKU', icon: '🔨', desc: '一手一手ていねいに' },
+  { name: 'Moonlit Path',    tag: 'MOONP', icon: '🌜', desc: 'walk it slow' },
+  { name: '大器晩成会',       tag: 'BANSE', icon: '🌾', desc: '伸びるのはこれから' },
+  { name: '連鎖美術館',       tag: 'MUSEM', icon: '🖼️', desc: '美しい連鎖を展示中' },
+  { name: 'Cold Brew Crew',  tag: 'CBREW', icon: '🧋', desc: 'chill and stack' },
+  { name: '一発逆転党',       tag: 'IPPTS', icon: '🎲', desc: '大技しか撃たない' },
+  { name: '積み上げ日和',     tag: 'BIYOR', icon: '🌤️', desc: '天気のいい日に1戦' },
+  { name: 'Prism Works',     tag: 'PRISM', icon: '🔷', desc: 'split the light' },
+  { name: '深呼吸クラブ',     tag: 'BREAT', icon: '🫁', desc: '焦ったら一度手を止める' },
+  { name: '灯台守',           tag: 'TODAI', icon: '🗼', desc: '静かに、確実に' },
+  { name: 'Final Piece',     tag: 'FINAL', icon: '🧩', desc: 'the last one always fits' },
 ];
 
 let ghostCache = null;

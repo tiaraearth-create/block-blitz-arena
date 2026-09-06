@@ -14,6 +14,10 @@
 // このモジュールは crowd.js から使われる純ロジック層で、content は
 // chatgen-content.js、スロット展開/口癖は crowd.js 側の fill/stylize が担う。
 
+// 住人の数の上限は server/residents.js が唯一の出どころ（下の記憶の上限が
+// 名簿に追随するために要る）。residents.js は何も import しないので循環しない。
+import { MAX_ROSTER, MAX_EXTRA_RESIDENTS } from './residents.js';
+
 // ---------------------------------------------------------------------------
 // Recency memory
 // ---------------------------------------------------------------------------
@@ -40,15 +44,17 @@ function pruneMap(map, max) {
   for (const [k] of cut) map.delete(k);
 }
 
-// 住人ごとの記憶の上限。住人の実数は ambient.js の MAX_ROSTER=600 に管理者追加の
-// 100 人を足して最大700人なので、通常運用ではここに触れない値にしてある。
-// （以前は 400 だった。MAX_ROSTER が 240→600 に上がったとき追随し忘れていて、
-//  にぎわい倍率 ×50 あたりから 401 人目が喋った瞬間に全員ぶんの記憶が消え、
-//  「同じ住人は同じテンプレを丸1日言わない」という約束が、いちばん賑やかな
-//  ときにだけ数時間ごとに崩れていた。）
+// 住人ごとの記憶の上限。**名簿の大きさから決める**（数字を書き写さない）。
+//
+// ⚠ 以前は 400 → 1200 と手で書いていた。MAX_ROSTER が 240→600 に上がったとき
+//  400 が取り残されていて、にぎわい倍率 ×50 あたりから 401人目が喋った瞬間に
+//  全員ぶんの記憶が消え、「同じ住人は同じテンプレを丸1日言わない」という約束が
+//  いちばん賑やかなときにだけ数時間ごとに崩れていた。
+//  600→2000 でも同じことが起きるので、追随する形に変える。
 // 残す意味はロスター再シード時の後始末 — 消えた住人IDが延々と積もらないように。
-const MAX_RESIDENT_MEMORY = 1200;
-const KEEP_RESIDENT_MEMORY = 800;
+const ALL_RESIDENTS = MAX_ROSTER + MAX_EXTRA_RESIDENTS;
+const MAX_RESIDENT_MEMORY = Math.round(ALL_RESIDENTS * 1.2);
+const KEEP_RESIDENT_MEMORY = ALL_RESIDENTS;
 
 // 全消しではなく、最後に喋ったのがいちばん古い住人から落とす。clear() だと
 // いま会話中の住人の記憶まで巻き添えになる（＝上の不具合そのもの）。
@@ -77,7 +83,11 @@ export function surfaceFresh(text, now = Date.now()) {
 
 export function noteSpoken(residentId, now = Date.now()) {
   if (residentId) spokeAt.set(residentId, now);
-  pruneMap(spokeAt, 400);
+  // ⚠ ここも名簿に追随させる。400 のままだと、名簿が2000人の世界では
+  //   **5人に1人ぶんしか「直前に喋ったか」を覚えていない**ことになり、
+  //   同じ住人が続けて喋るのを止められない（speakerDamp が効かない）。
+  //   すぐ上の MAX_RESIDENT_MEMORY で一度踏んだのと同じ形の取り残し。
+  pruneMap(spokeAt, ALL_RESIDENTS);
 }
 
 // Multiplier for the speaker-choice weights: fresh voices over chatterboxes.
