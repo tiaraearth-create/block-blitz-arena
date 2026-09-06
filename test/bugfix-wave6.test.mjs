@@ -45,12 +45,22 @@ const partySrv = read('server/party.js');
 {
   // A-1 バトルパス: もう持っている装備品が当たったら、同じ値段ぶんを払う
   const i = read('server/routes/missions.js').indexOf("missionsRouter.post('/api/battlepass/claim'");
-  const bp = i < 0 ? '' : read('server/routes/missions.js').slice(i, i + 2600);
+  // ⚠ 窓は広めに取る。ハンドラにコメントを足しただけで末尾の res.json が
+  //   窓から外れ、「返していない」と誤って赤くなった（v2.78 で実際に起きた）。
+  const bp = i < 0 ? '' : read('server/routes/missions.js').slice(i, i + 4200);
+  // v2.78 で振替先を**必ずコイン**にした。守るべき性質（振り替えて必ず払う／
+  // 何が入ったかを返す）は同じで、払う通貨だけが変わっている。
+  // ⚠ 以前は「その品と同じ通貨」で払っていたので、ジェム建ての skin_gold(250💎)
+  //   が 250💎 に化けていた。500💎 で買うパスが 250💎 を返す＝2周目以降は
+  //   620+250=870💎 が返って**買うほどジェムが増える**。ジェムの出口は
+  //   一度きりの 5,110💎 しか無いので、唯一の周回する出口が最大の蛇口だった。
   check('A-1 所持済みの装備品は通貨に振り替えて必ず払う',
     /const shopItem = SHOP_ITEMS\.find\(x => x\.id === reward\.id\);/.test(bp)
-    && /user\[cur\] = \(user\[cur\] \|\| 0\) \+ amount;/.test(bp), '');
+    && /user\.coins = \(user\.coins \|\| 0\) \+ amount;/.test(bp), '');
+  check('A-1b ★振替先はコイン（払ったジェムをそのまま返さない）',
+    /shopItem && shopItem\.currency === 'gems'\s*\n?\s*\? Math\.round\(listed \* 22\.8\) : listed/.test(bp), '');
   check('A-2 何が入ったかを返す（トーストが嘘をつかない）',
-    /paid = \{ type: cur, amount, insteadOf: reward\.id \};/.test(bp)
+    /paid = \{ type: 'coins', amount, insteadOf: reward\.id \};/.test(bp)
     && /res\.json\(\{ user: publicUser\(user\), reward: paid \}\);/.test(bp), '');
 
   // A-3 実績は「一度でも届いたか」で決まる

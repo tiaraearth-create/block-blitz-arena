@@ -7246,6 +7246,12 @@ class OnlineMode extends VersusBase {
     // grid が来ていない回は前の盤面を残す（MiniBoard.setGrid が長さを見て弾く）。
     // name と grid は同じ watch オブジェクトで届くので、名前だけ変わって
     // 盤面が前の人のまま、という食い違いは起きない。
+    // 🎨 観戦している相手のスキンで描く。
+    //    MiniBoard.render() は毎回 this.skinId を読み直すので、代入するだけで
+    //    次の描画から効く（板を作り直す必要は無い）。設定で切れる点も対戦カードと同じ。
+    //    ⚠ サーバーは**見ている1人ぶんだけ**スキンを送る（一覧には載せない）。
+    //      一覧に載せると観戦者全員が「名前→スキン」の対応表を常時持つことになる。
+    if (this.specBoard) this.specBoard.skinId = oppSkinId({ skin: info.skin });
     if (this.specBoard && Array.isArray(info.grid)) this.specBoard.setGrid(info.grid);
     this.renderWatchPicker(box, name, rows, info.note || '');
   }
@@ -13044,7 +13050,17 @@ class ReplayMode {
     this.ended = false;
     this.idx = 0;
     const v = getView();
-    setModeTheme({ ...equippedTheme(), boardId: 'board_sunset' });
+    // 🎨 他人の走りは**その人のスキン**で描く。今までは「見ている人の」
+    //    スキンで描いていたので、誰の走りを見ても自分の見た目だった。
+    //    ここに出る録画は実プレイヤーのものだけ（/api/daily/replays は
+    //    db.users からしか作らない）なので、住人の秘匿は関わらない。
+    //    知らない id が来ても themes.js の getSkin が既定に落とす。
+    const runnerSkin = this.meta && typeof this.meta.skin === 'string' ? this.meta.skin : '';
+    setModeTheme({
+      ...equippedTheme(),
+      ...(runnerSkin ? { skinId: runnerSkin } : {}),
+      boardId: 'board_sunset',
+    });
     this.engine = new Engine(this.replay.seed);
     // 🪨 **その日の種を必ず渡す。** 瓦礫の置き場所は seed から決まるので
     //    （applyDailyModifier の 'rubble'）、渡し忘れると既定の 0 で置いてしまい、
@@ -13175,7 +13191,7 @@ export function startDailyReplay(row, meta) {
     return;
   }
   if (currentMode) currentMode.destroy();
-  currentMode = new ReplayMode(rep, { ...(meta || {}), username: row.username });
+  currentMode = new ReplayMode(rep, { ...(meta || {}), username: row.username, skin: row.skin });
   window.__bbaMode = currentMode;
   currentMode.start();
 }

@@ -18,10 +18,19 @@
 //   D. 欄は全席に必ずある（undefined は JSON から消えるので、欄の有無が名簿になる）
 //   E. 知らないid・細工したidを受け取っても描画が壊れない
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildRoster, ROSTER_SIZE } from '../server/residents.js';
 import { residentSkin, seatProfile } from '../server/ambient.js';
 import { SHOP_ITEMS, isBuyableGear, DEFAULT_EQUIPPED } from '../server/catalog.js';
 import { getSkin, getBoard, SKINS } from '../public/js/themes.js';
+
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const src = f => fs.readFileSync(path.join(ROOT, f), 'utf8')
+  .replace(/\r\n/g, '\n')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^\s*\/\/.*$/gm, '');
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -156,6 +165,44 @@ check('A-1 全員がスキンidの文字列を持つ',
   // 既定に落ちていること（別のスキンが返ってきたら、それはそれで事故）
   check('E-3 知らないidは既定のスキンに落ちる',
     getSkin('__proto__') === getSkin('skin_default'), '');
+}
+
+// ===========================================================================
+// F. 🎞 リプレイ・観戦にも相手のスキン（v2.78）
+// ===========================================================================
+{
+  const modes = src('public/js/modes.js');
+  const daily = src('server/routes/daily.js');
+  const battle = src('server/battle.js');
+
+  // 🎞 リプレイは他人の走りを「**見ている人の**スキン」で描いていた。
+  //    ここに出る録画は実プレイヤーのものだけ（/api/daily/replays は db.users
+  //    からしか作らない）ので、住人の秘匿は関わらない。
+  check('F-1 リプレイの応答に走った人のスキンが載る', /skin: replaySkin\(u\)/.test(daily), '');
+  check('F-2 持っていない装備は既定に落とす（復元や手編集の対策）',
+    /function replaySkin\(u\)[\s\S]{0,400}?u\.owned\.includes\(id\)/.test(daily), '');
+  check('F-3 ★リプレイが走った人のスキンで描く',
+    /const runnerSkin = this\.meta && typeof this\.meta\.skin === 'string'/.test(modes)
+    && /\.\.\.\(runnerSkin \? \{ skinId: runnerSkin \} : \{\}\)/.test(modes), '');
+  // 自分で日替わりを遊ぶ側は**自分の**スキンのまま（取り違えない）。
+  check('F-4 日替わりを自分で遊ぶ側は自分のスキンのまま',
+    /setModeTheme\(\{ \.\.\.equippedTheme\(\), boardId: 'board_sunset' \}\);/.test(modes), '');
+
+  // 👀 観戦は**見ている1人ぶんだけ**スキンを送る。
+  check('F-5 ルーム観戦の応答にスキンが載る', /skin: watchSkinOf\(match, target\.slot\)/.test(battle), '');
+  check('F-6 ロイヤル観戦の応答にもスキンが載る',
+    /skin: \(typeof target\.skin === 'string' && target\.skin\) \|\| DEFAULT_EQUIPPED\.skin,/.test(battle), '');
+  // ★ 選べる相手の一覧（watchable）には**載せない**。載せると観戦者全員が
+  //   「名前→スキン」の対応表を常時持つ（見ていない相手のぶんまで）。
+  check('F-7 ★選べる相手の一覧にはスキンを載せない',
+    /watchable: list\.map\(x => \(\{ name: x\.name, score: x\.score, alive: x\.alive \}\)\)/.test(battle), '');
+  // ★ ロイヤルの参加者は**人も住人も同じ欄**にスキンを持つ。片方にしか無いと、
+  //   観戦の応答で欄の有無が割れて、そのまま正体になる。
+  check('F-8 ★ロイヤルは人も住人も同じ欄でスキンを持つ',
+    /ws, human: true[\s\S]{0,220}?skin: sockSkin\(ws\),/.test(battle)
+    && /human: false, name, level: seat\.level,[\s\S]{0,320}?skin: seatProfile\(/.test(battle), '');
+  check('F-9 観戦の板も設定で切れる（対戦カードと同じ口）',
+    /this\.specBoard\.skinId = oppSkinId\(\{ skin: info\.skin \}\)/.test(modes), '');
 }
 
 for (const [mark, name, detail] of results) console.log(`${mark} ${name}${detail ? ' — ' + detail : ''}`);

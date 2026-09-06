@@ -26,6 +26,9 @@ import {
 import {
   SIZE,
 } from '../../public/js/engine.js';
+import {
+  SHOP_ITEMS, DEFAULT_EQUIPPED,
+} from '../catalog.js';
 import { ctx } from '../context.js';
 
 // 🎭 お題（dailyModifierOf）の ghost は「住人のその日のスコア係数」── 完全に
@@ -322,8 +325,26 @@ function dailyReplayView(row, day, rank, viewerId) {
     score: row.score,
     at: row.at,
     you: !!viewerId && row.uid === viewerId,
+    // 🎨 走った本人が装備しているブロック。**必ず文字列**（null にしない）。
+    //    ここに載る録画は実プレイヤーのものだけ（db.users からしか作らない）
+    //    なので、住人の秘匿は関わらない ── 他人の走りを「見ている人のスキン」で
+    //    描いていたのを、本人のもので描くためだけの欄。
+    skin: replaySkin(u),
     replay: { seed: dailySeed(day), moves: row.moves, score: row.score, at: row.at },
   };
+}
+
+/**
+ * 録画の持ち主が装備しているブロック。
+ * 持っていない物を装備したままの記録（復元や手編集で入りうる）は既定に落とす。
+ * 受け取る側の themes.js も知らない id を既定に落とすが、配らないほうが早い。
+ */
+function replaySkin(u) {
+  const id = u && u.equipped && u.equipped.skin;
+  const item = SHOP_ITEMS.find(i => i.id === id && i.cat === 'skin');
+  if (!item) return DEFAULT_EQUIPPED.skin;
+  if (!u.owned || !u.owned.includes(id)) return DEFAULT_EQUIPPED.skin;
+  return id;
 }
 
 // ?day= の受け取り。形（YYYY-MM-DD）だけを見ていたので 9999-99-99 のような

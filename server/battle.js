@@ -2712,7 +2712,13 @@ export function initBattle(server, deps) {
     return {
       inMatch: true,
       remain: Math.max(0, Math.round((match.startedAt + (COUNTDOWN + match.duration) * 1000 - Date.now()) / 1000)),
-      watch: target ? { name: target.name, score: target.score, grid: matchGridOf(match, target.slot) } : null,
+      // 🎨 見ている相手のスキン。**この1人ぶんだけ**（watchable には載せない）
+      //    ── 一覧に載せると、観戦者全員が「名前→スキン」の対応表を常時持つ。
+      //    見ていない相手の見た目まで配る必要は無い。
+      watch: target
+        ? { name: target.name, score: target.score, skin: watchSkinOf(match, target.slot),
+          grid: matchGridOf(match, target.slot) }
+        : null,
       watchable: list.map(x => ({ name: x.name, score: x.score, alive: x.alive })),
     };
   }
@@ -2905,6 +2911,13 @@ export function initBattle(server, deps) {
   // 試合（room 経由）の観戦データ
   // -------------------------------------------------------------------------
   // ロイヤルと同じ形（name / score / alive）。**正体に関わる値は入れない**。
+  // 観戦している1人のスキン。**必ず文字列**（null にしない）── キーの有無や
+  // null かどうかで席が選り分けられると、それがそのまま正体になる。
+  function watchSkinOf(match, slot) {
+    const p = match.players.find(x => x.slot === slot);
+    return p ? sockSkin(p.sock) : DEFAULT_EQUIPPED.skin;
+  }
+
   function matchWatchable(match) {
     return match.players
       .map(p => ({
@@ -3161,8 +3174,11 @@ export function initBattle(server, deps) {
     const id = crypto.randomUUID();
     const used = new Set(humanSocks.map(s => sockName(s)));
     const seed = Math.floor(Math.random() * 2 ** 31);
+    // 🎨 スキンは**人も住人も同じ欄**に持たせる。片方にしか無いと、
+    //    観戦の応答で欄の有無が割れて、そのまま正体になる。
     const entrants = humanSocks.map(ws => ({
       ws, human: true, name: sockName(ws), score: 0, lines: 0, combo: 0,
+      skin: sockSkin(ws),
       alive: true, placement: null, kills: 0, revives: 1, grid: null, lastSeen: Date.now(),
     }));
 
@@ -3180,6 +3196,11 @@ export function initBattle(server, deps) {
       used.add(name);
       entrants.push({
         human: false, name, level: seat.level,
+        // 住人・使い捨てのスキンは seatProfile（1本化してある唯一の場所）から。
+        skin: seatProfile({
+          resident: res, name, level: seat.level,
+          registered: res ? res.registered !== false : true,
+        }).skin,
         // Humans all share `seed` (that is the fairness guarantee, and the old
         // code broke it by seeding each human separately). Bots get their own
         // streams on purpose: an identical sequence made same-level bots play
@@ -3639,7 +3660,12 @@ export function initBattle(server, deps) {
         // 同じ相手を10人が見ても snapshot は1回で済む）。
         const target = e.alive ? null : pickWatch(ranked, e.ws);
         const watchEntry = target
-          ? { name: target.name, score: Math.floor(target.score), grid: royaleGridOf(target) }
+          ? {
+            name: target.name, score: Math.floor(target.score),
+            // 🎨 見ている1人ぶんだけ。watchable（一覧）には**載せない**。
+            skin: (typeof target.skin === 'string' && target.skin) || DEFAULT_EQUIPPED.skin,
+            grid: royaleGridOf(target),
+          }
           : null;
         send(e.ws, {
           type: 'royale_state',

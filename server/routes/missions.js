@@ -263,11 +263,19 @@ missionsRouter.post('/api/battlepass/claim', requireAuth, maintenanceGuard, (req
       //    6段すべてで、どれもショップで普通に買える ── 💎500 の有料要素なのに、
       //    安い順にショップで買う人ほど損をする作りになっていた。
       //    同じ値段ぶんの通貨に振り替えて必ず払う。
+      //    ⚠ 振り替え先は**必ずコイン**。以前は「その品と同じ通貨」で払って
+      //      いたので、ジェム建ての skin_gold(250💎) は 250💎 に化けていた。
+      //      500💎 で買うパスが 250💎 を返すということは、2周目以降は
+      //      620+250=870💎 が返る＝**買うほどジェムが増える**（実測）。
+      //      ジェムの出口は一度きりの 5,110💎 しか無いので、唯一の周回する
+      //      出口が最大の蛇口になっていた。値打ちは同じでも、払った通貨を
+      //      そのまま返す形だけはやめる（22.8🪙/💎＝ガチャの実効レート）。
       const shopItem = SHOP_ITEMS.find(x => x.id === reward.id);
-      const cur = shopItem && shopItem.currency === 'gems' ? 'gems' : 'coins';
-      const amount = Math.max(1, Math.floor(shopItem ? shopItem.price : 500));
-      user[cur] = (user[cur] || 0) + amount;
-      paid = { type: cur, amount, insteadOf: reward.id };
+      const listed = Math.max(1, Math.floor(shopItem ? shopItem.price : 500));
+      const amount = shopItem && shopItem.currency === 'gems'
+        ? Math.round(listed * 22.8) : listed;
+      user.coins = (user.coins || 0) + amount;
+      paid = { type: 'coins', amount, insteadOf: reward.id };
     }
   } else if (reward.type === 'badge') {
     // 🏅 すぐ上の装備品と**まったく同じ形**にそろえる。ここだけ振り替えが
