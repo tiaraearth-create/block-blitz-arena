@@ -24,7 +24,8 @@ import { fileURLToPath } from 'url';
 import { freePort } from './_port.mjs';
 import { exchangeStock, EXCHANGE_SLOTS } from '../server/exchange.js';
 import {
-  SHOP_ITEMS, EXCHANGE_ITEMS, isBuyableGear, isGachaPoolGear, isCollectibleGear,
+  SHOP_ITEMS, BOOST_ITEMS, EXCHANGE_ITEMS, isBuyableGear, isGachaPoolGear, isCollectibleGear,
+  supplyPacks, SUPPLY_GEM_PACK,
 } from '../server/catalog.js';
 import { BOARDS } from '../public/js/themes.js';
 import { ParticleSystem } from '../public/js/particles.js';
@@ -213,6 +214,90 @@ try {
   const viaShop = await j('/api/shop/buy', { method: 'POST', body: { itemId: target.id } }, tok);
   check('C-9 通常のショップからは買えない', viaShop.status === 403 || viaShop.status === 400,
     `${viaShop.status} ${viaShop.error || ''}`);
+
+  // =========================================================================
+  // F. 🧰 補給 — 繰り返し使える出口（v2.71）
+  // =========================================================================
+  //
+  // ■ なぜ消耗品なのか
+  // 週替わりの見た目は一度買えば終わりなので、出口としては必ず枯れる。
+  // かといって見た目を増やすと、置き場が2つしか無くどちらも別のものを壊す:
+  //   ・普通の棚 → ガチャが横から抜き、図鑑と実績の母数が動いて
+  //     すでにコンプした人の達成が黙って剥がれる
+  //   ・交換所限定 → 住人がどの経路でも触れない品になるので、
+  //     相手のスキンを見せた瞬間「これを着ている＝実プレイヤー確定」になる
+  // 消耗品はそのどちらにも当たらず、しかも**使えば減る**ので繰り返し効く。
+  //
+  // ★ F-6 がこの節の本題 ── 補給が装備を1つも増やしていないこと。
+  //   増やした瞬間に上の2つの副作用が戻ってくる。
+  {
+    const packs = supplyPacks();
+    check('F-1 補給の品がある', packs.length >= 4, `${packs.length}種`);
+
+    // まとめ買いが定価より高い＝買う意味が無い（値段を2か所に書くと起きる）
+    const inverted = packs.filter(x => x.price >= x.list).map(x => x.id);
+    check('F-2 まとめ買いが定価より安い', inverted.length === 0, inverted.join(','));
+
+    // 値段は BOOST_ITEMS の定価から計算しているか（数字の直書きが無いこと）
+    const off = packs.filter(x => {
+      const b = BOOST_ITEMS.find(i => i.id === x.itemId);
+      return !b || x.list !== b.price * x.qty;
+    }).map(x => x.id);
+    check('F-3 値段が棚の定価から算出されている', off.length === 0, off.join(','));
+
+    // 運営専用の消耗品は絶対に並ばない
+    const adminLeak = packs.filter(x => {
+      const b = BOOST_ITEMS.find(i => i.id === x.itemId);
+      return !b || b.adminOnly;
+    }).map(x => x.id);
+    check('F-4 運営専用の消耗品が並んでいない', adminLeak.length === 0, adminLeak.join(','));
+
+    check('F-5 ジェムの出口がある', SUPPLY_GEM_PACK && SUPPLY_GEM_PACK.price > 0
+      && SUPPLY_GEM_PACK.currency === 'gems', JSON.stringify(SUPPLY_GEM_PACK));
+
+    // ★本題。補給が配るのは消耗品(BOOST_ITEMS)だけで、装備(SHOP_ITEMS)は1つも無い。
+    const gearIds = new Set(SHOP_ITEMS.map(i => i.id));
+    const gearLeak = packs.filter(x => gearIds.has(x.itemId)).map(x => x.id);
+    check('F-6 ★補給は装備を1つも配らない（図鑑・ガチャ・住人の秘匿に触らない）',
+      gearLeak.length === 0, gearLeak.join(','));
+  }
+  {
+    // 常設であること。週替わりの品と違い、週が変わっても消えない。
+    const view = await j('/api/exchange', {}, tok);
+    check('F-7 交換所の応答に補給が入っている',
+      !!(view.supply && Array.isArray(view.supply.packs) && view.supply.packs.length),
+      JSON.stringify(view.supply || {}).slice(0, 80));
+    check('F-8 補給は週替わりの品とは別枠（週の品が0でも並ぶ）',
+      (view.supply.packs || []).length === supplyPacks().length,
+      `${(view.supply.packs || []).length} / ${supplyPacks().length}`);
+  }
+  {
+    // 値段はサーバーのカタログからしか読まない（D節と同じ作法）。
+    const me0 = await j('/api/me', {}, tok);
+    const gems0 = me0.user.gems, coins0 = me0.user.coins;
+    const lie = await j('/api/exchange/supply',
+      { method: 'POST', body: { packId: SUPPLY_GEM_PACK.id, price: 1, qty: 99999 } }, tok);
+    const me1 = await j('/api/me', {}, tok);
+    if (lie.status === 200) {
+      check('F-9 申告した値段を無視して定価を引く',
+        me1.user.gems === gems0 - SUPPLY_GEM_PACK.price,
+        `${gems0} → ${me1.user.gems}（定価 ${SUPPLY_GEM_PACK.price}）`);
+      const each = BOOST_ITEMS.filter(i => !i.adminOnly && i.price > 0);
+      const wrong = each.filter(i => ((me1.user.items || {})[i.id] || 0)
+        !== (((me0.user.items || {})[i.id] || 0) + SUPPLY_GEM_PACK.qty)).map(i => i.id);
+      check('F-10 申告した個数を無視して定数を配る', wrong.length === 0, wrong.join(','));
+    } else {
+      check('F-9 申告した値段を無視して定価を引く（ジェム不足で購入されず）',
+        me1.user.gems === gems0 && me1.user.coins === coins0, `${lie.status} ${lie.error || ''}`);
+      check('F-10 申告した個数を無視して定数を配る（同上）', true, '購入に至らず');
+    }
+    const fake = await j('/api/exchange/supply',
+      { method: 'POST', body: { packId: 'supply_item_god_wipe_100' } }, tok);
+    check('F-11 運営専用の消耗品は買えない', fake.status !== 200,
+      `${fake.status} ${fake.error || ''}`);
+    const none = await j('/api/exchange/supply', { method: 'POST', body: { packId: 'nope' } }, tok);
+    check('F-12 存在しない補給は買えない', none.status !== 200, `${none.status} ${none.error || ''}`);
+  }
 } finally {
   await stop();
   fs.rmSync(DIR, { recursive: true, force: true });

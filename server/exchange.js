@@ -17,7 +17,7 @@
 // 週替わりということは「逃した週の品は取れない」ということ。図鑑の母数に
 // 入れると**達成できない図鑑**になるので、server/catalog.js の
 // isCollectibleGear が exchangeOnly を外している。
-import { EXCHANGE_ITEMS } from './catalog.js';
+import { EXCHANGE_ITEMS, BOOST_ITEMS, supplyPacks, SUPPLY_GEM_PACK } from './catalog.js';
 import { unit } from './residents.js';
 
 // 1週間に並べる数。増やすほど1週の出費は増えるが、品切れも早くなる。
@@ -70,6 +70,64 @@ export function exchangeStock(weekId, pool = EXCHANGE_ITEMS) {
   return out;
 }
 
+/**
+ * 🧰 補給の売り場。**週替わりではなく常設**。
+ *
+ * 週替わりの品は一度買えば終わりなので、出口としては必ず枯れる。
+ * 消耗品は使えば減るので、いつでも買える場所に置いておくのが正しい。
+ */
+export function supplyView(user) {
+  const coins = Math.max(0, Number(user && user.coins) || 0);
+  const gems = Math.max(0, Number(user && user.gems) || 0);
+  const have = (user && user.items) || {};
+  return {
+    packs: supplyPacks().map(p => ({
+      ...p, afford: coins >= p.price, held: Math.max(0, Number(have[p.itemId]) || 0),
+    })),
+    gemPack: {
+      ...SUPPLY_GEM_PACK,
+      // 中身は運営専用でない消耗品ぜんぶを qty 個ずつ。
+      items: BOOST_ITEMS.filter(i => i && !i.adminOnly && Number(i.price) > 0).map(i => i.id),
+      afford: gems >= SUPPLY_GEM_PACK.price,
+    },
+  };
+}
+
+/**
+ * 補給を買う。**値段も個数もサーバーのカタログからしか読まない。**
+ * （交換所の品と同じ作法 ── クライアントの申告した金額は一切見ない）
+ */
+export function buySupply(user, packId) {
+  const id = String(packId || '');
+  if (id === SUPPLY_GEM_PACK.id) {
+    const price = SUPPLY_GEM_PACK.price;
+    const have = Math.max(0, Number(user.gems) || 0);
+    if (have < price) return { error: 'ジェムが足りません' };
+    const kit = BOOST_ITEMS.filter(i => i && !i.adminOnly && Number(i.price) > 0);
+    if (!kit.length) return { error: 'いま補給できる品がありません' };
+    user.gems = have - price;
+    user.items = user.items || {};
+    for (const i of kit) user.items[i.id] = (Number(user.items[i.id]) || 0) + SUPPLY_GEM_PACK.qty;
+    return {
+      ok: true,
+      got: kit.map(i => ({ id: i.id, name: i.name, qty: SUPPLY_GEM_PACK.qty })),
+      spent: { currency: 'gems', amount: price },
+    };
+  }
+  const pack = supplyPacks().find(p => p.id === id);
+  if (!pack) return { error: 'その補給はありません' };
+  const have = Math.max(0, Number(user.coins) || 0);
+  if (have < pack.price) return { error: 'コインが足りません' };
+  user.coins = have - pack.price;
+  user.items = user.items || {};
+  user.items[pack.itemId] = (Number(user.items[pack.itemId]) || 0) + pack.qty;
+  return {
+    ok: true,
+    got: [{ id: pack.itemId, name: pack.name, qty: pack.qty }],
+    spent: { currency: 'coins', amount: pack.price },
+  };
+}
+
 /** 画面に返す形。owned は「もう持っているか」。 */
 export function exchangeView(user, weekId, endsAt) {
   const owned = new Set((user && Array.isArray(user.owned)) ? user.owned : []);
@@ -79,6 +137,7 @@ export function exchangeView(user, weekId, endsAt) {
     week: String(weekId),
     endsAt: Number(endsAt) || 0,
     slots: EXCHANGE_SLOTS,
+    supply: supplyView(user),
     items: exchangeStock(weekId).map(i => ({
       id: i.id, cat: i.cat, name: i.name, desc: i.desc,
       price: Math.floor(Number(i.exPrice) || 0),

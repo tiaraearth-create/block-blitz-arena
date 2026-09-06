@@ -2121,12 +2121,92 @@ function paintExchange() {
     btn.onclick = () => (btn.dataset.act === 'ex' ? exchangeBuy(it, btn) : equipItem(it, btn));
   }
 
+  paintSupply(grid);
+
   clearInterval(exchangeTimer);
   exchangeTimer = setInterval(() => {
     const el = $('#exRemain');
     if (!el || document.body.dataset.screen !== 'shop' || shopTab !== 'exchange') { clearInterval(exchangeTimer); return; }
     el.textContent = exchangeRemain(exchangeData.endsAt);
   }, 30000);
+}
+
+/**
+ * 🧰 補給 — 消耗品のまとめ買い。**週替わりの下に常設**で置く。
+ *
+ * 週替わりの見た目は一度買えば終わりなので、出口としては必ず枯れる。
+ * 使えば減る消耗品を、いつでも買える場所に置いておくのがこの枠の役目。
+ * 品揃えも強さも今までと同じ（安く多く買えるだけ）── 対戦でも使える
+ * ブースターなので、強い品を売ると買えなかった人が損をする。
+ */
+function paintSupply(grid) {
+  const sup = exchangeData && exchangeData.supply;
+  if (!sup || !Array.isArray(sup.packs) || !sup.packs.length) return;
+
+  const head = document.createElement('div');
+  head.style.cssText = 'grid-column:1 / -1;padding:8px 10px;margin-top:6px;'
+    + 'border:1px dashed var(--line);border-radius:12px;background:rgba(255,255,255,0.04)';
+  head.innerHTML = `
+    <b>${ic('item_bomb', 15)} ${tr('補給', 'Supply')}</b>
+    <p class="muted" style="font-size:11px;margin:4px 0 0;line-height:1.5">
+      ${tr('いつでも買えます。まとめて買うほど1個あたりが安くなります。強さは変わりません。',
+    'Always in stock. The bigger the pack, the cheaper per unit. No power change.')}
+    </p>`;
+  grid.appendChild(head);
+
+  const g = sup.gemPack;
+  if (g && g.id) {
+    const el = document.createElement('div');
+    el.className = 'shop-item';
+    el.innerHTML = `
+      <div class="shop-name">${ic('gems', 13)} ${tr('補給キット', 'Supply kit')}</div>
+      <div class="shop-desc">${tr(`全4種を${g.qty}個ずつ`, `${g.qty} of each of all 4`)}</div>
+      <button class="btn btn-sm btn-gold" data-sup="${g.id}" ${g.afford ? '' : 'disabled'}>
+        ${ic('gems', 14)} ${fmt(g.price)}</button>
+      ${g.afford ? '' : `<div class="muted" style="font-size:10px">${tr('足りません', 'Not enough')}</div>`}`;
+    grid.appendChild(el);
+  }
+
+  for (const p of sup.packs) {
+    const el = document.createElement('div');
+    el.className = 'shop-item';
+    // 定価との差を出す。割引が見えないと「まとめ買いする理由」が伝わらない。
+    const off = p.list > 0 ? Math.round((1 - p.price / p.list) * 100) : 0;
+    el.innerHTML = `
+      <div class="shop-name">${ic(itemIconName(p.itemId), 13)} ${catName({ id: p.itemId, name: p.name })} ×${p.qty}</div>
+      <div class="shop-desc">${off > 0 ? tr(`${off}%お得（定価 ${fmt(p.list)}）`, `${off}% off (list ${fmt(p.list)})`) : ''}
+        ${p.held ? `<span class="muted"> ・${tr(`所持 ${fmt(p.held)}`, `holding ${fmt(p.held)}`)}</span>` : ''}</div>
+      <button class="btn btn-sm btn-gold" data-sup="${p.id}" ${p.afford ? '' : 'disabled'}>
+        ${ic('coins', 14)} ${fmt(p.price)}</button>
+      ${p.afford ? '' : `<div class="muted" style="font-size:10px">${tr('足りません', 'Not enough')}</div>`}`;
+    grid.appendChild(el);
+  }
+
+  for (const btn of grid.querySelectorAll('[data-sup]')) {
+    btn.onclick = () => supplyBuy(btn.dataset.sup, btn);
+  }
+}
+
+async function supplyBuy(packId, btn) {
+  if (!session.user) { showAuthModal(); return; }
+  btn.disabled = true;
+  try {
+    const res = await api('/api/exchange/supply', { method: 'POST', body: { packId } });
+    if (res && res.user) session.user = res.user;
+    if (res && res.exchange) exchangeData = res.exchange;
+    audio.coin();
+    const got = (res && res.got) || [];
+    const one = got.length === 1 ? catName({ id: got[0].id, name: got[0].name }) : '';
+    toast(got.length === 1
+      ? tr(`${one} を ${fmt(got[0].qty)}個 補給しました！`, `Stocked ${fmt(got[0].qty)}× ${one}!`)
+      : tr(`${got.length}種類を補給しました！`, `Stocked ${got.length} kinds!`), 'ok');
+    updateTopbar();
+    paintExchange();
+  } catch (err) {
+    audio.error();
+    toast(err.message, 'err');
+    btn.disabled = false;
+  }
 }
 
 async function exchangeBuy(item, btn) {

@@ -145,6 +145,9 @@ const SERVER_MSG_EN = {
   '今週の交換所には並んでいない品です': 'That item is not in this week\'s exchange',
   'この品は引き換えできません': 'That item cannot be exchanged',
   '交換所の品です（交換所でのみ引き換え）': 'Exchange item — available only in the exchange',
+  // 🧰 補給（消耗品のまとめ買い）
+  'その補給はありません': 'No such supply pack',
+  'いま補給できる品がありません': 'Nothing available to stock right now',
   'ジェムが足りません': 'Not enough gems',
   'すでに所持しています': 'You already own this',
   'すでにプレミアムです': 'You already have Premium',

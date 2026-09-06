@@ -29,7 +29,7 @@ import {
 } from '../daily.js';
 import { enName } from '../../public/js/catalog-en.js';   // ライブフィード/ギフトの英語名
 import { ctx } from '../context.js';
-import { exchangeView, buyExchange } from '../exchange.js';
+import { exchangeView, buyExchange, buySupply } from '../exchange.js';
 
 // index.js のモジュールスコープにしか無いもの。値は起動時に一度だけ
 // 流し込む（init… は server.listen より前・battle 生成より後に呼ばれる）。
@@ -525,6 +525,15 @@ function exchangeEndsAt() {
 shopRouter.get('/api/exchange', requireAuth, (req, res) => {
   migrateUser(req.user);
   res.json(exchangeView(req.user, weekIdOf(currentWeekNum()), exchangeEndsAt()));
+});
+
+// 🧰 補給（消耗品のまとめ買い）。常設なので週は見ない。
+shopRouter.post('/api/exchange/supply', requireAuth, maintenanceGuard, (req, res) => {
+  const out = buySupply(req.user, (req.body || {}).packId);
+  if (out.error) return res.status(402).json({ error: out.error });
+  saveDb();
+  res.json({ ...out, user: publicUser(req.user),
+    exchange: exchangeView(req.user, weekIdOf(currentWeekNum()), exchangeEndsAt()) });
 });
 
 shopRouter.post('/api/exchange/buy', requireAuth, maintenanceGuard, (req, res) => {

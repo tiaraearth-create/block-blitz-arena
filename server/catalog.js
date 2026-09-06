@@ -160,6 +160,79 @@ export const isTalkableGear = i => isBuyableGear(i);
 /** 🔄交換所に並ぶ装備か。 */
 export const isExchangeGear = i => !!i && !!i.exchangeOnly;
 
+// ---------------------------------------------------------------------------
+// 🧰 補給 — 消耗品のまとめ買い
+// ---------------------------------------------------------------------------
+//
+// ■ なぜ「消耗品」なのか
+// コインとジェムが余っていた（実測で 蛇口 509,416🪙・11,271💎/日 に対し、
+// 出口は 249,900🪙・5,110💎 の**一度きり**）。数週間で棚が空になり、
+// あとは貯まる一方だった。
+//
+// 出口を「見た目」で作ると置き場が2つしか無く、どちらも別のものを壊す:
+//   ・普通の棚に足す → ガチャが横から抜く（500🪙で当たるので棚が空振り）。
+//     さらに図鑑と実績の母数が動き、すでにコンプした人の達成が黙って剥がれる。
+//   ・交換所限定にする → ガチャと図鑑は避けられるが、**住人がどの経路でも
+//     触れない品**になる。相手のスキンを見せるようにした瞬間、
+//     「交換所の見た目を着ている＝実プレイヤー確定」という一方向100%の
+//     判定器が生まれる（住人の秘匿はこのゲームで最も強い制約）。
+//
+// 消耗品ならそのどちらにも当たらない。装備を1つも増やさないので
+// 図鑑・実績・ガチャ・住人の秘匿のすべてに影響しない。しかも**使えば減る**
+// ので、一度きりではなく繰り返し効く。
+//
+// ■ 強い消耗品は足さない
+// ブースターは対戦でも使える（noItems なのは固定キューのモードだけ）。
+// 強い品を売ると、コインを持っている人が対戦で有利になる ── 買えなかった
+// 人が損をする形の出口は作らない。**今ある消耗品を、まとめて買えるように
+// するだけ**にしてある。品揃えも強さも1ミリも変わらない。
+//
+// ■ 正直な但し書き
+// 消耗品の出口は「使う速さ」で頭打ちになるので、1日15万コインの蛇口を
+// 永久に飲み干すことはできない。ここが直すのは「使い道が無い」であって、
+// 「収支が合う」ではない。収支まで合わせるなら、1日の上限の外に漏れている
+// 経路（ロイヤルの順位報酬・PvP連勝ボーナス）を塞ぐ必要がある。
+
+/** まとめ買いの単位と割引。数が多いほど1個あたりが安くなる。 */
+export const SUPPLY_TIERS = [
+  { qty: 20,  off: 0.10 },
+  { qty: 100, off: 0.20 },
+];
+
+/**
+ * 補給の品揃え。**運営専用でない消耗品だけ**を、定価から割り引いて並べる。
+ * 値段は BOOST_ITEMS の定価から計算するので、定価を変えればここも追従する
+ * （2か所に数字を書かない ── ずれたら「棚より高いまとめ買い」が生まれる）。
+ */
+export function supplyPacks(boosters = BOOST_ITEMS) {
+  const out = [];
+  for (const b of boosters) {
+    if (!b || b.adminOnly) continue;
+    const unit = Math.max(0, Math.floor(Number(b.price) || 0));
+    if (!unit) continue;
+    for (const t of SUPPLY_TIERS) {
+      out.push({
+        id: `supply_${b.id}_${t.qty}`,
+        itemId: b.id, name: b.name, qty: t.qty,
+        // 端数は切り上げる（切り捨てると割引が表示より1コインだけ得になる）。
+        price: Math.ceil(unit * t.qty * (1 - t.off)),
+        list: unit * t.qty,
+        currency: 'coins',
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * 💎の出口。ジェムは棚と交換所を合わせても一度きりの 5,110💎 しか出口が
+ * 無く、1日120💎 入るので単調に増え続けていた。中身は上と同じ消耗品なので、
+ * 強さは変わらない（＝ジェムで強くなることはない）。
+ */
+export const SUPPLY_GEM_PACK = {
+  id: 'supply_gem_kit', qty: 10, price: 40, currency: 'gems',
+};
+
 // 装備スロット一覧（/api/equip が受け付けるスロット）
 // 👑 王座の欠片で買えるものだけ。ここに入ったものは /api/shop にも
 // ガチャの抽選対象にも絶対に出さない（出したら専用の意味が消える）。
@@ -178,13 +251,13 @@ export const BOOST_ITEMS = [
   { id: 'item_fever',   name: 'フィーバー',   desc: '15秒間スコア2倍', price: 400, currency: 'coins' },
   { id: 'item_mini',    name: 'ミニブロック', desc: '手持ち3つが極小ピースに変化', price: 350, currency: 'coins' },
   // ---- Staff-only gear (adminOnly: never sold, never shown to players, infinite for admins) ----
-  { id: 'item_god_wipe',   name: '神の一撃【管理者】',   desc: '盤面を消滅させ +50,000点（倍率適用）',        price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_time',   name: '時の支配【管理者】',   desc: '制限時間+120秒／敵の攻撃を60秒封印',          price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_hand',   name: '創造の手札【管理者】', desc: '最適な3ピース＋次の12手がライン消し向けの大型ピース', price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_mult',   name: '神威【管理者】',       desc: '30秒間スコア10倍',                            price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_shield', name: '絶対防御【管理者】',   desc: '60秒間ゲームオーバー無効・お邪魔無効・コンボ永続', price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_nuke',   name: '天変地異【管理者】',   desc: '敵のHPを99%削る（敵がいなければ +100,000点）',   price: 0, currency: 'coins', adminOnly: true },
-  { id: 'item_god_ward',   name: '八方結界【管理者】',   desc: '外周28マスを祓い、25秒間 外周の妨害を祓い続ける（内側は無傷）', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_wipe',   name: '神の一撃【管理者】',   desc: '盤面を消滅させ +500,000点（倍率適用）',        price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_time',   name: '時の支配【管理者】',   desc: '制限時間+10分／敵の攻撃を5分封印／時計が無ければリロール+99',          price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_hand',   name: '創造の手札【管理者】', desc: '最適な3ピース＋次の99手がライン消し向けの大型ピース', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_mult',   name: '神威【管理者】',       desc: '60秒間スコア100倍',                            price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_shield', name: '絶対防御【管理者】',   desc: '5分間ゲームオーバー無効・お邪魔無効・コンボ永続', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_nuke',   name: '天変地異【管理者】',   desc: '敵を即死させる（敵がいなければ +1,000,000点）',   price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_ward',   name: '八方結界【管理者】',   desc: '外周28マスを祓い、2分間 外周の妨害を祓い続ける（内側は無傷）', price: 0, currency: 'coins', adminOnly: true },
   { id: 'item_god_omikuji', name: '御神籤【管理者】',     desc: '引くたびに変わる福を1つ。外れは無く、結果は必ず通知される', price: 0, currency: 'coins', adminOnly: true },
 ];
 

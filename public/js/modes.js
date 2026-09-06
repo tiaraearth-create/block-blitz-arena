@@ -1210,14 +1210,14 @@ const ITEM_DEFS = {
   item_fever:   { name: 'フィーバー', nameEn: N_FEVER, tip: 'フィーバー：15秒間スコア2倍', tipEn: `${N_FEVER}: 2× score for 15 seconds` },
   item_mini:    { name: 'ミニブロック', nameEn: N_MINI, tip: 'ミニブロック：手持ちが極小ピースに変化', tipEn: `${N_MINI}: turns your hand into tiny pieces` },
   // ---- staff only (infinite, every mode) ----
-  item_god_wipe:   { name: '神の一撃', nameEn: N_WIPE, admin: true, tip: '神の一撃：盤面消滅＋50,000点', tipEn: `${N_WIPE}: wipe the board, +50,000` },
-  item_god_time:   { name: '時の支配', nameEn: N_TIME, admin: true, tip: '時の支配：+120秒／敵の攻撃を60秒封印', tipEn: `${N_TIME}: +120s / freeze enemies 60s` },
-  item_god_hand:   { name: '創造の手札', nameEn: N_HAND, admin: true, tip: '創造の手札：最適手札＋12手は大型ピース', tipEn: `${N_HAND}: perfect hand + 12 big draws` },
-  item_god_mult:   { name: '神威', nameEn: N_MULT, admin: true, tip: '神威：30秒間スコア10倍', tipEn: `${N_MULT}: 10× score for 30s` },
-  item_god_shield: { name: '絶対防御', nameEn: N_SHIELD, admin: true, tip: '絶対防御：60秒間 無敵・お邪魔無効・コンボ永続', tipEn: `${N_SHIELD}: 60s invincible, no garbage, combo lock` },
-  item_god_ward:   { name: '八方結界', nameEn: enItemName('item_god_ward', 'Eightfold Ward'), admin: true, tip: '八方結界：外周28マスを祓い、25秒間 外周を守る', tipEn: `${enItemName('item_god_ward', 'Eightfold Ward')}: purge the 28 rim cells, then hold the rim for 25s` },
+  item_god_wipe:   { name: '神の一撃', nameEn: N_WIPE, admin: true, tip: '神の一撃：盤面消滅＋500,000点', tipEn: `${N_WIPE}: wipe the board, +500,000` },
+  item_god_time:   { name: '時の支配', nameEn: N_TIME, admin: true, tip: '時の支配：+10分／敵の攻撃を5分封印', tipEn: `${N_TIME}: +10 min / freeze enemies 5 min` },
+  item_god_hand:   { name: '創造の手札', nameEn: N_HAND, admin: true, tip: '創造の手札：最適手札＋99手は大型ピース', tipEn: `${N_HAND}: perfect hand + 99 big draws` },
+  item_god_mult:   { name: '神威', nameEn: N_MULT, admin: true, tip: '神威：60秒間スコア100倍', tipEn: `${N_MULT}: 100× score for 60s` },
+  item_god_shield: { name: '絶対防御', nameEn: N_SHIELD, admin: true, tip: '絶対防御：5分間 無敵・お邪魔無効・コンボ永続', tipEn: `${N_SHIELD}: 5 min invincible, no garbage, combo lock` },
+  item_god_ward:   { name: '八方結界', nameEn: enItemName('item_god_ward', 'Eightfold Ward'), admin: true, tip: '八方結界：外周28マスを祓い、2分間 外周を守る', tipEn: `${enItemName('item_god_ward', 'Eightfold Ward')}: purge the 28 rim cells, then hold the rim for 2 min` },
   item_god_omikuji: { name: '御神籤', nameEn: enItemName('item_god_omikuji', 'Sacred Lot'), admin: true, tip: '御神籤：引くたびに変わる福を1つ（外れ無し）', tipEn: `${enItemName('item_god_omikuji', 'Sacred Lot')}: one random blessing — never a dud` },
-  item_god_nuke:   { name: '天変地異', nameEn: N_NUKE, admin: true, tip: '天変地異：敵HPを99%削る（敵なしなら+100,000点）', tipEn: `${N_NUKE}: 99% enemy HP (or +100,000)` },
+  item_god_nuke:   { name: '天変地異', nameEn: N_NUKE, admin: true, tip: '天変地異：敵を即死させる（敵なしなら+1,000,000点）', tipEn: `${N_NUKE}: instantly kills the enemy (or +1,000,000)` },
 };
 
 // Build the HUD item buttons for the current player (staff see their gear).
@@ -1400,7 +1400,8 @@ export function useGameItem(id) {
     const filled = [];
     for (let i = 0; i < 64; i++) if (e.grid[i]) { filled.push(i); e.grid[i] = 0; }
     for (const i of filled) view.particles.burstCell(view.boardX + ((i % 8) + 0.5) * view.cell, view.boardY + (Math.floor(i / 8) + 0.5) * view.cell, view.cell, 14, 'fx_default');
-    const gained = Math.round(50000 * (e.scoreMult || 1) * (e.feverUntil > Date.now() ? (e.feverMult || 2) : 1));
+    // 👑 運営専用なので釣り合いは考えない（2026-09-06 指示で 50,000 → 500,000）。
+    const gained = Math.round(500000 * (e.scoreMult || 1) * (e.feverUntil > Date.now() ? (e.feverMult || 2) : 1));
     e.score += gained;
     if (m.onPlace) m.onPlace({ placedCells: [[0, 0]], color: 1, fullRows: [], fullCols: [], clearedCells: [], lineCount: 0, gained, streak: e.streak, over: false });
     view.shake = 22; view.screenFlash = 0.7; audio.bossDefeated();
@@ -1412,42 +1413,45 @@ export function useGameItem(id) {
     //    奥義の⏳時間停止（skills.js）は最初から分岐ごとに文言を作っている。
     const gtBits = [];
     if (m.endAt !== undefined && m.timerInt) {
-      m.endAt += 120000; m.timeLeft += 120; if (m.updateTimerHud) m.updateTimerHud();
-      gtBits.push(t('時間+120秒', '+120s'));
+      m.endAt += 600000; m.timeLeft += 600; if (m.updateTimerHud) m.updateTimerHud();
+      gtBits.push(t('時間+10分', '+10 min'));
     }
-    if (m.nextAtk) { m.nextAtk += 60000; gtBits.push(t('敵を60秒封印', 'enemies frozen 60s')); }
-    if (m.nextAt) { m.nextAt += 60000; gtBits.push(t('次の波を60秒遅らせた', 'next wave delayed 60s')); }
+    if (m.nextAtk) { m.nextAtk += 300000; gtBits.push(t('敵を5分封印', 'enemies frozen 5 min')); }
+    if (m.nextAt) { m.nextAt += 300000; gtBits.push(t('次の波を5分遅らせた', 'next wave delayed 5 min')); }
     if (m.endAt === undefined && !m.nextAtk && !m.nextAt) {
-      e.rerolls += 10;
+      e.rerolls += 99;
       updateRerollHud(e);
-      gtBits.push(t('リロール+10', '+10 rerolls'));
+      gtBits.push(t('リロール+99', '+99 rerolls'));
     }
     view.screenFlash = 0.4; audio.combo(7);
     toast(`${t('時の支配！', `${N_TIME}! `)}${gtBits.join(t('／', ' / '))}`, 'announce', 2000);
   } else if (id === 'item_god_hand') {
     const out = fireUlt('ult_rainbow', { engine: e, view, mode: m });
-    e.godDraws = 12;
+    e.godDraws = 99;
     if (out.error) toast(out.error, 'err', 1500);
-    else toast(t('創造の手札！次の12手は大型ピース', `${N_HAND}! 12 big draws incoming`), 'announce', 2000);
+    else toast(t('創造の手札！次の99手は大型ピース', `${N_HAND}! 99 big draws incoming`), 'announce', 2000);
   } else if (id === 'item_god_mult') {
-    e.feverUntil = Date.now() + 30000;
-    e.feverMult = 10;
+    // ⚠ 戻すときの見張りは **feverMult === 100 のときだけ** 下ろす。
+    //    ここを固定値で消すと、この60秒のあいだに掛かった別の倍率
+    //    （🔥オーバードライブ ×3 / 🎋招福 ×4）を途中で殺す。
+    e.feverUntil = Date.now() + 60000;
+    e.feverMult = 100;
     $('#hudScore').classList.add('fever');
     view.screenFlash = 0.5; audio.combo(9);
-    toast(t('神威！30秒間スコア10倍！！', `${N_MULT}! 10× score for 30s!!`), 'announce', 2400);
-    setTimeout(() => { if (e.feverMult === 10) { e.feverMult = 2; $('#hudScore').classList.remove('fever'); } }, 30000);
+    toast(t('神威！60秒間スコア100倍！！！', `${N_MULT}! 100× score for 60s!!!`), 'announce', 2400);
+    setTimeout(() => { if (e.feverMult === 100) { e.feverMult = 2; $('#hudScore').classList.remove('fever'); } }, 60000);
   } else if (id === 'item_god_shield') {
-    view.godInvincibleUntil = Date.now() + 60000;
-    e.fortressUntil = Math.max(e.fortressUntil || 0, Date.now() + 60000);
+    view.godInvincibleUntil = Date.now() + 300000;
+    e.fortressUntil = Math.max(e.fortressUntil || 0, Date.now() + 300000);
     e.streakShield = true;
     view.reviveFlash(); view.screenFlash = 0.4; audio.combo(6);
-    toast(t('絶対防御！60秒間 無敵・お邪魔無効・コンボ永続', `${N_SHIELD}! 60s invincible, no garbage, combo lock`), 'announce', 2400);
+    toast(t('絶対防御！5分間 無敵・お邪魔無効・コンボ永続', `${N_SHIELD}! 5 min invincible, no garbage, combo lock`), 'announce', 2400);
   } else if (id === 'item_god_ward') {
     // 🔯 八方結界 ── 「場所」に効く運営装備。見るのは外周28マスだけ。
     //    ・発動: 外周を種類を問わず祓う（＝盤の縁を作り直す）。内側6×6には
     //      指1本触れないので、積み上げた形もリーチもそのまま残る。盤面ごと
     //      消す神の一撃（item_god_wipe）との差はここ。
-    //    ・持続: 25秒間、外周に紛れ込んだ**異物だけ**（お邪魔9 / 氷10・11 /
+    //    ・持続: 2分間、外周に紛れ込んだ**異物だけ**（お邪魔9 / 氷10・11 /
     //      眼12）を 0.9 秒ごとに祓う。**自分の色(1..8)は絶対に触らない** ──
     //      触ると外周を含む行・列が永久に揃わなくなり、強化アイテムのはずが
     //      得点源を殺すことになる（行0・7と列0・7は全マスが外周、行1〜6でも
@@ -1472,7 +1476,7 @@ export function useGameItem(id) {
       wiped++;
       ringBurst(k);
     }
-    const wardGain = Math.round(wiped * 600 * (e.scoreMult || 1) * (e.feverUntil > Date.now() ? (e.feverMult || 2) : 1));
+    const wardGain = Math.round(wiped * 6000 * (e.scoreMult || 1) * (e.feverUntil > Date.now() ? (e.feverMult || 2) : 1));
     if (wardGain) {
       e.score += wardGain;
       if (m.updateHud) m.updateHud(); else if (m.updateMyHud) m.updateMyHud(e);
@@ -1486,7 +1490,7 @@ export function useGameItem(id) {
     //    2枚目を使ったときに見張りが2本走り、掃除も「解けた」も二重になる
     //    ── しかも先に張ったほうを止める手段が無い。重ねがけは**窓を
     //    伸ばすだけ**にして、見張りは常に1本に保つ。
-    m._wardUntil = Math.max(m._wardUntil || 0, Date.now() + 25000);
+    m._wardUntil = Math.max(m._wardUntil || 0, Date.now() + 120000);
     if (!m._wardInt) {
       let wardLast = Date.now();
       m._wardInt = setInterval(() => {
@@ -1528,8 +1532,8 @@ export function useGameItem(id) {
       }, 900);
     }
     const wardHead = wiped
-      ? t(`八方結界！外周${wiped}マスを祓い、25秒間 外周を守る`, `${N_WARD}! purged ${wiped} rim cells — the rim is warded for 25s`)
-      : t('八方結界！外周はすでに空。25秒間 外周を守る', `${N_WARD}! the rim was already clear — warded for 25s`);
+      ? t(`八方結界！外周${wiped}マスを祓い、2分間 外周を守る`, `${N_WARD}! purged ${wiped} rim cells — the rim is warded for 2 min`)
+      : t('八方結界！外周はすでに空。2分間 外周を守る', `${N_WARD}! the rim was already clear — warded for 2 min`);
     toast(wardGain ? `${wardHead} +${fmt(wardGain)}` : wardHead, 'announce', 2400);
   } else if (id === 'item_god_omikuji') {
     // 🎋 御神籤 ── 引くたびに変わる。ただし**外れの目は作らない**。
@@ -1566,7 +1570,7 @@ export function useGameItem(id) {
     const pool = ['kin', 'takara'];                                   // いつでも必ず効く2つ
     if (foreign.length) pool.push('harai');
     if (feverCur < 4) pool.push('fuku');                              // ×4 が現在の倍率を下げるなら出さない
-    if ((e.fortressUntil || 0) < Date.now() + 25000) pool.push('mamori');
+    if ((e.fortressUntil || 0) < Date.now() + 120000) pool.push('mamori');
     if ((m.endAt !== undefined && m.timerInt) || m.nextAtk || m.nextAt) pool.push('kotobuki');
     const luck = pool[(Math.random() * pool.length) | 0];
     audio.coin();
@@ -1577,11 +1581,11 @@ export function useGameItem(id) {
       // （自作すると置けない3枚を配って、その場で詰ませることがある）。
       const out = fireUlt('ult_rainbow', { engine: e, view, mode: m });
       if (out.error) {
-        omMsg = omKin(9000);
+        omMsg = omKin(90000);
       } else {
-        e.godDraws = Math.max(e.godDraws || 0, 6);
-        omMsg = t('御神籤：大吉「宝船」 手札が最良の3枚に。次の6手も大型',
-          `${N_OMIKUJI} — Great Fortune "Treasure Ship": perfect hand, 6 big draws`);
+        e.godDraws = Math.max(e.godDraws || 0, 30);
+        omMsg = t('御神籤：大吉「宝船」 手札が最良の3枚に。次の30手も大型',
+          `${N_OMIKUJI} — Great Fortune "Treasure Ship": perfect hand, 30 big draws`);
       }
     } else if (luck === 'harai') {
       // 大吉「厄祓い」── 外周に限らず盤面**全域**の異物を祓う（八方結界との差）。
@@ -1590,7 +1594,7 @@ export function useGameItem(id) {
         view.particles.burstCell(view.boardX + ((k % 8) + 0.5) * view.cell,
           view.boardY + (Math.floor(k / 8) + 0.5) * view.cell, view.cell, 5, view.fxId || 'fx_default');
       }
-      const g = omGain(foreign.length * 400);
+      const g = omGain(foreign.length * 4000);
       view.reviveFlash();
       omMsg = t(`御神籤：大吉「厄祓い」 ${foreign.length}マスを祓った +${fmt(g)}`,
         `${N_OMIKUJI} — Great Fortune "Cleansing": ${foreign.length} cells purged, +${fmt(g)}`);
@@ -1620,19 +1624,19 @@ export function useGameItem(id) {
     } else if (luck === 'mamori') {
       // 小吉「守り」── 🛡絶対防御から**無敵を抜いた**形。守りを切り詰めないよう
       // Math.max で伸ばすだけにする（ult_fortress と同じ作法）。
-      e.fortressUntil = Math.max(e.fortressUntil || 0, Date.now() + 25000);
+      e.fortressUntil = Math.max(e.fortressUntil || 0, Date.now() + 120000);
       e.streakShield = true;
       view.reviveFlash();
       audio.combo(5);
-      omMsg = t('御神籤：小吉「守り」 25秒間 お邪魔無効・コンボ永続',
-        `${N_OMIKUJI} — Small Fortune "Guard": 25s of garbage immunity and combo lock`);
+      omMsg = t('御神籤：小吉「守り」 2分間 お邪魔無効・コンボ永続',
+        `${N_OMIKUJI} — Small Fortune "Guard": 2 min of garbage immunity and combo lock`);
     } else if (luck === 'kotobuki') {
       // 吉「寿」── そのモードに在る時計だけを進める（⏳時の支配と同じ形。
       // 文言を固定にすると、時計も敵も無いモードで嘘のトーストになる）。
       const kb = [];
       if (m.endAt !== undefined && m.timerInt) {
-        m.endAt += 40000; m.timeLeft += 40; if (m.updateTimerHud) m.updateTimerHud();
-        kb.push(t('時間+40秒', '+40s'));
+        m.endAt += 180000; m.timeLeft += 180; if (m.updateTimerHud) m.updateTimerHud();
+        kb.push(t('時間+3分', '+3 min'));
       }
       if (m.nextAtk) { m.nextAtk += 25000; kb.push(t('敵の攻撃を25秒遅らせた', 'enemy attack delayed 25s')); }
       if (m.nextAt) { m.nextAt += 25000; kb.push(t('次の波を25秒遅らせた', 'next wave delayed 25s')); }
@@ -1648,7 +1652,8 @@ export function useGameItem(id) {
     toast(omMsg, 'announce', 2600);
   } else if (id === 'item_god_nuke') {
     if (typeof m.hp === 'number' && (m.mode === 'boss' || m.mode === 'dungeon' || m.raidBoss)) {
-      const dmg = Math.max(0, m.hp - Math.ceil(m.hp * 0.01));
+      // 👑 運営専用。1%残していたのをやめて、そのまま倒し切る。
+      const dmg = Math.max(0, m.hp);
       m.hp -= dmg;
       e.score += dmg;
       if (m.updateHpBar) m.updateHpBar();
@@ -1657,10 +1662,10 @@ export function useGameItem(id) {
       view.shake = 24; view.screenFlash = 0.8; audio.bossAttack();
       toast(t(`天変地異！ -${fmt(dmg)}`, `${N_NUKE}! -${fmt(dmg)}`), 'announce', 2000);
     } else {
-      e.score += 100000;
+      e.score += 1000000;
       if (m.updateHud) m.updateHud(); else if (m.updateMyHud) m.updateMyHud(e);
       view.shake = 24; view.screenFlash = 0.8; audio.bossDefeated();
-      toast(t('天変地異！ +100,000', `${N_NUKE}! +100,000`), 'announce', 2000);
+      toast(t('天変地異！ +1,000,000', `${N_NUKE}! +1,000,000`), 'announce', 2000);
     }
   }
 

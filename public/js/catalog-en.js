@@ -36,7 +36,7 @@ export const CATALOG_EN = {
   fx_hotaru: { name: 'Firefly Glow [Staff]', desc: 'Staff-only: fireflies drift slowly, flicker, and fade' },
   ult_barrier: { name: 'Ward [Staff]', desc: 'Staff-only guard: cleanses the four 2×2 corners to open up room to move' },
   ult_kamikakushi: { name: 'Hidden Away [Staff]', desc: 'Staff-only: carries off up to 12 cells, the loosest-linked first' },
-  item_god_ward: { name: 'Eightfold Ward [Staff]', desc: 'Purges all 28 rim cells, then keeps sweeping garbage and ice off the rim for 25s (the inside is untouched)' },
+  item_god_ward: { name: 'Eightfold Ward [Staff]', desc: 'Purges all 28 rim cells, then keeps sweeping garbage and ice off the rim for 2 minutes (the inside is untouched)' },
   item_god_omikuji: { name: 'Sacred Lot [Staff]', desc: 'Draws one random blessing — never a dud, and the result is always announced' },
   // ---- 🔄 交換所限定（exchangeOnly）----
   board_glass: { name: 'Glass Room', desc: 'Pale, cold blue-green seen through glass' },
@@ -106,12 +106,12 @@ export const CATALOG_EN = {
   ult_judgement: { name: 'Divine Judgement', desc: 'Annihilates the board for a colossal score' },
   ult_admin: { name: 'Omnipotence [Staff]', desc: 'Staff-only: board wipe + instant gauge refill' },
   // admin-exclusive booster items (item_god_*)
-  item_god_wipe: { name: 'God Strike [Staff]', desc: 'Wipes the board and grants +50,000 (multiplier applies)' },
-  item_god_time: { name: 'Time Mastery [Staff]', desc: '+120s on the clock / seals enemy attacks for 60s' },
-  item_god_hand: { name: 'Creator’s Hand [Staff]', desc: 'The best 3 pieces + the next 12 draws are big line-clearing pieces' },
-  item_god_mult: { name: 'Divine Might [Staff]', desc: '10× score for 30 seconds' },
-  item_god_shield: { name: 'Absolute Guard [Staff]', desc: '60s of no game-over, garbage immunity, and a permanent combo' },
-  item_god_nuke: { name: 'Cataclysm [Staff]', desc: 'Strips 99% of the enemy’s HP (or +100,000 if no enemy)' },
+  item_god_wipe: { name: 'God Strike [Staff]', desc: 'Wipes the board and grants +500,000 (multiplier applies)' },
+  item_god_time: { name: 'Time Mastery [Staff]', desc: '+10 min on the clock / seals enemy attacks for 5 min / +99 rerolls if there is no clock' },
+  item_god_hand: { name: 'Creator’s Hand [Staff]', desc: 'The best 3 pieces + the next 99 draws are big line-clearing pieces' },
+  item_god_mult: { name: 'Divine Might [Staff]', desc: '100× score for 60 seconds' },
+  item_god_shield: { name: 'Absolute Guard [Staff]', desc: '5 minutes of no game-over, garbage immunity, and a permanent combo' },
+  item_god_nuke: { name: 'Cataclysm [Staff]', desc: 'Instantly kills the enemy (or +1,000,000 if no enemy)' },
   // admin-exclusive gear
   skin_admin: { name: 'Rainbow [Staff]', desc: 'Staff-only blocks shimmering in rainbow' },
   board_admin: { name: 'Throne Room [Staff]', desc: 'A staff-only stage of royal gold' },
