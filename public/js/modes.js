@@ -2022,7 +2022,7 @@ class MeltdownMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('oni');
+    audio.playTrack('meltdown');
     this.alarmInt = setInterval(() => this.alarmTick(), 600);
     // トーストは textContent に入るので、盤面の冷却セルは絵ではなく言葉で指す。
     toast(t('消すほど熱く、熱いほど稼げる。100%で爆発！青い冷却セルごと消せば冷える！', 'Clears heat the core — heat multiplies your score. 100% = boom! Clear the blue coolant cells to cool it down!'), 'announce', 3200);
@@ -2252,7 +2252,7 @@ class ChimeraMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('solo');
+    audio.playTrack('chimera');
     toast(t('ピースをピースにドラッグで溶接！大きいほど高倍率！', 'Drag a piece onto another to weld them — bigger means bigger multipliers!'), 'announce', 3200);
   }
 
@@ -3240,7 +3240,7 @@ const DIFF_THEME = {
   hard:   { board: 'board_sunset',  track: 'hard' },
   oni:    { board: 'board_oni',     track: 'oni' },
   kami:   { board: 'board_kami',    track: 'kami' },
-  souzou: { board: 'board_galaxy',  track: 'kami' },
+  souzou: { board: 'board_galaxy',  track: 'souzou' },
 };
 
 class AiMode extends VersusBase {
@@ -3445,11 +3445,11 @@ class AiMode extends VersusBase {
 
 const BOSS_STAGE = {
   slime:  { board: 'board_forest', track: 'battle' },
-  golem:  { board: 'board_ocean',  track: 'boss' },
-  dragon: { board: 'board_sunset', track: 'boss' },
+  golem:  { board: 'board_ocean',  track: 'ocean' },
+  dragon: { board: 'board_sunset', track: 'volcano' },
   maou:   { board: 'board_oni',    track: 'oni' },
   mecha:  { board: 'board_cyber',  track: 'pixel' },
-  frost:  { board: 'board_snow',   track: 'kami' },
+  frost:  { board: 'board_snow',   track: 'frost' },
 };
 
 // ---------------------------------------------------------------------------
@@ -4004,7 +4004,7 @@ class BossRushMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('boss');
+    audio.playTrack('rush');
     toast(t('無限地獄ラッシュ！倒すほど深く、敵は強く。遺物でビルドを組め！', 'Infinite Hell Rush! The deeper you go, the stronger they get. Build with relics!'), 'announce', 3200);
 
     countdownOverlay(3, afterCountdown(this, () => {
@@ -4303,7 +4303,7 @@ class WeeklyMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('battle');
+    audio.playTrack('weekly');
     toast(t(`ウィークリーチャレンジ！${this.info.pieces}個のピースで限界に挑め！`, `Weekly Challenge! Push your limit with ${this.info.pieces} pieces!`), 'announce', 2800);
   }
 
@@ -4504,7 +4504,7 @@ class DailyMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('battle');
+    audio.playTrack('daily');
     const mod = this.info.modifier || {};
     toast(t(
       `${mod.ja || ''}！${this.info.pieces}個で${fmt(this.info.target)}点を狙え！${this.practice ? '（練習）' : ''}`,
@@ -4989,58 +4989,58 @@ function foeTint(realm, bandIdx, slot, isBoss) {
 }
 
 const DUNGEON_BANDS = [
-  { name: '苔の洞窟',   nameEn: 'Mossy Cave',       board: 'board_forest',  track: 'battle', foes: [['bird', 'コウモリ', 'Bat'], ['beast', '大ネズミ', 'Giant Rat'], ['slime', 'スライム', 'Slime'], ['bug', '毒グモ', 'Venom Spider']], boss: ['slime', 'キングスライム', 'King Slime'] },
-  { name: '海底神殿',   nameEn: 'Sunken Temple',    board: 'board_ocean',   track: 'battle', foes: [['tentacle', 'タコ兵', 'Octopus Trooper'], ['crab', '鉄カニ', 'Iron Crab'], ['aqua', 'トゲフグ', 'Spike Puffer'], ['beast', 'サメ傭兵', 'Shark Mercenary']], boss: ['royal', '海の女王', 'Queen of the Sea'] },
-  { name: '桜の迷宮',   nameEn: 'Sakura Labyrinth', board: 'board_sakura',  track: 'solo',   foes: [['beast', '妖狐', 'Fox Spirit'], ['serpent', '花蛇', 'Blossom Snake'], ['bug', '幻蝶', 'Phantom Butterfly'], ['bird', '怪鳥', 'Dread Bird']], boss: ['oni', '大天狗', 'Great Tengu'] },
-  { name: '黄昏の砂漠', nameEn: 'Twilight Desert',  board: 'board_sunset',  track: 'hard',   foes: [['crab', '大サソリ', 'Giant Scorpion'], ['beast', '護衛ラクダ', 'Guard Camel'], ['bird', 'ハゲタカ', 'Vulture'], ['serpent', '砂大蛇', 'Sand Serpent']], boss: ['royal', 'スフィンクス', 'Sphinx'] },
-  { name: '灼熱火山',   nameEn: 'Scorching Volcano', board: 'board_volcano', track: 'hard',  foes: [['flame', '火の精', 'Fire Sprite'], ['serpent', '溶岩トカゲ', 'Lava Lizard'], ['beast', 'マグマ猪', 'Magma Boar'], ['golem', '岩人形', 'Stone Golem']], boss: ['dragon', '火竜グレンド', 'Grend the Fire Dragon'] },
-  { name: '氷結洞窟',   nameEn: 'Frozen Cavern',    board: 'board_default', track: 'boss',   foes: [['golem', '雪人形', 'Snow Golem'], ['bird', '氷ペンギン兵', 'Ice Penguin Trooper'], ['aqua', '氷セイウチ', 'Ice Walrus'], ['frost', '氷の精', 'Frost Sprite']], boss: ['beast', 'フロストベア', 'Frost Bear'] },
-  { name: '雷雲の頂',   nameEn: 'Thunderhead Peak', board: 'board_galaxy',  track: 'boss',   foes: [['storm', '雷精', 'Storm Sprite'], ['bird', '雷鷲', 'Thunder Eagle'], ['ghost', '雲魔', 'Cloud Fiend'], ['void', '竜巻魔', 'Tornado Fiend']], boss: ['bird', 'サンダーバード', 'Thunderbird'] },
-  { name: '亡霊の城',   nameEn: 'Haunted Castle',   board: 'board_oni',     track: 'oni',    foes: [['ghost', '亡霊', 'Wraith'], ['undead', 'スケルトン', 'Skeleton'], ['blade', 'ゾンビ騎士', 'Zombie Knight'], ['bird', '吸血コウモリ', 'Vampire Bat']], boss: ['royal', 'ヴァンパイア卿', 'Lord Vampire'] },
+  { name: '苔の洞窟',   nameEn: 'Mossy Cave',       board: 'board_forest',  track: 'ruins', foes: [['bird', 'コウモリ', 'Bat'], ['beast', '大ネズミ', 'Giant Rat'], ['slime', 'スライム', 'Slime'], ['bug', '毒グモ', 'Venom Spider']], boss: ['slime', 'キングスライム', 'King Slime'] },
+  { name: '海底神殿',   nameEn: 'Sunken Temple',    board: 'board_ocean',   track: 'ocean', foes: [['tentacle', 'タコ兵', 'Octopus Trooper'], ['crab', '鉄カニ', 'Iron Crab'], ['aqua', 'トゲフグ', 'Spike Puffer'], ['beast', 'サメ傭兵', 'Shark Mercenary']], boss: ['royal', '海の女王', 'Queen of the Sea'] },
+  { name: '桜の迷宮',   nameEn: 'Sakura Labyrinth', board: 'board_sakura',  track: 'sakura',   foes: [['beast', '妖狐', 'Fox Spirit'], ['serpent', '花蛇', 'Blossom Snake'], ['bug', '幻蝶', 'Phantom Butterfly'], ['bird', '怪鳥', 'Dread Bird']], boss: ['oni', '大天狗', 'Great Tengu'] },
+  { name: '黄昏の砂漠', nameEn: 'Twilight Desert',  board: 'board_sunset',  track: 'desert',   foes: [['crab', '大サソリ', 'Giant Scorpion'], ['beast', '護衛ラクダ', 'Guard Camel'], ['bird', 'ハゲタカ', 'Vulture'], ['serpent', '砂大蛇', 'Sand Serpent']], boss: ['royal', 'スフィンクス', 'Sphinx'] },
+  { name: '灼熱火山',   nameEn: 'Scorching Volcano', board: 'board_volcano', track: 'volcano',  foes: [['flame', '火の精', 'Fire Sprite'], ['serpent', '溶岩トカゲ', 'Lava Lizard'], ['beast', 'マグマ猪', 'Magma Boar'], ['golem', '岩人形', 'Stone Golem']], boss: ['dragon', '火竜グレンド', 'Grend the Fire Dragon'] },
+  { name: '氷結洞窟',   nameEn: 'Frozen Cavern',    board: 'board_default', track: 'frost',   foes: [['golem', '雪人形', 'Snow Golem'], ['bird', '氷ペンギン兵', 'Ice Penguin Trooper'], ['aqua', '氷セイウチ', 'Ice Walrus'], ['frost', '氷の精', 'Frost Sprite']], boss: ['beast', 'フロストベア', 'Frost Bear'] },
+  { name: '雷雲の頂',   nameEn: 'Thunderhead Peak', board: 'board_galaxy',  track: 'storm',   foes: [['storm', '雷精', 'Storm Sprite'], ['bird', '雷鷲', 'Thunder Eagle'], ['ghost', '雲魔', 'Cloud Fiend'], ['void', '竜巻魔', 'Tornado Fiend']], boss: ['bird', 'サンダーバード', 'Thunderbird'] },
+  { name: '亡霊の城',   nameEn: 'Haunted Castle',   board: 'board_oni',     track: 'crypt',    foes: [['ghost', '亡霊', 'Wraith'], ['undead', 'スケルトン', 'Skeleton'], ['blade', 'ゾンビ騎士', 'Zombie Knight'], ['bird', '吸血コウモリ', 'Vampire Bat']], boss: ['royal', 'ヴァンパイア卿', 'Lord Vampire'] },
   { name: '鬼の巣窟',   nameEn: 'Oni Den',          board: 'board_oni',     track: 'oni',    foes: [['oni', '赤鬼', 'Red Oni'], ['mask', '青鬼', 'Blue Oni'], ['flame', '鬼火', 'Ghost Flame'], ['undead', '骨武者', 'Bone Samurai']], boss: ['oni', '鬼神ラセツ', 'Rasetsu the Oni God'] },
-  { name: '天界の門',   nameEn: 'Heavenly Gate',    board: 'board_kami',    track: 'kami',   foes: [['angel', '堕天使', 'Fallen Angel'], ['blade', '神殿騎士', 'Temple Knight'], ['star', '星霊', 'Star Spirit'], ['arcane', '法陣魔', 'Rune Fiend']], boss: ['oni', '魔神ゼルガドス', 'Zelgados the Demon God'] },
+  { name: '天界の門',   nameEn: 'Heavenly Gate',    board: 'board_kami',    track: 'heaven',   foes: [['angel', '堕天使', 'Fallen Angel'], ['blade', '神殿騎士', 'Temple Knight'], ['star', '星霊', 'Star Spirit'], ['arcane', '法陣魔', 'Rune Fiend']], boss: ['oni', '魔神ゼルガドス', 'Zelgados the Demon God'] },
 ];
 
 // Underground realm (B1–B100): tougher, faster, rubble on every floor.
 const UNDER_BANDS = [
-  { name: '苔むす地下道', nameEn: 'Mossy Underpass',  board: 'board_forest',  track: 'battle', foes: [['serpent', '大ミミズ', 'Giant Worm'], ['bug', '洞窟蚊', 'Cave Gnat'], ['plant', '毒キノコ', 'Toxic Shroom'], ['slime', '岩ナメクジ', 'Rock Slug']], boss: ['serpent', '地底大蛇', 'Tunnel Serpent'] },
-  { name: '忘れられた坑道', nameEn: 'Forgotten Mineshaft', board: 'board_default', track: 'battle', foes: [['ghost', '亡霊坑夫', 'Ghost Miner'], ['bird', '洞窟コウモリ', 'Cave Bat'], ['bug', '坑道グモ', 'Shaft Spider'], ['beast', 'トロル', 'Troll']], boss: ['golem', 'ゴーレム親方', 'Golem Foreman'] },
-  { name: '地底湖',       nameEn: 'Sunless Lake',     board: 'board_ocean',   track: 'battle', foes: [['aqua', '盲目魚', 'Blind Fish'], ['crab', '白ザリガニ', 'Pale Crayfish'], ['slime', '洞窟ガエル', 'Cave Toad'], ['tentacle', '地底クラゲ', 'Deep Jelly']], boss: ['dragon', '地底湖の主', 'Lord of the Sunless Lake'] },
-  { name: '水晶の洞',     nameEn: 'Crystal Hollow',   board: 'board_galaxy',  track: 'hard',   foes: [['beast', 'クリスタル獣', 'Crystal Beast'], ['star', '光の精', 'Light Wisp'], ['crab', '水晶サソリ', 'Crystal Scorpion'], ['golem', '晶石人形', 'Geode Golem']], boss: ['royal', '水晶の女王', 'Crystal Queen'] },
-  { name: '骨の回廊',     nameEn: 'Bone Gallery',     board: 'board_oni',     track: 'boss',   foes: [['undead', '骸骨兵', 'Bone Soldier'], ['beast', '骨犬', 'Bone Hound'], ['ghost', '地縛霊', 'Earthbound Ghost'], ['oni', '屍鬼', 'Ghoul']], boss: ['royal', '骸骨王', 'Skeleton King'] },
-  { name: '溶岩脈',       nameEn: 'Lava Vein',        board: 'board_volcano', track: 'hard',   foes: [['bug', 'マグマ虫', 'Magma Grub'], ['serpent', '火蜥蜴', 'Flame Newt'], ['oni', '炎鬼', 'Flame Oni'], ['flame', '噴煙魔', 'Smoke Fiend']], boss: ['dragon', '地竜バルガ', 'Balga the Earth Dragon'] },
-  { name: '毒の沼窟',     nameEn: 'Venom Grotto',     board: 'board_forest',  track: 'oni',    foes: [['serpent', '毒蛇', 'Viper'], ['slime', '猛毒スライム', 'Toxic Ooze'], ['bug', '母グモ', 'Brood Spider'], ['crab', '死のサソリ', 'Death Scorpion']], boss: ['dragon', '毒竜ドクロア', 'Dokuroa the Venom Drake'] },
-  { name: '静寂の墓所',   nameEn: 'Silent Crypt',     board: 'board_oni',     track: 'oni',    foes: [['ghost', '棺の霊', 'Coffin Wraith'], ['undead', '血吸い', 'Blood Fiend'], ['void', '影人', 'Shade'], ['flame', '呪い火', 'Curse Flame']], boss: ['royal', '墓所の王', 'Crypt King'] },
-  { name: '奈落への橋',   nameEn: 'Bridge to the Abyss', board: 'board_galaxy', track: 'kami', foes: [['ghost', '闇の使徒', 'Dark Apostle'], ['bird', '深淵鷲', 'Abyss Eagle'], ['blade', '鎖の獄卒', 'Chain Warden'], ['void', '虚無魔', 'Void Fiend']], boss: ['eye', '奈落の番人', 'Warden of the Abyss'] },
-  { name: '深淵の玉座',   nameEn: 'Throne of the Abyss', board: 'board_oni',  track: 'kami',   foes: [['oni', '深淵の魔兵', 'Abyssal Soldier'], ['void', '無貌のもの', 'The Faceless'], ['tentacle', '深淵の触手', 'Abyssal Tendril'], ['undead', '奈落騎士', 'Abyss Knight']], boss: ['eye', '深淵神アビソス', 'Abysos the Abyss God'] },
+  { name: '苔むす地下道', nameEn: 'Mossy Underpass',  board: 'board_forest',  track: 'mine', foes: [['serpent', '大ミミズ', 'Giant Worm'], ['bug', '洞窟蚊', 'Cave Gnat'], ['plant', '毒キノコ', 'Toxic Shroom'], ['slime', '岩ナメクジ', 'Rock Slug']], boss: ['serpent', '地底大蛇', 'Tunnel Serpent'] },
+  { name: '忘れられた坑道', nameEn: 'Forgotten Mineshaft', board: 'board_default', track: 'mine', foes: [['ghost', '亡霊坑夫', 'Ghost Miner'], ['bird', '洞窟コウモリ', 'Cave Bat'], ['bug', '坑道グモ', 'Shaft Spider'], ['beast', 'トロル', 'Troll']], boss: ['golem', 'ゴーレム親方', 'Golem Foreman'] },
+  { name: '地底湖',       nameEn: 'Sunless Lake',     board: 'board_ocean',   track: 'ocean', foes: [['aqua', '盲目魚', 'Blind Fish'], ['crab', '白ザリガニ', 'Pale Crayfish'], ['slime', '洞窟ガエル', 'Cave Toad'], ['tentacle', '地底クラゲ', 'Deep Jelly']], boss: ['dragon', '地底湖の主', 'Lord of the Sunless Lake'] },
+  { name: '水晶の洞',     nameEn: 'Crystal Hollow',   board: 'board_galaxy',  track: 'frost',   foes: [['beast', 'クリスタル獣', 'Crystal Beast'], ['star', '光の精', 'Light Wisp'], ['crab', '水晶サソリ', 'Crystal Scorpion'], ['golem', '晶石人形', 'Geode Golem']], boss: ['royal', '水晶の女王', 'Crystal Queen'] },
+  { name: '骨の回廊',     nameEn: 'Bone Gallery',     board: 'board_oni',     track: 'crypt',   foes: [['undead', '骸骨兵', 'Bone Soldier'], ['beast', '骨犬', 'Bone Hound'], ['ghost', '地縛霊', 'Earthbound Ghost'], ['oni', '屍鬼', 'Ghoul']], boss: ['royal', '骸骨王', 'Skeleton King'] },
+  { name: '溶岩脈',       nameEn: 'Lava Vein',        board: 'board_volcano', track: 'volcano',   foes: [['bug', 'マグマ虫', 'Magma Grub'], ['serpent', '火蜥蜴', 'Flame Newt'], ['oni', '炎鬼', 'Flame Oni'], ['flame', '噴煙魔', 'Smoke Fiend']], boss: ['dragon', '地竜バルガ', 'Balga the Earth Dragon'] },
+  { name: '毒の沼窟',     nameEn: 'Venom Grotto',     board: 'board_forest',  track: 'ocean',    foes: [['serpent', '毒蛇', 'Viper'], ['slime', '猛毒スライム', 'Toxic Ooze'], ['bug', '母グモ', 'Brood Spider'], ['crab', '死のサソリ', 'Death Scorpion']], boss: ['dragon', '毒竜ドクロア', 'Dokuroa the Venom Drake'] },
+  { name: '静寂の墓所',   nameEn: 'Silent Crypt',     board: 'board_oni',     track: 'crypt',    foes: [['ghost', '棺の霊', 'Coffin Wraith'], ['undead', '血吸い', 'Blood Fiend'], ['void', '影人', 'Shade'], ['flame', '呪い火', 'Curse Flame']], boss: ['royal', '墓所の王', 'Crypt King'] },
+  { name: '奈落への橋',   nameEn: 'Bridge to the Abyss', board: 'board_galaxy', track: 'abyssdeep', foes: [['ghost', '闇の使徒', 'Dark Apostle'], ['bird', '深淵鷲', 'Abyss Eagle'], ['blade', '鎖の獄卒', 'Chain Warden'], ['void', '虚無魔', 'Void Fiend']], boss: ['eye', '奈落の番人', 'Warden of the Abyss'] },
+  { name: '深淵の玉座',   nameEn: 'Throne of the Abyss', board: 'board_oni',  track: 'abyssdeep',   foes: [['oni', '深淵の魔兵', 'Abyssal Soldier'], ['void', '無貌のもの', 'The Faceless'], ['tentacle', '深淵の触手', 'Abyssal Tendril'], ['undead', '奈落騎士', 'Abyss Knight']], boss: ['eye', '深淵神アビソス', 'Abysos the Abyss God'] },
 ];
 
 // Heaven realm (H1–H100): slower but heavier attacks; bosses grant blessings.
 const HEAVEN_BANDS = [
-  { name: '雲の階段',     nameEn: 'Stairway of Clouds', board: 'board_default', track: 'solo', foes: [['beast', '雲ひつじ', 'Cloud Sheep'], ['bird', '白鳩兵', 'Dove Trooper'], ['storm', '風の精', 'Wind Sprite'], ['angel', '鈴天使', 'Chime Cherub']], boss: ['bird', '白鳥の守護者', 'Swan Guardian'] },
-  { name: '虹の花園',     nameEn: 'Rainbow Garden',   board: 'board_sakura',  track: 'solo',   foes: [['bug', '虹蝶', 'Rainbow Butterfly'], ['angel', '蜜天蜂', 'Honeybee Cherub'], ['plant', '花の精', 'Flower Sprite'], ['star', '星てんとう', 'Star Ladybug']], boss: ['royal', '花園の女王', 'Queen of the Garden'] },
-  { name: '星屑の橋',     nameEn: 'Stardust Bridge',  board: 'board_galaxy',  track: 'battle', foes: [['star', '星の子', 'Starling'], ['beast', '流星獣', 'Meteor Beast'], ['arcane', '環の精', 'Ring Spirit'], ['ghost', '光塵魔', 'Gleam Fiend']], boss: ['royal', '星織りの賢者', 'Sage of Woven Stars'] },
-  { name: '月光の泉',     nameEn: 'Moonlit Spring',   board: 'board_ocean',   track: 'solo',   foes: [['beast', '月ウサギ', 'Moon Rabbit'], ['angel', '泡天使', 'Bubble Cherub'], ['aqua', '天空イルカ', 'Sky Dolphin'], ['bird', '月孔雀', 'Moon Peacock']], boss: ['royal', '月の巫女', 'Priestess of the Moon'] },
-  { name: '審判の間',     nameEn: 'Hall of Judgment', board: 'board_kami',    track: 'boss',   foes: [['golem', '天秤の番人', 'Scale Keeper'], ['arcane', '律法の霊', 'Law Spirit'], ['blade', '裁きの剣', 'Judging Blade'], ['eye', '監視者', 'The Watcher']], boss: ['beast', '審判者レオン', 'Leon the Adjudicator'] },
-  { name: '竪琴の雲海',   nameEn: 'Sea of Harp Clouds', board: 'board_sunset', track: 'kami',  foes: [['arcane', '音符精', 'Note Sprite'], ['angel', 'ラッパ天使', 'Trumpet Cherub'], ['beast', '有翼獅子', 'Winged Lion'], ['bird', '聖鳩', 'Holy Dove']], boss: ['royal', '大聖歌長', 'Grand Cantor'] },
-  { name: '黄金の大聖堂', nameEn: 'Golden Cathedral', board: 'board_kami',    track: 'kami',   foes: [['blade', '聖堂騎士', 'Cathedral Knight'], ['golem', '光の衛兵', 'Light Sentinel'], ['flame', '聖火の精', 'Sacred Flame'], ['arcane', '祈りの霊', 'Prayer Spirit']], boss: ['angel', '大天使ミカエラ', 'Archangel Michaela'] },
-  { name: '天雷の峰',     nameEn: 'Peak of Holy Thunder', board: 'board_galaxy', track: 'oni', foes: [['storm', '天雷精', 'Skybolt Sprite'], ['bird', '神鷲', 'Divine Eagle'], ['arcane', '雷雲魔', 'Storm Halo'], ['blade', '雷槍兵', 'Thunder Lancer']], boss: ['bird', '不死鳥フェニクス', 'Phoenix'] },
+  { name: '雲の階段',     nameEn: 'Stairway of Clouds', board: 'board_default', track: 'heaven', foes: [['beast', '雲ひつじ', 'Cloud Sheep'], ['bird', '白鳩兵', 'Dove Trooper'], ['storm', '風の精', 'Wind Sprite'], ['angel', '鈴天使', 'Chime Cherub']], boss: ['bird', '白鳥の守護者', 'Swan Guardian'] },
+  { name: '虹の花園',     nameEn: 'Rainbow Garden',   board: 'board_sakura',  track: 'sakura',   foes: [['bug', '虹蝶', 'Rainbow Butterfly'], ['angel', '蜜天蜂', 'Honeybee Cherub'], ['plant', '花の精', 'Flower Sprite'], ['star', '星てんとう', 'Star Ladybug']], boss: ['royal', '花園の女王', 'Queen of the Garden'] },
+  { name: '星屑の橋',     nameEn: 'Stardust Bridge',  board: 'board_galaxy',  track: 'kami', foes: [['star', '星の子', 'Starling'], ['beast', '流星獣', 'Meteor Beast'], ['arcane', '環の精', 'Ring Spirit'], ['ghost', '光塵魔', 'Gleam Fiend']], boss: ['royal', '星織りの賢者', 'Sage of Woven Stars'] },
+  { name: '月光の泉',     nameEn: 'Moonlit Spring',   board: 'board_ocean',   track: 'heaven',   foes: [['beast', '月ウサギ', 'Moon Rabbit'], ['angel', '泡天使', 'Bubble Cherub'], ['aqua', '天空イルカ', 'Sky Dolphin'], ['bird', '月孔雀', 'Moon Peacock']], boss: ['royal', '月の巫女', 'Priestess of the Moon'] },
+  { name: '審判の間',     nameEn: 'Hall of Judgment', board: 'board_kami',    track: 'zero',   foes: [['golem', '天秤の番人', 'Scale Keeper'], ['arcane', '律法の霊', 'Law Spirit'], ['blade', '裁きの剣', 'Judging Blade'], ['eye', '監視者', 'The Watcher']], boss: ['beast', '審判者レオン', 'Leon the Adjudicator'] },
+  { name: '竪琴の雲海',   nameEn: 'Sea of Harp Clouds', board: 'board_sunset', track: 'heaven',  foes: [['arcane', '音符精', 'Note Sprite'], ['angel', 'ラッパ天使', 'Trumpet Cherub'], ['beast', '有翼獅子', 'Winged Lion'], ['bird', '聖鳩', 'Holy Dove']], boss: ['royal', '大聖歌長', 'Grand Cantor'] },
+  { name: '黄金の大聖堂', nameEn: 'Golden Cathedral', board: 'board_kami',    track: 'royal',   foes: [['blade', '聖堂騎士', 'Cathedral Knight'], ['golem', '光の衛兵', 'Light Sentinel'], ['flame', '聖火の精', 'Sacred Flame'], ['arcane', '祈りの霊', 'Prayer Spirit']], boss: ['angel', '大天使ミカエラ', 'Archangel Michaela'] },
+  { name: '天雷の峰',     nameEn: 'Peak of Holy Thunder', board: 'board_galaxy', track: 'storm', foes: [['storm', '天雷精', 'Skybolt Sprite'], ['bird', '神鷲', 'Divine Eagle'], ['arcane', '雷雲魔', 'Storm Halo'], ['blade', '雷槍兵', 'Thunder Lancer']], boss: ['bird', '不死鳥フェニクス', 'Phoenix'] },
   { name: '神々の回廊',   nameEn: 'Corridor of the Gods', board: 'board_kami', track: 'kami',  foes: [['golem', '神像兵', 'Idol Soldier'], ['beast', '聖獣ユニコーン', 'Unicorn'], ['dragon', '天竜', 'Sky Dragon'], ['angel', '熾天使', 'Seraph']], boss: ['royal', '虹神殿の主', 'Master of the Rainbow Shrine'] },
-  { name: '創造の玉座',   nameEn: 'Throne of Creation', board: 'board_kami',  track: 'kami',   foes: [['angel', '大熾天使', 'High Seraph'], ['star', '太陽の化身', 'Avatar of the Sun'], ['ghost', '星幽体', 'Astral Being'], ['royal', '王冠の霊', 'Crown Spirit']], boss: ['star', '至高神ルミナス', 'Luminus the Supreme'] },
+  { name: '創造の玉座',   nameEn: 'Throne of Creation', board: 'board_kami',  track: 'souzou',   foes: [['angel', '大熾天使', 'High Seraph'], ['star', '太陽の化身', 'Avatar of the Sun'], ['ghost', '星幽体', 'Astral Being'], ['royal', '王冠の霊', 'Crown Spirit']], boss: ['star', '至高神ルミナス', 'Luminus the Supreme'] },
 ];
 
 // 🌑 The Abyss — the hardest realm. Unlocked by conquering the tower.
 const ABYSS_BANDS = [
-  { name: '忘却の入口',   nameEn: 'Gate of Oblivion',   board: 'board_oni',     track: 'oni',  foes: [['flame', '消えかけの灯', 'Dying Light'], ['bird', '影蝙蝠', 'Shade Bat'], ['ghost', '墓守', 'Gravekeeper'], ['serpent', '黒蛇', 'Black Serpent']], boss: ['undead', '忘却の番人', 'Warden of Oblivion'] },
-  { name: '嘆きの回廊',   nameEn: 'Corridor of Lament', board: 'board_oni',     track: 'oni',  foes: [['ghost', '嘆きの霊', 'Lamenting Spirit'], ['bug', '毒蜘蛛', 'Venom Spider'], ['blade', '錆びた鍵守', 'Rusted Keyholder'], ['void', '瘴気', 'Miasma']], boss: ['royal', '嘆きの王', 'King of Lament'] },
-  { name: '血の沼',       nameEn: 'Blood Marsh',        board: 'board_volcano', track: 'oni',  foes: [['slime', '血の滴', 'Blood Drop'], ['aqua', '沼の顎', 'Marsh Jaw'], ['undead', '吸血鬼', 'Vampire'], ['bug', '吸血蚊の群れ', 'Mosquito Swarm']], boss: ['dragon', '血竜ヴァルグ', 'Valg the Blood Dragon'] },
-  { name: '虚無の階段',   nameEn: 'Stairs of the Void', board: 'board_cyber',   track: 'kami', foes: [['golem', '虚無の欠片', 'Void Shard'], ['arcane', '歪み', 'Distortion'], ['eye', '無の眼', 'Eye of Nothing'], ['void', '落とし穴', 'Pitfall']], boss: ['royal', '虚無の支配者', 'Master of the Void'] },
-  { name: '狂気の鏡殿',   nameEn: 'Hall of Mad Mirrors', board: 'board_cyber',  track: 'oni',  foes: [['ghost', '鏡像', 'Mirror Image'], ['mask', '狂道化', 'Mad Jester'], ['oni', '二面鬼', 'Two-Faced Oni'], ['arcane', '惑わしの珠', 'Orb of Delusion']], boss: ['royal', '狂王ジョーカー', 'The Mad Joker'] },
-  { name: '氷獄',         nameEn: 'Frozen Hell',        board: 'board_snow',    track: 'oni',  foes: [['undead', '氷の亡者', 'Frozen Wraith'], ['beast', '氷狼', 'Ice Wolf'], ['frost', '吹雪の精', 'Blizzard Sprite'], ['golem', '凍てつく像', 'Frozen Idol']], boss: ['royal', '氷獄の魔女', 'Witch of Frozen Hell'] },
-  { name: '灼熱の底',     nameEn: 'Scorched Depths',    board: 'board_volcano', track: 'oni',  foes: [['slime', '溶岩魔', 'Lava Fiend'], ['beast', '噴火獣', 'Eruption Beast'], ['dragon', '火蜥蜴', 'Fire Lizard'], ['flame', '爆炎の精', 'Blast Sprite']], boss: ['oni', '灼熱鬼イフリート', 'Ifrit the Scorching'] },
-  { name: '星喰いの巣',   nameEn: 'Nest of the Star-Eater', board: 'board_galaxy', track: 'kami', foes: [['bug', '星の糸', 'Star Silk'], ['tentacle', '宇宙蛸', 'Cosmic Squid'], ['star', '落星', 'Fallen Star'], ['void', '暗黒球', 'Dark Sphere']], boss: ['tentacle', '星喰いヨグ', 'Yog the Star-Eater'] },
-  { name: '神殺しの祭壇', nameEn: 'Altar of Godslaying', board: 'board_kami',   track: 'kami', foes: [['angel', '堕天騎士', 'Fallen Knight'], ['blade', '弑逆の刃', 'Regicide Blade'], ['arcane', '異端僧', 'Heretic Monk'], ['bird', '黒翼', 'Black Wing']], boss: ['oni', '堕神ルシファル', 'Lucifal the Fallen'] },
-  { name: '深淵の玉座',   nameEn: 'Throne of the Abyss', board: 'board_oni',    track: 'kami', foes: [['eye', '深淵の視線', 'Gaze of the Abyss'], ['star', '終焉の兆し', 'Omen of the End'], ['void', '奈落', 'Naraka'], ['ghost', '無慈悲', 'Mercilessness']], boss: ['royal', '深淵王アビスゼロ', 'Abyss Zero, King of the Deep'] },
+  { name: '忘却の入口',   nameEn: 'Gate of Oblivion',   board: 'board_oni',     track: 'abyssdeep',  foes: [['flame', '消えかけの灯', 'Dying Light'], ['bird', '影蝙蝠', 'Shade Bat'], ['ghost', '墓守', 'Gravekeeper'], ['serpent', '黒蛇', 'Black Serpent']], boss: ['undead', '忘却の番人', 'Warden of Oblivion'] },
+  { name: '嘆きの回廊',   nameEn: 'Corridor of Lament', board: 'board_oni',     track: 'crypt',  foes: [['ghost', '嘆きの霊', 'Lamenting Spirit'], ['bug', '毒蜘蛛', 'Venom Spider'], ['blade', '錆びた鍵守', 'Rusted Keyholder'], ['void', '瘴気', 'Miasma']], boss: ['royal', '嘆きの王', 'King of Lament'] },
+  { name: '血の沼',       nameEn: 'Blood Marsh',        board: 'board_volcano', track: 'volcano',  foes: [['slime', '血の滴', 'Blood Drop'], ['aqua', '沼の顎', 'Marsh Jaw'], ['undead', '吸血鬼', 'Vampire'], ['bug', '吸血蚊の群れ', 'Mosquito Swarm']], boss: ['dragon', '血竜ヴァルグ', 'Valg the Blood Dragon'] },
+  { name: '虚無の階段',   nameEn: 'Stairs of the Void', board: 'board_cyber',   track: 'abyssdeep', foes: [['golem', '虚無の欠片', 'Void Shard'], ['arcane', '歪み', 'Distortion'], ['eye', '無の眼', 'Eye of Nothing'], ['void', '落とし穴', 'Pitfall']], boss: ['royal', '虚無の支配者', 'Master of the Void'] },
+  { name: '狂気の鏡殿',   nameEn: 'Hall of Mad Mirrors', board: 'board_cyber',  track: 'crypt',  foes: [['ghost', '鏡像', 'Mirror Image'], ['mask', '狂道化', 'Mad Jester'], ['oni', '二面鬼', 'Two-Faced Oni'], ['arcane', '惑わしの珠', 'Orb of Delusion']], boss: ['royal', '狂王ジョーカー', 'The Mad Joker'] },
+  { name: '氷獄',         nameEn: 'Frozen Hell',        board: 'board_snow',    track: 'frost',  foes: [['undead', '氷の亡者', 'Frozen Wraith'], ['beast', '氷狼', 'Ice Wolf'], ['frost', '吹雪の精', 'Blizzard Sprite'], ['golem', '凍てつく像', 'Frozen Idol']], boss: ['royal', '氷獄の魔女', 'Witch of Frozen Hell'] },
+  { name: '灼熱の底',     nameEn: 'Scorched Depths',    board: 'board_volcano', track: 'volcano',  foes: [['slime', '溶岩魔', 'Lava Fiend'], ['beast', '噴火獣', 'Eruption Beast'], ['dragon', '火蜥蜴', 'Fire Lizard'], ['flame', '爆炎の精', 'Blast Sprite']], boss: ['oni', '灼熱鬼イフリート', 'Ifrit the Scorching'] },
+  { name: '星喰いの巣',   nameEn: 'Nest of the Star-Eater', board: 'board_galaxy', track: 'abyssdeep', foes: [['bug', '星の糸', 'Star Silk'], ['tentacle', '宇宙蛸', 'Cosmic Squid'], ['star', '落星', 'Fallen Star'], ['void', '暗黒球', 'Dark Sphere']], boss: ['tentacle', '星喰いヨグ', 'Yog the Star-Eater'] },
+  { name: '神殺しの祭壇', nameEn: 'Altar of Godslaying', board: 'board_kami',   track: 'oni', foes: [['angel', '堕天騎士', 'Fallen Knight'], ['blade', '弑逆の刃', 'Regicide Blade'], ['arcane', '異端僧', 'Heretic Monk'], ['bird', '黒翼', 'Black Wing']], boss: ['oni', '堕神ルシファル', 'Lucifal the Fallen'] },
+  { name: '深淵の玉座',   nameEn: 'Throne of the Abyss', board: 'board_oni',    track: 'abyssdeep', foes: [['eye', '深淵の視線', 'Gaze of the Abyss'], ['star', '終焉の兆し', 'Omen of the End'], ['void', '奈落', 'Naraka'], ['ghost', '無慈悲', 'Mercilessness']], boss: ['royal', '深淵王アビスゼロ', 'Abyss Zero, King of the Deep'] },
 ];
 
 // 表を書き間違えても画面は「見慣れない箱」が出るだけで、遊べてしまう。
@@ -5715,7 +5715,7 @@ class ChaosMode extends VersusBase {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('boss');
+    audio.playTrack('chaos');
     toast(t(`カオスモード！${this.interval}秒ごとにルールが変わるぞ！`, `Chaos Mode! The rules change every ${this.interval} seconds!`), 'announce', 3000);
 
     countdownOverlay(3, afterCountdown(this, () => {
@@ -7220,7 +7220,7 @@ class OnlineMode extends VersusBase {
     this.engine.reroll = () => false;
     updateAutoBtn();
     v.start();
-    audio.playTrack('solo');
+    audio.playTrack('coop');
     this.updateCoopHud();
 
     const emoteBtn = $('#btnEmote');
@@ -7405,7 +7405,7 @@ class OnlineMode extends VersusBase {
     this.landOverlay = new CellOverlay();
     updateAutoBtn();
     v.start();
-    audio.playTrack('battle');
+    audio.playTrack('land');
     this.updateLandHud();
 
     const emoteBtn = $('#btnEmote');
@@ -7631,7 +7631,12 @@ class OnlineMode extends VersusBase {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack(this.isRaid ? 'boss' : 'battle');
+    // 🎵 対戦は「どの対戦か」で曲を分ける。以前は全部 battle（レイドだけ boss）で、
+    //    ランクマもチーム戦もトーナメントも陣取りも同じ曲だった。
+    audio.playTrack(this.isRaid ? 'raid'
+      : this.kind === 'team' ? 'team'
+        : this.kind === 'tourney' ? 'tourney'
+          : 'battle');
 
     // Emotes: quick reactions relayed to everyone in the match.
     const emoteBtn = $('#btnEmote');
@@ -8437,7 +8442,7 @@ class SurvivalMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('hard');
+    audio.playTrack('survival');
     this.nextAt = Date.now() + 15000;
     this.int = setInterval(() => this.tick(), 200);
     toast(t('15秒ごとにお邪魔ブロックが降ってくる！生き延びろ！', 'Garbage drops every 15s — survive!'), 'announce', 3000);
@@ -8595,7 +8600,7 @@ class SprintMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('hard');
+    audio.playTrack('sprint');
 
     countdownOverlay(3, afterCountdown(this, () => {
       if (this.ended) return;
@@ -8842,7 +8847,9 @@ class AdminEventMode extends VersusBase {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack(this.modeId === 'invasion' ? 'oni' : this.modeId === 'roulette' ? 'boss' : 'solo');
+    // 🎵 運営イベントは1つの舞台なので、曲も1つ（以前は中身ごとに他モードの曲を
+    //    借りていて、侵攻＝鬼、ルーレット＝ボス、それ以外＝ソロと散らばっていた）。
+    audio.playTrack('arena');
 
     this.setupWorldPanel();
     // ae.mode.icon（サーバーが送る絵文字）は出さない ── トーストは textContent。
@@ -9297,7 +9304,7 @@ class ZeroMode extends VersusBase {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('oni');
+    audio.playTrack('zero');
 
     this.buildArena();
 
@@ -11658,7 +11665,7 @@ class ChainMode {
     updateRerollHud(this.engine);
     updateAutoBtn();
     v.start();
-    audio.playTrack('battle');
+    audio.playTrack('chain');
     toast(t('ブロックは必ず下へ落ちる！ 揃った列は1本ずつ消えるので、まとめて揃えるほど連鎖が伸びる！',
       'Everything falls! Full lines clear one at a time — set up several at once and the chain keeps going!'), 'announce', 3600);
   }
@@ -12154,7 +12161,7 @@ class BlueprintMode {
     this.updateHud();
     updateAutoBtn();
     v.start();
-    audio.playTrack('ruins');
+    audio.playTrack('blueprint');
     toast(t(`「${this.bp.name}」を組み立てよう！ 光る形どおりに置く ── 列を揃えると崩れるぞ！`,
       `Build "${this.bp.nameEn}"! Fill the glowing shape — completing a line makes it crumble!`), 'announce', 4000);
   }
@@ -12647,7 +12654,7 @@ class ReplayMode {
     v.onGameOver = null;
     this.updateHud();
     v.start();
-    audio.playTrack('battle');
+    audio.playTrack('replay');
     this.buildBar();
     toast(t(`${this.meta.username || ''}さんの走りを再生中`, `Replaying ${this.meta.username || 'this run'}`), 'announce', 2600);
     this.timer = setTimeout(() => this.step(), 700);
@@ -12890,7 +12897,7 @@ class WorkshopMode {
     this.updateHud();
     updateAutoBtn();
     v.start();
-    audio.playTrack('ruins');
+    audio.playTrack('workshop');
     // プレイ数と作者への還元はサーバーが数える（金額はクライアントから指定できない）。
     if (!this.authoring && session.user && this.stage.code) {
       api(`/api/workshop/stages/${encodeURIComponent(this.stage.code)}/play`, { method: 'POST' })

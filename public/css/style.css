@@ -610,6 +610,16 @@ body {
   display: flex; flex-direction: column; gap: 6px;
   margin: 10px 0 4px; max-height: 46vh; overflow-y: auto; padding-right: 2px;
 }
+/* 🎵 ジュークボックスの棚の見出し。47曲を平坦に並べると探せないので分ける。 */
+.jb-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin: 10px 2px 2px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px; font-weight: 800; letter-spacing: .08em;
+  color: var(--muted); text-transform: uppercase;
+}
+.jb-head:first-child { margin-top: 0; }
+.jb-head small { font-weight: 700; opacity: .7; font-variant-numeric: tabular-nums; }
 .jb-row {
   display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px;

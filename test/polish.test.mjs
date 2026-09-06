@@ -141,8 +141,20 @@ check('C-3 効果音スライダーの試聴音を間引いている',
   /if \(now - lastSfxTick > 120\)/.test(screens), '');
 check('C-4 ソロ曲の「どこで流れるか」からウィークリーを外した',
   !/where: 'ソロ・ウィークリー'/.test(audioJs), '');
-check('C-5 対戦曲側にウィークリー／デイリーを足した',
-  /オンライン対戦・連鎖・リプレイ・ウィークリー・デイリー/.test(audioJs), '');
+// v2.65: ウィークリーもデイリーも**専用曲を持った**ので、対戦曲の説明から外れた。
+//   ここで見るべきものは「一覧の説明が実態と食い違わないこと」に変わる ──
+//   自分の曲を持ったモードの名前が、別の曲の『どこで流れるか』に残っていたら嘘になる。
+//   （曲そのものの検査は test/tracks.test.mjs が全曲ぶん見ている）
+check('C-5 自分の曲を持ったモードが、別の曲の説明に残っていない', (() => {
+  const rows = [...audioJs.matchAll(/\{ id: '(\w+)',[^\n]*?where: '([^']*)'/g)].map(m => [m[1], m[2]]);
+  if (rows.length < 40) return false;
+  const owned = [['ウィークリー', 'weekly'], ['デイリー', 'daily'], ['連鎖', 'chain'],
+    ['リプレイ', 'replay'], ['キメラ', 'chimera'], ['タイムアタック', 'sprint'],
+    ['サバイバル', 'survival'], ['メルトダウン', 'meltdown'], ['カオス', 'chaos'],
+    ['設計図', 'blueprint'], ['パズル工房', 'workshop']];
+  //   ※ 「工房」だけで見ない。キメラ工房（chimera）とパズル工房（workshop）は別のモード。
+  return owned.every(([word, id]) => rows.every(([rid, where]) => rid === id || !where.includes(word)));
+})(), '');
 
 // ===========================================================================
 // D. 書き出し（クリップ / YouTube）

@@ -10,7 +10,7 @@ import { getSkin, BOARDS, PALETTE } from './themes.js';
 // 商品・バッジ・段位は必ず id 引き（itemIconName / badgeIconName）でここから出す。
 import { icon, itemIconName, badgeIconName, hasIcon } from './icons.js';
 import { rankLadder } from './ranks.js';
-import { audio, TRACK_INFO } from './audio.js';
+import { audio, TRACK_INFO, TRACK_GROUPS } from './audio.js';
 import { getSettings, updateSettings, particleFactor, prefersReducedMotion } from './settings.js';
 import { reconnectChat, markNewsSeen, sendWs, registerHandler } from './chat.js';
 import { t as tr, setLang, LANG, catName, catDesc, trServer } from './i18n.js';
@@ -1018,8 +1018,9 @@ export function showJukeboxModal() {
   const render = () => {
     const now = audio.playing;
     const autoActive = !lock && !audio.previewTrack;
-    list.innerHTML = `
-      ${visibleTracks.map(t => `
+    // 🎵 棚ごとに見出しを付ける。TRACK_GROUPS の順に並べ、そこに無い group は
+    //    最後にまとめる（曲を足したのに見出しを足し忘れても、消えずに出る）。
+    const rowHtml = t => `
         <button class="jb-row ${now === t.id ? 'playing' : ''}" data-jb="${t.id}">
           <span class="jb-icon">${ic(t.iconName, 20)}</span>
           <span class="jb-meta">
@@ -1027,7 +1028,16 @@ export function showJukeboxModal() {
             <small>${escapeHtml(tr(t.where, t.whereEn))}${SEP}${t.bpm} BPM</small>
           </span>
           ${now === t.id ? '<span class="jb-eq"><i></i><i></i><i></i></span>' : `<span class="jb-play">${tr('再生', 'Play')}</span>`}
-        </button>`).join('')}
+        </button>`;
+    const known = TRACK_GROUPS.map(g => g.id);
+    const shelves = [
+      ...TRACK_GROUPS.map(g => [tr(g.ja, g.en), visibleTracks.filter(t => t.group === g.id)]),
+      [tr('その他', 'Other'), visibleTracks.filter(t => !known.includes(t.group))],
+    ].filter(([, rows]) => rows.length);
+    list.innerHTML = `
+      ${shelves.map(([label, rows]) => `
+        <div class="jb-head">${escapeHtml(label)}<small>${rows.length}</small></div>
+        ${rows.map(rowHtml).join('')}`).join('')}
       <button class="jb-row jb-auto ${autoActive ? 'playing' : ''}" data-jb="">
         <span class="jb-icon">${ic('reroll', 20)}</span>
         <span class="jb-meta"><b>${tr('おまかせ', 'Auto')}</b><small>${tr('画面ごとにBGMを自動で切り替え（通常モード）', 'Music switches with each screen (default)')}</small></span>
