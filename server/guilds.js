@@ -7,7 +7,7 @@
 // residents pad the ranking and give the residents tags in chat.
 
 import crypto from 'crypto';
-import { getRoster, residentStats } from './ambient.js';
+import { getRoster, residentStats, effectiveScale, getCustom } from './ambient.js';
 import { unit, strHash, mulberry32 } from './residents.js';
 import { anonId } from './sanitize.js';
 
@@ -673,6 +673,22 @@ function ghostQuestState(guild, weekId, now) {
 // 一覧（/api/guilds）は実ギルドを浅い形で返すので、ゴーストだけ members や
 // quests を持っていると **持ち物の多さ**が指紋になる。深さも実ギルドに合わせる。
 export function ghostGuildViews(weekId, now = Date.now(), { detailed = false } = {}) {
+  // 🎭 にぎわいが止まっているなら、住人のギルドは**存在しない**。
+  //
+  // ⚠ ここを route 側だけで見ていたので、3つの入口で判断がバラバラだった:
+  //     一覧 GET /api/guilds        … toggles.guilds を見ていた
+  //     詳細 GET /api/guilds/:id    … 何も見ていない
+  //     参加 POST /api/guilds/join  … 何も見ていない
+  //   結果、にぎわいを止めても **id を知っていれば詳細が引け**、参加しようと
+  //   すると「このギルドは招待制です」という住人のギルド専用の返事が来た。
+  //   一覧に無いのに 409 が返る、は住人のギルドの判別器そのもの。
+  //   しかも「完全オフ」プリセットは scale:0 しか設定せず toggles を触らないので、
+  //   にぎわいを全部止めたつもりでも4件が一覧に残っていた（実測）。
+  //   判断はここ1か所に置く ── 入口を1つ足すたびに増える形にしない。
+  if (!(effectiveScale() > 0)) return [];
+  let on = true;
+  try { on = getCustom().toggles.guilds !== false; } catch { /* 既定は出す */ }
+  if (!on) return [];
   return ghostGuilds().map(g => {
     const seedKey = g.seedKey || g.id;
     const weeklyPoints = ghostWeekly(g, weekId, now);

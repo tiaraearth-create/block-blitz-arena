@@ -201,6 +201,31 @@ const net = strip(read('public/js/net.js'));
     /rBossList'\)\.onclick[\s\S]{0,300}?endToMenu\(\);[\s\S]{0,200}?__bbaOpenBossSelect/.test(modes), '');
 }
 
+// ===========================================================================
+// F. 🎭 にぎわいを止めたら住人のギルドも消える
+// ===========================================================================
+//
+// ⚠ 判断が3つの入口でバラバラだった:
+//     一覧 GET /api/guilds       … toggles.guilds を見ていた
+//     詳細 GET /api/guilds/:id   … 何も見ていない
+//     参加 POST /api/guilds/join … 何も見ていない
+//   にぎわいを止めても id を知っていれば詳細が引け、参加すると
+//   「このギルドは招待制です」という住人のギルド専用の返事が来た。
+//   **一覧に無いのに 409 が返る**のは、住人のギルドの判別器そのもの。
+//   しかも「完全オフ」プリセットは scale:0 しか設定せず toggles を触らないので、
+//   全部止めたつもりでも4件が一覧に残っていた（実測）。
+{
+  const guilds = strip(read('server/guilds.js'));
+  const route = strip(read('server/routes/guild.js'));
+  check('F-1 ★倍率0なら住人のギルドを1件も返さない',
+    /if \(!\(effectiveScale\(\) > 0\)\) return \[\];/.test(guilds), '');
+  check('F-2 ★toggles の判断も同じ関数の中にある',
+    /getCustom\(\)\.toggles\.guilds !== false/.test(guilds), '');
+  // 入口ごとに書くのをやめる（書くと増やすたびに食い違う）。
+  check('F-3 ★route 側に判断を書き写していない',
+    !/toggles\.guilds \?/.test(route), '');
+}
+
 for (const [mark, name, detail] of results) console.log(`${mark} ${name}${detail ? ' — ' + detail : ''}`);
 const failed = results.filter(r => r[0] === '❌').length;
 console.log(`\n${results.length - failed}/${results.length} 件`);

@@ -54,7 +54,9 @@ guildRouter.get('/api/guilds', (req, res) => {
   const real = Object.values(db.guilds).map(g => guildView(db, g, week));
   // 🎭 一覧は実ギルドと同じ「浅い」形で（detailed を渡さない）。ゴーストだけ
   // members / quests を抱えていると、持ち物の多さでどれが住人のギルドか分かる。
-  const ghosts = getCustom().toggles.guilds ? ghostGuildViews(week).filter(g => !real.some(r => r.name === g.name || r.tag === g.tag)) : [];
+  // toggles / にぎわい倍率の判断は ghostGuildViews の中に1本化してある
+  // （詳細・参加の入口と食い違わないように）。ここは重複だけを外す。
+  const ghosts = ghostGuildViews(week).filter(g => !real.some(r => r.name === g.name || r.tag === g.tag));
   const rows = real.concat(ghosts).sort((a, b) => b.weeklyPoints - a.weeklyPoints).slice(0, 50).map((g, i) => ({ ...g, rank: i + 1 }));
   const mine = req.user && req.user.guildId && db.guilds[req.user.guildId]
     ? guildView(db, db.guilds[req.user.guildId], week, { detailed: true, viewerId: req.user.id, levelOf })
