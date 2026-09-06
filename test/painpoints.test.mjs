@@ -216,7 +216,13 @@ check('K-16 タブの往復で取り直さない', /if \(tab !== 'ach' && missio
 check('K-17 遊び方の印がチュートリアルで消えない',
   /dot\.classList\.toggle\('hidden', rulesSeen\(\)\);/.test(mainJs), '');
 check('K-18 エフェクトは実物を撃って見せる', /ps\.burstCell\(84, 84, 84, 6, item\.id\);/.test(screens), '');
-check('K-19 棚から離れたら止める', /if \(!canvas\.isConnected \|\| now > until\) \{ stop\(\); return; \}/.test(screens), '');
+// ⚠ K-19/K-20 は実機で踏んだ形。renderPreview は grid.appendChild より**前**に
+//   呼ばれるので、最初のフレームは canvas.isConnected が false のまま ──
+//   そこで止めると**一度も描かれず真っ白**になる（テストでは見えない）。
+//   「一度つながったあとに外れた」ときだけ止めること。
+check('K-19 つながる前に止めない（真っ白にしない）',
+  /if \(canvas\.isConnected\) \{[\s\S]{0,40}?if \(!seen\) \{ seen = true; until = now \+ 1600; \}/.test(screens), '');
+check('K-20 棚から離れたら止める', /\} else if \(seen\) \{ stop\(\); return; \}/.test(screens), '');
 
 for (const [mark, name, detail] of results) console.log(mark, name, detail ? `— ${detail}` : '');
 const bad = results.filter(r => r[0] === '❌').length;

@@ -2682,11 +2682,17 @@ function renderPreview(el, item) {
     let raf = 0;
     let last = 0;
     let until = 0;
+    // ⚠ renderPreview は **grid.appendChild より前**に呼ばれるので、
+    //   最初の数フレームは canvas.isConnected が false のまま。
+    //   そこで止めてしまうと**一度も描かれず真っ白なまま**になる
+    //   （実機でこの形を踏んだ）。「一度つながったあとに外れた」ときだけ止める。
+    let seen = false;
     const stop = () => { if (raf) cancelAnimationFrame(raf); raf = 0; };
     const frame = now => {
-      // 棚から離れた（画面が差し替わった）ら止める。棚は毎回作り直されるので、
-      // 取り残された rAF がバックグラウンドで回り続けないようにする。
-      if (!canvas.isConnected || now > until) { stop(); return; }
+      if (canvas.isConnected) {
+        if (!seen) { seen = true; until = now + 1600; }   // 映った瞬間から数える
+      } else if (seen) { stop(); return; }                 // 棚から離れた
+      if (seen && now > until) { stop(); return; }
       const dt = Math.min(0.05, (now - (last || now)) / 1000);
       last = now;
       ps.update(dt);
@@ -2696,7 +2702,8 @@ function renderPreview(el, item) {
     };
     const play = () => {
       ps.burstCell(84, 84, 84, 6, item.id);
-      until = performance.now() + 1600;
+      seen = false;
+      until = 0;
       last = 0;
       if (!raf) raf = requestAnimationFrame(frame);
     };
