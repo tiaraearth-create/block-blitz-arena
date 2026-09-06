@@ -2007,7 +2007,9 @@ function renderShop() {
       <div class="shop-desc">${catDesc(item)}</div>
       ${saleBadge(deal)}
       ${equipped
-        ? `<button class="btn btn-sm btn-ghost" disabled>${ic('check', 13)} ${tr('装備中', 'Equipped')}</button>`
+        ? (item.default
+    ? `<button class="btn btn-sm btn-ghost" disabled>${ic('check', 13)} ${tr('装備中', 'Equipped')}</button>`
+    : `<button class="btn btn-sm btn-ghost" data-act="unequip">${ic('check', 13)} ${tr('装備中 ・ 外す', 'Equipped · remove')}</button>`)
         : owned
           ? `<button class="btn btn-sm btn-primary" data-act="equip">${tr('装備する', 'Equip')}</button>`
           : item.adminOnly
@@ -2026,7 +2028,8 @@ function renderShop() {
     if (btn) {
       btn.onclick = () => (btn.dataset.act === 'buy' ? buyItem(item, btn)
         : btn.dataset.act === 'exchange' ? openShop('exchange', { keepScreen: true })
-          : equipItem(item, btn));
+          : btn.dataset.act === 'unequip' ? unequipItem(item.cat, btn)
+            : equipItem(item, btn));
     }
   });
   startDealTimer();
@@ -2350,12 +2353,15 @@ function renderInvGear() {
       const isEq = item.id === equippedId;
       const card = document.createElement('button');
       card.className = `inv-card ${isEq ? 'equipped' : ''}`;
+      // 🧷 装備中の札は「押すと外れる」。今までは押しても何も起きず、
+      //    基本の見た目に戻すには一覧から既定品を探して押すしかなかった。
+      const isDefault = !!item.default;
       card.innerHTML = `<div class="inv-pv" data-pv="${item.id}"></div>
         <div class="inv-name">${item.adminOnly || item.throneOnly ? `${ic('throne', 13)} ` : ''}${catName(item)}</div>
-        ${isEq ? `<div class="inv-eq">${tr('装備中', 'Equipped')}</div>` : ''}`;
+        ${isEq ? `<div class="inv-eq">${isDefault ? tr('装備中', 'Equipped') : tr('装備中 ・ 押して外す', 'Equipped · tap to remove')}</div>` : ''}`;
       renderPreview(card.querySelector('.inv-pv'), item);
       // card は <button> なので、そのまま二度押し止めに渡せる。
-      card.onclick = () => { if (!isEq) equipItem(item, card); };
+      card.onclick = () => (isEq ? unequipItem(item.cat, card) : equipItem(item, card));
       grid.appendChild(card);
     }
     body.appendChild(sec);
@@ -3199,7 +3205,11 @@ function afterEquip() {
   else renderShop();
 }
 
-async function equipItem(item, btn) {
+async function equipItem(item, btn, { unequip = false } = {}) {
+  // 解除で呼ばれたときは文言だけ変える（やっていることは既定品の装備）。
+  const said = () => (unequip
+    ? tr('装備を外しました', 'Unequipped')
+    : tr(`${catName(item)} を装備しました`, `Equipped ${catName(item)}`));
   // 装備も連打で /api/equip が並ぶ。害は小さいが、押した感触が無いまま
   // トーストだけ2枚出るのは気持ちが悪い。買うのと同じ扱いにする。
   if (btn) { if (btn.disabled) return; btn.disabled = true; }
@@ -3213,19 +3223,44 @@ async function equipItem(item, btn) {
     }
     setGuestUlt(item.id);
     audio.click();
-    toast(tr(`${catName(item)} を装備しました`, `Equipped ${catName(item)}`), 'ok');
+    toast(said(), 'ok');
     afterEquip();
     return;
   }
   try {
     await api('/api/equip', { method: 'POST', body: { slot: item.cat, itemId: item.id } });
     audio.click();
-    toast(tr(`${catName(item)} を装備しました`, `Equipped ${catName(item)}`), 'ok');
+    toast(said(), 'ok');
     afterEquip();   // 描き直すのでボタンごと差し替わる
   } catch (err) {
     toast(err.message, 'err');
     if (btn) btn.disabled = false;
   }
+}
+
+// 🧷 装備解除 ＝ **そのスロットの既定品に戻す**。
+//
+// このゲームのスロットは空にできない（盤面は必ず何かの絵で描かれるし、
+// 奥義も必ず1つ入っている）。なので「外す」は「基本のものへ戻す」こと。
+// 既定品は catalog の `default: true`（skin_default / board_default /
+// fx_default / ult_blast）で、サーバーの DEFAULT_EQUIPPED と同じ4つ。
+// ⚠ 一覧から拾う（id を写経しない）── 既定品を入れ替えたときに、
+//   こちらだけ古い id を指したまま黙って壊れるのを防ぐ。
+function defaultGearOf(cat) {
+  return (shopItems || []).find(i => i.cat === cat && i.default) || null;
+}
+
+async function unequipItem(cat, btn) {
+  const def = defaultGearOf(cat);
+  if (!def) { toast(tr('基本の装備が見つかりません', 'No default gear for this slot'), 'err'); return; }
+  const cur = cat === 'ult' ? equippedUlt()
+    : (session.user ? (session.user.equipped || {})[cat] : def.id);
+  if (cur === def.id) {
+    // 押して何も起きないのがいちばん困る。なぜ変わらないのかを言う。
+    toast(tr('これが基本の装備です', 'This is the default already'), '', 2000);
+    return;
+  }
+  await equipItem(def, btn, { unequip: true });
 }
 
 // ---------------------------------------------------------------------------

@@ -175,6 +175,54 @@ try {
   check('装備が反映される', me1.user.equipped.skin === locked.id, me1.user.equipped.skin);
   check('所持品リストにも入っている', me1.user.owned.includes(locked.id), '');
 
+  // -------------------------------------------------------------------------
+  // 🧷 装備解除
+  // -------------------------------------------------------------------------
+  // このゲームのスロットは空にできない（盤面は必ず何かの絵で描かれるし、奥義も
+  // 必ず1つ入っている）。だから「外す」＝**そのスロットの既定品に戻す**。
+  // 今までは道が無く、基本の見た目に戻すには一覧から既定品を探して押すしかなかった。
+  {
+    const def = shop.items.find(i => i.cat === 'skin' && i.default);
+    check('既定のスキンがカタログにある', !!def, def && def.id);
+    const back = await j('/api/equip', { method: 'POST', body: { slot: 'skin', itemId: def.id } }, tok);
+    check('既定品に戻せる（＝解除の中身）', back.status === 200, `${back.status} ${back.error || ''}`);
+    const me2 = await j('/api/me', {}, tok);
+    check('外したあとは既定品になっている', me2.user.equipped.skin === def.id, me2.user.equipped.skin);
+
+    // 画面側の配線。押しても何も起きない状態に戻らないよう、形で固定する。
+    const src = fs.readFileSync('public/js/screens.js', 'utf8');
+    check('解除の入口がある（unequipItem）', /async function unequipItem\(cat, btn\)/.test(src), '');
+    check('既定品は一覧から引く（id を写経していない）',
+      /function defaultGearOf\(cat\) \{[\s\S]{0,200}?i\.cat === cat && i\.default/.test(src), '');
+    check('既に既定品なら理由を出す（黙って無反応にしない）',
+      /これが基本の装備です/.test(src), '');
+    check('持ち物の「装備中」札を押すと外れる',
+      /card\.onclick = \(\) => \(isEq \? unequipItem\(item\.cat, card\) : equipItem\(item, card\)\);/.test(src), '');
+    check('ショップの「装備中」ボタンからも外せる',
+      /data-act="unequip"/.test(src) && /btn\.dataset\.act === 'unequip' \? unequipItem\(item\.cat, btn\)/.test(src), '');
+    // 既定品そのものは外しようが無いので、押せないままにしてある。
+    check('既定品の札は押せないまま', /item\.default\s*\n?\s*\?\s*`<button class="btn btn-sm btn-ghost" disabled>/.test(src), '');
+  }
+
+  // 👑 運営専用の装備も、他と同じように着け外しできること。
+  {
+    // ⚠ /api/shop は一般プレイヤーには運営専用を返さないので、
+    //   運営のトークンで引き直す（それ自体が正しい振る舞い）。
+    const shopAdmin = await j('/api/shop', {}, atk);
+    check('一般には運営専用を返さない',
+      !shop.items.some(i => i.adminOnly) && shopAdmin.items.some(i => i.adminOnly), '');
+    const adminGear = shopAdmin.items.find(i => i.cat === 'board' && i.adminOnly);
+    check('運営専用のボードがある', !!adminGear, adminGear && adminGear.id);
+    const asAdmin = await j('/api/equip', { method: 'POST', body: { slot: 'board', itemId: adminGear.id } }, atk);
+    check('運営は運営専用の装備を着けられる', asAdmin.status === 200, `${asAdmin.status} ${asAdmin.error || ''}`);
+    const defBoard = shopAdmin.items.find(i => i.cat === 'board' && i.default);
+    const off = await j('/api/equip', { method: 'POST', body: { slot: 'board', itemId: defBoard.id } }, atk);
+    check('運営は運営専用の装備を外せる', off.status === 200, `${off.status} ${off.error || ''}`);
+    // 一般プレイヤーは着けられないまま（解除を足したことで穴を開けていないか）。
+    const denied = await j('/api/equip', { method: 'POST', body: { slot: 'board', itemId: adminGear.id } }, tok);
+    check('一般プレイヤーは運営専用を着けられない', denied.status === 403, `${denied.status} ${denied.error || ''}`);
+  }
+
   // アイテムタブが読むもの
   check('publicUser に items が含まれる', typeof me1.user.items === 'object', JSON.stringify(me1.user.items));
   check('publicUser に badges が含まれる', Array.isArray(me1.user.badges), '');
