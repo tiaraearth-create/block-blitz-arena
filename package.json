@@ -8,6 +8,7 @@
     "start": "node server/index.js",
     "dev": "node server/index.js",
     "backup:pull": "node scripts/pull-backup.mjs",
+    "record:clear": "node scripts/clear-record.mjs",
     "test": "node test/run-all.mjs",
     "test:serial": "node test/run-all.mjs --jobs 1"
   },

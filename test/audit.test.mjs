@@ -224,6 +224,69 @@ try {
       hit ? String(hit.detail.statsDiff) : `statsDiff が無い（前の値 ${was}）`);
   }
 
+  // ---- 🧰 scripts/clear-record.mjs（運営が実際に叩く道具）------------------
+  //
+  // 画面のボタンと同じAPIを叩くだけの道具だが、**本番のデータを書き換える**
+  // ので、素通しにはしない。本物のスクリプトを子プロセスで走らせて、
+  //   ・確認に yes と答えない限り 1バイトも書き換えない
+  //   ・名指しした人しか触らない
+  //   ・実際に取り消せる
+  // を通しで見る。
+  {
+    const run = (args, stdin) => new Promise(resolve => {
+      const ps = spawn(process.execPath, [path.join(ROOT, 'scripts', 'clear-record.mjs'),
+        '--url', BASE, ...args], { env: { ...process.env, ADMIN_PASSWORD: ADMIN_PW } });
+      let out = '';
+      ps.stdout.on('data', d => { out += d; });
+      ps.stderr.on('data', d => { out += d; });
+      ps.stdin.end(stdin === undefined ? '' : stdin);
+      ps.on('close', code => resolve({ code, out }));
+    });
+    const name = '時間があり得ない人';
+    const idOf = n => ids[n];
+    const scoreOf = async n => {
+      const d = await j(`/api/admin/users/${encodeURIComponent(idOf(n))}`, {}, admin);
+      return ((d.user && d.user.stats) || {}).bestScore || 0;
+    };
+
+    // ① 下見（--apply 無し）は絶対に書き換えない
+    const was = await scoreOf(name);
+    const dry = await run([]);
+    check('9-1 下見だけでは何も書き換えない', dry.code === 0 && (await scoreOf(name)) === was,
+      `code=${dry.code} / ${was} → ${await scoreOf(name)}`);
+    check('9-2 下見で監査の一覧が出る', /気になる点があります/.test(dry.out),
+      dry.out.split('\n').slice(0, 3).join(' / '));
+
+    // ② --apply でも、確認に yes と答えなければ書き換えない
+    const no = await run(['--apply', name], 'no\n');
+    check('9-3 ★確認に yes と答えなければ書き換えない',
+      (await scoreOf(name)) === was && /中止しました/.test(no.out),
+      `${was} → ${await scoreOf(name)}`);
+
+    // ③ 一覧に居ない名前は弾く（打ち間違いで別人を消さない）
+    const bad = await run(['--apply', 'そんな人はいない'], 'yes\n');
+    check('9-4 ★一覧に居ない名前は弾く', bad.code === 1 && /居ません/.test(bad.out),
+      `code=${bad.code}`);
+
+    // ④ 名前を挙げずに --apply しても消さない（一括削除の事故を作らない）
+    const none = await run(['--apply'], 'yes\n');
+    check('9-5 ★名前を挙げない一括取り消しはできない',
+      none.code === 1 && (await scoreOf(name)) === was, `code=${none.code}`);
+
+    // ⑤ yes と答えたら実際に消える
+    const yes = await run(['--apply', name], 'yes\n');
+    check('9-6 yes なら取り消せる', yes.code === 0 && (await scoreOf(name)) === 0,
+      `${was} → ${await scoreOf(name)} / ${yes.out.split('\n').filter(l => /✅|❌|⚠/.test(l)).join(' ')}`);
+
+    // ⑥ 名指しした人以外は無傷
+    // 名指ししていない人が巻き添えになっていないこと。
+    // 「潰された人」は CASES で bestScore 1,000,000 を持たされていて、
+    // ここまでの取り消しは一度もこの人を名指ししていない。
+    const other = await scoreOf('潰された人');
+    check('9-7 ★名指ししていない人は無傷', other === 1000000,
+      `ハイスコア=${other}（期待 1000000）`);
+  }
+
   // ---- 権限 ---------------------------------------------------------------
   const reg = await j('/api/register', { method: 'POST', body: { username: 'のぞき見', password: 'pw-audit-1234' } });
   const denied = await j('/api/admin/audit', {}, reg.token);
