@@ -440,6 +440,155 @@ adminRouter.get('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) =>
 // The stats an admin can sensibly restore. Anything derived (level from xp,
 // titles from stats, achievement progress) is deliberately absent — those
 // recompute themselves from what is set here.
+// ---------------------------------------------------------------------------
+// 🏛 記録を歴史からも消す（歴史の書き換え）
+// ---------------------------------------------------------------------------
+//
+// ■ 退会の後始末との違い
+// 退会（上の purgeUserContent）は「記録（順位と値）は歴代の事実なので残し、
+// **名前だけ伏せる**」。あれは正しい ── 本人が去っただけで、その順位は本当に
+// 起きたことだから。
+//
+// ここは逆で、**その記録がそもそも嘘だった**ときの後始末。名前を伏せるだけだと
+// 「（退会したプレイヤー）が1位」という行が残り、2位だった人は永久に2位のまま。
+// 行ごと消して、**残った人の順位を繰り上げる**。
+//
+// ■ 触る先は4つ（どれか1つでも残すと数字がどこかに生き残る）
+//   ① 殿堂 db.meta.hallOfFame … 行を消して rank を振り直す
+//   ② お知らせの本文 … 「1位 名前（値）」の行を消して、medal を振り直す
+//      （/api/news は未ログインでも読める＝いちばん人目に付く）
+//   ③ 受け取り待ちの報酬 user.rankRewards … その記録で得た報酬を取り消す
+//      （消さないと「記録は消えたのに報酬だけ後から受け取れる」）
+//   ④ シーズン王者バッジ s{N}champ / 週間王者 weekly1
+//
+// ■ 元に戻せるようにする
+// 消した中身は呼び出し側が 🧾操作ログに残す。歴史の書き換えは間違えたときの
+// 被害がいちばん大きいので、「何を消したか」を必ず読める形にしておく。
+
+const MEDALS_JA = ['1位', '2位', '3位'];
+
+/**
+ * お知らせ本文から、名前の合う「順位の行」を消して番号を振り直す。
+ *
+ * 本文は
+ *   【スコア】
+ *   1位 だれか（123,456）
+ *   2位 べつのひと（100,000）
+ * という形（週間の結果は【】の見出しが無いだけで行の形は同じ）。
+ * **連続する順位行のかたまり**を1つの表とみなし、その中で振り直す。
+ *
+ * ⚠ 名前を無差別に文字列置換しない。2文字の名前は他の語に埋まりうるので、
+ *   「行頭の medal + 空白 + 名前 + 開き括弧」に**完全に一致した行**だけを消す。
+ */
+function rewriteRankLines(text, names, medals) {
+  if (typeof text !== 'string' || !text) return { text, removed: 0 };
+  const esc = x => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const medalRe = new RegExp(`^(?:${medals.map(esc).join('|')})\\s`);
+  const mineRe = names.length
+    ? new RegExp(`^(?:${medals.map(esc).join('|')})\\s+(?:${names.map(esc).join('|')})\\s*[（(]`)
+    : null;
+  const lines = text.split('\n');
+  const out = [];
+  let removed = 0;
+  for (let i = 0; i < lines.length;) {
+    if (!medalRe.test(lines[i])) { out.push(lines[i]); i++; continue; }
+    // 順位行のかたまりを取り出す
+    const run = [];
+    while (i < lines.length && medalRe.test(lines[i])) run.push(lines[i++]);
+    const kept = run.filter(l => {
+      if (mineRe && mineRe.test(l)) { removed++; return false; }
+      return true;
+    });
+    // 残った行の番号を振り直す（＝繰り上げ）
+    kept.forEach((l, k) => {
+      out.push(l.replace(medalRe, `${medals[Math.min(k, medals.length - 1)]} `));
+    });
+  }
+  return { text: out.join('\n'), removed };
+}
+
+/**
+ * その人の記録を歴史から消す。戻り値は「何を消したか」の控え。
+ * @param {object} db
+ * @param {object} target  対象のユーザー
+ * @param {string[]|null} boards  対象のボードid（null＝全部）
+ */
+function purgeRecordHistory(db, target, boards = null) {
+  const id = target && target.id;
+  const name = target && target.username;
+  if (!id) return { hof: 0, news: 0, rewards: 0, badges: [], removed: [] };
+  const want = boards && boards.length ? new Set(boards) : null;
+  const removed = [];   // 消した中身（ログ用）
+  let hof = 0;
+
+  // ① 殿堂 — 行を消して rank を振り直す
+  for (const season of (Array.isArray(db.meta && db.meta.hallOfFame) ? db.meta.hallOfFame : [])) {
+    for (const b of (season && Array.isArray(season.boards) ? season.boards : [])) {
+      if (want && !want.has(b.id)) continue;
+      if (!Array.isArray(b.top)) continue;
+      const before = b.top.length;
+      b.top = b.top.filter(t => {
+        const mine = t && (t.userId ? t.userId === id : (!!name && t.username === name));
+        if (mine) removed.push(`殿堂 ${season.name || season.season}/${b.id} ${t.rank}位 ${t.username} ${t.value}`);
+        return !mine;
+      });
+      if (b.top.length !== before) {
+        // 繰り上げ。ここを飛ばすと「2位・3位はいるのに1位が居ない」表になる。
+        b.top.forEach((t, k) => { t.rank = k + 1; });
+        hof += before - b.top.length;
+      }
+    }
+  }
+
+  // ② お知らせの本文
+  let news = 0;
+  if (Array.isArray(db.news) && name) {
+    for (const n of db.news) {
+      if (!n) continue;
+      const ja = rewriteRankLines(n.body, [name], MEDALS_JA);
+      const en = rewriteRankLines(n.bodyEn, [name], MEDALS_JA);
+      if (!ja.removed && !en.removed) continue;
+      n.body = ja.text; n.bodyEn = en.text;
+      if (Array.isArray(n.names)) {
+        n.names = n.names.map(x => (typeof x === 'string' ? { name: x, userId: null } : x))
+          .filter(r => r && !(r.userId ? r.userId === id : r.name === name));
+      }
+      news++;
+      removed.push(`お知らせ「${String(n.title || '').slice(0, 24)}」から ${ja.removed + en.removed} 行`);
+    }
+  }
+
+  // ③ 受け取り待ちの報酬 — 記録が消えたのに報酬だけ残るのを防ぐ
+  let rewards = 0;
+  const badges = [];
+  if (Array.isArray(target.rankRewards)) {
+    const keep = [];
+    for (const r of target.rankRewards) {
+      const board = r && typeof r.board === 'string' ? r.board.replace(/^hof_/, '') : '';
+      if (want && !want.has(board)) { keep.push(r); continue; }
+      rewards++;
+      removed.push(`受け取り待ち ${r.board} ${r.rank}位 ${r.coins || 0}コイン ${r.gems || 0}ジェム`);
+      // ④ その報酬で配るはずだったバッジは、まだ受け取っていないので消えるだけ。
+      //    すでに受け取ってしまったぶんは下で剥がす。
+      if (r.badge) badges.push(r.badge);
+    }
+    target.rankRewards = keep;
+  }
+
+  // ④ 受け取り済みのシーズン王者・週間王者バッジ
+  if (Array.isArray(target.badges)) {
+    const strip = target.badges.filter(b => SEASON_BADGE_RE.test(b) || b === 'weekly1');
+    if (strip.length) {
+      target.badges = target.badges.filter(b => !strip.includes(b));
+      for (const b of strip) { badges.push(b); removed.push(`バッジ ${b}`); }
+    }
+  }
+
+  // 同じバッジが2度挙がることがある（受け取り待ちのぶんと、受け取り済みのぶん）。
+  // 報告に同じ名前が並ぶと「2個消したのか？」と読めるので畳む。
+  return { hof, news, rewards, badges: [...new Set(badges)], removed };
+}
+
 const EDITABLE_STATS = [
   { key: 'bestScore', label: 'ハイスコア', max: 100_000_000 },
   { key: 'rating', label: 'レート', max: 5000 },
@@ -818,6 +967,18 @@ adminRouter.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) =
     }
   }
 
+  // 🏛 歴史からも消す（purgeHistory）。stats を 0 に戻すだけでは、
+  //    殿堂・お知らせ・受け取り待ちの報酬・バッジに数字と名前が残る。
+  //    どれも本人にも他人にも見えるので、「取り消したのに残っている」状態になる。
+  //    ⚠ 消した中身は下の 🧾操作ログに丸ごう残す（間違えたときの被害が
+  //      いちばん大きい操作なので、読める形にしておく）。
+  let purged = null;
+  if (b.purgeHistory === true) {
+    const boards = Array.isArray(b.purgeBoards) && b.purgeBoards.length
+      ? b.purgeBoards.map(x => String(x).slice(0, 24)) : null;
+    purged = purgeRecordHistory(db, target, boards);
+  }
+
   // Leave the record in a shape the rest of the server can read.
   migrateUser(target);
   // 🧾 統計を触ったときだけ、変わった欄を「前→後」の1行に畳んで足す。
@@ -826,11 +987,18 @@ adminRouter.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) =
   const diff = Object.keys(before)
     .filter(k => (Number((target.stats || {})[k]) || 0) !== before[k])
     .map(k => `${k}: ${before[k].toLocaleString('en-US')} → ${(Number((target.stats || {})[k]) || 0).toLocaleString('en-US')}`);
-  adminLog(req, 'user_edit', target.username, diff.length ? { ...b, statsDiff: diff.join(' / ') } : b);
+  const logDetail = { ...b };
+  if (diff.length) logDetail.statsDiff = diff.join(' / ');
+  if (purged) {
+    // ⚠ adminLog は入れ子の object を「N項目」に潰すので、**文字列**にして渡す。
+    logDetail.purged = `殿堂${purged.hof} / お知らせ${purged.news} / 報酬${purged.rewards}`;
+    logDetail.purgedDetail = purged.removed.join(' | ').slice(0, 900);
+  }
+  adminLog(req, 'user_edit', target.username, logDetail);
   saveDb();
   // NOT publicUser(): for an admin target that view fakes the entire shop as
   // owned, and echoing it back would let the editor write that fiction in.
-  res.json({ ok: true, user: adminUserView(target) });
+  res.json({ ok: true, user: adminUserView(target), ...(purged ? { purged } : {}) });
 });
 
 // ---------------------------------------------------------------------------

@@ -287,6 +287,101 @@ try {
       `ハイスコア=${other}（期待 1000000）`);
   }
 
+  // ---- 🏛 歴史の書き換え（v2.76）------------------------------------------
+  //
+  // 記録を 0 に戻すだけでは、殿堂・お知らせ・受け取り待ちの報酬・バッジに
+  // 数字と名前が残る。殿堂とお知らせは**未ログインでも読める**ので、
+  // 「取り消したのに1位のまま載っている」状態になる。
+  // 行ごと消して、**残った人の順位を繰り上げる**のがここの本題。
+  {
+    const cheat = '時間があり得ない人';   // 上の 9-6 で既に stats は 0 にした
+    const honest = '正直な上位者';
+    // 殿堂とお知らせを、実際の書式どおりに仕込む
+    await stop();
+    const raw = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+    raw.meta = raw.meta || {};
+    raw.meta.hallOfFame = [{
+      season: 's1', number: 1, name: 'シーズン1', nameEn: 'Season 1',
+      at: Date.now(), badge: 's1champ',
+      boards: [{
+        id: 'score', name: 'ハイスコア', nameEn: 'High Score', entrants: 3, awarded: true,
+        top: [
+          { rank: 1, username: cheat, userId: ids[cheat], value: 2000000, resident: false },
+          { rank: 2, username: honest, userId: ids[honest], value: 900000, resident: false },
+          { rank: 3, username: 'ふつうの人', userId: ids['ふつうの人'], value: 42000, resident: false },
+        ],
+      }],
+    }];
+    raw.news = raw.news || [];
+    raw.news.push({
+      id: 'hof-news-1', title: 'シーズン1 殿堂入り発表', titleEn: 'Season 1 Hall of Fame',
+      body: `シーズン1が終了しました。\n\n【ハイスコア】\n1位 ${cheat}（2,000,000）\n2位 ${honest}（900,000）\n3位 ふつうの人（42,000）\n\n新シーズンもよろしく！`,
+      bodyEn: `Season 1 has ended.\n\n[High Score]\n1位 ${cheat} (2,000,000)\n2位 ${honest} (900,000)\n3位 ふつうの人 (42,000)\n\nSee you!`,
+      pinned: false, by: '運営', at: Date.now(),
+      names: [{ name: cheat, userId: ids[cheat] }, { name: honest, userId: ids[honest] }],
+    });
+    // 受け取り待ちの報酬とバッジも仕込む
+    const cu = raw.users[ids[cheat]];
+    cu.rankRewards = [{ id: 'rr1', board: 'hof_score', rank: 1, of: 3, best: 2000000,
+      coins: 0, gems: 400, badge: 's1champ', at: Date.now() }];
+    cu.badges = [...new Set([...(cu.badges || []), 's1champ', 'weekly1'])];
+    fs.writeFileSync(dbPath, JSON.stringify(raw));
+    await start();
+    const relog2 = await j('/api/login', { method: 'POST', body: { username: 'るみまき', password: ADMIN_PW } });
+    admin = relog2.token || admin;
+
+    const before = await j('/api/halloffame');
+    check('10-0 前提: 殿堂に3人並んでいる',
+      before.seasons && before.seasons[0] && before.seasons[0].boards[0].top.length === 3,
+      JSON.stringify((before.seasons || [])[0] || {}).slice(0, 90));
+
+    const res = await j(`/api/admin/users/${encodeURIComponent(ids[cheat])}`,
+      { method: 'POST', body: { setStats: { bestScore: 0 }, purgeHistory: true } }, admin);
+    check('10-1 歴史の書き換えを実行できる', res.status === 200 && !!res.purged,
+      JSON.stringify(res.purged || res).slice(0, 120));
+
+    const after = await j('/api/halloffame');
+    const top = ((after.seasons || [])[0] || { boards: [{}] }).boards[0].top || [];
+    check('10-2 ★殿堂からその人が消えた', !top.some(t => t.username === cheat),
+      top.map(t => `${t.rank}位${t.username}`).join(' '));
+    check('10-3 ★残った人の順位が繰り上がった（1位が空かない）',
+      top.length === 2 && top[0].rank === 1 && top[0].username === honest && top[1].rank === 2,
+      top.map(t => `${t.rank}位${t.username}`).join(' '));
+
+    // 未ログインで読める面。ここに残ると「取り消したのに載っている」になる。
+    const news = await j('/api/news');
+    const n = (news.news || []).find(x => x.id === 'hof-news-1');
+    check('10-4 ★お知らせ本文からも行が消えた',
+      !!n && !n.body.includes(cheat) && !n.bodyEn.includes(cheat),
+      n ? n.body.replace(/\n/g, ' / ') : 'お知らせが無い');
+    check('10-5 ★お知らせの中でも順位が繰り上がった',
+      !!n && /1位 正直な上位者（900,000）/.test(n.body) && /2位 ふつうの人（42,000）/.test(n.body),
+      n ? n.body.replace(/\n/g, ' / ') : '');
+
+    const me = await j(`/api/admin/users/${encodeURIComponent(ids[cheat])}`, {}, admin);
+    check('10-6 ★受け取り待ちの報酬が消えた',
+      !!me.user && (me.user.rankRewards || []).length === 0,
+      JSON.stringify((me.user || {}).rankRewards || []).slice(0, 80));
+    check('10-7 ★シーズン王者・週間王者のバッジが剥がれた',
+      !!me.user && !(me.user.badges || []).includes('s1champ')
+      && !(me.user.badges || []).includes('weekly1'),
+      JSON.stringify((me.user || {}).badges || []));
+
+    // 巻き添えを出さない
+    const honestRec = await j(`/api/admin/users/${encodeURIComponent(ids[honest])}`, {}, admin);
+    check('10-8 ★名指ししていない人のバッジ・報酬は無傷',
+      !!honestRec.user && (honestRec.user.stats || {}).bestScore === 900000,
+      `ハイスコア=${((honestRec.user || {}).stats || {}).bestScore}`);
+
+    // 何を消したかがログに残る（間違えたときに戻せるのはここだけ）
+    const log = await j('/api/admin/log', {}, admin);
+    const hit = (log.log || log.entries || log.items || [])
+      .find(r => r && r.detail && r.detail.purgedDetail);
+    check('10-9 ★消した中身が操作ログに残る',
+      !!hit && String(hit.detail.purgedDetail).includes('殿堂'),
+      hit ? String(hit.detail.purgedDetail).slice(0, 100) : 'purgedDetail が無い');
+  }
+
   // ---- 権限 ---------------------------------------------------------------
   const reg = await j('/api/register', { method: 'POST', body: { username: 'のぞき見', password: 'pw-audit-1234' } });
   const denied = await j('/api/admin/audit', {}, reg.token);

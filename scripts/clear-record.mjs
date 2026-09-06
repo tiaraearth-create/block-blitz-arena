@@ -12,14 +12,18 @@
 //   node scripts/clear-record.mjs                        … 監査の一覧を見るだけ
 //   node scripts/clear-record.mjs --apply まじ コーヘイ80  … その2人の記録を取り消す
 //   node scripts/clear-record.mjs --apply --floors まじ   … 階層のほうを取り消す
+//   node scripts/clear-record.mjs --apply --keep-history まじ … 殿堂とお知らせは残す
 //   node scripts/clear-record.mjs --url http://localhost:3000 … 対象を変える
 //
 // パスワードは打った端末から出ない（この画面に出ることも、ログに残ることも無い）。
 //
 // ⚠ 取り消した記録は、サーバーの🧾操作ログに「前の値 → 後の値」で残る（v2.70〜）。
 //   押し間違えたら、その値を見ながら手で戻せる。
-// ⚠ 殿堂（/api/halloffame）と過去のお知らせ本文に焼き込まれた数字は**消えない**。
-//   どちらも未ログインで読める。そこも消したいなら別の作業が要る。
+// 🏛 既定では**歴史も書き換える**。殿堂の行を消して残った人の順位を繰り上げ、
+//   お知らせ本文からもその行を消し、受け取り待ちの報酬とシーズン王者バッジを
+//   取り消す。殿堂とお知らせは未ログインでも読めるので、ここを残すと
+//   「取り消したのに1位のまま載っている」状態になる。
+//   --keep-history を付けると、記録だけ 0 にして歴史はそのまま残す。
 
 import readline from 'readline';
 
@@ -31,6 +35,7 @@ const flag = n => args.includes(n);
 const opt = n => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
 const BASE = (opt('--url') || DEFAULT_URL).replace(/\/$/, '');
 const APPLY = flag('--apply');
+const PURGE = !flag('--keep-history');
 const WHAT = flag('--floors') ? 'floors' : 'score';
 // 旗と、その旗が取る値を除いた残りが「名指しした人」。
 const NAMES = args.filter((a, i) =>
@@ -196,20 +201,26 @@ async function main() {
   }
 
   const keys = WHAT === 'score' ? SCORE_FAMILY : FLOOR_FAMILY;
-  console.log('これから取り消します:\n');
+  console.log(PURGE
+    ? 'これから取り消します（**歴史も書き換えます**）:\n'
+    : 'これから取り消します（歴史はそのまま残します）:\n');
   for (const t of targets) {
     console.log(`  ${t.username}`);
     if (WHAT === 'score') console.log(`    ハイスコア ${fmt(t.bestScore)} → 0（各モードの自己ベストも一緒に）`);
     else console.log(`    塔${t.dungeonMax} 地下${t.underMax} 天国${t.heavenMax} 深淵${t.abyssMax} → すべて 0`);
   }
-  console.log('\n前の値はサーバーの🧾操作ログに残るので、間違えたら手で戻せます。');
-  console.log('殿堂と過去のお知らせに焼き込まれた数字は消えません。\n');
+  if (PURGE) {
+    console.log('\n  ＋ 殿堂からその行を消し、残った人の順位を繰り上げます');
+    console.log('  ＋ 過去のお知らせ本文からもその行を消します（未ログインでも読める面）');
+    console.log('  ＋ 受け取り待ちのランキング報酬と、シーズン王者・週間王者バッジを取り消します');
+  }
+  console.log('\n消した中身はサーバーの🧾操作ログに残るので、間違えたら手で戻せます。\n');
 
   const ans = await askLine(`本当に実行しますか？ yes と入力: `);
   if (ans !== 'yes') { console.log('中止しました。何も変更していません。'); return; }
 
   for (const t of targets) {
-    const body = { setStats: Object.fromEntries(keys.map(k => [k, 0])) };
+    const body = { setStats: Object.fromEntries(keys.map(k => [k, 0])), ...(PURGE ? { purgeHistory: true } : {}) };
     const res = await req(`${BASE}/api/admin/users/${encodeURIComponent(t.id)}`, {
       method: 'POST',
       headers: { ...H, 'content-type': 'application/json' },
@@ -219,9 +230,12 @@ async function main() {
     if (!res.ok) { console.error(`  ❌ ${t.username}: ${d.error || res.status}`); continue; }
     const st = (d.user && d.user.stats) || {};
     const left = keys.filter(k => (Number(st[k]) || 0) !== 0);
+    const pg = d.purged;
+    const note = pg ? `（殿堂${pg.hof} / お知らせ${pg.news} / 報酬${pg.rewards}${pg.badges && pg.badges.length ? ` / バッジ${pg.badges.length}` : ''}）` : '';
     console.log(left.length
       ? `  ⚠ ${t.username}: 残った欄があります → ${left.join(',')}`
-      : `  ✅ ${t.username}: 取り消しました`);
+      : `  ✅ ${t.username}: 取り消しました ${note}`);
+    for (const line of (pg && pg.removed ? pg.removed : [])) console.log(`       - ${line}`);
   }
   console.log('\n管理画面の 🧾操作ログ に「前の値 → 後の値」が残っています。');
 }
