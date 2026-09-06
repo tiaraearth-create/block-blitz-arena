@@ -613,11 +613,25 @@ function gachaPull(user, lucky = false, floor = 0, gemBudget = null) {
       // 図鑑コンプ済み。ここで💎を確実に配ると、コイン→💎の両替レートが
       // 固定される（22.8🪙/💎）＝実質の両替機になる。通貨は配らず、
       // 非通貨のブースター束を代わりに配る。
-      const pool = BOOST_ITEMS.filter(i => !i.adminOnly);
-      const it = pool[Math.floor(Math.random() * pool.length)];
-      const qty = 3;
+      //
+      // ★ 配るのは「いちばん少ない持ち物」を5個。
+      //   ⚠ 以前は**無作為に3個**だった。コンプ後に回す理由がこれしか無いのに、
+      //     すでに山ほど持っている品が当たることが多く、「回しても意味が無い」
+      //     状態だった（＝コンプした人にとってガチャが出口として死ぬ）。
+      //     少ないものを補充する形なら、回すたびに必ず役に立つ。
+      //   ⚠ 数は5個まで。平均定価 325🪙 × 5 = 1,625🪙相当、SSR は7%なので
+      //     1回転あたり 114🪙。1回転 500🪙 なので**出口のまま**でいられる
+      //     （10個にすると 228🪙 になり、吸う力が目に見えて落ちる）。
+      //   ⚠ 運営専用は除く（pool の条件は変えない）。
+      const pool = BOOST_ITEMS.filter(i => !i.adminOnly && Number(i.price) > 0);
+      if (!pool.length) return boosterFallback(2, 'SSR');
       user.items = user.items || {};
-      user.items[it.id] = (user.items[it.id] || 0) + qty;
+      const held = id => Number(user.items[id]) || 0;
+      // いちばん少ないもの。同数なら id 順で安定させる（引くたびに揺れない）。
+      const it = pool.slice().sort((a, b) => (held(a.id) - held(b.id))
+        || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0];
+      const qty = 5;
+      user.items[it.id] = held(it.id) + qty;
       return { type: 'item', id: it.id, name: it.name, amount: qty, rarity: 'SSR', complete: true };
     }
     const it = unowned[Math.floor(Math.random() * unowned.length)];

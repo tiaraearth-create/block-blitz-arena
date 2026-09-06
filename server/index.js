@@ -1021,6 +1021,9 @@ function publicUser(user) {
     battlePass: adminBp, badges: user.badges,
     equippedTitle: user.equippedTitle || null,
     achievements: user.achievements,
+    // 🧾 運営が記録を取り消した時刻。端末に残る自己ベストの控えを
+    //    落としてもらうための合図（値そのものに意味は無い）。
+    recordsClearedAt: user.recordsClearedAt || 0,
     // 🎭 of（順位を決めた母集団の人数）は**渡さない**。順位報酬は住人を
     //    外した実プレイヤーだけで数え直しているので、そのままだと
     //    「3位 / 13人中」と出て、100行あるランキングの残りが何なのかが割れる。

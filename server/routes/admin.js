@@ -987,6 +987,20 @@ adminRouter.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) =
   const diff = Object.keys(before)
     .filter(k => (Number((target.stats || {})[k]) || 0) !== before[k])
     .map(k => `${k}: ${before[k].toLocaleString('en-US')} → ${(Number((target.stats || {})[k]) || 0).toLocaleString('en-US')}`);
+  // 🧾 記録を**下げた**なら、端末にも落としてもらうための印を打つ。
+  //
+  // ⚠ 取り消しはサーバーの stats を 0 にするだけで、端末の控えには届かない。
+  //   しかも持ち主が変わるときに bba_arch:<持ち主> へ仕舞われて戻ってくるので、
+  //   ログインし直すだけで自己ベストが復活していた。まだ送っていない結果の
+  //   控え（bba_result_queue）も残るので、取り消した直後に正規の経路で
+  //   記録が戻ることすらあった。
+  //   端末には命令を送れないので、**時刻の印**を置いて次の /api/me で
+  //   気づいてもらう（クライアントの localdata.dropDeviceRecords が拾う）。
+  //   上げたときは打たない ── 運営が記録を直してあげた場合まで消さない。
+  const lowered = Object.keys(before)
+    .some(k => (Number((target.stats || {})[k]) || 0) < before[k]);
+  if (lowered || purged) target.recordsClearedAt = Date.now();
+
   const logDetail = { ...b };
   if (diff.length) logDetail.statsDiff = diff.join(' / ');
   if (purged) {

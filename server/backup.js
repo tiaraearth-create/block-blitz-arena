@@ -667,7 +667,10 @@ function mergeEarned(winner, loser) {
   //    上限は EYE_SHARD_DAILY_CAP)も同じ形。欠片は applyGameResult の中で
   //    **唯一そのまま通貨を鋳造する行**なので（test/econguard.test.mjs）、
   //    ここから落ちていると**復元した日だけ上限が丁度もう一本分開く**。
-  for (const [key, fields] of [['grindDay', ['coins', 'bpXp', 'accXp']], ['eventGemDay', ['got']], ['eyeShardDay', ['got']]]) {
+  for (const [key, fields] of [['grindDay', ['coins', 'bpXp', 'accXp']], ['eventGemDay', ['got']], ['eyeShardDay', ['got']],
+    // 📜 実績の受け取りの1日あたりの上限（achievements.js の ACH_CLAIM_*_DAY）。
+    //    落とすと復元した日だけ、全実績を一度に受け取れる状態に戻る。
+    ['achClaimDay', ['coins', 'gems']]]) {
     const ld = loser.stats && loser.stats[key];
     if (!isPlainObj(ld) || !okDay(ld.day)) continue;
     const wst4 = winner.stats || (winner.stats = {});

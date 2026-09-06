@@ -289,13 +289,79 @@ export function claimAchievement(user, id) {
   if (!ready.length) {
     return { error: id === '*' ? '受け取れる実績がありません' : 'まだ達成していないか、受け取り済みです' };
   }
+  // 📜 1日に受け取れる**金額**の上限。
+  //
+  // ⚠ id:'*' の一括受け取りは、条件を満たしている実績を**1リクエストで満額**
+  //   払っていた。全実績の合計は 418,916🪙＋3,509💎 で、図鑑（90,500🪙＋612💎）の
+  //   4倍以上あるのに、絞りは金額の小さい図鑑側にだけ付いていた
+  //   （catalog.js の COLLECTION_CLAIM_PER_DAY）。実績を追加した日に、
+  //   条件をすでに満たしている古参が一斉に満額を受け取ることになる。
+  //
+  // ★ 件数ではなく**金額**で絞る。件数だと、小さな実績（600🪙）まで
+  //   何日も待たされて「達成したのに受け取れない」体験になる。
+  //   金額で絞れば、細かいものは今日まとめて片付き、大物だけが翌日に回る。
+  // ★ 受け取れる権利は消えない（明日また受け取れる）。数日に均すだけ。
+  const q = achievementQuota(user);
+  const roomC = Math.max(0, ACH_CLAIM_COIN_DAY - q.coins);
+  const roomG = Math.max(0, ACH_CLAIM_GEM_DAY - q.gems);
+
+  // 安い順に片付ける（小さいものを人質に取らない）。
+  const order = ready.slice().sort((a, b) =>
+    (a.coins + a.gems * GEM_IN_COINS) - (b.coins + b.gems * GEM_IN_COINS));
+
   let coins = 0, gems = 0;
-  for (const ac of ready) {
+  const taken = [];
+  for (const ac of order) {
+    // ★ 1件も取れないときは**必ず1件は通す**。そうしないと、上限より高い
+    //   実績（ach_own45 は 8,000🪙+70💎）が永久に受け取れなくなる。
+    const first = taken.length === 0;
+    if (!first && (coins + ac.coins > roomC || gems + ac.gems > roomG)) continue;
     user.achievements.push(ac.id);
     coins += ac.coins;
     gems += ac.gems;
+    taken.push(ac.id);
   }
+  q.coins += coins;
+  q.gems += gems;
   user.coins += coins;
   user.gems += gems;
-  return { coins, gems, ids: ready.map(r => r.id) };
+  // 取り切れなかった件数を返す（画面が「あと◯件は明日」と言えるように）。
+  return { coins, gems, ids: taken, left: ready.length - taken.length };
+}
+
+// 💎をコイン換算する重み（ガチャの実効レート）。安い順に並べるためだけに使う。
+const GEM_IN_COINS = 22.8;
+// 1日に受け取れる実績報酬の上限。図鑑のいちばん大きなセット（30,000🪙＋300💎）と
+// 同じ高さにそろえてある ── どちらも「まとめて配ると一度に効きすぎる」ための歯止め。
+export const ACH_CLAIM_COIN_DAY = 30000;
+export const ACH_CLAIM_GEM_DAY = 300;
+
+// JST 0時区切り。catalog.js の collectionDayKey と同じ計算。
+function achDayKey(ts = Date.now()) {
+  return new Date(ts + 9 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+// きょういくら受け取ったか。user を書き換える（受け取り時にだけ呼ぶ）。
+function achievementQuota(user) {
+  const day = achDayKey();
+  // ⚠ 置き場は **user.stats の下**。grindDay / eventGemDay / eyeShardDay と
+  //   同じ棚に置かないと、復元マージ（server/backup.js の「日付つきの止め金」の
+  //   輪）が拾わず、**復元した日だけ上限がもう1本ぶん開く**。
+  //   test/persist-registry.test.mjs の C-2/C-5 がそれを見張っている。
+  const st = user.stats || (user.stats = {});
+  let q = st.achClaimDay;
+  if (!q || typeof q !== 'object' || q.day !== day) q = st.achClaimDay = { day, coins: 0, gems: 0 };
+  q.coins = Math.max(0, Number(q.coins) || 0);
+  q.gems = Math.max(0, Number(q.gems) || 0);
+  return q;
+}
+
+/** 画面向け（書き換えない）。きょうあといくら受け取れるか。 */
+export function achievementClaimRoom(user) {
+  const q = user && user.stats && user.stats.achClaimDay;
+  const on = q && q.day === achDayKey();
+  return {
+    coins: Math.max(0, ACH_CLAIM_COIN_DAY - (on ? Number(q.coins) || 0 : 0)),
+    gems: Math.max(0, ACH_CLAIM_GEM_DAY - (on ? Number(q.gems) || 0 : 0)),
+  };
 }

@@ -76,6 +76,10 @@ export const OWNED_KEYS = [
   // 🕯 端末側のプレイ回数（ロゴのヒントを出すしきい値に使う）。
   //    その人が何回遊んだかなので、持ち主が変われば一緒に仕舞う。
   'bba_plays',
+  // 🧾 運営の取り消しを、この端末でどこまで反映したか（時刻）。
+  //    持ち主が変われば一緒に仕舞う ── 1台を家族で使っている端末で、
+  //    誰かの取り消しが別の人の記録まで巻き込まないようにするため。
+  'bba_records_cleared_at',
   // 🔖 しおり ── 途中まで走った1本を預けたもの（盤面・手札・スコア・
   //    モード固有の進み具合）。**その人のプレイそのもの**なので、持ち主が
   //    変われば必ず一緒に仕舞う（他人のログインで前の人の続きが出てはいけない）。
@@ -84,6 +88,72 @@ export const OWNED_KEYS = [
 
 // 前方一致で owned 扱いにするもの（キー名に値が混ざるため列挙できない）。
 export const OWNED_PREFIXES = ['bba_sprint_'];
+
+// 🧾 運営が記録を取り消したときに、端末からも落とすもの。
+//
+// ⚠ 取り消しはサーバーの stats を 0 にするだけで、端末の控えには届かない。
+//   しかも持ち主が変わるときに bba_arch:<持ち主> へ**仕舞われて戻ってくる**ので、
+//   ログインし直すだけで自己ベストが復活していた。
+//   ここに挙げるのは「サーバーにも同じ記録がある」ものだけ。
+//   ★ bba_puzzle_stars は**入れない** ── ★はサーバーに控えが無く、
+//     消すと本当に失われる（localdata.js 冒頭の注記のとおり）。
+//   ★ bba_items / bba_ult / bba_bookmark / bba_plays / bba_workshop_liked も
+//     入れない。記録ではなく持ち物と操作の続きなので、取り消しの対象外。
+export const RECORD_KEYS = [
+  'bba_best', 'bba_meltdown_best', 'bba_chimera_best', 'bba_dig_best',
+  'bba_ghost_best', 'bba_chaos_best', 'bba_coop_best', 'bba_survival_best',
+  'bba_survival_wave', 'bba_boss_max', 'bba_rush_depth', 'bba_weekly_best',
+  'bba_daily_record', 'bba_chain_best', 'bba_chain_max',
+  'bba_blueprint_clears', 'bba_blueprint_record',
+  'bba_dungeon_max', 'bba_dungeon_under_max', 'bba_dungeon_heaven_max', 'bba_dungeon_abyss_max',
+  'bba_puzzle_stage',
+  // 📴 まだ送っていない結果。ここを残すと、取り消した直後に控えが送られて
+  //    記録が**正規の経路で**戻る（runId の冪等は未送信の1件を止めない）。
+  'bba_result_queue',
+];
+const RECORD_PREFIXES = ['bba_sprint_'];
+
+/**
+ * 🧾 端末に残っている記録を落とす。**仕舞ってあるぶんも**落とす。
+ *
+ * 仕舞い（bba_arch:<持ち主>）を残すと、ログインし直した瞬間に戻ってくる
+ * ── test/localkeys.test.mjs が「Aが戻ってきたら記録が戻る」を保証している
+ * とおりの動きなので、そこを通さずに消す必要がある。
+ *
+ * @returns {{dropped:number, stashed:number}} 落とした件数
+ */
+export function dropDeviceRecords(store = ls()) {
+  const out = { dropped: 0, stashed: 0 };
+  if (!store) return out;
+  const isRecord = k => RECORD_KEYS.includes(k) || RECORD_PREFIXES.some(p => k.startsWith(p));
+  try {
+    for (const k of [...RECORD_KEYS]) {
+      if (store.getItem(k) === null) continue;
+      store.removeItem(k); out.dropped++;
+    }
+    // 前方一致ぶん（bba_sprint_60 など）
+    // ⚠ 鍵の列挙は allKeys（length / key(i)）を使う。Object.keys(localStorage) は
+    //   ブラウザでは動くが、仕様として保証された並べ方ではない ── 実測でも
+    //   模擬した store では1件も返らず、前方一致ぶんと仕舞いを取りこぼした。
+    for (const k of allKeys(store).filter(x => RECORD_PREFIXES.some(p => x.startsWith(p)))) {
+      store.removeItem(k); out.dropped++;
+    }
+    // 仕舞ってあるぶん。持ち主ごとに JSON で入っているので、中の欄だけ抜く。
+    for (const k of allKeys(store)) {
+      if (!k.startsWith(ARCH_PREFIX)) continue;
+      let bag;
+      try { bag = JSON.parse(store.getItem(k) || '{}'); } catch { continue; }
+      if (!bag || typeof bag !== 'object') continue;
+      let hit = 0;
+      for (const f of Object.keys(bag)) if (isRecord(f)) { delete bag[f]; hit++; }
+      if (!hit) continue;
+      out.stashed += hit;
+      if (Object.keys(bag).length) store.setItem(k, JSON.stringify(bag));
+      else store.removeItem(k);
+    }
+  } catch { /* 端末側が読めないなら諦める（記録はサーバー側で既に 0） */ }
+  return out;
+}
 
 // 隠し要素の解放印。owned とは別規則（下の switchOwner のコメント参照）。
 export const UNLOCK_KEYS = ['bba_kami', 'bba_souzou', 'bba_ghost'];

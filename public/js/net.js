@@ -4,7 +4,7 @@ import { trServer, LANG } from './i18n.js';
 //    「解放印がどこから来たか」を記録するのに使う ── 記録しておかないと、
 //    Aがアカウントで持っていた解放が端末に残り、次にログインしたBの
 //    アカウントへ carryOverLocalUnlocks が恒久コピーしてしまう。
-import { noteUnlockSource, ownerKeyOf } from './localdata.js';
+import { noteUnlockSource, ownerKeyOf, dropDeviceRecords } from './localdata.js';
 
 const TOKEN_KEY = 'bba_token';
 
@@ -42,6 +42,35 @@ export function setToken(token) {
 // ゲストのまま開けた人がログインした瞬間に扉を失う（引き継ぎは main.js が
 // 別途 POST する）。ここは「開ける」だけの片道。
 export const UNLOCK_LS_KEYS = { kami: 'bba_kami', souzou: 'bba_souzou', ghost: 'bba_ghost' };
+
+// 🧾 端末に残る記録の控えを、運営の取り消しに合わせて落とす。
+//
+// サーバーから端末へ命令は送れないので、user.recordsClearedAt（取り消した時刻）を
+// 端末の控えと突き合わせて、進んでいたら一度だけ落とす。
+// ⚠ 印は**持ち主ごと**に覚える。1台を家族で使っている端末で、誰かの取り消しが
+//   別の人の記録まで巻き込むと、取り消していない人の自己ベストが消える。
+// ⚠ 鍵は**持ち主ごとの棚**（localdata.js の OWNED_KEYS）に置く。
+//   自分で `:<持ち主>` を付けた鍵を作ると、localdata の分類から外れて
+//   「持ち主が変わったときに仕舞う／戻す」に乗らない
+//   （test/localkeys.test.mjs ① が、分類漏れをそのまま赤にする）。
+//   OWNED_KEYS に入れておけば、1台を家族で使っていても取り違えない。
+const CLEARED_AT_KEY = 'bba_records_cleared_at';
+function syncClearedRecords(user) {
+  try {
+    const at = Number(user && user.recordsClearedAt) || 0;
+    if (!at) return;
+    const key = CLEARED_AT_KEY;
+    if (Number(localStorage.getItem(key) || 0) >= at) return;
+    const out = dropDeviceRecords();
+    localStorage.setItem(key, String(at));
+    // 端末の控え（dom.js の bba_me_cache）も捨てる。/api/me が返るまでの
+    // あいだ、取り消したはずの数字が本人の画面に出続けるため。
+    try { localStorage.removeItem('bba_me_cache'); } catch { /* 読めないなら諦める */ }
+    if (out.dropped || out.stashed) {
+      console.info(`[records] 端末の控えを落としました（表 ${out.dropped} / 仕舞い ${out.stashed}）`);
+    }
+  } catch { /* localStorage が読めない端末では何もしない */ }
+}
 
 function mirrorUnlocksToDevice(user) {
   try {
@@ -383,7 +412,7 @@ export async function api(path, { method = 'GET', body, timeout, queueOffline = 
   // TypeError で開けなくなり、管理者の「💰自分にコイン付与」は直前に編集画面を
   // 開いた相手のほうへ飛ぶ。検索が空振り（user:null）だとゲスト扱いに落ちて、
   // リロードするまで戻らなかった。
-  if (isMyUser(data.user)) { session.user = data.user; mirrorUnlocksToDevice(session.user); }
+  if (isMyUser(data.user)) { session.user = data.user; mirrorUnlocksToDevice(session.user); syncClearedRecords(session.user); }
   if (data.season) session.season = data.season;
   // 📴 1本でも通ったなら通信は生きている。控えてある結果があれば送る。
   if (queueOffline) scheduleResultFlush();
@@ -397,6 +426,7 @@ export async function refreshMe() {
   // api() の中の代入は isMyUser() を通すので、ここで素通しに入れ直した user は
   // まだ端末へ映っていないことがある。念のためもう一度通す（冪等）。
   mirrorUnlocksToDevice(session.user);
+  syncClearedRecords(session.user);
   return data;   // { user, season, dailyBonus }
 }
 
