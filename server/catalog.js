@@ -108,6 +108,17 @@ export const SHOP_ITEMS = [
   { id: 'skin_admin',    cat: 'skin',  name: 'レインボー【管理者】', desc: '虹色に輝く運営専用ブロック', price: 0, currency: 'coins', adminOnly: true },
   { id: 'board_admin',   cat: 'board', name: '王の間【管理者】',     desc: '黄金に輝く運営専用ステージ', price: 0, currency: 'coins', adminOnly: true },
   { id: 'fx_admin',      cat: 'fx',    name: '虹の祝福【管理者】',   desc: '虹の粒子が舞う運営専用エフェクト', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'skin_talisman', cat: 'skin',  name: '御札【管理者】',       desc: '朱の帯を巻いた縦長の護符ブロック', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'skin_foxfire',  cat: 'skin',  name: '狐火【管理者】',       desc: '夜色の地に青白い火が灯る運営専用ブロック', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'skin_ward',     cat: 'skin',  name: '結界【管理者】',       desc: '六角の護符格子が浮かぶ硝子ブロック', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'board_yomiya',  cat: 'board', name: '宵宮の社【管理者】',   desc: '提灯の灯が沈み、蛍だけが昇る運営専用ステージ', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'board_higan',   cat: 'board', name: '彼岸の岸【管理者】',   desc: '曼珠沙華の紅が暮れ方へ沈む運営専用ステージ', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'board_tokoyo',  cat: 'board', name: '常夜の境【管理者】',   desc: '藍と紫が触れ合う、明けない夜の運営専用ステージ', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'fx_danmaku',    cat: 'fx',    name: '弾幕【管理者】',       desc: '等間隔に並んだ弾が輪のまま広がる運営専用エフェクト', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'fx_ofuda',      cat: 'fx',    name: '御札乱舞【管理者】',   desc: '御札の紙片がひらひらと舞い落ちる運営専用エフェクト', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'fx_hotaru',     cat: 'fx',    name: '蛍火【管理者】',       desc: '蛍の光がゆっくり漂って消える運営専用エフェクト', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'ult_barrier',   cat: 'ult',   name: '結界【管理者】', desc: '四隅の2×2を祓って逃げ場を作る運営専用の守り', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'ult_kamikakushi', cat: 'ult',   name: '神隠し【管理者】', desc: '繋がりの薄いマスから順に最大12マスを持ち去る運営専用奥義', price: 0, currency: 'coins', adminOnly: true },
   { id: 'ult_admin',     cat: 'ult',   name: '全能【管理者】', desc: '盤面消滅＋ゲージ即再充填の運営専用奥義', price: 0, currency: 'coins', adminOnly: true },
 ];
 
@@ -173,6 +184,8 @@ export const BOOST_ITEMS = [
   { id: 'item_god_mult',   name: '神威【管理者】',       desc: '30秒間スコア10倍',                            price: 0, currency: 'coins', adminOnly: true },
   { id: 'item_god_shield', name: '絶対防御【管理者】',   desc: '60秒間ゲームオーバー無効・お邪魔無効・コンボ永続', price: 0, currency: 'coins', adminOnly: true },
   { id: 'item_god_nuke',   name: '天変地異【管理者】',   desc: '敵のHPを99%削る（敵がいなければ +100,000点）',   price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_ward',   name: '八方結界【管理者】',   desc: '外周28マスを祓い、25秒間 外周の妨害を祓い続ける（内側は無傷）', price: 0, currency: 'coins', adminOnly: true },
+  { id: 'item_god_omikuji', name: '御神籤【管理者】',     desc: '引くたびに変わる福を1つ。外れは無く、結果は必ず通知される', price: 0, currency: 'coins', adminOnly: true },
 ];
 
 // ---- Boss battles ----

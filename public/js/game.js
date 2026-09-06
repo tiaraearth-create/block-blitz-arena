@@ -1,6 +1,6 @@
 // GameView: canvas renderer + input controller for one board (player or spectator).
 import { SIZE, shapeSize, ICE, ICE_CRACKED, EYE } from './engine.js';
-import { PALETTE, getSkin, getBoard } from './themes.js';
+import { PALETTE, getSkin, getBoard, drawScene } from './themes.js';
 import { ParticleSystem } from './particles.js';
 import { audio } from './audio.js';
 import { getSettings, particleFactor, motionFactor, prefersReducedMotion, onSettingsChange, onReducedMotionChange, showPlaceGhost, showClearHint } from './settings.js';
@@ -1183,6 +1183,10 @@ export class GameView {
       }
       ctx.globalAlpha = 1;
     }
+
+    // 🌳 動く風景（木が揺れる・波が寄せる…）。粒より**奥**に描く。
+    //    薄く暗い層なので、この上に粒が浮き、さらに手前に盤面が載る。
+    drawScene(ctx, this.W, this.H, t0, theme);
 
     // animated decorations
     for (const d of this.deco) {

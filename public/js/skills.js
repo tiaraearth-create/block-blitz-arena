@@ -31,6 +31,8 @@ export const ULT_META = {
   ult_condemn:   { color: '#e03546' },
   ult_gravity:   { color: '#8fb6ff' },
   ult_admin:     { color: '#ffd75e' },
+  ult_barrier:   { color: '#ff6a3d' },
+  ult_kamikakushi: { color: '#6fe2b4' },
 };
 
 export function ultColor(id) { return (ULT_META[id] || ULT_META[DEFAULT_ULT]).color; }
@@ -464,6 +466,106 @@ const EFFECTS = {
       return { msg: t('全能：ゲージを再充填した', 'Omnipotence: gauge refilled') };
     }
     return { msg: t('全能！！盤面消滅＋ゲージ再充填！', 'OMNIPOTENCE — board erased, gauge refilled!') };
+  },
+
+  // ---- 🏮 運営専用の奥義（v2.69）-----------------------------------------
+  // ⛩ 結界。盤の四方（四隅の 2×2）を祓って、逃げ場そのものを作り直す守り。
+  // ult_fortress が「時間で守る」（30秒のコンボ盾＋妨害無効）のに対して、
+  // こちらは **場所で守る**。隅は行と列の両方の端になるので死に地になりやすく、
+  // そこが埋まったまま増えると置ける形が一気に減って詰む。時限の状態を
+  // 1つも増やさないのが要点 ── 新しいフラグを作らずに守りを成立させる。
+  // 代償として、埋まりかけの行からも四隅ぶんの石が抜ける（ライン狙いは遠のく）。
+  ult_barrier(ctx) {
+    const { engine, view } = ctx;
+    const corners = [[0, 0], [0, SIZE - 2], [SIZE - 2, 0], [SIZE - 2, SIZE - 2]];
+    const taken = [];
+    for (const [r0, c0] of corners) {
+      for (let dr = 0; dr < 2; dr++) for (let dc = 0; dc < 2; dc++) {
+        const r = r0 + dr, c = c0 + dc, k = r * SIZE + c;
+        if (engine.grid[k] !== 0) { taken.push([r, c, engine.grid[k]]); engine.grid[k] = 0; }
+      }
+    }
+    // 四隅がすでに空なら守るものが無い。他の盤面系奥義と同じくゲージを温存する。
+    if (!taken.length) return { error: t('四隅はすでに空いています！', 'The four corners are already clear!') };
+    // lineCount 0 の結果では applyResult が粒を出さないので、ここで自分で出す
+    // （ult_meteor / ult_purify と同じ作法）。
+    for (const [r, c, v] of taken) burst(view, r, c, v);
+    // ラインを消したわけではない。コンボにも linesCleared にも触らず、
+    // 加点は awardPoints にだけ通す（フィーバー・イベント倍率はそこで乗る）。
+    const gained = awardPoints(engine, taken.length * 70);
+    // 空いた四隅で手が戻るなら詰み判定を下ろす（ult_rainbow と同じ作法）。
+    // ⚠ このあとの emit は over を **立てる方向にしか動かさない**
+    //    （refillHand → それでも動けなければ over = true）。下ろしているのは
+    //    この1行だけなので、emit より後ろへ動かしたり消したりしないこと。
+    if (engine.over && engine.hasAnyMove()) engine.over = false;
+    view.reviveFlash();
+    view.screenFlash = 0.35;
+    audio.combo(5);
+    const [cx, cy] = boardCenter(view);
+    view.particles.ring(cx, cy, view.boardSize * 0.92, '#ff6a3d');
+    view.addFloatText(cx, cy, 'WARD!', '#ff6a3d', 1.8);
+    emit(ctx, { clearedCells: taken, gained, anchor: [taken[0][0], taken[0][1]] });
+    return {
+      msg: t(`結界！四方を祓い、${taken.length}マスの逃げ場を空けた！`,
+        `Ward — the four corners are cleansed; ${taken.length} cells of breathing room!`),
+    };
+  },
+
+  // 🏮 神隠し。盤面の石を「上下左右で何マスと繋がっているか」で並べ替え、
+  // **繋がりの薄いほうから**最大12マスを宵闇へ持ち去る。ult_blast（密度の
+  // 高い行と列）や ult_purify（お邪魔＋下2行）が「線」で消すのに対し、
+  // こちらは線を持たないので、塊の縁と飛び石が先に抜ける。
+  // ult_meteor の乱択と違って結果は盤面だけで決まる（同じ盤面なら必ず同じ）。
+  // ⚠ 「孤立した石だけを抜く」技ではない。実測で確かめた両端は:
+  //    ・満盤（64マス）… link 0 が1つも無いので、四隅（link 2）＋上辺の
+  //      (0,1)〜(0,6) と (1,0)(1,7)（link 3）の計12マス、つまり塊の縁を削る
+  //    ・石が12個以下 … ranked を全部取るので、2×2 の塊も丸ごと持って行く
+  //    どちらもメッセージは taken.length と lone を数えて出すので嘘にならない。
+  ult_kamikakushi(ctx) {
+    const { engine, view } = ctx;
+    const filled = cellsOf(engine, v => v !== 0);
+    if (!filled.length) return { error: t('盤面が空です！', 'The board is empty!') };
+    // 上下左右で接している石の数（＝繋がりの強さ）。0 なら完全な独り。
+    const links = (r, c) => {
+      let n = 0;
+      if (r > 0 && engine.grid[(r - 1) * SIZE + c]) n++;
+      if (r < SIZE - 1 && engine.grid[(r + 1) * SIZE + c]) n++;
+      if (c > 0 && engine.grid[r * SIZE + c - 1]) n++;
+      if (c < SIZE - 1 && engine.grid[r * SIZE + c + 1]) n++;
+      return n;
+    };
+    // 浮いている順。同じ繋がり具合なら盤の上から順に並べる ── 並びを固定
+    // しておかないと、同じ盤面で撃っても消える場所が回ごとに変わる。
+    // ここは grid を1マスも書き換える前に作りきること（消しながら数えると
+    // 先に消した石のぶんだけ後ろの石が「浮いている」ことになる）。
+    const ranked = filled
+      .map(([r, c, v]) => ({ r, c, v, link: links(r, c) }))
+      .sort((a, b) => a.link - b.link || (a.r * SIZE + a.c) - (b.r * SIZE + b.c));
+    const taken = ranked.slice(0, 12);
+    const lone = taken.filter(x => x.link === 0).length;
+    for (const { r, c } of taken) engine.grid[r * SIZE + c] = 0;
+    // lineCount 0 の結果では applyResult が粒を出さないので、ここで自分で出す。
+    for (const { r, c, v } of taken) burst(view, r, c, v);
+    // 独りだった石ほど厚く払う。ライン消しではないのでコンボは繋がらない
+    // （clearLines を通さないので streak も linesCleared も動かさない）。
+    const gained = awardPoints(engine, taken.length * 100 + lone * 80);
+    view.shake = 12;
+    view.screenFlash = 0.35;
+    audio.combo(6);
+    const [cx, cy] = boardCenter(view);
+    view.particles.ring(cx, cy, view.boardSize * 0.6, '#6fe2b4');
+    view.addFloatText(cx, cy, 'VANISHED!', '#6fe2b4', 1.8);
+    emit(ctx, {
+      clearedCells: taken.map(x => [x.r, x.c, x.v]),
+      gained, anchor: [taken[0].r, taken[0].c],
+    });
+    return {
+      msg: lone
+        ? t(`神隠し！浮いた石${lone}個を含む${taken.length}マスが消えた！`,
+          `Hidden Away — ${taken.length} cells taken, ${lone} of them drifting alone!`)
+        : t(`神隠し！繋がりの薄い${taken.length}マスが持ち去られた！`,
+          `Hidden Away — the ${taken.length} loosest cells are carried off!`),
+    };
   },
 };
 

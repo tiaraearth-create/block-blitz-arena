@@ -15,6 +15,7 @@ import { getSettings, updateSettings, particleFactor, prefersReducedMotion } fro
 import { reconnectChat, markNewsSeen, sendWs, registerHandler } from './chat.js';
 import { t as tr, setLang, LANG, catName, catDesc, trServer } from './i18n.js';
 import { equippedUlt, setGuestUlt, ghostUnlocked, resetTutorial } from './modes.js';
+import { drawScene } from './themes.js';
 // ultIcon（奥義の絵文字）は import しない。奥義の絵は itemIconName で
 // icons.js から引くようになった ── 絵文字のままだと 🛡️ が管理者ブースター
 // 「絶対防御」と、☄️ が「天変地異」と重複したままになる。色だけ借りる。
@@ -2759,6 +2760,11 @@ function drawBoardPreview(ctx, b, size) {
   g.addColorStop(1, b.bg[1]);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
+
+  // 🌳 動く風景。実物と**同じ関数**を呼ぶ（写しとると必ずズレる）。
+  //    棚の絵は静止画なので、時計は代表的な1コマで固定する
+  //    （動かすと棚の札が全部アニメして、選ぶときにうるさい）。
+  drawScene(ctx, size, size, 3.2, b);
 
   // 🌌 オーロラの帯。実物（game.js の drawBackground）は上辺に3本の帯を
   //    引くのに、プレビューは粒の色を別扱いするだけで**帯そのものを描いて

@@ -61,6 +61,9 @@ export class ParticleSystem {
       case 'fx_shatter': this.shatter(x, y, size); break;
       case 'fx_ripple': this.ripple(x, y, size); break;
       case 'fx_spark': this.sparkler(x, y, size); break;
+      case 'fx_danmaku': this.danmaku(x, y, size); break;
+      case 'fx_ofuda': this.ofuda(x, y, size); break;
+      case 'fx_hotaru': this.hotaru(x, y, size); break;
       default: this.spark(x, y, size, light, dark);
     }
     this.trim();
@@ -99,6 +102,146 @@ export class ParticleSystem {
     }
   }
 
+
+  // ---- 🏮 運営専用のエフェクト（v2.69）----------------------------------
+  // ◎ 弾幕: 等間隔に並んだ弾が、輪の形を崩さずに外へ抜ける。
+  //    既存の放射（花火 / プリズム / 封印砕き / 虹）は角度が全部
+  //    Math.random() * 2π ＝ 毎回ばらばらの散り方になる。ここだけは
+  //    ① 角度を i/n で等分 ② 速さに乱数を入れない ③ 重力を 0 にする、
+  //    の3つを揃えて「輪が輪のまま広がる」に見せている（どれか1つでも
+  //    乱すと、ただの花火に戻る）。decay も輪ごとに固定なので、1枚の輪の
+  //    中では全弾が同時に消える。向きだけは base で1マスごとに回し、
+  //    64マスが同じ判子にならないようにする。
+  danmaku(x, y, size) {
+    const TAU = Math.PI * 2;
+    // ⚠ 外周は必ず偶数にする。内周をその半分にしたうえで、ずらす量は
+    //   **外周の目盛の半分**（Math.PI / outer）にすること。そうすると
+    //   内周の弾が外周の弾と弾のちょうど真ん中に入る。
+    //   ここを「内周の目盛の半分」＝ (i + 0.5) / inner で書くと、inner が
+    //   outer の半分である以上そのズレは外周の目盛そのものになり、内周が
+    //   外周と**同じ放射線に重なる**（低・標準でズレ 0.00° を実測）。
+    //   輪が二枚に見えず「1本の線に弾が2個」になるので、必ず外周基準で回す。
+    //   偶数に寄せるのは、粒量「多め」で n(10)=19 になると inner が 9.5 と
+    //   小数になり、輪が閉じないため。低=4 / 標準=10 / 多め=20 のどれでも
+    //   ズレは正確に半目盛（45° / 18° / 9°）になる。
+    let outer = this.n(10);
+    if (outer % 2) outer++;
+    const inner = Math.max(2, outer / 2);
+    const base = Math.random() * TAU;
+    for (let i = 0; i < outer; i++) {
+      const a = base + (i / outer) * TAU;
+      this.particles.push({
+        x: x + Math.cos(a) * size * 0.18, y: y + Math.sin(a) * size * 0.18,
+        vx: Math.cos(a) * size * 4.2, vy: Math.sin(a) * size * 4.2,
+        g: 0, life: 1, decay: 1.5,
+        size: size * 0.09,
+        color: '#ffe8f0',
+        kind: 'glow', rot: 0, vr: 0,
+      });
+    }
+    // 内周は外周の弾と弾の真ん中から、遅く・短く。重力が無いので落ちはせず、
+    // 外へ届く前に紅い内輪だけが先に消えて、白い外輪が最後まで抜けていく。
+    for (let i = 0; i < inner; i++) {
+      const a = base + (i / inner) * TAU + Math.PI / outer;
+      this.particles.push({
+        x, y,
+        vx: Math.cos(a) * size * 2.4, vy: Math.sin(a) * size * 2.4,
+        g: 0, life: 1, decay: 2.1,
+        size: size * 0.075,
+        color: '#ff4d72',
+        kind: 'glow', rot: 0, vr: 0,
+      });
+    }
+    this.trim();
+  }
+
+  // 📜 御札乱舞: 紙片をいったん上へ投げ上げ、大きく横へ振れながら落とす。
+  //    同じ 'petal' の桜吹雪・木の葉との違いは3つ:
+  //      ・撃ち出しが上向きの扇（あの2つは全方位）＝跳ね上がってから降る
+  //      ・重力 size*1.3（桜 2.5 / 葉 3）＝ petal 勢でいちばん遅く落ちる
+  //      ・vr ±2.4（桜 ±6 / 葉 ±7）＋ drift 2.6〜4.4（桜 1.5〜3.5）
+  //        ＝「くるくる回る」ではなく「回らずに大きく揺れる」紙になる
+  //    ⚠ drift を持つ粒は update() が phase を加算する。update() 側に
+  //      `(p.phase || 0)` の保険があるので NaN にはならないが、初期値を
+  //      散らさないと7枚が同じ位相で同じ向きに揺れ、「1枚が七重に見える」
+  //      だけになる。撒く側で乱数を入れる（bubbles / sakura / flames と同じ）。
+  ofuda(x, y, size) {
+    const paper = ['#f4ead0', '#fffaf0', '#efe0bd'];
+    for (let i = 0; i < this.n(7); i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.1;      // 上向きの扇
+      const sp = (0.6 + Math.random() * 0.7) * size * 3;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        g: size * 1.3,
+        drift: size * (2.6 + Math.random() * 1.8),
+        phase: Math.random() * Math.PI * 2,
+        life: 1, decay: 0.55 + Math.random() * 0.3,
+        size: size * (0.16 + Math.random() * 0.10),
+        // 色は粒番号で決めない（設定「粒少なめ」で n(7)=2 になると、
+        // i%3 では朱が一度も出なくなる）。数に依らない抽選にする。
+        color: (Math.random() < 0.22) ? '#d8453a' : paper[(Math.random() * 3) | 0],
+        kind: 'petal', rot: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 2.4,
+      });
+    }
+    this.trim();
+  }
+
+  // 🪲 蛍火: ほとんど進まない小さな光が、ゆっくり漂いながら暗くなって消える。
+  //    ・初速は最大 size*1.1（sp は size*0.8 までだが、vy に +size*0.3 が乗る）。
+  //      それでも既存で最も遅い墨飛沫（最大 size*1.4）より遅い
+  //    ・decay 0.45〜0.75＝寿命 1.3〜2.2秒 で全エフェクト中いちばん長い
+  //      （既存の最長は雪あられ／桜の下限 0.7＝約1.4秒。墨飛沫の 0.8 ではない）
+  //    ⚠ drift は size*0.16 まで。update() は drift をそのまま速度に足すのではなく
+  //      vx += Math.sin(phase)*drift*dt*6（phase は 3rad/s）で積むので、平均速度が
+  //      最大 2*drift、瞬間では 4*drift まで伸びる。桜（size*1.5〜3.5）や炎
+  //      （size*0.5〜1.5）が太い drift を持てるのは寿命が1秒前後だからで、2.2秒
+  //      生きるこの粒に元案の size*0.7〜1.6 を入れると横へ最大 7.75マス 流れ、
+  //      盤（8マス幅）を横断する。棚のプレビュー（screens.js の renderPreview が
+  //      168px の枠へ (84,100) から size=21 で1発撃ち、1.6秒 で止める）でも
+  //      7.6マス×21px ≒ 160px 動き、再生中に枠の外へ出て「空の枠」になる。
+  //      この値なら移動は中央値 0.9マス・最大 2.6マス。
+  //    ・重力は -size*0.05。update() は g を dt*10 倍して積むので、寿命 2.2秒 でも
+  //      終端 1.1マス/秒＝初速と同程度に収まる。-0.12 だと終端 2.64マス/秒 まで
+  //      加速し、初速の上限 size*1.1 の2倍を超えて終盤に飛んでいく
+  //      （foam の -size*1.2 は寿命 0.6〜1.0秒 前提の値なので真似できない）
+  //    ⚠ 明滅について: draw() は p.life をそのまま α にするだけで、life は単調に
+  //      減る ── 1粒では原理的に点滅できない。そこで「早く消える核」と「長く残る
+  //      暈」を**同じ速度・同じ drift/phase で**重ねて置き、核が落ちる瞬間に1段
+  //      暗くなるようにした。核の decay は粒ごとにばらけているので、群れとしては
+  //      次々に減光して明滅して見える。
+  //    ⚠ 核の半径は暈の 0.6倍まで。0.5倍 だと size*0.06 になり、硝子片が書き残して
+  //      いる下限（size*0.07 未満は 168px canvas を CSS 84px に縮める棚で 0.5px を
+  //      割って消える）を割る ── 核が消えると明滅の仕掛けごと消える。
+  hotaru(x, y, size) {
+    const halo = ['#9bef6a', '#7fe38a', '#c8ff8a'];
+    for (let i = 0; i < this.n(6); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.15 + Math.random() * 0.35) * size * 1.6;
+      const vx = Math.cos(a) * sp;
+      const vy = Math.sin(a) * sp + size * 0.3;      // 少し沈んでから浮き上がる
+      const drift = size * (0.06 + Math.random() * 0.10);
+      const phase = Math.random() * Math.PI * 2;
+      const r = size * (0.12 + Math.random() * 0.06);
+      const c = halo[(Math.random() * 3) | 0];
+      const px = x + (Math.random() - 0.5) * size * 0.6;
+      const py = y + (Math.random() - 0.5) * size * 0.6;
+      // 暈（長く残る）
+      this.particles.push({
+        x: px, y: py, vx, vy, g: -size * 0.05, drift, phase,
+        life: 1, decay: 0.45 + Math.random() * 0.3,
+        size: r, color: c,
+        kind: 'glow', rot: 0, vr: 0,
+      });
+      // 核（同じ動きで先に消える＝ここで1段暗くなる）
+      this.particles.push({
+        x: px, y: py, vx, vy, g: -size * 0.05, drift, phase,
+        life: 1, decay: 2.0 + Math.random() * 1.8,
+        size: r * 0.6, color: '#f4ffd6',
+        kind: 'glow', rot: 0, vr: 0,
+      });
+    }
+    this.trim();
+  }
 
   // ---- 🔄 交換所限定のエフェクト（v2.67）--------------------------------
   // 🖌 墨飛沫: 墨の粒がゆっくり広がって沈み、にじんで消える。

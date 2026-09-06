@@ -1215,6 +1215,8 @@ const ITEM_DEFS = {
   item_god_hand:   { name: '創造の手札', nameEn: N_HAND, admin: true, tip: '創造の手札：最適手札＋12手は大型ピース', tipEn: `${N_HAND}: perfect hand + 12 big draws` },
   item_god_mult:   { name: '神威', nameEn: N_MULT, admin: true, tip: '神威：30秒間スコア10倍', tipEn: `${N_MULT}: 10× score for 30s` },
   item_god_shield: { name: '絶対防御', nameEn: N_SHIELD, admin: true, tip: '絶対防御：60秒間 無敵・お邪魔無効・コンボ永続', tipEn: `${N_SHIELD}: 60s invincible, no garbage, combo lock` },
+  item_god_ward:   { name: '八方結界', nameEn: enItemName('item_god_ward', 'Eightfold Ward'), admin: true, tip: '八方結界：外周28マスを祓い、25秒間 外周を守る', tipEn: `${enItemName('item_god_ward', 'Eightfold Ward')}: purge the 28 rim cells, then hold the rim for 25s` },
+  item_god_omikuji: { name: '御神籤', nameEn: enItemName('item_god_omikuji', 'Sacred Lot'), admin: true, tip: '御神籤：引くたびに変わる福を1つ（外れ無し）', tipEn: `${enItemName('item_god_omikuji', 'Sacred Lot')}: one random blessing — never a dud` },
   item_god_nuke:   { name: '天変地異', nameEn: N_NUKE, admin: true, tip: '天変地異：敵HPを99%削る（敵なしなら+100,000点）', tipEn: `${N_NUKE}: 99% enemy HP (or +100,000)` },
 };
 
@@ -1440,6 +1442,210 @@ export function useGameItem(id) {
     e.streakShield = true;
     view.reviveFlash(); view.screenFlash = 0.4; audio.combo(6);
     toast(t('絶対防御！60秒間 無敵・お邪魔無効・コンボ永続', `${N_SHIELD}! 60s invincible, no garbage, combo lock`), 'announce', 2400);
+  } else if (id === 'item_god_ward') {
+    // 🔯 八方結界 ── 「場所」に効く運営装備。見るのは外周28マスだけ。
+    //    ・発動: 外周を種類を問わず祓う（＝盤の縁を作り直す）。内側6×6には
+    //      指1本触れないので、積み上げた形もリーチもそのまま残る。盤面ごと
+    //      消す神の一撃（item_god_wipe）との差はここ。
+    //    ・持続: 25秒間、外周に紛れ込んだ**異物だけ**（お邪魔9 / 氷10・11 /
+    //      眼12）を 0.9 秒ごとに祓う。**自分の色(1..8)は絶対に触らない** ──
+    //      触ると外周を含む行・列が永久に揃わなくなり、強化アイテムのはずが
+    //      得点源を殺すことになる（行0・7と列0・7は全マスが外周、行1〜6でも
+    //      両端は外周なので、外周を消し続ける実装はライン消しを全部止める）。
+    // 英語名は棚（catalog-en.js）から引く ── N_* の並びと同じ作法。ここでしか
+    // 使わないので、モジュールの定数は増やさずブロックの中に置く。
+    const N_WARD = enItemName('item_god_ward', 'Eightfold Ward');
+    const ringIdx = [];
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      if (r === 0 || r === 7 || c === 0 || c === 7) ringIdx.push(r * 8 + c);
+    }
+    // burstCell の第4引数は**粒の数ではなく色**（PALETTE の添字）。3＝黄で
+    // 結界の金色に合わせる。
+    const ringBurst = k => view.particles.burstCell(
+      view.boardX + ((k % 8) + 0.5) * view.cell,
+      view.boardY + (Math.floor(k / 8) + 0.5) * view.cell,
+      view.cell, 3, view.fxId || 'fx_default');
+    let wiped = 0;
+    for (const k of ringIdx) {
+      if (!e.grid[k]) continue;
+      e.grid[k] = 0;
+      wiped++;
+      ringBurst(k);
+    }
+    const wardGain = Math.round(wiped * 600 * (e.scoreMult || 1) * (e.feverUntil > Date.now() ? (e.feverMult || 2) : 1));
+    if (wardGain) {
+      e.score += wardGain;
+      if (m.updateHud) m.updateHud(); else if (m.updateMyHud) m.updateMyHud(e);
+    }
+    view.reviveFlash();
+    view.screenFlash = 0.45;
+    audio.kamiDescend();
+    view.addFloatText(view.boardX + view.boardSize / 2, view.boardY + view.boardSize * 0.42,
+      t('八方結界', 'WARD'), '#ffd75e', 1.7);
+    // ⏱ 期限はモードに預ける（m._wardUntil）。クロージャに閉じ込めると
+    //    2枚目を使ったときに見張りが2本走り、掃除も「解けた」も二重になる
+    //    ── しかも先に張ったほうを止める手段が無い。重ねがけは**窓を
+    //    伸ばすだけ**にして、見張りは常に1本に保つ。
+    m._wardUntil = Math.max(m._wardUntil || 0, Date.now() + 25000);
+    if (!m._wardInt) {
+      let wardLast = Date.now();
+      m._wardInt = setInterval(() => {
+        // 見張りは自分で止まる。モードが変わった／終わった／盤が差し替わった
+        // あとも回り続けると、次の試合の盤面を勝手に掃除してしまう
+        // （⭐フィーバーの setTimeout が currentMode を見ているのと同じ理由）。
+        const live = currentMode === m && !m.ended && m.engine === e && !!view;
+        const now = Date.now();
+        if (!live || now >= m._wardUntil) {
+          clearInterval(m._wardInt);
+          m._wardInt = null;
+          m._wardUntil = 0;
+          if (live) toast(t('八方結界が解けた', `${N_WARD} has faded`), '', 1400);
+          return;
+        }
+        // ⏸ ダイアログで止めている間は**祓わない・期限も減らさない**。
+        //    pauseModeForDialog の shift() は m の PAUSABLE_DEADLINES と
+        //    engine の feverUntil / fortressUntil、view の godInvincibleUntil /
+        //    dangerUntil という決まった欄しか後ろへずらせないので、ここで自分で
+        //    押さないと⚙を開いて1分いじる間に結界だけが焼き切れる。ついでに、
+        //    凍っている盤で点数だけ増えるのも止まる。
+        if (m._dialogPaused) { m._wardUntil += now - wardLast; wardLast = now; return; }
+        wardLast = now;
+        let n = 0;
+        for (const k of ringIdx) {
+          const v = e.grid[k];
+          if (v !== 9 && v !== ICE && v !== ICE_CRACKED && v !== EYE) continue;
+          e.grid[k] = 0;
+          n++;
+          ringBurst(k);
+        }
+        if (!n) return;
+        const g = Math.round(n * 200 * (e.scoreMult || 1) * (e.feverUntil > Date.now() ? (e.feverMult || 2) : 1));
+        e.score += g;
+        if (m.updateHud) m.updateHud(); else if (m.updateMyHud) m.updateMyHud(e);
+        // 祓ってマスが空いたので、古い詰み判定は捨てる（クリーナーと同じ作法）。
+        if (e.over && e.hasAnyMove()) e.over = false;
+        audio.coin();
+      }, 900);
+    }
+    const wardHead = wiped
+      ? t(`八方結界！外周${wiped}マスを祓い、25秒間 外周を守る`, `${N_WARD}! purged ${wiped} rim cells — the rim is warded for 25s`)
+      : t('八方結界！外周はすでに空。25秒間 外周を守る', `${N_WARD}! the rim was already clear — warded for 25s`);
+    toast(wardGain ? `${wardHead} +${fmt(wardGain)}` : wardHead, 'announce', 2400);
+  } else if (id === 'item_god_omikuji') {
+    // 🎋 御神籤 ── 引くたびに変わる。ただし**外れの目は作らない**。
+    //    ⭐フィーバーが「すでに強い倍率のときは消費させずに逃げる」のと同じ
+    //    考え方で、効かない目は**引く前に**抽選から外す（引いてから外れを
+    //    引き直すと、確率が読めないうえに1回ぶん演出が空振りする）。
+    //    引いた結果は必ずトーストで出す ── 何が起きたか分からない当たりは
+    //    プレイヤーから見れば「効いていない」のと同じ。
+    // 英語名は N_* と同じくショップの表からだけ引く（ITEM_DEFS はモジュール
+    // 先頭で組み立てられるので、そちらでは enItemName を直に呼んでいる）。
+    const N_OMIKUJI = enItemName('item_god_omikuji', 'Sacred Lot');
+    const omGain = base => {
+      const g = Math.round(base * (e.scoreMult || 1) * (e.feverUntil > Date.now() ? (e.feverMult || 2) : 1));
+      e.score += g;
+      if (m.updateHud) m.updateHud(); else if (m.updateMyHud) m.updateMyHud(e);
+      return g;
+    };
+    // 「金運」は2か所から出る（素で引いたとき／宝船が置き場所を見つけられず
+    // 落ちてきたとき）。同じ名前を名乗るのに紙吹雪と音だけ違う、を作らない。
+    const omKin = base => {
+      const g = omGain(base);
+      confettiBurst(28);
+      audio.levelUp();
+      return t(`御神籤：大吉「金運」 +${fmt(g)}`, `${N_OMIKUJI} — Great Fortune "Riches": +${fmt(g)}`);
+    };
+    // 盤に入り込んでいる異物（お邪魔・氷・眼）。1つも無ければ「厄祓い」は
+    // 空振りになるので抽選に入れない。
+    const foreign = [];
+    for (let i = 0; i < 64; i++) {
+      const v = e.grid[i];
+      if (v === 9 || v === ICE || v === ICE_CRACKED || v === EYE) foreign.push(i);
+    }
+    const feverCur = e.feverUntil > Date.now() ? (e.feverMult || 1) : 1;
+    const pool = ['kin', 'takara'];                                   // いつでも必ず効く2つ
+    if (foreign.length) pool.push('harai');
+    if (feverCur < 4) pool.push('fuku');                              // ×4 が現在の倍率を下げるなら出さない
+    if ((e.fortressUntil || 0) < Date.now() + 25000) pool.push('mamori');
+    if ((m.endAt !== undefined && m.timerInt) || m.nextAtk || m.nextAt) pool.push('kotobuki');
+    const luck = pool[(Math.random() * pool.length) | 0];
+    audio.coin();
+    let omMsg;
+    if (luck === 'takara') {
+      // 大吉「宝船」── 手札が最良の3枚に替わり、次の6手も大型。
+      // 手札を自前で作らず 🌈 を通すのは、置ける形しか配られないため
+      // （自作すると置けない3枚を配って、その場で詰ませることがある）。
+      const out = fireUlt('ult_rainbow', { engine: e, view, mode: m });
+      if (out.error) {
+        omMsg = omKin(9000);
+      } else {
+        e.godDraws = Math.max(e.godDraws || 0, 6);
+        omMsg = t('御神籤：大吉「宝船」 手札が最良の3枚に。次の6手も大型',
+          `${N_OMIKUJI} — Great Fortune "Treasure Ship": perfect hand, 6 big draws`);
+      }
+    } else if (luck === 'harai') {
+      // 大吉「厄祓い」── 外周に限らず盤面**全域**の異物を祓う（八方結界との差）。
+      for (const k of foreign) {
+        e.grid[k] = 0;
+        view.particles.burstCell(view.boardX + ((k % 8) + 0.5) * view.cell,
+          view.boardY + (Math.floor(k / 8) + 0.5) * view.cell, view.cell, 5, view.fxId || 'fx_default');
+      }
+      const g = omGain(foreign.length * 400);
+      view.reviveFlash();
+      omMsg = t(`御神籤：大吉「厄祓い」 ${foreign.length}マスを祓った +${fmt(g)}`,
+        `${N_OMIKUJI} — Great Fortune "Cleansing": ${foreign.length} cells purged, +${fmt(g)}`);
+    } else if (luck === 'fuku') {
+      // 中吉「招福」── 20秒 ×4。🔱神威(×10/30秒) の下、⭐フィーバー(×2) の上。
+      e.feverMult = 4;
+      e.feverUntil = Math.max(e.feverUntil || 0, Date.now() + 20000);
+      $('#hudScore').classList.add('fever');
+      audio.combo(7);
+      setTimeout(() => {
+        // ⚠ 倍率を戻すのは「窓がもう切れているとき」だけ。ここで無条件に ×2 を
+        //    代入すると、この20秒のあいだに掛かった 🔥オーバードライブ（×3・
+        //    feverUntil を後ろへ伸ばす）を**途中で殺す** ── 招福 → 10秒後に
+        //    オーバードライブ、で残り5秒が ×3 のはずが ×2 に落ちる。上の
+        //    ⭐フィーバーが「お金を払って弱くなる」と書いて潰したのと同じ形。
+        //    skills.js の ult_overdrive が
+        //    `if (engine.feverUntil <= Date.now()) engine.feverMult = 2;`
+        //    と書いてあるのはこのため。同じ形に揃える。
+        if (e.feverUntil <= Date.now() && e.feverMult === 4) e.feverMult = 2;
+        // 金色を落とすのは「いま倍率が生きていないとき」だけ。固定で消すと、
+        // あとから掛かった神威やオーバードライブの途中で消灯する。
+        const cu = currentMode && currentMode.engine;
+        if (cu && cu.feverUntil > Date.now()) return;
+        $('#hudScore').classList.remove('fever');
+      }, 20000);
+      omMsg = t('御神籤：中吉「招福」 20秒間スコア4倍！', `${N_OMIKUJI} — Fortune "Blessing": 4× score for 20s!`);
+    } else if (luck === 'mamori') {
+      // 小吉「守り」── 🛡絶対防御から**無敵を抜いた**形。守りを切り詰めないよう
+      // Math.max で伸ばすだけにする（ult_fortress と同じ作法）。
+      e.fortressUntil = Math.max(e.fortressUntil || 0, Date.now() + 25000);
+      e.streakShield = true;
+      view.reviveFlash();
+      audio.combo(5);
+      omMsg = t('御神籤：小吉「守り」 25秒間 お邪魔無効・コンボ永続',
+        `${N_OMIKUJI} — Small Fortune "Guard": 25s of garbage immunity and combo lock`);
+    } else if (luck === 'kotobuki') {
+      // 吉「寿」── そのモードに在る時計だけを進める（⏳時の支配と同じ形。
+      // 文言を固定にすると、時計も敵も無いモードで嘘のトーストになる）。
+      const kb = [];
+      if (m.endAt !== undefined && m.timerInt) {
+        m.endAt += 40000; m.timeLeft += 40; if (m.updateTimerHud) m.updateTimerHud();
+        kb.push(t('時間+40秒', '+40s'));
+      }
+      if (m.nextAtk) { m.nextAtk += 25000; kb.push(t('敵の攻撃を25秒遅らせた', 'enemy attack delayed 25s')); }
+      if (m.nextAt) { m.nextAt += 25000; kb.push(t('次の波を25秒遅らせた', 'next wave delayed 25s')); }
+      audio.combo(6);
+      omMsg = `${t('御神籤：吉「寿」 ', `${N_OMIKUJI} — Fortune "Longevity": `)}${kb.join(t('／', ' / '))}`;
+    } else {
+      // 大吉「金運」── 8,000〜32,000点（倍率適用）。額が毎回変わるのが売り。
+      omMsg = omKin(8000 + ((Math.random() * 25) | 0) * 1000);
+    }
+    view.screenFlash = 0.35;
+    view.addFloatText(view.boardX + view.boardSize / 2, view.boardY + view.boardSize * 0.42,
+      t('御神籤', 'FORTUNE'), '#ffe08a', 1.6);
+    toast(omMsg, 'announce', 2600);
   } else if (id === 'item_god_nuke') {
     if (typeof m.hp === 'number' && (m.mode === 'boss' || m.mode === 'dungeon' || m.raidBoss)) {
       const dmg = Math.max(0, m.hp - Math.ceil(m.hp * 0.01));

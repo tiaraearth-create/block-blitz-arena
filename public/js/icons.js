@@ -829,6 +829,90 @@ Object.assign(ICONS, {
         <circle cx="16.6" cy="5.4" r="1.9" fill="var(--ic-b)"/>
         <circle cx="6" cy="4.2" r="1.4" fill="var(--ic-b)"/>`,
   },
+  // ---- 🏮 運営専用（v2.69）----
+  // 弾幕【管理者】：等間隔の弾だけで描く。線を1本も引かないので、
+  // fx_spark（中心の丸＋8本の光条）とも fx_fireworks（線の先に粒）とも
+  // 骨格が違う。外周8（45°ごと・半径9）・内周4（外周の半目盛＝22.5°ずらし・
+  // 半径5）で、実物の「内周が外周の弾と弾の真ん中に入る」並びをそのまま絵にする。
+  fx_danmaku: {
+    a: '#ffb3c9', b: '#e63757',
+    p: `<circle cx="12" cy="12" r="2.6" fill="var(--ic-b)"/>
+        <circle cx="21" cy="12" r="1.5" fill="var(--ic-a)"/><circle cx="18.4" cy="18.4" r="1.5" fill="var(--ic-a)"/>
+        <circle cx="12" cy="21" r="1.5" fill="var(--ic-a)"/><circle cx="5.6" cy="18.4" r="1.5" fill="var(--ic-a)"/>
+        <circle cx="3" cy="12" r="1.5" fill="var(--ic-a)"/><circle cx="5.6" cy="5.6" r="1.5" fill="var(--ic-a)"/>
+        <circle cx="12" cy="3" r="1.5" fill="var(--ic-a)"/><circle cx="18.4" cy="5.6" r="1.5" fill="var(--ic-a)"/>
+        <circle cx="16.6" cy="13.9" r="1.2" fill="var(--ic-b)"/><circle cx="10.1" cy="16.6" r="1.2" fill="var(--ic-b)"/>
+        <circle cx="7.4" cy="10.1" r="1.2" fill="var(--ic-b)"/><circle cx="13.9" cy="7.4" r="1.2" fill="var(--ic-b)"/>`,
+  },
+  // 御札乱舞【管理者】：角のある細長い紙片を3枚、別々の角度で落とす。
+  // fx_sakura（丸い花弁の五弁）とも fx_leaf（葉脈の入った一枚）とも
+  // 輪郭が違う。朱の縦線を入れて「花びらではなく札」だと分かるようにした。
+  fx_ofuda: {
+    a: '#f2e4c4', b: '#c8342c',
+    p: `<rect x="7.6" y="1.6" width="6.4" height="10.4" rx="0.8" fill="var(--ic-a)" transform="rotate(-18 10.8 6.8)"/>
+        <path d="M10.8 3.6v6.6" stroke="var(--ic-b)" stroke-width="1.4" stroke-linecap="round" transform="rotate(-18 10.8 6.8)"/>
+        <rect x="14.4" y="9.4" width="5.2" height="8.6" rx="0.7" fill="var(--ic-a)" transform="rotate(26 17 13.7)"/>
+        <path d="M17 11.2v5.2" stroke="var(--ic-b)" stroke-width="1.2" stroke-linecap="round" transform="rotate(26 17 13.7)"/>
+        <rect x="3.2" y="14.2" width="4.4" height="7.2" rx="0.6" fill="var(--ic-a)" transform="rotate(-40 5.4 17.8)"/>`,
+  },
+  // 蛍火【管理者】：光の玉に、破線の暈を重ねて「にじんで光っている」を出す。
+  // fx_admin も破線を使うが、あちらは弧が1本＋その下に粒が降る構図。
+  // こちらは粒そのものを破線の輪が囲む（大小2匹＋こぼれた小さな光）。
+  // 線幅 1.2/1.0 はこのファイルで最も細いが、2つの暈の外縁の隙間が
+  // 11.32−(6.2+4.9)=0.22 しかない ── これ以上太らせると輪同士がくっつく。
+  fx_hotaru: {
+    a: '#d7ff8a', b: '#5aa832',
+    p: `<circle cx="8.2" cy="8" r="3" fill="var(--ic-a)"/>
+        <circle cx="8.2" cy="8" r="5.6" fill="none" stroke="var(--ic-b)" stroke-width="1.2" stroke-dasharray="1.6 2.2"/>
+        <circle cx="17.4" cy="14.6" r="2.2" fill="var(--ic-a)"/>
+        <circle cx="17.4" cy="14.6" r="4.4" fill="none" stroke="var(--ic-b)" stroke-width="1" stroke-dasharray="1.4 2"/>
+        <circle cx="10.4" cy="18.8" r="1.4" fill="var(--ic-a)"/>
+        <circle cx="20.4" cy="4.6" r="1.1" fill="var(--ic-b)"/>
+        <circle cx="3.4" cy="16.4" r="0.9" fill="var(--ic-b)"/>`,
+  },
+  // ⛩ 結界【管理者】。注連縄を渡した門と、そこから垂れた紙垂2本。
+  // ult_fortress（狭間つきの城壁）とは守り方がそもそも違うので、絵も
+  // 「壁」ではなく「通り道に張った門」で描く。stake（一本柱の立札）とは
+  // 柱2本＋横木2本という骨格で分かれ、色を落としても取り違えない。
+  ult_barrier: {
+    a: '#ff6a3d', b: '#ffeede',
+    p: `<path d="M2.2 4.2h19.6" stroke="var(--ic-a)" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M4.8 8.6h14.4" stroke="var(--ic-a)" stroke-width="2.1" stroke-linecap="round"/>
+        <path d="M7.2 5.4v15.6M16.8 5.4v15.6" stroke="var(--ic-a)" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M10.2 9.6v2.2l1.4.8-1.4.9v2.1M13.8 9.6v2.2l1.4.8-1.4.9v2.1" fill="none" stroke="var(--ic-b)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  // 🏮 神隠し【管理者】。持ち去られた石（傾いた四角）と、あとに残った空きマス
+  // （破線の四角）、消えぎわの灯3つ。mini（小四角5つ）や block（4つの大ブロック）
+  // と違って**枠が破線**なので、色を落としても「無くなった跡」だと読める。
+  // 破線を使うアイコンは他に fx_admin（破線の弧＋粒）と seat_open（24×24
+  // いっぱいの破線角丸枠＋プラス）があるが、こちらは左下の小さな破線枠＋
+  // 傾いた石＋灯3つで骨格が別。ult_meteor（岩＋線3本）とも被らない。
+  ult_kamikakushi: {
+    a: '#6fe2b4', b: '#e6fff6',
+    p: `<rect x="2.4" y="13.4" width="8.2" height="8.2" rx="2" fill="none" stroke="var(--ic-a)" stroke-width="1.9" stroke-dasharray="2.6 2.4"/>
+        <rect x="12.6" y="2.6" width="8.8" height="8.8" rx="2" fill="var(--ic-a)" transform="rotate(16 17 7)"/>
+        <circle cx="11.9" cy="12.3" r="1.5" fill="var(--ic-b)"/>
+        <circle cx="7.6" cy="10.6" r="1.2" fill="var(--ic-b)"/>
+        <circle cx="4.6" cy="7.4" r="0.9" fill="var(--ic-b)"/>`,
+  },
+  // 🔯 八方結界。八角の結界＋中の御札＋四方の切れ目。盾（item_god_shield /
+  // ult_fortress）とも輪（fx_admin）とも外形が重ならないよう八角形にする。
+  item_god_ward: {
+    a: '#ffe08a', b: '#b3352f',
+    p: `<path d="M8.6 2.6h6.8l6 6v6.8l-6 6H8.6l-6-6V8.6z" fill="none" stroke="var(--ic-a)" stroke-width="2.2" stroke-linejoin="round"/>
+        <rect x="8.8" y="8.8" width="6.4" height="6.4" rx="1.5" fill="var(--ic-b)"/>
+        <path d="M12 4.6v2.4M12 17v2.4M4.6 12h2.4M17 12h2.4" stroke="var(--ic-a)" stroke-width="1.9" stroke-linecap="round"/>`,
+  },
+  // 🎋 御神籤。籤筒から1本だけ抜けた形。柄物（item_cleaner のほうき）とも
+  // 札物（item_god_hand のカード3枚）ともシルエットが重ならないよう、
+  // 筒＋斜めの籤＋筒の2本線で作る。
+  item_god_omikuji: {
+    a: '#fff4d6', b: '#b3352f',
+    p: `<rect x="5.6" y="8.6" width="12.8" height="13" rx="2" fill="var(--ic-b)"/>
+        <rect x="12.6" y="1.4" width="3.2" height="8.6" rx="1.2" transform="rotate(16 14.2 5.7)" fill="var(--ic-a)"/>
+        <path d="M5.6 11.4h12.8" stroke="var(--ic-a)" stroke-width="1.3" opacity=".55"/>
+        <path d="M8.4 14.6h7.2M8.4 18h4.4" stroke="var(--ic-a)" stroke-width="1.8" stroke-linecap="round"/>`,
+  },
   // 🔄交換所限定のエフェクト4種。既存15種と作りが被らないよう、
   //   墨＝滲む塊 / 硝子＝角のある破片 / 波紋＝同心円 / 線香花火＝放射の細線、
   //   と骨格そのものを分けてある（色だけ変えた別物にしない）。
