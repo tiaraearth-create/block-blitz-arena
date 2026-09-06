@@ -310,13 +310,31 @@ const numAt = (o, k) => (own(o, k) && Number.isFinite(Number(o[k])) ? Number(o[k
 function readGuildQuests(guild, weekId) {
   const stored = own(guild.quests, weekId) ? guild.quests[weekId] : null;
   const ids = stored && Array.isArray(stored.ids) && stored.ids.length ? stored.ids : pickQuestIds(guild.id, weekId);
-  return { ids, p: (stored && stored.p) || {}, done: (stored && stored.done) || {} };
+  // size は目標を縮める人数（questGoalOf）。刻まれていない古い週は今の人数で読む。
+  const size = stored && Number.isFinite(stored.size)
+    ? stored.size : Math.max(1, (guild.members || []).length);
+  return { ids, p: (stored && stored.p) || {}, done: (stored && stored.done) || {}, size };
 }
 
 // Progress of one quest. 'points' は週間ptそのものなので guild.weekly から引く
 // （加算で二重に数えない）。
 // minus: 「この1ゲームで足したぶん」。'points' の“達成前”の値を出すのに使う
 // （詳しくは trackGuildQuests の注記）。
+// 🏰 **そのギルドの人数ぶんに縮めた目標。**
+//
+//    QUEST_POOL の goal は「ラインを3,000本」「200回プレイ」…と 20人で割る前提の
+//    数字で、人数がどこにも掛かっていなかった。実プレイヤーが13人しかいない
+//    この世界では、ギルドを建てれば必ず1人ギルドになる（住人のギルドは
+//    open:false で参加できない）ので、1週間まるごと遊んでも3本とも未達成のまま
+//    金庫もバッジも一度も開かなかった。隣に並ぶ住人のギルド（ghostQuestState）は
+//    最初から人数で進みが変わる式なので、実ギルド側だけ重み付けが抜けていた。
+//    ⚠ 人数は**週の初めに刻んで固定する**（q.size）── 週の途中で人が増減する
+//      たびに目標が動くと、達成したはずの行が未達成に戻る。
+export function questGoalOf(def, size) {
+  const n = Math.max(1, Math.min(Number(size) || 1, GUILD_MAX_MEMBERS));
+  return Math.max(1, Math.ceil(def.goal * n / GUILD_MAX_MEMBERS));
+}
+
 function questProgress(guild, weekId, q, def, minus = 0) {
   if (def.track === 'points') {
     const total = (guild.weekly[weekId] && guild.weekly[weekId].total) || 0;
@@ -330,8 +348,14 @@ function syncGuildQuests(guild, weekId) {
   if (!guild.quests || typeof guild.quests !== 'object' || Array.isArray(guild.quests)) guild.quests = {};
   let q = own(guild.quests, weekId) ? guild.quests[weekId] : null;
   if (!q || typeof q !== 'object' || !Array.isArray(q.ids) || !q.ids.length) {
-    q = guild.quests[weekId] = { ids: pickQuestIds(guild.id, weekId), p: {}, done: {} };
+    q = guild.quests[weekId] = {
+      ids: pickQuestIds(guild.id, weekId), p: {}, done: {},
+      // 目標を縮める人数。作った時点で固定する（questGoalOf のコメント）。
+      size: Math.max(1, (guild.members || []).length),
+    };
   }
+  // 古い週の行には size が無い。そのときは今の人数で読む（読み取り専用の既定）。
+  if (!Number.isFinite(q.size)) q.size = Math.max(1, (guild.members || []).length);
   if (!q.p || typeof q.p !== 'object') q.p = {};
   if (!q.done || typeof q.done !== 'object') q.done = {};
   // weekly と同じ理由（'W9999' → 'W10000' の桁またぎ）で数値部で比べて古い週から落とす。
@@ -394,13 +418,14 @@ export function trackGuildQuests(db, user, weekId, event = {}) {
     const def = questDefOf(id);
     if (!def) continue;
     const before = questProgress(guild, weekId, q, def, def.track === 'points' ? justAdded : 0);
-    const was = before >= def.goal;
+    const goal = questGoalOf(def, q.size);
+    const was = before >= goal;
     if (def.track !== 'points') {
       const add = contrib[def.track] || 0;
-      if (add) q.p[def.id] = Math.min(def.goal, before + add);
+      if (add) q.p[def.id] = Math.min(goal, before + add);
     }
     const after = questProgress(guild, weekId, q, def);
-    if (!was && after >= def.goal) {
+    if (!was && after >= goal) {
       q.done[def.id] = Date.now();
       completed.push(def);
     }
@@ -435,7 +460,7 @@ export function claimGuildQuest(db, user, weekId, questId) {
   if (!def) return { error: 'そのクエストは見つかりません' };
   const q = syncGuildQuests(guild, weekId);
   if (!q.ids.includes(def.id)) return { error: 'そのクエストは今週のものではありません' };
-  if (questProgress(guild, weekId, q, def) < def.goal) return { error: 'ギルドがまだ達成していません' };
+  if (questProgress(guild, weekId, q, def) < questGoalOf(def, q.size)) return { error: 'ギルドがまだ達成していません' };
 
   const rec = memberQuestRec(user, weekId, guild.id);
   if (rec.gid !== guild.id) {
@@ -480,9 +505,9 @@ export function guildQuestView(guild, weekId, viewer = null) {
     const p = questProgress(guild, weekId, q, def);
     return {
       id: def.id, name: def.name, nameEn: def.nameEn,
-      goal: def.goal, progress: Math.min(def.goal, Math.max(0, Math.floor(p))),
+      goal: questGoalOf(def, q.size), progress: Math.min(questGoalOf(def, q.size), Math.max(0, Math.floor(p))),
       coins: def.coins, gems: def.gems,
-      done: p >= def.goal,
+      done: p >= questGoalOf(def, q.size),
       doneAt: numAt(q.done, def.id) || null,
       claimed: !!(rec && rec.claimed.includes(def.id)),
     };
@@ -509,7 +534,7 @@ export function guildQuestSummary(guild, weekId) {
     const def = questDefOf(id);
     if (!def) continue;
     total++;
-    if (questProgress(guild, weekId, q, def) >= def.goal) done++;
+    if (questProgress(guild, weekId, q, def) >= questGoalOf(def, q.size)) done++;
   }
   return { questsDone: done, questTotal: total };
 }

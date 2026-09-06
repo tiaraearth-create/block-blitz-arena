@@ -188,8 +188,15 @@ export const ACHIEVEMENTS = [
   // workshop.js が作者の stats に積む wsPublished / wsPlaysGot / wsLikesGot から導出する。
   // ほかと同じく保存済み統計から毎回計算されるので、過去ぶんもさかのぼって解除される。
   a('ach_ws_pub1',     'mode_blueprint', 'explore', 1,   400,  3,  '工房デビュー',   'Workshop Debut',   '自作ステージを初めて公開する', 'Publish your first Workshop stage', u => S(u).wsPublished || 0),
-  a('ach_ws_played100','play', 'explore', 100, 2500, 20, '遊ばれる作品',   'Played by Others', '自作が通算100回遊ばれる',      'Get 100 total plays on your stages', u => S(u).wsPlaysGot || 0),
-  a('ach_ws_liked50',  'heart', 'explore', 50,  2000, 16, '♡をもらう人',    'Well Liked',       '自作が通算50♡もらう',        'Get 50 total likes on your stages', u => S(u).wsLikesGot || 0),
+  // ⚠ **♡と遊ばれた回数は「他人の数」で決まる。** ♡を積めるのは登録済みの
+  //   実プレイヤーだけで（住人は工房のAPIを叩かない）、作者本人は除外、
+  //   二重♡も禁止。つまり1人の作者が受け取れる♡の上限は
+  //   「自分以外の実プレイヤーの数 × 投稿数(最大10)」で、実プレイヤーが
+  //   13人の世界では通算50♡は**供給そのものが足りない**（＝自分では
+  //   どうにもできない実績として永久に残る）。世界の規模に合わせて下げる。
+  //   ⚠ 人が増えたらここも上げ直してよい ── 難しさではなく「届くかどうか」の話。
+  a('ach_ws_played100','play', 'explore', 50, 2500, 20, '遊ばれる作品',   'Played by Others', '自作が通算50回遊ばれる',      'Get 50 total plays on your stages', u => S(u).wsPlaysGot || 0),
+  a('ach_ws_liked50',  'heart', 'explore', 10,  2000, 16, '♡をもらう人',    'Well Liked',       '自作が通算10♡もらう',        'Get 10 total likes on your stages', u => S(u).wsLikesGot || 0),
 
   // ---- 収集 ----
   a('ach_gacha10',  'gacha', 'collect', 10,  600,  5,  'ガチャデビュー', 'Gacha Debut',     'ガチャを10回引く',      'Pull the gacha 10 times',    u => S(u).gachaPulls || 0),
@@ -221,8 +228,12 @@ export const ACHIEVEMENTS = [
   // 相手が人間でもそのまま読める言い回しだけを使うこと。
   a('ach_champ1',   'throne', 'legend', 1,  6000,  50,  '王者を討ちし者', 'The Crown Taker',
     'アリーナ最強と呼ばれた相手に勝つ', 'Defeat the strongest player in the arena', u => S(u).championWins || 0),
-  a('ach_champ10',  'throne', 'legend', 10, 20000, 160, '頂を獲りし者',   'Taker of the Summit',
-    'アリーナ最強と呼ばれた相手に10回勝つ', 'Defeat the strongest player in the arena 10 times', u => S(u).championWins || 0),
+  // ⚠ **その相手に会えるかどうかは自分の腕と無関係**（遭遇は抽選で、既定1%）。
+  //   10回は「上手い人でも約1,000試合」で、進捗が 0/10 のまま何十時間も動かない。
+  //   遭遇率（＝伝説枠という設計）は触らず、回数だけ届く高さへ下げる
+  //   ── 3回でも約320試合ぶんの伝説枠なので、称号の重みは十分に残る。
+  a('ach_champ10',  'throne', 'legend', 3, 20000, 160, '頂を獲りし者',   'Taker of the Summit',
+    'アリーナ最強と呼ばれた相手に3回勝つ', 'Defeat the strongest player in the arena 3 times', u => S(u).championWins || 0),
 
   a('ach_pclear1',  'fx_default', 'legend', 1,  600,  5,  '昇華のはじまり', 'First Sublimation', '盤面を初めて空にする',  'Empty the board for the first time', u => S(u).perfectClears || 0),
   a('ach_pclear10', 'fx_default', 'legend', 10, 2800, 22, '無へ還す者',     'Into the Void',     '盤面を10回空にする',    'Empty the board 10 times',           u => S(u).perfectClears || 0),

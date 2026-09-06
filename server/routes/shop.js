@@ -513,9 +513,14 @@ function gachaPull(user, lucky = false, floor = 0, gemBudget = null) {
   // 💎ジェムは全産出源で1日の総額(GEMDROP_DAILY_CAP)を共有する。ガチャの💎も
   // その残額(gemBudget.room)からしか出さない ── コインで確実に💎を買える
   // 両替機にしないため。予算が尽きていれば 0💎 になる（＝配りきり）。
+  // ⚠ 削ったかどうかを呼び出し側へ伝える（short）。0 のときだけ受け皿へ落ちる
+  //   作りだったので、150💎 のはずの UR が「7💎」になっても理由がどこにも出ず、
+  //   いちばん珍しい3%の当たりがふつうの SR より安く見えていた。
+  let gemShort = false;
   const takeGems = (want) => {
     if (!gemBudget) { user.gems += want; return want; }
     const give = Math.max(0, Math.min(want, gemBudget.room));
+    gemShort = give < want;
     user.gems += give;
     gemBudget.room -= give;
     return give;
@@ -552,7 +557,7 @@ function gachaPull(user, lucky = false, floor = 0, gemBudget = null) {
   if (roll < 87) {   // SR: gems
     const amount = takeGems(15 + Math.floor(Math.random() * 6) * 5);
     if (amount <= 0) return boosterFallback(2, 'SR');
-    return { type: 'gems', amount, rarity: 'SR' };
+    return { type: 'gems', amount, rarity: 'SR', ...(gemShort ? { budgetOut: true } : {}) };
   }
   if (roll < 97) {   // SSR: unowned cosmetic (or a booster bundle when complete)
     // adminOnly gear must never drop; gachaOnly gear drops ONLY here.
@@ -576,7 +581,7 @@ function gachaPull(user, lucky = false, floor = 0, gemBudget = null) {
   // UR: jackpot gems
   const amount = takeGems(150);
   if (amount <= 0) return boosterFallback(5, 'UR');
-  return { type: 'gems', amount, rarity: 'UR' };
+  return { type: 'gems', amount, rarity: 'UR', ...(gemShort ? { budgetOut: true } : {}) };
 }
 
 shopRouter.post('/api/gacha', requireAuth, maintenanceGuard, (req, res) => {

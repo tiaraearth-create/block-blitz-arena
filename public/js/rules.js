@@ -69,6 +69,23 @@ export function lineScore(lineCount, streak = 1) {
 //     attack → 「1v1 ランクマッチ」（対戦の本流。攻撃あり）
 //     duel   → 「クラシック」（攻撃なしのスコア勝負）
 // ---------------------------------------------------------------------------
+// 🏅 その試合で**何が動くのか**。選択画面に必ず出す（main.js）。
+//    以前はどのモードにも書かれておらず、Elo がランクマッチと同じだけ動く
+//    「クラシック」が『静かな勝負』というタグだけで並んでいた。
+//    出どころをここ1か所にして、画面は読むだけにする。
+//      rating … Elo も戦績（◯勝◯敗）も動く（1対1のレート戦）
+//      record … 戦績と勝利報酬は動くが、Elo は動かない（2v2）
+//      none  … Elo も戦績も動かない
+//    ⚠ 'none' は「何も記録されない」という意味ではない ── ロイヤルの順位も
+//      大会の優勝も、そのモード自身の記録にはちゃんと残る。ここで言っている
+//      「戦績」は画面に出る ◯勝◯敗（pvpWins / pvpLosses）のことだけ。
+export const STAKES_LABEL = {
+  rating: () => t('レートと戦績（勝敗）が動きます', 'Rating and win/loss record change'),
+  record: () => t('戦績（勝敗）に残ります。レートは動きません', 'Counts toward your win/loss record — rating does not change'),
+  none: () => t('レートは動きません', 'Your rating does not change'),
+};
+export const stakesOf = mode => (mode && mode.stakes) || (mode && mode.rated ? 'rating' : 'none');
+
 export const ONLINE_MODES = [
   {
     kind: 'attack',
@@ -78,6 +95,7 @@ export const ONLINE_MODES = [
       'Head-to-head duel: clear 2+ lines at once to dump garbage on your opponent.'),
     tag: () => t('対戦の本流', 'The main event'),
     rated: true,
+    stakes: 'rating',
   },
   {
     kind: 'duel',
@@ -85,8 +103,11 @@ export const ONLINE_MODES = [
     name: () => t('クラシック', 'Classic'),
     line: () => t('攻撃なし。まったく同じピースが両者に配られる、純粋なスコア勝負。',
       'No attacks. Both players get the exact same pieces — pure score contest.'),
+    // 🏅 説明もタグも「気楽に遊ぶ枠」に読めるが、Elo はランクマッチと同じだけ動く。
+    //   下の stakes がそれを画面に出す（main.js の選択画面）。
     tag: () => t('静かな勝負', 'Quiet duel'),
     rated: true,
+    stakes: 'rating',
   },
   {
     kind: 'team',
@@ -94,7 +115,12 @@ export const ONLINE_MODES = [
     name: () => t('2v2 チーム戦', '2v2 Team Battle'),
     line: () => t('2人組のスコア合計で勝負。人数が足りなければ自動で埋まる。',
       'Two-on-two: the higher combined score wins. Empty seats are filled automatically.'),
+    // ⚠ **宣言と実装が食い違っていた欄。** Elo は「rated かつ2人戦」でしか動かない
+    //   （server/battle.js の duel2）ので 2v2 でレートは動かない ── が、
+    //   勝敗の記録（pvpWins / pvpLosses）と勝利報酬は動く。rated:false のままだと
+    //   「何も動かない気楽な枠」と読めるので、実態に合わせて stakes で書き分ける。
     rated: false,
+    stakes: 'record',
   },
   {
     kind: 'tourney',
@@ -270,9 +296,11 @@ export function rulesSections() {
         //       roomWatchExtra（watch / watchable）
         t('バトルロイヤルは脱落しても終わりではありません。そのまま残った人の盤面を観戦できます。',
           'Getting knocked out of Battle Royale is not the end — you keep watching the survivors play.'),
-        // 出典: server/battle.js の ROOM_MAX（=8）と reseat()
+        // 出典: server/battle.js の ROOM_MAX（=16）と cleanSettings の seatMax。
+        // ⚠ 日本語だけ更新して英語が旧版のまま残っていた（8人・対戦席2/4）。
+        //   同じアプリの中で数字が食い違うので、直すときは必ず両方そろえること。
         t('カスタムルームは1部屋16人まで。対戦する人数はホストが選べます（1v1と2v2チームは2〜16人。攻撃戦・協力・陣取りは盤面の作り上2人固定）。あふれた人は観戦席に座り、試合をそのまま見られます。2v2チームでは席ごとにA/Bを入れ替えられます。',
-          'A custom room holds 8. Anyone past the playing seats (2 for 1v1, 4 for 2v2) sits in the stands and watches the match live.'),
+          'A custom room holds up to 16. The host picks how many actually play (2–16 for 1v1 and 2v2; Attack, Co-op and Land are fixed at 2 by board design). Anyone past the playing seats sits in the stands and watches live. In 2v2 the host can swap each seat between team A and B.'),
         t('ホストは席をいつでも入れ替えられます。交代で遊ぶときは、待っている人が観戦席で見ていられます。',
           'The host can move people between seats at any time, so whoever is waiting their turn can watch instead of sitting out.'),
         // ⚠️ 再接続の猶予は別担当の実装。**入らなかった場合に嘘にならない**

@@ -3433,6 +3433,9 @@ export function initBattle(server, deps) {
     const gone = [];
     for (const e of r.entrants) {
       if (!e.alive || !e.human) continue;
+      // 🔌 繋ぎ直しの猶予中は席を残す（close ハンドラが e.dcUntil を立てる）。
+      //    期限が過ぎたらここで確定する ── 順位の決まり方は今までどおり。
+      if (e.dcUntil && now < e.dcUntil) continue;
       const dead = e.ws.readyState !== e.ws.OPEN;
       const silent = now - (e.lastSeen || now) > 90000;
       if (!dead && !silent) continue;
@@ -3518,7 +3521,15 @@ export function initBattle(server, deps) {
     const watching = r.entrants.some(e => e.human && e.ws.readyState === e.ws.OPEN);
     // Nobody is in it and nobody is watching — do not keep simulating a field
     // of bots for three minutes and then announce a "winner" to the world.
-    if (!watching) {
+    // 🔌 繋ぎ直しの猟予中の人が居るあいだは畳まない。
+    //
+    //    この行は「誰も見ていないロビーをボットだけで3分回さない」ためのものだが、
+    //    readyState しか見ていないので、回線が切れた瞬間の次の tick で
+    //    **猟予が明ける前にロビーごと消していた** ―― そのため上の
+    //    「落ちた人を席から外す」ブロックが一度も走らず、順位も報酬も確定しないまま
+    //    消えていた（切断ハンドラがその場で締めていたころは顔を出さなかった問題）。
+    const inGrace = r.entrants.some(e => e.human && e.alive && e.dcUntil && now < e.dcUntil);
+    if (!watching && !inGrace) {
       clearInterval(r.tick);
       royales.delete(r.id);
       return;
@@ -3788,6 +3799,31 @@ export function initBattle(server, deps) {
     }
     clearHold(p);
     return seatSocket(match, p, ws);
+  }
+
+  // 🔌 ロイヤルの席を返す。対戦の resumeMatch と同じ入口から呼ぶ。
+  //    盤面はクライアント側で走り続けているので、返すのは「席」だけでよい
+  //    ── 700ms ごとの state がまた流れ始めれば、順位も危険メーターも戻る。
+  function resumeRoyale(ws, userId) {
+    for (const r of royales.values()) {
+      if (r.ended) continue;
+      const e = r.entrants.find(x => x.human && x.alive
+        && x.ws && x.ws.user && x.ws.user.id === userId);
+      if (!e) continue;
+      e.ws = ws;
+      e.dcUntil = null;
+      e.lastSeen = Date.now();
+      ws.royaleId = r.id;
+      // クライアントは「繋ぎ直しが成功したか」を見て、失敗なら諦める作りなので、
+      // 席が返ったことを必ず1本返す（返さないと RESUME_WAIT_MS で切られる）。
+      send(ws, {
+        type: 'royale_resumed',
+        secs: Math.max(0, Math.round(ROYALE_DURATION + COUNTDOWN - (Date.now() - r.startedAt) / 1000)),
+        alive: royaleAlive(r).length,
+      });
+      return true;
+    }
+    return false;
   }
 
   // close がまだ届いていない席を、同じ userId の新しいソケットで引き継ぐ。
@@ -4083,7 +4119,11 @@ export function initBattle(server, deps) {
           // hello_ok のあとに送るのは、クライアントが hello_ok で
           // connect() を解決してから受け口を張るため。
           // resume / role の2条件が要る理由は resumeMatch のコメント。
-          if (user && msg.resume === true && ws.secondary) resumeMatch(ws, user.id);
+          if (user && msg.resume === true && ws.secondary) {
+            // 対戦とロイヤルの両方を見る（片方しか見ていなかったので、
+            // ロイヤルは再接続の仕組みに一度も乗っていなかった）。
+            if (!resumeMatch(ws, user.id)) resumeRoyale(ws, user.id);
+          }
           break;
         }
         case 'queue': {
@@ -4876,9 +4916,21 @@ export function initBattle(server, deps) {
         if (r && !r.ended) {
           const e = r.entrants.find(x => x.ws === ws);
           if (e && e.alive) {
-            const ranked = royaleRanked(r);
-            endRoyaleFor(e, r, ranked.length, ranked);
-            royaleFeed(r, { kind: 'left', victim: e.name, alive: ranked.length - 1 });
+            // 🔌 **ログインしている人には、対戦と同じ猶予を置く。**
+            //    いちばん長くて（180秒）いちばん切断の代償が大きいモードなのに、
+            //    ここだけ猶予がゼロで、電車で1〜2秒切れただけで
+            //    「そのとき生きていた全員の中で最下位」が即確定していた。
+            //    しかも結果カードは閉じたソケットへ送られて捨てられるので、
+            //    本人は自分が何位だったかも、何がもらえたかも分からない。
+            //    順位の裁定（離脱＝生存者中最下位）そのものは変えないので、
+            //    「逃げ得にしない」設計は保たれる ── 待つのは確定の**時刻**だけ。
+            if (ws.user) {
+              e.dcUntil = Date.now() + RECONNECT_GRACE_MS;
+            } else {
+              const ranked = royaleRanked(r);
+              endRoyaleFor(e, r, ranked.length, ranked);
+              royaleFeed(r, { kind: 'left', victim: e.name, alive: ranked.length - 1 });
+            }
           }
         }
         ws.royaleId = null;

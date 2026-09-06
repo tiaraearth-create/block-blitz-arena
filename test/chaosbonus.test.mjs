@@ -110,14 +110,27 @@ try {
   check('イベントなし: カオスとソロのコインが同じ', chaosOff === soloOff, `solo ${soloOff} / chaos ${chaosOff}`);
 
   // -------------------------------------------------------------------------
-  // 2. カオスタイム開催中でも等倍のまま
+  // 2. 「カオスタイム」は引退した（v2.63）
+  //
+  //    元の中身は「開放」＋「コイン1.5倍」の2つ。開放は v2.48 で常時になり、
+  //    倍率は指示で v2.54 にやめたので、残っていたのは `bonus: {}` ＝
+  //    **何も起きないイベント**だった。ここで見るのは「等倍のまま」ではなく
+  //    「そもそも枠が無い」こと ── 等倍であること自体は 1 / 3 / 4 が見ている。
   // -------------------------------------------------------------------------
   const ev = await eventOn('chaos');
-  check('カオスタイムを開催できた', !!(ev.event && ev.event.type === 'chaos'), String(ev.event && ev.event.type));
+  // ⚠ 知らない型を頒むとサーバーは**別の型を抽選して開催する**ので、
+  //   「カオスではない」ことだけを見て、測る前に必ず消す。
+  check('カオスタイムの枠が無くなっている', !(ev.event && ev.event.type === 'chaos'),
+    String(ev.event && ev.event.type));
+  await eventOff();
   const soloOn = await coinsFor('solo');
   const chaosOn = await coinsFor('chaos');
-  check('開催中: ソロは据え置き', soloOn === soloOff, `${soloOff} → ${soloOn}`);
-  check('開催中: カオスも等倍のまま', chaosOn === soloOn, `solo ${soloOn} / chaos ${chaosOn}`);
+  check('引退後もソロは据え置き', soloOn === soloOff, `${soloOff} → ${soloOn}`);
+  check('引退後もカオスは等倍のまま', chaosOn === soloOn, `solo ${soloOn} / chaos ${chaosOn}`);
+  // どのイベントも「カオスだけ」を強くしない（モード名を条件にした bonus を作らない）。
+  const evSrc = fs.readFileSync(new URL('../server/events.js', import.meta.url), 'utf8');
+  check('イベント表にカオス専用の枠が無い', !/id: 'chaos'/.test(evSrc), '');
+  check('モード名で分岐する bonus を作っていない', !/chaosCoin|coinChaos/.test(evSrc), '');
 
   // -------------------------------------------------------------------------
   // 3. 他のモードに掛かる倍率は、カオスにも同じだけ掛かる（塞ぎすぎていない）
@@ -155,13 +168,19 @@ try {
   // 6. イベントが数字の約束をしていない
   // -------------------------------------------------------------------------
   const srcEvents = stripComments(fs.readFileSync(path.join(ROOT, 'server', 'events.js'), 'utf8').replace(/\r\n/g, '\n'));
-  const at = srcEvents.indexOf("id: 'chaos'");
-  // 型の終わりは「2字下げの },」。`indexOf('},')` だと `bonus: {},` の中で
-  // 先に当たってしまい、いちばん見たい行が切り落とされる（実際に一度なった）。
-  const chaosType = srcEvents.slice(at, srcEvents.indexOf('\n  },', at));
-  check('前提: カオスタイムの定義を切り出せた', at > 0 && /desc:/.test(chaosType), `${chaosType.length}文字`);
-  check('カオスタイムの説明に「1.5倍」が残っていない', !/1\.5/.test(chaosType), chaosType.replace(/\s+/g, ' ').slice(0, 90));
-  check('カオスタイムに報酬の bonus が付いていない', /bonus: \{\}/.test(chaosType), '');
+  // v2.63: カオスタイムそのものを引退させた（何も起きないイベントだったため）。
+  //   見るべきものが「その型の中身」から「どの型もカオスを特別扱いしない」に変わる。
+  check('カオスタイムの型が残っていない', srcEvents.indexOf("id: 'chaos'") < 0, '');
+  const types = [...srcEvents.matchAll(/id: '(\w+)'/g)].map(m => m[1]);
+  check('前提: イベントの型を数え上げられた', types.length >= 5, types.join(','));
+  // どの型にも「1.5倍」の約束が残っていないこと（説明文も bonus も）。
+  check('どのイベントの説明にも「1.5倍」が残っていない', !/1\.5倍|1\.5x/.test(srcEvents), '');
+  // モード名を条件にした bonus を作らない（作るとまた「このモードだけ得」に戻る）。
+  check('モード名で分岐する bonus が無い', !/chaos|meltdown|survival/.test(srcEvents.replace(/mode_chaos/g, '')), '');
+  // 残った型はすべて中身を持っている（また「何も起きない枠」を作らない）。
+  const empty = [...srcEvents.matchAll(/id: '(\w+)'[\s\S]*?bonus: (\{[^}]*\})/g)]
+    .filter(m => m[2].replace(/\s/g, '') === '{}').map(m => m[1]);
+  check('中身の無いイベントが1つも無い', empty.length === 0, empty.join(','));
 
 } catch (err) {
   check('テストが最後まで走った', false, err.message);

@@ -473,11 +473,21 @@ export class BattleClient {
             }, RESUME_WAIT_MS);
           }
         }
-        if (msg.type === 'match_found' || msg.type === 'match_resumed') {
+        // 🔌 ロイヤルも「試合中」に数える。入っていなかったので
+        //    _scheduleReconnect の `if (!this.inMatch) return false;` で必ず引き返し、
+        //    **再接続のはしごが1回も回らなかった** ―― 1。1 には25秒の猟予と
+        //    約15秒の自動再接続があるのに、いちばん長くて代償の大きいモードだけ
+        //    保護がゼロだった。
+        if (msg.type === 'match_found' || msg.type === 'match_resumed'
+          || msg.type === 'royale_found' || msg.type === 'royale_resumed') {
           this.inMatch = true;
           clearTimeout(this.resumeTimer);
           this.resumeTimer = null;
-        } else if (msg.type === 'result') {
+        } else if (msg.type === 'result' || msg.type === 'royale_over') {
+          this.inMatch = false;
+        } else if (msg.type === 'royale_result' && msg.spectate !== true) {
+          // 脱落して観戦もしない回。ここで落とさないと、
+          // もう帰る席が無いのに繋ぎ直しを繰り返す。
           this.inMatch = false;
         }
         // hello 処理中の切断理由（メンテ中・凍結など）を握っておき、

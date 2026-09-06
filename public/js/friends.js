@@ -134,9 +134,20 @@ function valueLabel(key, e) {
   return v == null ? t('未挑戦', 'No run') : t(`${v}点`, `${v} pts`);
 }
 
+// 📅 JSTの今日（server/adminevent.js の jstDayKey と同じ式）。
+const jstToday = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+
 function challengeBtn(key, e) {
   if (!e.id) return '';
   if (session.user && e.id === session.user.id) return '';
+  // 🏁 **送れない理由が自分側にあるなら、押す前に言う。**
+  //    サーバーは rivalBoard で canChallenge（＝自分に今日の記録があるか）を
+  //    毎回返しているのに、画面が一度も読んでいなかった。押すと
+  //    「今日のデイリーチャレンジの記録がまだありません」と赤トーストが出て、
+  //    しかもそのボタンが60秒ロックされる ── すぐ遊んで戻ってきても送れない。
+  if (boardData && boardData.canChallenge === false) {
+    return `<button class="fr-b" disabled title="${t('先に今日のデイリーを遊んでください', 'Play today’s Daily first')}">${t('先にデイリー', 'Daily first')}</button>`;
+  }
   const left = cooldownUntil(e) - Date.now();
   if (left > 0) {
     return `<button class="fr-b" disabled title="${t('しばらく送れません', 'On cooldown')}">${esc(cdLabel(left))}</button>`;
@@ -225,8 +236,13 @@ async function sendChallenge(b) {
       challengeCooldown.set(id, Date.now() + 60000);
     } else {
       toast((err && err.message) || t('送れませんでした', 'Could not send'), 'err', 3000);
-      // 断られた理由がクールダウンでも上限でも、こちら側でも少し間を空ける。
-      challengeCooldown.set(id, Date.now() + 60000);
+      // ⚠ **断られた理由が自分側の事情なら、クールダウンを付けない。**
+      //    「今日のデイリーの記録がまだありません」で弾かれた人は、すぐに
+      //    デイリーを遊んで戻ってきても 60秒間送れなかった。
+      //    （上の challengeBtn が先に止めるので普通はここまで来ないが、
+      //     古い boardData を見ていたときの保険。）
+      const mine = /記録がまだありません|no Daily Challenge record/i.test(String((err && err.message) || ''));
+      if (!mine) challengeCooldown.set(id, Date.now() + 60000);
     }
   }
   if (tab === 'rival') renderFriends();
@@ -420,10 +436,33 @@ function viewRequests() {
     chal.length ? [
       `<h3 class="fr-h">${t('届いている挑戦状', 'Challenges')}</h3>`,
       '<div class="fr-list">',
-      chal.map(f => row(f, [
-        `<button class="fr-b ok" data-chalgo="${esc(f.day)}">${t('受けて立つ', 'Accept')}</button>`,
-        `<button class="fr-b" data-chaldrop="${esc(f.id)}">${t('消す', 'Dismiss')}</button>`,
-      ].join(''))).join(''),
+      chal.map(f => {
+        // 🔔 挑戦状の行だけ専用に描く。汎用の row() は名前・Lv・在席しか出さないので、
+        //    **追う点数がどこにも出ていなかった** ── 数字を知る手段は、送られた
+        //    瞬間にたまたまオンラインだった人に出るトーストだけで、見逃すと
+        //    24時間そのまま消える。サーバーは f.score / f.cleared / f.day を
+        //    毎回載せているのに、一度も読んでいなかった。
+        // 📅 日をまたいだ挑戦状は「受けて立つ」を止める。デイリーは日ごとに
+        //    シードもピース順も違うので、今日の盤面で出した点を比べても意味がない
+        //    （しかも1日1回勝負なのでやり直せない）。
+        const stale = !!f.day && f.day !== jstToday();
+        const goal = Number(f.score) || 0;
+        return [
+          '<div class="fr-row">',
+          `  <span class="fr-name">${esc(f.username)}</span>`,
+          `  <span class="fr-status" style="font-weight:800;color:var(--yellow)">${
+            goal ? t(`${num(goal)}点`, `${num(goal)} pts`) : t('記録なし', 'no score')}${
+            f.cleared ? ` <i style="color:var(--green)">${t('クリア', 'cleared')}</i>` : ''}${
+            stale ? ` <i class="muted">${esc(f.day)}</i>` : ''}</span>`,
+          '  <span class="fr-btns">',
+          stale
+            ? `<button class="fr-b" disabled title="${t('昨日のデイリーへの挑戦状です', 'This challenge is for a previous day’s Daily')}">${t('期限切れ', 'Expired')}</button>`
+            : `<button class="fr-b ok" data-chalgo="${esc(f.day)}">${t('受けて立つ', 'Accept')}</button>`,
+          `<button class="fr-b" data-chaldrop="${esc(f.id)}">${t('消す', 'Dismiss')}</button>`,
+          '  </span>',
+          '</div>',
+        ].join('');
+      }).join(''),
       '</div>',
       `<p class="muted" style="font-size:11px">${t(
         'デイリーは全員が同じ盤面・同じピース順です。同じ日のうちに挑めば、実力だけの勝負になります。',
@@ -576,8 +615,19 @@ function wire(body) {
         b.onclick = async () => {
           b.disabled = true;
           const ok = await act('/api/friends/request', { userId: b.dataset.req });
-          if (ok) toast(t('申請を送りました', 'Request sent'), 'ok');
-          setTab('find');
+          // ⚠ **検索結果を消さない。** 成否にかかわらず setTab('find') を呼んでいたので、
+          //    タブごと描き直されて #frResult が空に戻り、名前を一から打ち直しになっていた。
+          //    この世界では申請が通らないことのほうが多いので、同じ打ち直しを何度も踏む。
+          //    チャットのプロフィールカード（chat.js の askFriend）は最初から
+          //    「カードは残し、ボタンだけ戻す」形なので、窓口によって後始末が違っていた。
+          if (ok) {
+            toast(t('申請を送りました', 'Request sent'), 'ok');
+            b.replaceWith(Object.assign(document.createElement('span'), {
+              className: 'muted', textContent: t('申請ずみ', 'Requested'),
+            }));
+          } else {
+            b.disabled = false;   // 断られた ── もう一度押せるように戻すだけ
+          }
         };
       });
     } catch (err) { out.innerHTML = `<p class="muted">${esc(err.message)}</p>`; }

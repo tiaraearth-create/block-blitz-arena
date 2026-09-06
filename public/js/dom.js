@@ -573,7 +573,14 @@ export function closeAllModals() {
 function dismissLockedModal(backdrop) {
   const esc = backdrop && backdrop.querySelector('[data-modal-dismiss]');
   if (esc) { esc.click(); return; }
-  toast(t('選択が必要です', 'Please choose an option'), 'err', 2000);
+  // ⚠ ここへ落ちるのは「押せる出口がそもそも無いモーダル」だけ。
+  //   以前は data-modal-dismiss を**実際に付けている場所が1つも無かった**ので、
+  //   dismissable:false のモーダル（modes.js だけで40か所以上）はすべてここに落ち、
+  //   Android の戻るジェスチャーが毎回「選択が必要です」の赤トーストになっていた。
+  //   ジュークボックスのように“選ぶもの”が無いダイアログでも同じ文が出るので、
+  //   何を求められているのかも分からない。下で印を付けるようにしたうえで、
+  //   文言も「何をすればいいか」に変える。
+  toast(t('下のボタンから選んでください', 'Use one of the buttons below'), '', 2000);
 }
 
 // 自前の閉じるボタンを既に持っているモーダルに、もう1つ足さないための判定。
@@ -673,6 +680,18 @@ export function showModal(html, { dismissable = true, peekable = false, back = n
   if (modal) {
     // 閉じ口が1つも無いモーダルを作らない。自前で持っているものには足さない。
     if (dismissable && !hasOwnCloseControl(modal, hasBack)) attachModalNav(modal, hasBack);
+    // 🚪 閉じられないモーダルでも、**「やめる／閉じる／メニュー」に当たるボタンが
+    //    あるならそれを逃げ道として印付けする**（端末の戻るがそこを押す）。
+    //    印を付ける場所が1つも無かったので、dismissLockedModal の逃げ道は
+    //    ずっと空振りしていた。判定は既存の CLOSE_WORDS を借りる（規則を増やさない）。
+    if (!dismissable && !modal.querySelector('[data-modal-dismiss]')) {
+      for (const b of modal.querySelectorAll('.modal-buttons button, .modal-buttons .btn')) {
+        if (CLOSE_WORDS.test(b.textContent || '') || /メニュー|menu/i.test(b.textContent || '')) {
+          b.setAttribute('data-modal-dismiss', '1');
+          break;
+        }
+      }
+    }
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
     const h = modal.querySelector('h2');

@@ -18,7 +18,7 @@ import { openFriends } from './friends.js';
 import { initParty } from './party.js';
 // 📖 ルールの「内容」は rules.js が唯一の正解。ここは並べるだけで、
 // 説明の本文も数字も一切持たない（数字を直すときに2か所直す羽目にならない）。
-import { ONLINE_MODES, onlineModeLine, rulesSections } from './rules.js';
+import { ONLINE_MODES, onlineModeLine, rulesSections, STAKES_LABEL, stakesOf } from './rules.js';
 // 🎨 絵文字ではなく自前のアイコン。index.html は静的なので、起動時に流し込む。
 import { icon, iconEl, hasIcon, bossIconName } from './icons.js';
 
@@ -155,7 +155,13 @@ function rulesIcon(size = 20) {
 function updateRulesDot() {
   const dot = $('#rulesDot');
   if (!dot) return;
-  dot.classList.toggle('hidden', rulesSeen() || tutorialDone());
+  // ⚠ **チュートリアル済みで消さない。** 盤面のチュートリアルは置き方と消し方だけで、
+  //   攻撃（2ライン同時消しでお邪魔が飛ぶ）も得点表もオンラインの作法も
+  //   📖遊び方にしか書いていない ── 説明している内容が別物なので、片方を見たことを
+  //   もう片方の既読にしてよい理由が無い。しかも Tutorial.start() は吹き出しを出した
+  //   **その瞬間に**済みの印を立てるので、①が1回出ただけで導線が消えていた。
+  //   （この画面が作られた元の事故＝「友達が最後まで攻撃を知らなかった」の再現。）
+  dot.classList.toggle('hidden', rulesSeen());
 }
 
 // 節の1行。文字列ならそのまま段落、{ head, body } なら表として出す。
@@ -830,7 +836,10 @@ function showOnlineSelect() {
         ${mode ? icon(mode.icon, { size: 22 }) : ''}<span>${name}</span>
         ${tag ? `<i style="font-size:11px;font-weight:800;font-style:normal;opacity:.85;border:1px solid currentColor;border-radius:999px;padding:1px 7px">${tag}</i>` : ''}
       </span>
-      <small style="display:block;margin-top:5px;font-size:12px;font-weight:600;line-height:1.55;opacity:.92;white-space:normal">${onlineModeLine(kind)}</small>`;
+      <small style="display:block;margin-top:5px;font-size:12px;font-weight:600;line-height:1.55;opacity:.92;white-space:normal">${onlineModeLine(kind)}</small>
+      ${/* 🏅 何が動くのかを必ず書く。書いていなかったので、Elo がランクマッチと
+             同じだけ動く「クラシック」が気楽な枠にしか見えなかった。 */''}
+      ${mode ? `<small style="display:block;margin-top:3px;font-size:11px;font-weight:700;opacity:.72;white-space:normal">${STAKES_LABEL[stakesOf(mode)]()}</small>` : ''}`;
     // 押されたモードを必ず明示で渡す（startOnline の既定値 'duel' に落ちない）。
     btn.onclick = () => { audio.click(); closeModal(); startOnline(kind); };
   });
@@ -1779,7 +1788,38 @@ const NAV_BTN_ICONS = {
 const HUD_BTN_ICONS = {
   btnQuit: 'quit', btnReroll: 'reroll', btnAuto: 'autopilot',
   btnAdminCmd: 'admincmd', btnEmote: 'emote', btnClip: 'clip',
+  // ⚙ 走行中の設定。トップバーは `body[data-screen="game"] #topbar { display:none }`
+  //   で丸ごと隠れるので、⚙（#btnSettings）も巻き添えで消えていた ── つまり
+  //   20分続くメルトダウンやダンジョンの最中に、音量・画面フラッシュ・
+  //   配置プレビューを変える道が画面上に1本も無く、そのためだけに走行を捨てるか
+  //   しおりの唯一の枠を使うしかなかった。HUD に1つ生やす（index.html は触らない）。
+  btnHudSettings: 'settings',
 };
+
+// ⚙ HUD の設定ボタンを（無ければ）作る。#btnQuit の隣に置く。
+function ensureHudSettings() {
+  const left = document.querySelector('.hud-left');
+  if (!left || document.getElementById('btnHudSettings')) return;
+  const b = document.createElement('button');
+  b.id = 'btnHudSettings';
+  b.className = 'chip icon-btn';
+  b.title = t('設定', 'Settings');
+  b.setAttribute('aria-label', b.title);
+  // ✕（#btnQuit）のすぐ隣。押し間違えても走行は終わらない位置。
+  const quit = document.getElementById('btnQuit');
+  if (quit && quit.nextSibling) left.insertBefore(b, quit.nextSibling);
+  else left.appendChild(b);
+  b.onclick = () => {
+    audio.click();
+    // ⏸ ✕ の確認ダイアログと同じ止め方。開いているあいだ走行の時計を止める
+    //    （止めないと、設定を読んでいる数秒でボスの技が着弾する）。
+    const resume = pauseModeForDialog();
+    showSettingsModal();
+    if (resume) onModalClosed(resume);
+  };
+}
+
+ensureHudSettings();
 
 // 画面の見出し（.sub-header h2）。i18n.js の applyStaticI18n() が
 // textContent ごと書き換えるので、**そのあと**に塗ること。

@@ -407,6 +407,12 @@ function cappedRow(kind) {
   }
   // 🎫 シーズンのバトルパスを走り切った人。満タンを超えたXPは捨てられるので、
   //    「+530」と出しながらバーが動かない状態を作らない（server/index.js の bpFull）。
+  // 💎 イベントの💎ドロップにも1日の上限がある。バナーが
+  //    「1プレイごとに3個」と言い続けるので、止まった理由を必ず出す。
+  if (kind === 'gem_day') {
+    return row(t('きょうのイベントのジェムはもらいきりました', 'You have taken all of today’s event gems'),
+      t('明日また入ります', 'Back tomorrow'));
+  }
   if (kind === 'bp_full') {
     return row(t('バトルパスは今シーズンぶんを走り切りました', 'Battle pass is maxed for this season'),
       t('次のシーズンまで', 'Until next season'));
@@ -1847,8 +1853,43 @@ class SoloMode {
     audio.playTrack('solo');
   }
 
+  // 🎮 ソロ専用の記録を見る。
+  //
+  //    以前は汎用の stats.bestScore を読んでいたが、あれは**全モード共通**
+  //    （除外はメルトダウン・連鎖・デイリー・管理者イベントだけ）なので、
+  //    ダンジョンやボスラッシュを一度でも走ると数十万点が入り、
+  //    以後ソロは何をしても BEST が動かず NEW RECORD! も紙吹雪も
+  //    一生出ない状態になっていた（ソロだけが「記録の動かないモード」に見える）。
+  //    古いアカウントは soloBest をまだ持たないので 0 から始まる
+  //    ―― その回は必ず新記録になるが、間違った大きい数字を出し続けるよりよい。
   best() {
-    return session.user ? Math.max(session.user.stats.bestScore, guestBest()) : guestBest();
+    return session.user
+      ? Math.max(session.user.stats.soloBest || 0, guestBest())
+      : guestBest();
+  }
+
+  // 🔖 しおり。盤面に残っている👁（観測マス）の追跡を写す。
+  //
+  //    EyeWatch は追跡中のマスを自分の this.cell にだけ持っているので、
+  //    預けて戻すと（start() が新品を作るので）cell が -1 に戻り、
+  //    盤面の EYE は見た目そのままなのに**幽霊**になっていた
+  //    ―― 潰しても「観測 n／m」に入らず王座の欠片ももらえず、
+  //    開き切ってお邪魔になることも無く、そのうち本物がもう1つ湧いて並ぶ。
+  bookmarkExtra() {
+    const e = this.eye;
+    return e ? { eye: { cell: e.cell, age: e.age, since: e.since, caught: e.caught, missed: e.missed } } : null;
+  }
+
+  bookmarkRestore(x) {
+    if (!x || !x.eye || !this.eye) return;
+    const n = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+    this.eye.cell = n(x.eye.cell, -1);
+    this.eye.age = n(x.eye.age);
+    this.eye.since = n(x.eye.since);
+    this.eye.caught = n(x.eye.caught);
+    this.eye.missed = n(x.eye.missed);
+    // 開き具合（見た目）も戻す。0〜1 で渡す作法は EyeWatch と同じ。
+    setEyePhase(this.eye.cell >= 0 ? Math.min(1, this.eye.age / EYE_OPEN_MOVES) : 0);
   }
 
   updateHud() {
@@ -2232,7 +2273,14 @@ class ChimeraMode {
       ['down', t('↓ 縦に接合', '↓ weld below')],
       ['diag', t('↘ 斜めに接合', '↘ weld diagonal')],
     ].map(([how, label]) => ({ how, label, cells: chimeraMerge(base.cells, add.cells, how) }))
-      .filter(o => o.cells);
+      .filter(o => o.cells)
+      // 🧬 **いま盤面に入るかを先に見る。**
+      //    chimeraMerge が弾くのは 8×8 をはみ出す形だけなので、
+      //    「形は成立するが盤面のどこにも入らない」候補が普通に並んでいた。
+      //    選んだ瞬間に他の手札も置けなければ何の予告も無く GAME OVER になるのに、
+      //    選ぶ前の画面には形の絵とマス数しか出ていない（取り消しもできない）。
+      //    合体が窒息との取引であることは変えず、**賭けていることが見える**ようにする。
+      .map(o => ({ ...o, fits: this.engine.placements({ cells: o.cells }).length > 0 }));
     if (!opts.length) {
       toast(t('大きすぎて溶接できない！', 'Too big to weld!'), 'err', 1500);
       return true;
@@ -2243,9 +2291,10 @@ class ChimeraMode {
       <h2>${ic('mode_chimera', 22)} ${t('溶接する？', 'Weld them?')}</h2>
       <div class="form-col">
         ${opts.map((o, i) => `
-          <button class="btn btn-ghost perk-btn" data-perk="${i}">
+          <button class="btn btn-ghost perk-btn${o.fits ? '' : ' off'}" data-perk="${i}">
             <span class="perk-icon">${ic('mode_chimera', 26)}</span>
-            <span class="perk-body"><b>${o.label} ${chimeraCellsHtml(o.cells)}</b><small>${t(`${o.cells.length}マスの怪物ピース ・ 倍率×${(base.weld || 1) + (add.weld || 1)}`, `${o.cells.length}-cell monster ・ ×${(base.weld || 1) + (add.weld || 1)} multiplier`)}</small></span>
+            <span class="perk-body"><b>${o.label} ${chimeraCellsHtml(o.cells)}</b><small>${t(`${o.cells.length}マスの怪物ピース ・ 倍率×${(base.weld || 1) + (add.weld || 1)}`, `${o.cells.length}-cell monster ・ ×${(base.weld || 1) + (add.weld || 1)} multiplier`)}${
+              o.fits ? '' : t(' ・ いまの盤面に置き場所なし', ' ・ no room on this board')}</small></span>
           </button>`).join('')}
       </div>
       <div class="modal-buttons"><button class="btn btn-ghost" id="wldCancel">${t('やめる', 'Cancel')}</button></div>`,
@@ -2641,6 +2690,19 @@ class DigMode {
   }
 
   // The ground rises: rows shift up one, a fresh stratum enters at the bottom.
+  // ⛏ 天井（0行目）に1マスでもあると、次のせり上がりでその場で終わる。
+  //    盤面にはまだ空きも置ける手も山ほどあるのに終わるので、初見では
+  //    何が起きたのか分からないまま最高深度を失っていた。仕組み（view.dangerCells）は
+  //    ボスの予告技が既に使っているので、せり上がりが近いときだけ天井行を光らせる。
+  markCeiling() {
+    const v = getView();
+    if (!v) return;
+    if (this.ended || this.placedSince < DIG_STEP - 1) { v.dangerCells = null; return; }
+    const cells = new Set();
+    for (let c = 0; c < 8; c++) if (this.engine.grid[c] !== 0) cells.add(c);
+    v.dangerCells = cells.size ? cells : null;
+  }
+
   pushLayer() {
     const e = this.engine;
     for (let c = 0; c < 8; c++) {
@@ -2741,6 +2803,7 @@ class DigMode {
     const pct = Math.round((this.placedSince / DIG_STEP) * 100);
     fill.style.width = `${pct}%`;
     fill.style.background = pct >= 75 ? '#ff9d3b' : '#a7793b';
+    this.markCeiling();   // ⛏ せり上がりが近いときだけ天井行を光らせる
   }
 
   async finish() {
@@ -2793,7 +2856,7 @@ class DigMode {
     const fill = $('#chaosBarFill');
     fill.style.background = '';
     fill.style.width = '0%';
-    if (view) { view.onPlace = null; view.oreCells = null; }
+    if (view) { view.onPlace = null; view.oreCells = null; view.dangerCells = null; }
   }
 }
 
@@ -2834,6 +2897,12 @@ class GhostMode {
     this.startedAt = Date.now();
     this.ended = false;
     this.ghostFx = { hideAt: new Map(), revealUntil: 0 };
+    // 🔖 隔しおりの復元待ちの霧（bookmarkRestore が先に入れる）。
+    if (this._fogPending) {
+      const v0 = getView();
+      for (const k of this._fogPending) this.ghostFx.hideAt.set(k, v0.time + 1.2);
+      this._fogPending = null;
+    }
     const v = getView();
     this.engine = new Engine();
     v.setEngine(this.engine);
@@ -2850,6 +2919,27 @@ class GhostMode {
     toast(t('置いたブロックは消えていく…記憶だけが頼り。ラインを消せば一瞬だけ見える！',
       'Placed blocks fade away… memory is all you have. Clears reveal the board for a moment!'), 'announce', 3600);
   }
+
+  // 🔖 しおり。**霧を必ず写すこと**。
+  //
+  //    BOOKMARKABLE に 'ghost' が入っているのにこの2つが無かったので、
+  //    預けて戻すと盤面の霧が全部晴れ、記憶モードの難しさが丸ごと
+  //    消えていた（しおりを知っている人だけがバッジと ghostBest を楽に取れる）。
+  //    hideAt の値は view.time 基準の絶対値なので預けても意味が無い。
+  //    隠れているマスの番号だけを預けて、戻すときに貼り直す。
+  bookmarkExtra() { return { fog: [...this.ghostFx.hideAt.keys()] }; }
+  bookmarkRestore(x) {
+    if (!x || !Array.isArray(x.fog)) return;
+    // start() より後に呼ばれるので、その場で貼れる（届く前なら _fogPending が拾う）。
+    if (this.ghostFx) {
+      const v = getView();
+      for (const k of x.fog) if (Number.isInteger(k)) this.ghostFx.hideAt.set(k, v.time + 1.2);
+      this.updateHud();
+    } else {
+      this._fogPending = x.fog.filter(Number.isInteger);
+    }
+  }
+  bookmarkLabel() { return t(`幽霊屋敷 ${this.ghostFx ? this.ghostFx.hideAt.size : 0}個が闇の中`, `Haunted House — ${this.ghostFx ? this.ghostFx.hideAt.size : 0} hidden`); }
 
   onPlace(result) {
     if (this.ended) return;
@@ -3824,6 +3914,15 @@ function relicStrip(ids, size = 18) {
   }).join('');
 }
 
+// 🔁 1周の長さ（＝「制覇」と周回のHP倍率の物差し）。
+//
+//    解放の最低数と同じ4に固定してある。顔ぶれは解放済みボス全部のままなので、
+//    たくさん解放した人は「1周の中で会える相手が増える」だけで、
+//    バッジも深度の重さも変わらない ── 強くなった人ほど損をする形にしない。
+//    ⚠ 変えるときは、既にこの物差しで積み上がっている rushDepth の記録
+//      （ランキング・殿堂・実績「深度20」）と地続きになることを必ず考えること。
+const RUSH_LAP = 4;
+
 class BossRushMode {
   constructor(bosses) {
     this.mode = 'boss';        // shares boss-panel admin command (HP halve)
@@ -3832,7 +3931,9 @@ class BossRushMode {
     this.relics = [];
   }
 
-  lap() { return Math.floor(this.kills / this.bosses.length); }
+  // 周回のHP倍率もこの分母で決まる。制覇の物差しと同じ固定値にして、
+  // 解放数によって深度20の重さが変わらないようにする。
+  lap() { return Math.floor(this.kills / RUSH_LAP); }
 
   // 周回でHPが倍々に、攻撃間隔が少しずつ短く。
   scaledBoss() {
@@ -4073,8 +4174,14 @@ class BossRushMode {
     view.inputLocked = true;
     view.dangerCells = null;
     $('#bossAtkBar').classList.remove('danger');
-    // 「制覇」= 1周（全ボス撃破）以上。深度がそのまま記録になる。
-    const conquered = this.kills >= this.bosses.length;
+    // 🔁 「制覇」の物差しは**固定**（RUSH_LAP）。
+    //
+    //    以前は「解放済みボスの数」を1周としていたので、まじめにボスを倒して
+    //    6体解放した人は、4体で止めた人の3倍の重さ（合計HP 51,000 → 151,000）を
+    //    1本の走行で通さないと同じバッジが取れなかった ── **強くなるほど
+    //    報酬が遠のく**うえ、解放数は戻せないので取り返しがつかない。
+    //    周回する顔ぶれは解放済みのままでよい（未見のボスを出さない意図は保つ）。
+    const conquered = this.kills >= RUSH_LAP;
     if (!this.aborted) audio.gameOver();
     const localDepth = Number(localStorage.getItem('bba_rush_depth') || 0);
     // 別端末ではサーバー統計にしか最深記録が無いので、両者の最大と比べる
@@ -5062,8 +5169,24 @@ class DungeonMode {
     // そのレルムのボス間隔で数えるのが正しい（深淵はボスが倍あるぶん多く付く）。
     const step = this.realm.bossEvery || 10;
     const k = Math.floor((this.startFloor - 1) / step);
+    // ⚠ **見積もりの物差しは「通ったフロアの数」。** ボスの数（k）だけで
+    //    測っていたので、通しで登った人との差が階が上がるほど開いていた ──
+    //    通しなら1フロアごとに報酬（⚔与ダメージ+60%・🐢攻撃間隔+25%、
+    //    どちらも重ねがけ無制限）を選べるので、F31 なら30回ぶん積み上がっている。
+    //    チェックポイント側は攻×2.05・攻撃間隔は素のまま、というのが実態で、
+    //    「さっき楽に抜けた階が急に抜けられない」という形になっていた。
+    //    敵の強さは開始階だけで決まるので、同じ階が別物の難度になる。
+    //    ADOPT_* は「実際にはそればかり選ばない」ぶんの見積もり（控えめ）。
+    //    ⚠ 通しで登った人を追い越さないこと ── ここを上げすぎると
+    //      「途中でやめて入り直したほうが強い」になる。
+    const passed = Math.max(0, this.startFloor - 1);
+    const ADOPT_ATK = 0.3;    // 30% のフロアで ⚔（+60%）を取った見積もり
+    const ADOPT_SLOW = 0.18;  // 18% のフロアで 🐢（+25%）を取った見積もり
+    if (passed > 0) {
+      this.engine.scoreMult = 1 + 0.6 * passed * ADOPT_ATK;
+      this.atkSlow = Math.pow(1.25, passed * ADOPT_SLOW);
+    }
     if (k > 0) {
-      this.engine.scoreMult = 1 + 0.35 * k;
       this.engine.rerolls += k;
       this.lives += Math.floor(k / 3);
     }
@@ -5928,7 +6051,19 @@ class OnlineMode extends VersusBase {
         // 無く、サーバー側のキューも切断で消えるので待っても永久にマッチしない。
         // 切れたら kind に関係なくメニューへ戻す。
         closeModal();
-        toast(t('サーバーとの接続が切れました', 'Lost connection to the server'), 'err');
+        // ⚠ **裁定をそのまま伝える。**
+        //    ランクマッチの最中に戻れなかった回は、サーバー側で
+        //    敗北として締められて Elo が引かれ、pvpLosses が1増えているのに、
+        //    画面には「接続が切れました」としか出ていなかった ―― 本人は
+        //    「通信が切れただけ」と思っているので、あとでレートが下がっていても
+        //    理由が分からない。分岐の順序は quitWarning() と揃えること。
+        const lostRanked = this.inMatch && !this.isCoop && !this.isRoyale
+          && !this.spectatingRoom && this.kind !== 'custom';
+        toast(lostRanked
+          ? t('接続が戻らなかったため、この対戦は敗北として記録されます',
+            'Your connection did not come back — this match is recorded as a loss')
+          : t('サーバーとの接続が切れました', 'Lost connection to the server'), 'err',
+        lostRanked ? 5000 : 2600);
         this.ended = true;
         this.destroy();
         endToMenu();
@@ -7874,13 +8009,22 @@ class OnlineMode extends VersusBase {
       if (msg.user) { session.user = msg.user; updateTopbar(); }
       audio.victory();
       const opp = msg.players.find(p => p.slot !== msg.you.slot);
-      showModal(`
+      // ⚠ **出口を必ず1つ残す。** ボタンが1つも無い dismissable:false のモーダルなので、
+      //    次のラウンドの組み合わせが届くまで画面から出られなかった（✕も暗幕も
+      //    端末の戻るも効かない）。他の組が長引けば最大1ラウンドぶん、リロード以外に
+      //    できることが無い。onTourneyState と同じ形にそろえる。
+      const advM = showModal(`
         <div class="result-banner win">${t('勝利！', 'Victory!')}</div>
         <div class="result-stats">
           <div class="rs-row"><span>${t('あなた', 'You')}</span><b>${fmt(msg.players.find(p => p.slot === msg.you.slot).score)}</b></div>
           ${opp ? `<div class="rs-row"><span>${escapeHtml(opp.name)}</span><b>${fmt(opp.score)}</b></div>` : ''}
         </div>
-        <p class="muted center" style="margin-top:8px">${ic('mode_tourney', 15)} ${t('勝ち上がり！次のラウンドを待っています…', 'Advancing! Waiting for the next round…')}</p>`, { dismissable: false });
+        <p class="muted center" style="margin-top:8px">${ic('mode_tourney', 15)} ${t('勝ち上がり！次のラウンドを待っています…', 'Advancing! Waiting for the next round…')}</p>
+        <div class="modal-buttons">
+          <button class="btn btn-ghost" id="tqLeave2">${t('離脱する', 'Leave')}</button>
+        </div>`, { dismissable: false });
+      const advLeave = advM.querySelector('#tqLeave2');
+      if (advLeave) advLeave.onclick = () => { audio.click(); closeModal(); this.quit(); };
       return;
     }
 

@@ -10,10 +10,27 @@ export const AI_LEVELS = {
   normal: { name: '戦士',   nameEn: 'Warrior', moveMs: 1700, noise: 0.15, lookahead: false, iconName: 'perk_atk' },
   hard:   { name: '達人',   nameEn: 'Master',  moveMs: 1100, noise: 0.02, lookahead: true,  iconName: 'rank_master' },
   oni:    { name: '鬼',     nameEn: 'Oni',     moveMs: 700,  noise: 0,    lookahead: true,  deep: true, iconName: 'foe_oni' },
+  // ⚠ **強さは「速さ」ではなく「手の質」で作る。**
+  //
+  //   AI戦は120秒のスコア勝負で、AiMode は showItemBar(false) でアイテムも奥義も
+  //   切るので、勝敗はほぼ「2分間に何手置けたか」で決まる。神 520ms は毎秒1.9手、
+  //   創造神 380ms は毎秒2.6手 ── 2分間ミスなく打ち続けられる人間は居ない。
+  //   同じエンジンで総当たりを回すと、人間側を「達人の置き・0.55秒/手」という
+  //   非現実的な速さにしても対 神 5%・対 創造神 **0%**だった。
+  //   ところが実績 ach_kami / ach_souzou と称号 kamislayer / souzouslayer は
+  //   その「勝利」を要求しているので、達成の道が事実上塞がっていた
+  //   （解放だけは8割スコアで通る救済があるが、バッジはその救済の外）。
+  //
+  //   王者ボット（server/battle.js）は同じ理由で 380ms → 700ms に落としてある。
+  //   ここも人間の帯へ寄せて、差は既にある思考の質（exhaustive / beam）に任せる。
+  //   実測で 鬼@700=10,152 < 神@700=10,994 < 創造神@700=11,136 となり、
+  //   難易度の順も「創造神が最強」も保ったまま、上手い人が手を伸ばせば届く高さになる。
+  //   ⚠ ここを速さで強くし直すときは、必ず勝利を要求している実績と称号を
+  //     同時に見直すこと（achievements.js の ach_kami / ach_souzou）。
   // Hidden difficulty: only revealed by the secret command (↑↑↓↓←→←→BA / title x10).
-  kami:   { name: '神',     nameEn: 'Kami',    moveMs: 520,  noise: 0,    exhaustive: true, iconName: 'badge_kami', secret: true },
+  kami:   { name: '神',     nameEn: 'Kami',    moveMs: 700,  noise: 0,    exhaustive: true, iconName: 'badge_kami', secret: true },
   // TRUE hidden difficulty: ultra-secret command only (↑↑↓↓←→←→BABA↓↑↓↑).
-  souzou: { name: '創造神', nameEn: 'Creator God', moveMs: 380, noise: 0, exhaustive: true, beam: 14, iconName: 'badge_souzou', secret: true },
+  souzou: { name: '創造神', nameEn: 'Creator God', moveMs: 680, noise: 0, exhaustive: true, beam: 14, iconName: 'badge_souzou', secret: true },
 };
 
 // Evaluate the grid after a hypothetical placement.

@@ -1,6 +1,6 @@
 {
   "name": "block-blitz-arena",
-  "version": "2.62.0",
+  "version": "2.63.0",
   "description": "Block Blast-style puzzle game with online battles, ranking, shop, battle pass and admin panel",
   "main": "server/index.js",
   "type": "module",

@@ -622,7 +622,7 @@ function newUser(username, password, role = 'user') {
       ultsUsed: 0, itemsUsed: 0, missionsDone: 0, piecesPlaced: 0,
       survivalWave: 0, winStreakBest: 0, loginStreak: 1, loginStreakBest: 1,
       sprintPlays: 0, coopPlays: 0, coopBest: 0, sprint: {},
-      meltdownBest: 0, chimeraBest: 0,
+      meltdownBest: 0, chimeraBest: 0, soloBest: 0,
       dailycPlays: 0, dailycBestStreak: 0,
       // 下の lastDaily を null にしたので、初回ログインボーナスは登録直後の
       // /api/me で出る。その1回目を数えるのはあちらなので、ここは0から始める
@@ -717,7 +717,7 @@ function migrateUser(user) {
     ultsUsed: 0, itemsUsed: 0, missionsDone: 0, piecesPlaced: 0,
     survivalWave: 0, winStreakBest: 0, loginStreak: 1, loginStreakBest: 1,
     sprintPlays: 0, coopPlays: 0, coopBest: 0, abyssMax: 0, guildBestWeek: 0,
-    meltdownBest: 0, chimeraBest: 0, rushDepth: 0,
+    meltdownBest: 0, chimeraBest: 0, soloBest: 0, rushDepth: 0,
     totalWins: 0, playSecs: 0, bossKills: 0, chaosPlays: 0, meltdownPlays: 0,
     chimeraPlays: 0, survivalPlays: 0, weeklyPlays: 0, dailyLogins: 1,
     gachaPulls: 0, gachaSSR: 0, chatMessages: 0, reactionsGiven: 0,
@@ -1419,6 +1419,7 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // Limited-time event multipliers.
   const isBossMode = mode === 'boss' || mode === 'boss_rush' || mode === 'raid';
   let eventCoins = 0, eventGems = 0;
+  let gemCapped = false;   // 💎ドロップが1日の上限で削られたか（下のブロック）
   const coinMult = (bonus.coin || 1) * (isBossMode && bonus.bossCoin ? bonus.bossCoin : 1);
   if (coinMult > 1) {
     const boosted = Math.round(coins * coinMult);
@@ -1451,6 +1452,12 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     if (!st.eventGemDay || st.eventGemDay.day !== today) st.eventGemDay = { day: today, got: 0 };
     const room = Math.max(0, GEMDROP_DAILY_CAP - st.eventGemDay.got);
     eventGems = Math.min(Math.floor(bonus.gemDrop), room);
+    // 💎 上限に当たった回は**理由を返す**。イベントのバナーは
+    //    「1プレイごとにジェムが3個ドロップ」と言い続けるのに、40戦ほどで
+    //    上限に達したあとは開催時間が何時間残っていても黙って0になり、
+    //    なぜ止まったのかも、いつ戻るのかも出なかった。
+    //    隣の👁欠片は既に同じ形で理由を立てている（eyeCapped）。
+    if (eventGems < Math.floor(bonus.gemDrop)) gemCapped = true;
     if (eventGems > 0) {
       st.eventGemDay.got += eventGems;
       user.gems += eventGems;
@@ -1795,6 +1802,13 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
   // メルトダウン / キメラ工房: per-mode personal bests.
   if (mode === 'meltdown' && score > (s.meltdownBest || 0)) s.meltdownBest = score;
   if (mode === 'chimera' && score > (s.chimeraBest || 0)) s.chimeraBest = score;
+  // 🎮 ソロ専用の記録。画面の「BEST」と NEW RECORD! はこれを見る。
+  //    汎用の s.bestScore は**全モード共通**（除外はメルトダウン・連鎖・
+  //    デイリー・管理者イベントだけ）なので、ダンジョンやボスラッシュを
+  //    一度でも走ると数十万点が入り、以後ソロは何をしても記録が動かないように
+  //    見えていた（紙吹雪も NEW RECORD! も一生出ない）。
+  //    ランキング用の s.bestScore は今までどおり触らない。
+  if (mode === 'solo' && score > (s.soloBest || 0)) s.soloBest = score;
   // 🧩 パズル遺跡: highest stage cleared + first-clear badge at stage 50.
   // stage/depth are client-declared (same trust level as floor/wave) — the gem
   // faucet is bounded like the dungeon's: decade payouts stop at stage 100, and
@@ -2127,7 +2141,8 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     //    付かなかったときだけ載せる（false は載せない＝欄の有無も情報にしない）。
     ...(workshopCapped ? { capped: workshopCapped === true ? 'workshop' : workshopCapped }
       : eyeCapped ? { capped: 'eyeshard_day' }
-        : bpFull ? { capped: 'bp_full' } : {}),
+        : gemCapped ? { capped: 'gem_day' }
+          : bpFull ? { capped: 'bp_full' } : {}),
   };
 }
 

@@ -381,8 +381,11 @@ function renderVault(data) {
   const m = showModal(`
     <h2>${icon('shards', { size: 24 })} ${t('王座の宝物庫', 'Throne Vault')}</h2>
     <p class="muted center" style="font-size:12px">${t(
-      'ここの品はコインでもジェムでもガチャでも手に入りません。管理者イベントの中でしか増えない「王座の欠片」だけで交換します。',
-      'Nothing here can be bought with coins, gems, or the gacha. Only Throne Shards — and shards only come from Admin Events.')}</p>
+      // ⚠ 「管理者イベントの中でしか増えない」は嘘だった。ソロの盤面に湧く👁を
+      //    潰しても入る（server/index.js の eyeShards）── むしろイベントが
+      //    常時開催ではないこの世界では、そちらが**いちばん確実な入手経路**。
+      'ここの品はコインでもジェムでもガチャでも手に入りません。管理者イベントと、ソロの盤面に現れる瞳から集まる「王座の欠片」だけで交換します。',
+      'Nothing here can be bought with coins, gems, or the gacha. Only Throne Shards — earned in Admin Events and from the eyes that open on your solo board.')}</p>
     <div class="tv-wallet">${icon('shards', { size: 18 })} <b>${fmt(data.shards || 0)}</b> ${t('王座の欠片', 'Throne Shards')}</div>
     <div class="tv-progress">
       <div class="tv-crowns">${[1,2,3,4,5,6,7].map(n => `<span class="${n <= max ? 'on' : ''}">${icon('throne', { size: 16 })}</span>`).join('')}</div>
@@ -400,6 +403,10 @@ function renderVault(data) {
         <li>${t(`共同作業の目標を達成 … 欠片${(R.tier || [25])[0]}〜${(R.tier || [0,0,0,250])[3]}`, `Clear a Great Work tier … ${(R.tier || [25])[0]}–${(R.tier || [0,0,0,250])[3]} shards`)}</li>
         <li>${t(`侵攻ボスを討ち取る … 欠片${R.bossKill || 120}`, `Bring down the invasion boss … ${R.bossKill || 120} shards`)}</li>
         <li>${t(`その日はじめて席につく … 欠片${R.join || 10}（1日1回）`, `First time you take a seat that day … ${R.join || 10} shards (once daily)`)}</li>
+        ${/* 👁 イベントの外でも入る唯一の経路。ここに1行も無かったので、
+               イベントが無い日は集めようがないように読めていた。 */''}
+        <li>${t('ソロの盤面に現れる瞳を潰す … 1つにつき欠片2（1日の上限あり）',
+          'Crush the eyes that open on your solo board … 2 shards each (daily cap)')}</li>
       </ul>
     </details>
     <div class="modal-buttons"><button class="btn btn-ghost" id="tvClose">${t('とじる', 'Close')}</button></div>`);

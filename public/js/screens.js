@@ -19,6 +19,9 @@ import { equippedUlt, setGuestUlt, ghostUnlocked, resetTutorial } from './modes.
 // icons.js から引くようになった ── 絵文字のままだと 🛡️ が管理者ブースター
 // 「絶対防御」と、☄️ が「天変地異」と重複したままになる。色だけ借りる。
 import { ultColor } from './skills.js';
+// ✨ 消去エフェクトは「動き」そのものが商品なので、棚で実物を1発撃たせる
+//    （スキンとボードは既に実物を描いている）。renderPreview の else 枝を参照。
+import { ParticleSystem } from './particles.js';
 import { showYouTubeStudio } from './ytexport.js';
 // 📊 プレイヤー統計（誰がいつオンラインだったか）。admintools.js が持つ画面を
 // 管理者パネルの正式なボタンから開く ── 以前は admintools.js 側が DOM に
@@ -283,7 +286,7 @@ function showProfileModal() {
   // 段位一覧と同じく back を渡す ── 称号を1つ着け替えるたびにプロフィールごと
   // 消えていたので、続けて別の称号を試すのにアカウントボタンから開き直す必要があった。
   m.querySelector('#pTitles').onclick = () => showTitlesModal({ back: () => showProfileModal() });
-  m.querySelector('#pRename').onclick = () => showRenameModal();
+  m.querySelector('#pRename').onclick = () => showRenameModal({ back: () => showProfileModal() });
   m.querySelector('#pLogout').onclick = async () => {
     // 通信が届いたかどうかで文面を変える。届いていないとき、消えたのは
     // **この端末のトークンだけ**で、サーバー側のセッションは最長1年生きている。
@@ -468,7 +471,11 @@ function showStatsModal() {
 }
 
 // Rename: account name (logged in) — once per day, enforced server-side.
-function showRenameModal() {
+// opts.back … 閉じたときに開き直す親（設定／プロフィール）。
+//   渡さないと dom.js の showModal が modalStack を捨てるので、
+//   「やめる」でも改名成功でも**設定ごと閉じてメニューに戻って**いた。
+//   設定を一番下までスクロールして開いた人は、毎回そこまで戻ることになる。
+function showRenameModal(opts = {}) {
   const m = showModal(`
     <h2>${tr('名前変更', 'Change name')}</h2>
     <p class="muted center" style="margin-bottom:10px">${tr('2〜16文字（英数字・日本語）・1日1回まで', '2–16 characters · once per day')}</p>
@@ -479,8 +486,8 @@ function showRenameModal() {
         <button class="btn btn-ghost" id="rnCancel">${tr('やめる', 'Cancel')}</button>
         <button class="btn btn-primary" id="rnApply">${tr('変更する', 'Rename')}</button>
       </div>
-    </div>`);
-  m.querySelector('#rnCancel').onclick = closeModal;
+    </div>`, { back: opts.back });
+  m.querySelector('#rnCancel').onclick = closeModal;   // back があれば dom.js が親を開き直す
   m.querySelector('#rnApply').onclick = async () => {
     try {
       const data = await api('/api/me/rename', { method: 'POST', body: { username: m.querySelector('#rnName').value.trim() } });
@@ -808,7 +815,7 @@ export function showSettingsModal() {
   m.querySelector('#setJukebox').onclick = () => { audio.click(); closeModal(); showJukeboxModal(); };
 
   const renameBtn = m.querySelector('#setRename');
-  if (renameBtn) renameBtn.onclick = () => showRenameModal();
+  if (renameBtn) renameBtn.onclick = () => showRenameModal({ back: showSettingsModal });
 
   const guestInput = m.querySelector('#setGuestName');
   if (guestInput) guestInput.onchange = () => {
@@ -1675,6 +1682,44 @@ export async function openShop(tab = shopTab, { keepScreen = false } = {}) {
 // ---- 🔥 セールの読み取り（サーバーの形に幅を持たせる） ----------------------
 // deals は配列でも { itemId: {...} } でも受ける。壊れた／期限切れの行は
 // 単に「セールなし」に落ちるだけで、通常価格の表示に戻る。
+// 🏷 本日のピックアップ。**タブに関係なく棚の先頭へ1本出す。**
+//
+//    セールは全48品から2品しか選ばれないので、画面が品ごとの値札にしか
+//    使っていなかったころは、ブロック／ボード／エフェクト／奥義の4タブを
+//    毎日ひととおり開いて回らないと自分に関係あるかどうかも分からなかった
+//    （しかも既に持っている品が選ばれた日は、どのタブにもバッジが出ない）。
+//    住人はチャットで「今日のセール見た？」と話しているのに、一覧がどこにも無い。
+function appendDealBanner(grid) {
+  if (!shopDeals || !shopDeals.size) return;
+  const rows = [...shopDeals.entries()].map(([id, d]) => {
+    const item = shopItems.find(x => x.id === id);
+    return { id, d, item, cat: (item && item.cat) || d.cat, name: item ? catName(item) : (d.name || id) };
+  }).filter(r => r.cat);
+  if (!rows.length) return;
+  const u = session.user;
+  const el = document.createElement('div');
+  // 無料ギフトの帯と同じ見た目を借りる（.shop-gift に CSS は無く、
+  // 見た目はインラインで持っているので、そこも合わせて写す）。
+  el.className = 'shop-gift';
+  el.style.cssText = 'grid-column:1 / -1;padding:10px;border:1px dashed var(--green);border-radius:12px;background:rgba(94,232,110,0.08)';
+  el.innerHTML = `
+    <b>${ic('shop', 15)} ${tr('本日のピックアップ', 'Today’s picks')}</b>
+    <div style="display:flex;flex-direction:column;gap:3px;margin-top:4px">
+      ${rows.map(r => {
+    const owned = u ? (u.owned || []).includes(r.id) : false;
+    return `<button class="btn btn-sm btn-ghost" data-dealgo="${escapeHtml(r.cat)}" style="justify-content:space-between;width:100%">
+          <span>${escapeHtml(r.name)}${owned ? ` <small class="muted">${tr('（所持ずみ）', '(owned)')}</small>` : ''}</span>
+          <span>${r.d.off ? `<b style="color:var(--green)">-${r.d.off}%</b> ` : ''}${
+      r.d.was ? `<s class="muted">${fmt(r.d.was)}</s> ` : ''}<b>${fmt(r.d.price)}</b></span>
+        </button>`;
+  }).join('')}
+    </div>`;
+  grid.appendChild(el);
+  el.querySelectorAll('[data-dealgo]').forEach(b => {
+    b.onclick = () => { audio.click(); shopTab = b.dataset.dealgo; renderShop(); };
+  });
+}
+
 function normalizeDeals(raw) {
   const map = new Map();
   if (!raw) return map;
@@ -1696,6 +1741,10 @@ function normalizeDeals(raw) {
       was: Number.isFinite(was) ? was : null,
       off: Number.isFinite(off) ? off : null,
       endsAt,
+      // 🏷 どのタブの品かも持っておく（「本日のピックアップ」の帯で使う）。
+      //    サーバーは最初から cat と name を返しているのに、ここで捨てていた。
+      cat: d.cat || null,
+      name: d.name || null,
     });
   }
   return map;
@@ -1856,9 +1905,11 @@ async function renderThroneTab() {
         `The world has broken through stage ${data.throneMax || 0}. Deeper stages open more shelves — ${owned}/${items.length} owned`)}</p>
       <button class="btn btn-throne" id="shopThroneOpen">${ic('shards', 16)} ${tr('宝物庫をひらく', 'Open the vault')}${
         openable ? tr(`（${openable}品 交換できます）`, ` (${openable} available)`) : ''}</button>
-      ${data.shards ? '' : `<p class="muted" style="font-size:12px;margin:0">${tr(
+      ${/* 👑 残高があるときも出す。0のときだけ出していたので、1個手に入った瞬間に
+             「どうすれば増えるのか」が画面から消えていた。12pxの1行なので棚を圧迫しない。 */''}
+      <p class="muted" style="font-size:12px;margin:0">${tr(
         '欠片は管理者イベントと、ソロの盤面に混ざる瞳を潰したときに手に入ります',
-        'Shards come from Admin Events — and from the eyes that open on your solo board')}</p>`}
+        'Shards come from Admin Events — and from the eyes that open on your solo board')}</p>
     </div>`;
   const b = grid.querySelector('#shopThroneOpen');
   if (b) b.onclick = () => { audio.click(); import('./adminevent.js').then(m => m.openThroneVault()); };
@@ -1877,6 +1928,7 @@ function renderShop() {
   const items = shopItems.filter(i => i.cat === shopTab);
   grid.innerHTML = '';
   appendGiftBanner(grid);
+  appendDealBanner(grid);
   if (shopTab === 'ult') {
     const note = document.createElement('p');
     note.className = 'muted center';
@@ -2611,8 +2663,47 @@ function renderPreview(el, item) {
     if (item.cat === 'ult') {
       el.classList.add('ult-preview');
       el.style.setProperty('--ult-color', ultColor(item.id));
+      el.innerHTML = icon(itemIconName(item), { size: 48, label: catName(item) });
+      return;
     }
-    el.innerHTML = icon(itemIconName(item), { size: 48, label: catName(item) });
+    // ✨ **エフェクトだけは静止画では商品が分からない。**
+    //    「花火が炸裂」「稲妻が走る」「虹色の光片が弾け飛ぶ」の差は、買って装備して
+    //    ラインを消すまで見えなかった（1,700〜2,600🪙／180〜220💎、返品も下取りも無い）。
+    //    スキンとボードが実物を描いているのと同じ考え方で、ここも実物を1発撃たせる。
+    //    ⚠ 奥義は「盤面を消す」ものなので静止アイコンのままでよい（上で return）。
+    el.innerHTML = '';
+    const canvas = document.createElement('canvas');
+    canvas.width = 168; canvas.height = 168;
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    el.appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+    const ps = new ParticleSystem();
+    let raf = 0;
+    let last = 0;
+    let until = 0;
+    const stop = () => { if (raf) cancelAnimationFrame(raf); raf = 0; };
+    const frame = now => {
+      // 棚から離れた（画面が差し替わった）ら止める。棚は毎回作り直されるので、
+      // 取り残された rAF がバックグラウンドで回り続けないようにする。
+      if (!canvas.isConnected || now > until) { stop(); return; }
+      const dt = Math.min(0.05, (now - (last || now)) / 1000);
+      last = now;
+      ps.update(dt);
+      ctx.clearRect(0, 0, 168, 168);
+      ps.draw(ctx);
+      raf = requestAnimationFrame(frame);
+    };
+    const play = () => {
+      ps.burstCell(84, 84, 84, 6, item.id);
+      until = performance.now() + 1600;
+      last = 0;
+      if (!raf) raf = requestAnimationFrame(frame);
+    };
+    // 開いた直後に1回、そのあとは触れたときに撃つ（勝手に鳴り続けない）。
+    play();
+    el.addEventListener('pointerenter', play);
+    el.addEventListener('click', play);
   }
 }
 
@@ -2670,34 +2761,53 @@ function renderBoosterShop() {
         count !== null ? ` <span class="muted">×${staffItem || invIsStaff() ? '∞' : fmt(count)}</span>` : ''}</div>
       <div class="shop-desc">${catDesc(item)}</div>
       ${saleBadge(deal)}
+      ${/* 🛒 まとめ買い。サーバーは最初から1〜10個を受け付けている
+             （server/routes/shop.js の count）のに、画面が個数を送っていなかったので
+             3個ずつ揃えるのに12回タップ・12往復・12回のトースト、しかも1回ごとに
+             棚の全カードが消えて0.7秒かけて戻るので押した札を毎回探し直していた。 */''}
       ${staffItem
         ? `<button class="btn btn-sm btn-ghost" disabled>${tr('運営専用', 'Staff only')}</button>`
-        : `<button class="btn btn-sm btn-gold" data-act="buy">${priceLabel(ic('coins', 14), item, deal)}</button>`}
+        : `<div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap">
+            <button class="btn btn-sm btn-gold" data-act="buy" data-n="1">${priceLabel(ic('coins', 14), item, deal)}</button>
+            <button class="btn btn-sm btn-ghost" data-act="buy" data-n="10" title="${tr('10個まとめて', 'Buy 10')}">×10</button>
+          </div>`}
     `;
     grid.appendChild(el);
-    const bbtn = el.querySelector('[data-act]');
-    if (!bbtn) return;
-    bbtn.onclick = async () => {
-      if (!session.user) { showAuthModal(); return; }
-      // 二度押しで2個買わないように、送信中は押せなくする。
-      // ブースターは所持数が増えるだけなので、装備品と違って
-      // サーバーが「もう持っている」で弾いてくれない ── 素直に2回買える。
-      if (bbtn.disabled) return;
-      bbtn.disabled = true;
-      try {
-        await api('/api/items/buy', { method: 'POST', body: { itemId: item.id } });
-        await refreshMe();
-        audio.coin();
-        // トーストは textContent なので絵は出せない。item.icon（絵文字）は使わない。
-        toast(tr(`${item.name} を購入しました！`, `Bought ${catName(item)}!`), 'ok');
-        updateTopbar();
-        renderShop();   // 棚ごと描き直す
-      } catch (err) {
-        audio.error();
-        toast(err.message, 'err');
-        bbtn.disabled = false;
-      }
-    };
+    const bbtns = [...el.querySelectorAll('[data-act="buy"]')];
+    if (!bbtns.length) return;
+    for (const bbtn of bbtns) {
+      bbtn.onclick = async () => {
+        if (!session.user) { showAuthModal(); return; }
+        // 二度押しで2個買わないように、送信中は押せなくする。
+        // ブースターは所持数が増えるだけなので、装備品と違って
+        // サーバーが「もう持っている」で弾いてくれない ── 素直に2回買える。
+        if (bbtn.disabled) return;
+        for (const b of bbtns) b.disabled = true;
+        const n = Math.max(1, Math.min(10, Number(bbtn.dataset.n) || 1));
+        try {
+          const res = await api('/api/items/buy', { method: 'POST', body: { itemId: item.id, count: n } });
+          // 応答に user が載っているので、余計な1往復（refreshMe）は要らない。
+          if (res && res.user) session.user = res.user;
+          else await refreshMe();
+          audio.coin();
+          // トーストは textContent なので絵は出せない。item.icon（絵文字）は使わない。
+          toast(n > 1
+            ? tr(`${item.name} を${n}個購入しました！`, `Bought ${n}× ${catName(item)}!`)
+            : tr(`${item.name} を購入しました！`, `Bought ${catName(item)}!`), 'ok');
+          updateTopbar();
+          // 🛒 棚ごと描き直さない（押した札が消えて探し直しになる）。
+          //    バトルパスの受取が先に採っている作法にそろえて、所持数だけ書き換える。
+          const cnt = el.querySelector('.shop-name .muted');
+          const have = (session.user.items || {})[item.id];
+          if (cnt && !invIsStaff() && Number.isFinite(Number(have))) cnt.textContent = `×${fmt(have)}`;
+          for (const b of bbtns) b.disabled = false;
+        } catch (err) {
+          audio.error();
+          toast(err.message, 'err');
+          for (const b of bbtns) b.disabled = false;
+        }
+      };
+    }
   });
   startDealTimer();
 }
@@ -2814,7 +2924,9 @@ export function openGacha() {
           : r.type === 'gems' ? icon('gems', { size: 26 })
           : icon(itemIconName(r), { size: 26, label: catName(r) });
         const label = r.type === 'coins' ? tr(`コイン +${fmt(r.amount)}`, `Coins +${fmt(r.amount)}`)
-          : r.type === 'gems' ? tr(`ジェム +${fmt(r.amount)}${r.complete ? '（コンプ済）' : ''}`, `Gems +${fmt(r.amount)}${r.complete ? ' (all collected)' : ''}`)
+          // 💎 上限で削られた回は理由を添える（0のときだけ受け皿に落ちるので、
+          //    1〜149 のときは何も出ずに「URなのに7💎」だけが見えていた）。
+          : r.type === 'gems' ? tr(`ジェム +${fmt(r.amount)}${r.complete ? '（コンプ済）' : ''}${r.budgetOut ? '（本日のジェム上限）' : ''}`, `Gems +${fmt(r.amount)}${r.complete ? ' (all collected)' : ''}${r.budgetOut ? ' (daily gem cap)' : ''}`)
           // 🎁 個数を必ず出す。サーバーは図鑑コンプ後のSSRに amount:3、
           //    ジェム予算切れの受け皿に amount:2/5 を載せているのに、ここが
           //    名前しか出さないので、ふつうのR（1個）と見分けがつかなかった。
@@ -2917,6 +3029,15 @@ export async function openMissions(tab = msTab) {
   const gen = ++viewGen;
   $$('[data-ms]').forEach(x => x.classList.toggle('active', x.dataset.ms === tab));
   const body = $('#msBody');
+
+  // 🔁 **手元にあるものは取り直さない。**
+  //    /api/missions の応答には daily と weekly の**両方**が入っているのに、
+  //    タブを行き来するたびに無条件で叩き直して一覧を「読み込み中…」へ戻していた
+  //    （実績タブのカテゴリ切り替えは通信しないので、同じ画面で挙動が食い違う）。
+  //    鮮度は claim / reroll のハンドラが `missionsCache = res.missions` で保つ。
+  if (tab === 'ach' && achCache) { renderAchievements(); return; }
+  if (tab !== 'ach' && missionsCache && session.user) { renderMissions(); return; }
+
   body.innerHTML = `<p class="muted center">${tr('読み込み中…', 'Loading…')}</p>`;
 
   if (tab === 'ach') {
@@ -3002,7 +3123,17 @@ function renderMissions() {
           <br>${rrHint}
         </div>
       </div>
-      <div class="ms-progress-ring">${Math.round((doneCount / Math.max(1, rows.length)) * 100)}%</div>
+      ${/* 🎯 実績タブと同じ「まとめて受取」。3本とも達成した日は
+             「受取」を3回押し、そのたびに紙吹雪とトーストと再描画を待たされ、
+             そのあとで初めて解放されるコンプリートボーナスをもう1回 ── 毎日4回。
+             サーバーの /api/missions/claim は id を1つずつしか受けないので、
+             順に投げて最後に1回だけ描き直す（ボーナスまで続けて1タップで終わる）。 */''}
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+        ${doneCount > claimedCount || (allClaimed && !bonusClaimed)
+    ? `<button class="btn btn-sm btn-gold" id="msClaimAll">${tr(`${doneCount - claimedCount + (allClaimed && !bonusClaimed ? 1 : 0)}件まとめて受取`, `Claim all (${doneCount - claimedCount + (allClaimed && !bonusClaimed ? 1 : 0)})`)}</button>`
+    : ''}
+        <div class="ms-progress-ring">${Math.round((doneCount / Math.max(1, rows.length)) * 100)}%</div>
+      </div>
     </div>
     <div class="ms-list">
       ${rows.map(r => {
@@ -3088,6 +3219,39 @@ function renderMissions() {
   body.querySelectorAll('[data-reroll-gems]').forEach(btn => {
     btn.onclick = () => doReroll(btn, btn.dataset.rerollGems, 'gems');
   });
+
+  const claimAll = body.querySelector('#msClaimAll');
+  if (claimAll) claimAll.onclick = async () => {
+    claimAll.disabled = true;
+    // 受け取る順番は「行 → コンプリートボーナス」。ボーナスは全部受け取ってから
+    // でないとサーバーが弾くので、必ず最後に投げる。
+    const ids = rows.filter(r => r.done && !r.claimed).map(r => r.id);
+    if (allClaimed || ids.length === rows.filter(r => r.done).length) {
+      if (!bonusClaimed) ids.push(daily ? 'daily_bonus' : 'weekly_bonus');
+    }
+    let coins = 0, gems = 0, got = 0;
+    for (const id of ids) {
+      try {
+        const res = await api('/api/missions/claim', { method: 'POST', body: { id } });
+        missionsCache = res.missions;
+        coins += Number(res.reward && res.reward.coins) || 0;
+        gems += Number(res.reward && res.reward.gems) || 0;
+        got++;
+      } catch { /* 1件だめでも残りは受け取る（理由は最後にまとめて出す） */ }
+    }
+    if (got) {
+      audio.coin();
+      confettiBurst(28);
+      toast(tr(`${got}件の報酬を受け取りました！ コイン${fmt(coins)}${gems ? ` ジェム${fmt(gems)}` : ''}`,
+        `Claimed ${got} rewards! ${fmt(coins)} coins${gems ? `, ${fmt(gems)} gems` : ''}`), 'ok');
+    } else {
+      audio.error();
+      toast(tr('受け取れるものがありませんでした', 'Nothing was available to claim'), 'err');
+    }
+    updateTopbar();
+    renderMissions();
+    refreshMissionDot();
+  };
 
   body.querySelectorAll('[data-claim]:not([disabled])').forEach(btn => {
     btn.onclick = async () => {

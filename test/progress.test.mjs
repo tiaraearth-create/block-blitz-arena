@@ -33,6 +33,7 @@ const PORT = await freePort();
 const BASE = `http://localhost:${PORT}`;
 const DIR = path.join(os.tmpdir(), `bba-progress-test-${PORT}`);
 const ROYALE_SECS = 30;
+const GRACE_MS = 1200;   // ロイヤルの切断確定までの猶予（テスト用に短くする）
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const results = [];
@@ -63,6 +64,10 @@ async function start() {
     env: {
       ...process.env, PORT: String(PORT), DATA_DIR: DIR, POP_SCALE: '0',
       SESSION_SECRET: 'progress-test', SEED_RESTORE: '0', ROYALE_SECS: String(ROYALE_SECS),
+      // 🔌 v2.63 でロイヤルにも再接続の猶予が入った（1v1と同じ RECONNECT_GRACE_MS）。
+      //    ここで見たいのは「切断でも報酬が入るか」なので、猶予を短くして
+      //    確定を待つ ── 猶予そのものは royale の別テストが見ている。
+      RECONNECT_GRACE_MS: String(GRACE_MS),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -248,7 +253,8 @@ try {
   await sleep(2500);
   // ここで「回線が切れる」。結果モーダルは受け取れないが、報酬は入るべき。
   A.ws.close();
-  await sleep(2000);
+  // 猶予が明けて、次の tick が席を外すまで待つ（tick は 250ms 間隔）。
+  await sleep(GRACE_MS + 2000);
 
   const after = (await j('/api/me', {}, tok)).user || {};
   const bs = before.stats || {};

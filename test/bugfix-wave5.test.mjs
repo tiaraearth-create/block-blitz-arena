@@ -108,9 +108,19 @@ const zs = read('server/zero-session.js');
 
   // 閉じ方はボタンだけではない（枠外タップ・Esc・端末の戻る）。
   // onModalClosed を通さないと、止めた時計が止まったまま＝永久に無敵になる。
-  check('②-10 閉じ方によらず必ず戻す（onModalClosed）',
-    (main.match(/if \(resume\) onModalClosed\(resume\);/g) || []).length === 1
-    && (modes.match(/if \(resume\) onModalClosed\(resume\);/g) || []).length === 2, '');
+  // v2.63: 止める場所は増える（走行中の⚙など）。**件数を固定するのではなく
+  //   「止めた数 ＝ 戻す数」を見る** ── 増えたときに赤くなってほしいのは
+  //   「止めたのに戻していない」ときだけ。
+  {
+    const pairs = src => [
+      (src.match(/const resume = pauseModeForDialog\(\);/g) || []).length,
+      (src.match(/if \(resume\) onModalClosed\(resume\);/g) || []).length,
+    ];
+    const [pm, rm] = pairs(main);
+    const [pd, rd] = pairs(modes);
+    check('②-10 閉じ方によらず必ず戻す（onModalClosed）',
+      pm > 0 && pm === rm && pd > 0 && pd === rd, `main ${pm}→${rm} / modes ${pd}→${rd}`);
+  }
   check('②-11 dom.js に閉じたときの口がある', /export function onModalClosed\(fn\) \{/.test(dom), '');
   check('②-12 中身が消えたときに必ず流す', /if \(had\) runModalClosedHooks\(\);/.test(dom), '');
   check('②-13 一度きりで流す（同じ後始末を二度走らせない）',
