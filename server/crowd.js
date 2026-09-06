@@ -176,6 +176,13 @@ function resolveSlot(key, r, ctx, extra, cache) {
     case 'ach': v = pick(RESIDENT_ACHIEVEMENTS); break;
     case 'question': v = ctx.poll || ''; break;   // pollオブジェクトごと保持し言語別に描画
     // v2.6 新モードの進行度 — 塔の進みからそれっぽい数字を出す
+    // ⛏ {depth} は**採掘場だけ**が使う。採掘の板は 22〜86 なので、
+    //    塔の進みから作るこの式（70〜77）は範囲の中に収まっている。
+    //    ⚠ ボスラッシュには使わないこと。あちらの板は上限12で桁が違い、
+    //      住人が70台を名乗ると「板に実体が無い＝住人」の見分け方になる
+    //      （サバイバルで一度潰したのと同じ形。ambient.js の注記を参照）。
+    //      residentStats は rushDepth を持たないので、ここから正しい数字は
+    //      作れない ── だからラッシュの台詞は数字を言わない形にしてある。
     case 'depth': v = Math.max(3, Math.round(((st ? st.dungeonMax : 20) || 8) * 0.75) + rint(-4, 3)); break;
     case 'stage': v = Math.max(1, Math.round(((st ? st.dungeonMax : 15) || 8) * 0.55) + rint(-3, 2)); break;
     default: v = '';
@@ -1350,7 +1357,7 @@ const EXTRA_DIALOGUES = [
   { lang: "ja", lines: [["a", "ジュークボックスでPIXEL RUSH 182ループ固定にした", "locked the jukebox on PIXEL RUSH 182 loop"], ["b", "あれテンション上がるよね", "that track hypes me up"], ["a", "作業がはかどりすぎる", "my focus goes way up"], ["b", "おれはやすらぎのロビー派", "I'm a Peaceful Lobby person myself"]], archA: ["casual","streamer","nightowl"], archB: ["casual","morning"] },
   { lang: "ja", lines: [["a", "ねえねえ神AI勝てた？！", "hey hey, did you beat the God AI?!"], ["b", "まだ", "not yet"], ["a", "ぼく創造神やったら3手でまけた！！", "I tried the Creator God and lost in 3 moves!!"], ["b", "創造神はそういうもん", "that's just what the Creator God is"], ["a", "ガチ勢でもむずいんだ！！", "so it's hard even for the pros!!"]], archA: ["kid"], archB: ["tryhard"] },
   { lang: "ja", lines: [["a", "UR狙いで30連した", "did 30 pulls chasing the UR"], ["b", "結果は聞かないほうがいい？", "should I even ask?"], ["a", "SR被り3枚", "three duplicate SRs"], ["b", "昨日のおれと同じで草", "same as me yesterday lol"]], archA: ["gacha"], archB: ["gacha"] },
-  { lang: "ja", lines: [["a", "深淵クリアした", "cleared the Abyss"], ["b", "えっ喋った", "wait, they talked"], ["b", "しかも報告がえぐい", "and what a report too"], ["a", "以上", "that is all"]], archA: ["lurker"], archB: ["casual","streamer","kid"] },
+  { lang: "ja", lines: [["a", "地下100階クリアした", "cleared Underworld floor 100"], ["b", "えっ喋った", "wait, they talked"], ["b", "しかも報告がえぐい", "and what a report too"], ["a", "以上", "that is all"]], archA: ["lurker"], archB: ["casual","streamer","kid"] },
   { lang: "ja", lines: [["a", "今夜バトロワ100人配信する 生き残るとこ見せるよ", "streaming the 100-player royale tonight — watch me survive"], ["b", "見る！何時から？！", "watching! what time?!"], ["a", "21時 初手から端で立ち回る予定", "9pm — planning to hug the edge from move one"], ["b", "宿題おわらせて待機します！", "finishing my homework and standing by!"]], archA: ["streamer"], archB: ["kid","casual"] },
   { lang: "ja", lines: [["a", "2v2組も 気楽にやろ", "let's do 2v2, keep it chill"], ["b", "勝ちにいくなら", "only if we play to win"], ["a", "負けても笑えればよくない？w", "isn't losing fine if we get a laugh? lol"], ["b", "よくない", "it is not"], ["a", "そういうとこ好きだよw", "that's what I like about you lol"]], archA: ["casual"], archB: ["tryhard"] },
   { lang: "ja", lines: [["a", "おはよ〜 朝活タイムアタック行くよ〜", "morning~ time for my sunrise time attack~"], ["b", "こっちは今から寝るとこ", "I'm just heading to bed"], ["a", "徹夜？！", "all-nighter?!"], ["b", "ラッシュで深度盛ってたら朝だった", "was farming depth in Rush and suddenly it was morning"]], archA: ["morning"], archB: ["nightowl"], ctx: "morning" },
