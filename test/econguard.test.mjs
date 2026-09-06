@@ -216,7 +216,13 @@ try {
   // G. 圏外の控え（期限切れが消えず警告が鳴り続ける）
   // -------------------------------------------------------------------------
   const net = read('public/js/net.js');
-  check('G-1 期限切れを落としたら書き戻す', /writeResultQueue\(kept\); noteResultsDropped\(dropped, 'expired'\)/.test(net), '');
+  {
+    // v2.62: 1行だったものが複数行になった（捨てたぶんのモードを集めて渡すため）。
+    //   見るべきは並びではなく **順序**（書き戻してから知らせる）。
+    const w = net.indexOf('writeResultQueue(kept)');
+    const n2 = net.indexOf("noteResultsDropped(dropped, 'expired'");
+    check('G-1 期限切れを落としたら書き戻す', w > 0 && n2 > 0 && w < n2, `write=${w} note=${n2}`);
+  }
   check('G-2 連打よけの刻印が早期returnより前にある',
     /lastResultFlushAt = Date\.now\(\);\n  if \(!readResultQueue\(\)\.some/.test(net), '');
 

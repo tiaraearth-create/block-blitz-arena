@@ -22,6 +22,7 @@ import {
   seatsFor, lanesFor, moodFor, pickVerdictCells, verdictAccepts,
   MIN_BOT_SEATS, REVIVE_SEC, EXECUTIONS_PER_SLOT, EXECUTIONS_PER_DAY, SIZE,
   MISS_HEAL, TOPOUT_HEAL, SEATS_MAX, missHealFor,
+  CUT_GRID_FRESH_MS, CUT_GRID_PREV_MS, MIN_LINE_FILLED,
   GRID_FRESH_MS, HUMAN_DPM_CAP, HUMAN_BUDGET_MAX_SEC,
   makeDeal, dealTally, dealWinner, clearDealEffects, dealForDay,
   DEAL_AT_SEC, DEAL_SEC, HUMAN_VOTE_WEIGHT,
@@ -143,9 +144,19 @@ export function createSession(deps, humanSocks, run = null) {
     verdicts: [],          // 進行中の断罪
     nextVerdictAt: now() + COUNTDOWN * 1000 + 25_000,
     lastState: 0,
-    targetCol: Math.floor(random() * SIZE),
+    // 🎯 「今夜の的」は**枠のもの**。部屋（セッション）に持たせていたので、
+    //    生身が1人の枠では zero_leave のたびに部屋ごと消えて、次に入り直すと
+    //    別の列が的になっていた（杭のカウンタ s.stakes2 も一緒に0へ戻る）。
+    //    必要本数 run.dealStakeCost だけは run 側にあり、片方だけ枠をまたぐ
+    //    ちぐはぐな状態だった。run に無いときだけ引き直す。
+    targetCol: (run && Number.isInteger(run.targetCol)) ? run.targetCol : Math.floor(random() * SIZE),
     stakes: [],            // このセッションで割れた段（枠の終わりに精算）
   };
+  // 🎯 引いた的（と杭の本数）を枠へ預ける。同じ枠に入り直しても変わらない。
+  if (run) {
+    run.targetCol = s.targetCol;
+    if (Number.isInteger(run.stakes2)) s.stakes2 = run.stakes2;
+  }
   // 部屋ができた＝枠が開いた。ここが open / solo の唯一の発火点。
   sayOpening(s, run, deps, now());
   return s;
@@ -498,15 +509,43 @@ function fireVerdicts(s, run, danIndex, deps) {
 // 「斬りやすくする置き方」が同じ手番の中で衝突する。
 // 今の3モードには一度も無かった、盤面の中の選択。
 export function submitStake(s, run, name, cols, deps) {
-  const { emit } = deps;
+  const { emit, now = () => Date.now() } = deps;
   // 取引「八列すべてを的に」を飲んだ夜は、どの列を縦に消しても杭になる。
   // ここを直さないと、赤マスだけが散って杭は元の1列のまま＝ただの損だった。
   if (!Array.isArray(cols)) return { ok: false };
   if (!run.dealMarkAll && !cols.includes(s.targetCol)) return { ok: false };
+  // 🪧 **盤面の裏づけを取る（zero_cut と同じ作法）。**
+  //    ここだけ完全な自己申告で、`{type:'zero_stake', cols:[的の列]}` を
+  //    連投するだけで杭が溜まった（警告時間の延長＝warnBonus が湧く）。
+  //    盤面は syncBoard で既に席が持っているので、材料は揃っている。
+  //    同期が無い／古いときは従来どおり通す ── 正当なプレイヤーを弾かない、
+  //    という verdictAccepts と同じ判断。
+  const st = s.entrants.find(x => x.name === name);
+  const t = now();
+  const fresh = (g, at, within) =>
+    (Array.isArray(g) && g.length >= SIZE * SIZE && t - (at || 0) <= within ? g : null);
+  const grids = st
+    ? [fresh(st.grid, st.gridAt, CUT_GRID_FRESH_MS), fresh(st.gridPrev, st.gridPrevAt, CUT_GRID_PREV_MS)]
+      .filter(Boolean)
+    : [];
+  if (grids.length) {
+    // 申告されたどれかの列が「1手で消せる形」になっていたこと。
+    // ⚠ 列そのものを数える（lineFilledEnough は cell を受けるので、
+    //    列番号をそのまま渡すと0行目まで一緒に見てしまい判定が緩む）。
+    const colFilled = (g, c) => {
+      let n = 0;
+      for (let r = 0; r < SIZE; r++) if (g[r * SIZE + c]) n++;
+      return n >= MIN_LINE_FILLED;
+    };
+    const okCol = cols.some(c => c >= 0 && c < SIZE && grids.some(g => colFilled(g, c)));
+    if (!okCol) return { ok: false };
+  }
   const need = run.dealStakeCost || 3;
   s.stakes2 = (s.stakes2 || 0) + 1;
   const ready = s.stakes2 >= need;
   if (ready) { s.stakes2 = 0; s.warnBonus = 1500; }
+  // 🎯 杭の本数も枠へ預ける（的と同じ理由。部屋は1人で抜けると消える）。
+  run.stakes2 = s.stakes2;
   if (emit) {
     for (const x of seatedHumans(s)) {
       emit(x, { type: 'zero_stake', by: name, have: s.stakes2, need, ready });
@@ -721,10 +760,21 @@ function breakDan(s, run, danIndex, deps) {
   run.dealt = 0;
   run.sealDealt = 0;
   // 取引は1段ぶん。段が変わったら効果は切れる。
+  // ⚠ **捨てる前に席へ締めを知らせる。** 無言で消していたので、クライアントは
+  //    #zeroDeal を消す合図（zero_deal_done）を受け取れず、パネルが画面に残った。
+  //    次の段で新しい取引が来ると onDeal がもう1枚 append し、$ は
+  //    document.querySelector なので #zdLeft / #zdTally / #zdYes は
+  //    **古い1枚目**を掴み続ける ── 押しても何も起きないパネルが残る形になっていた。
+  if (emit && run.deal && !run.deal.settled) {
+    for (const x of seatedHumans(s)) {
+      emit(x, { type: 'zero_deal_done', win: 'no', broken: true });
+    }
+  }
   clearDealEffects(run);
   delete run.deal;
   delete run.dealDoneFor;
   s.stakes2 = 0; s.warnBonus = 0;
+  run.stakes2 = 0;   // 🎯 枠へ預けてある本数も一緒に戻す（submitStake と対）
   run.broken = run.broken || [];
   const top = aliveHumans(s).sort((a, b) => (b.cuts || 0) - (a.cuts || 0))[0];
   const rec = { dan: danIndex + 1, at: now(), by: top ? top.name : null };

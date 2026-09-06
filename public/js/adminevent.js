@@ -462,6 +462,9 @@ export async function openChronicle() {
           ? t(`取引を${yes ? '飲んだ' : '断った'}${tally}`, `The bargain was ${yes ? 'accepted' : 'refused'}${tally}`)
           : t('取引が成立した', 'A bargain was struck')}</li>`;
       }
+      // 📜 伝言。枝が無かったので default に落ち、記録欄に `will るみまき` と
+      //    kind の生の文字列が出ていた（他の4種はきちんと日本語になる）。
+      case 'will':   return `<li class="ch-will">${t(`<b>${who}</b> が第${e.dan}段で伝言を残した ──「${esc(e.text || '')}」`, `<b>${who}</b> left a message at stage ${e.dan}: 「${esc(e.text || '')}」`)}</li>`;
       default:       return `<li>${esc(e.kind || '')} ${who}</li>`;
     }
   };

@@ -311,6 +311,11 @@ const SERVER_MSG_EN = {
 };
 
 const SERVER_MSG_PATTERNS = [
+  // 👥 定数を埋め込んだ文なので完全一致の表に置けない（定数を変えると英訳が死ぬ）。
+  //    ここに無かったせいで、英語で遊んでいる人に日本語のトーストが出ていた。
+  [/^フレンドは(\d+)人までです$/, (m) => `You can have up to ${m[1]} friends`],
+  [/^申請は同時に(\d+)件までです$/, (m) => `You can have up to ${m[1]} pending requests`],
+  [/^ブロックは(\d+)人までです$/, (m) => `You can block up to ${m[1]} players`],
   [/^名前変更は1日1回までです（あと約(\d+)時間）$/, (m) => `You can rename once per day (about ${m[1]}h left)`],
   [/^あと(\d+)人必要です（ボット補充をONにもできます）$/, (m) => `Need ${m[1]} more player(s) — or enable bot fill`],
   [/^この設定では最大(\d+)人です（チーム戦に変更してください）$/, (m) => `Max ${m[1]} players for this setup — switch to team mode`],

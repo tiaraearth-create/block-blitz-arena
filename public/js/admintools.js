@@ -39,6 +39,27 @@ function applyGod() {
   const m = getCurrentMode();
   const e = m && m.engine;
   if (!e) return;
+  // 🛡 **スタッフ特典を OFF にしたら、このループも止める。**
+  //
+  //    isAdmin()（= staffExtras を見る）が掛かっていたのはパレットと
+  //    オートパイロットの**入口**だけで、毎秒エンジンへ書き込むこの関数には
+  //    権限判定が1つも無かった。しかも OFF にした瞬間にパレット（god を
+  //    戻す唯一の道）もボタンも消えるので、**無敌のまま解除できなくなる**。
+  //    自分が書いた分だけを畳んでから抜ける（godoff と同じ後始末）。
+  if (!isAdmin()) {
+    const v0 = getViewRef();
+    if (v0) v0.godInvincible = false;
+    if (e.fortressUntil > 8e15) e.fortressUntil = 0;
+    if (appliedCombo && e.streakShield) e.streakShield = false;
+    if (appliedMult !== 1 && e.scoreMult === appliedMult) e.scoreMult = 1;
+    if (e.feverUntil > 8e15) { e.feverUntil = 0; $('#hudScore').classList.remove('fever'); }
+    appliedCombo = false;
+    appliedMult = 1;
+    god.invincible = god.noGarbage = god.combo = god.fever = god.freezeEnemy = god.stopTimer = false;
+    god.mult = 1;
+    if (autopilot.on) stopAutopilot();
+    return;
+  }
   const view = getViewRef();
   if (view) view.godInvincible = god.invincible;
   e.fortressUntil = god.noGarbage ? 8.64e15 : (e.fortressUntil > 8e15 ? 0 : e.fortressUntil);

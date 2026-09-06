@@ -9366,6 +9366,12 @@ class ZeroMode extends VersusBase {
     this.deal = deal;
     this.dealVoted = false;
     audio.countdown(false);
+    // ⚠ **古いパネルを先に畳む。** $ は document.querySelector なので、
+    //    2枚目を append すると #zdLeft / #zdTally / #zdYes はずっと
+    //    **1枚目**を掘み続ける ―― 新しい取引の数字が動かないし、
+    //    押しても何も起きないボタンが画面に残る。
+    const stale = document.getElementById('zeroDeal');
+    if (stale) stale.remove();
     const wrap = document.createElement('div');
     wrap.className = 'zero-deal';
     wrap.id = 'zeroDeal';
@@ -9459,10 +9465,19 @@ class ZeroMode extends VersusBase {
   }
 
   onSomeoneMissed(m) {
-    if (!m.victim) return;
-    audio.bossAttack();
-    toast(t(`${m.victim} が処刑された（${m.target} が落とした）`,
-      `${m.victim} was executed (${m.target} let it slip)`), 'err', 2600);
+    // ⚠ **お邪魔は「誰かが処刑されたか」ではなく「自分が落としたか」で決まる。**
+    //    先頭に `if (!m.victim) return;` があったので、処刑の上限
+    //    （枠に3人 / 1日9人 / 生き残りが少ないとき）に当たった回は
+    //    お邪魔の適用まで到達せず、**落としても盤面に1マスも入らなかった**。
+    //    段のHPはサーバー側で回復しているので、本人からは「落としても何も起きない」
+    //    ＝罰の無い断罪になる。30分の枠に断罪は60回前後飛ぶのに、処刑枠は3回しか
+    //    無いので、枠の大半でこの状態だった（モード説明の約束も成立していない）。
+    //    2つの条件を並べて書く。
+    if (m.victim) {
+      audio.bossAttack();
+      toast(t(`${m.victim} が処刑された（${m.target} が落とした）`,
+        `${m.victim} was executed (${m.target} let it slip)`), 'err', 2600);
+    }
     // 👁️ 自分が時間内に斬れなかった赤マスは、自分の盤面へお邪魔として返ってくる。
     // engine には座標指定でお邪魔を置く口が無いので、onGarbage と同じ経路
     // （addGarbage は resolveLines と over 判定も内部で行う）で個数だけ再現する。

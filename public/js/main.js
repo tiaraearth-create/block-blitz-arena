@@ -2243,15 +2243,25 @@ window.addEventListener('bba:results-dropped', ev => {
   const d = (ev && ev.detail) || {};
   const n = Math.max(0, Number(d.count) || 0);
   if (!n) return;
+  // ⚠ 文面をデイリー専用に固定していたので、圏外で遊んだソロやダンジョンの
+  //   控えが捨てられたときも「デイリーとして記録できませんでした（…デイリーは2時間以内）」と
+  //   出ていた。その回はデイリーではないし、控えの寿命は12時間。
+  //   net.js が detail.mode を載せてくるので、デイリーのときだけ専用の文にする。
+  const isDaily = d.mode === 'daily';
   const why = {
     auth: t('（ログインが切れていました）', ' (you were signed out)'),
-    expired: t('（時間切れです。デイリーは2時間以内に送る必要があります）',
-      ' (too old — the Daily must be submitted within 2 hours)'),
+    expired: isDaily
+      ? t('（時間切れです。デイリーは2時間以内に送る必要があります）',
+        ' (too old — the Daily must be submitted within 2 hours)')
+      : t('（控えの期限が切れました）', ' (the saved result expired)'),
     stale: t('（日付が変わっていました）', ' (the day had rolled over)'),
     unreserved: t('（挑戦の登録がありませんでした）', ' (the run was never registered)'),
   }[d.reason] || t('（サーバーに受け付けてもらえませんでした）', ' (the server rejected it)');
-  toast(t(`${n}件はデイリーとして記録できませんでした`,
-    `${n} run${n === 1 ? '' : 's'} could not be recorded as a Daily`) + why, 'err', 6000);
+  toast((isDaily
+    ? t(`${n}件はデイリーとして記録できませんでした`,
+      `${n} run${n === 1 ? '' : 's'} could not be recorded as a Daily`)
+    : t(`${n}件ぶんの記録を送れませんでした`,
+      `${n} saved run${n === 1 ? '' : 's'} could not be submitted`)) + why, 'err', 6000);
   updateOfflineNotice(netDown());
 });
 

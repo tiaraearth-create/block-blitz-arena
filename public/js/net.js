@@ -157,9 +157,12 @@ const RESULT_QUEUE_GAP_MS = 2500;
 //    net.js は表示を持たないので、ここでは投げるだけ（main.js が受ける）。
 //    黙って件数だけ減らしていたので、「未送信3件」がいつのまにか0件になり、
 //    報酬も記録も付かないのに理由がどこにも出なかった。
-function noteResultsDropped(count, reason) {
+// mode … 捨てた回のモード（分かるときだけ）。受け口（main.js）が
+//   「デイリーとして記録できませんでした」という**デイリー専用の文面**に
+//   固定されていたので、ソロやダンジョンの控えにも嘘の説明が出ていた。
+function noteResultsDropped(count, reason, mode) {
   if (!count || typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
-  try { window.dispatchEvent(new CustomEvent('bba:results-dropped', { detail: { count, reason } })); }
+  try { window.dispatchEvent(new CustomEvent('bba:results-dropped', { detail: { count, reason, mode } })); }
   catch { /* 合図が出せなくても控えの扱いは変わらない */ }
 }
 
@@ -183,7 +186,13 @@ function readResultQueue() {
     //   画面を開いているだけで鳴り続ける）。しかも flushResultQueue は
     //   「自分の控えが1件も無い」と先に return するので、連打よけの
     //   lastResultFlushAt に到達せず、throttle も効いていなかった。
-    if (dropped > 0) { writeResultQueue(kept); noteResultsDropped(dropped, 'expired'); }
+    if (dropped > 0) {
+      // 落としたぶんが全部デイリーなら 'daily'、混ざっていれば undefined。
+      const lost = list.filter(e => !kept.includes(e));
+      const modes = new Set(lost.map(e => (e && e.body && e.body.mode) || ''));
+      writeResultQueue(kept);
+      noteResultsDropped(dropped, 'expired', modes.size === 1 ? [...modes][0] : undefined);
+    }
     return kept;
   } catch { return []; }
 }
@@ -233,12 +242,18 @@ export async function flushResultQueue() {
       const list = readResultQueue();
       const entry = list.find(e => e.uid === session.user.id);
       if (!entry) break;
-      // 送る前に控えから外し、送れなかったら戻す。付けたまま送ると、
-      // 送信中にもう一度 flush が走ったときに同じ控えを二度送ることになる
-      // （サーバーは冪等なので実害は無いが、レート上限を無駄に食う）。
-      writeResultQueue(list.filter(e => e !== entry));
+      // ⚠ **控えから外すのは送信が終わってから。**
+      //    先に外していたので、再送の最中（最長12秒）にアプリが閉じられたり
+      //    モバイルOSに殺されたりすると、**控えは消えたのに送信は届いていない**
+      //    という状態になり、報酬も記録も付かないまま未送信件数だけが静かに減った
+      //    （'bba:results-dropped' も飛ばないので理由がどこにも出ない）。
+      //    「送信中の二重送信を防ぐため」に先に外していたが、その二重起動は
+      //    関数先頭の flushingResults が既に塞いでいるし、サーバーは runId で
+      //    冪等なので、途中で落ちて次回もう一度送られても二重加算にはならない。
+      const drop = () => writeResultQueue(readResultQueue().filter(e => e.body.runId !== entry.body.runId));
       try {
         const res = await api(RESULT_PATH, { method: 'POST', body: entry.body, queueOffline: false });
+        drop();
         sent++;
         // 送れても「デイリーとしては記録されなかった」ことがある（予約が
         // 2時間で切れる／日付が変わった）。報酬は入るのに連続クリアだけが
@@ -248,16 +263,14 @@ export async function flushResultQueue() {
       } catch (err) {
         // まだ圏外(0) / 送りすぎ(429) / メンテ中(503) は、こちらの都合ではなく
         // 時間が解決する ── 控えに戻して次の機会に回す。
-        if (err.status === 0 || err.status === 429 || err.status === 503) {
-          const back = readResultQueue();
-          back.unshift(entry);
-          writeResultQueue(back);
-          break;
-        }
-        // 401/403/400 … 送り直しても通らない。捨てる（残すと永遠に叩き続ける）。
+        // 控えはまだ外していないので、戻す操作は要らない（そのまま次の機会に回る）。
+        if (err.status === 0 || err.status === 429 || err.status === 503) break;
+        // 401/403/400 … 送り直しても通らない。ここで捨てる（残すと永遠に叩き続ける）。
         // ただし黙っては捨てない ── 件数だけが減って、報酬も記録も付かない
         // 理由がどこにも出ないのがいちばん困る。
-        noteResultsDropped(1, err.status === 401 || err.status === 403 ? 'auth' : 'rejected');
+        drop();
+        noteResultsDropped(1, err.status === 401 || err.status === 403 ? 'auth' : 'rejected',
+          entry.body && entry.body.mode);
       }
       // 次がある時だけ間を空ける（最後の1件のあとに待つ意味は無い）。
       if (!readResultQueue().some(e => e.uid === session.user.id)) break;

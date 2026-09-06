@@ -4027,6 +4027,9 @@ export async function showUserEditor(uid) {
       ${num('ueGems', 'ジェム', u.gems)}
       ${num('ueXp', 'XP', u.xp, `いまは Lv.${u.level}（1000ごとに1レベル）`)}
       ${num('ueRating', 'レート', u.stats.rating || 1000)}
+      ${/* 👑 王座の欠片。サーバーは差分（grantShards）で受けるので、
+             保存時に「入力値 − いまの値」を送る。 */''}
+      ${num('ueShards', '王座の欠片', u.shards || 0)}
 
       <h3 class="ue-h">${ic('battlepass', 16)} バトルパス</h3>
       ${num('uePassXp', 'パスXP', (u.battlePass && u.battlePass.xp) || 0)}
@@ -4091,7 +4094,12 @@ export async function showUserEditor(uid) {
       </div>
 
       <h3 class="ue-h">${ic('leaderboard', 16)} 記録</h3>
-      ${c.stats.map(s => num(`ueSt_${s.key}`, s.label, (u.stats && u.stats[s.key]) || 0)).join('')}
+      ${/* ⚠ rating は上の「対戦」節に #ueRating として**別に**描いてある。
+             両方描くと、こちらの欄（#ueSt_rating）は編集しても保存時に
+             読み飛ばされる ── 初期値も片方が `|| 1000`、片方が `|| 0` で
+             食い違い、運営が直したつもりの値が黙って捨てられていた。 */''}
+      ${c.stats.filter(s => s.key !== 'rating')
+        .map(s => num(`ueSt_${s.key}`, s.label, (u.stats && u.stats[s.key]) || 0)).join('')}
     </div>
 
     <div class="modal-buttons">
@@ -4147,6 +4155,12 @@ export async function showUserEditor(uid) {
     const body = {};
     if (dirty.has('ueCoins')) body.setCoins = int('ueCoins');
     if (dirty.has('ueGems')) body.setGems = int('ueGems');
+    // 👑 欠片だけは絶対値ではなく差分で受ける口（grantShards）しかないので、
+    //    いまの値との差を送る。0 のときは何も送らない。
+    if (dirty.has('ueShards')) {
+      const d = int('ueShards') - (Number(u.shards) || 0);
+      if (d) body.grantShards = d;
+    }
     if (dirty.has('ueXp')) body.setXp = int('ueXp');
     if (dirty.has('pass')) body.setPass = { xp: int('uePassXp'), premium };
     if (dirty.has('title')) body.setTitle = m.querySelector('#ueTitle').value || null;
@@ -4221,7 +4235,18 @@ async function showBugReportsAdminModal() {
         : (b.kind === 'workshop' || wsCode) ? ic('mode_workshop', 18) : ic('warn', 18)}</span>
       <span class="feed-text" style="white-space:pre-wrap">${escapeHtml(b.text)}${
         b.kind === 'workshop' && b.stage ? `
-        <small class="muted" style="display:block;margin-top:2px">${ic('mode_puzzle', 13)} ${escapeHtml(b.stage.title || '(無題)')} ・ ${ic('user', 13)} ${escapeHtml(b.stage.author || '(不明)')} ・ コード ${escapeHtml(String(b.stage.code || wsCode))}</small>` : ''}
+        <small class="muted" style="display:block;margin-top:2px">${ic('mode_puzzle', 13)} ${escapeHtml(b.stage.title || '(無題)')} ・ ${ic('user', 13)} ${escapeHtml(b.stage.author || '(不明)')} ・ コード ${escapeHtml(String(b.stage.code || wsCode))}</small>` : ''}${
+        /* 👥 パーティーの通報。本文には「通報しました」しか無く、
+             中身（参加者と直近40行の会話）は b.party に入っているのに
+             **描く場所が一つも無かった** ―― 運営は db.json を直接開くしか
+             読む手段が無く、通報が実質機能していなかった。 */''}${
+        b.kind === 'party' && b.party ? `
+        <details style="margin-top:4px">
+          <summary class="muted" style="font-size:11px;cursor:pointer">${ic('friends', 13)} 参加者 ${(b.party.members || []).length}人 ・ 会話 ${(b.party.lines || []).length}行（開く）</summary>
+          <div class="muted" style="font-size:11px;margin-top:4px">${escapeHtml((b.party.members || []).join('、'))}</div>
+          <div style="font-size:11px;margin-top:4px;max-height:180px;overflow:auto">${
+            (b.party.lines || []).map(l => `<div><b>${escapeHtml(l.from || '?')}</b>: ${escapeHtml(l.text || '')}</div>`).join('')}</div>
+        </details>` : ''}
         <small class="muted" style="display:block;margin-top:2px">${escapeHtml(b.by)}${b.role === 'guest' ? '（ゲスト）' : ''} ・ ${new Date(b.at).toLocaleString('ja-JP')}</small></span>
       <span style="display:flex;flex-direction:column;gap:4px">
         ${b.status === 'done' ? '' : `<button class="btn btn-sm btn-ghost" data-done="${b.id}" title="処理済みにする">${ic('check', 14)}</button>`}
@@ -4308,7 +4333,10 @@ async function showZeroDeskModal() {
   let throneMax = null;
   try { const d = await api('/api/status'); throneMax = d && d.throneMax != null ? d.throneMax : null; }
   catch { /* 取れなくても卓は開く */ }
-  const KINDS = ['verdict', 'missed', 'cut', 'revive', 'deal', 'dealYes', 'dealNo', 'dan', 'wrap'];
+  // ⚠ **server/zero.js の ZERO_LINES の実キーと必ずそろえること。**
+  //    'dan' というキーは存在せず（正しくは 'danBroken'）、押すと必ず400が返っていた。
+  //    逆に open / solo は表にあるのに選択肢が無く、動作確認ができなかった。
+  const KINDS = ['open', 'solo', 'verdict', 'cut', 'missed', 'danBroken', 'revive', 'deal', 'dealYes', 'dealNo', 'wrap'];
   const m = showModal(`
     <h2>${ic('mode_zero', 20)} ゼロの卓</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:10px">

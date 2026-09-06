@@ -181,9 +181,13 @@ export function locallyEarnedUnlocks(store = ls()) {
 function pruneArchives(store) {
   const owners = allKeys(store).filter(k => k.startsWith(ARCH_PREFIX));
   if (owners.length <= ARCHIVE_MAX_OWNERS) return;
-  // 中身に仕舞った時刻を持たせていないので、localStorage の並び（古いほうが先）を
-  // そのまま使う。厳密な最古でなくてよい ── 目的は「際限なく増やさない」こと。
-  for (const k of owners.slice(0, owners.length - ARCHIVE_MAX_OWNERS)) store.removeItem(k);
+  // ⚠ **allKeys は新しい順で返す**（末尾から積んでいる）。先頭側を捨てていたので、
+  //    いま仕舞ったばかりの人の控えがその場で消え、いちばん古い人だけが残っていた
+  //    ── ベストスコア・到達階・★・しおり・圏外の未送信控えなど、サーバーに
+  //    写しが無いものが本当に失われる。捨てるのは末尾（古いほう）。
+  //    中身に仕舞った時刻は持たせていないので厳密な最古でなくてよい
+  //    ── 目的は「際限なく増やさない」こと。
+  for (const k of owners.slice(ARCHIVE_MAX_OWNERS)) store.removeItem(k);
 }
 
 /**
@@ -291,6 +295,22 @@ export function forgetOwner(owner, store = ls()) {
         store.removeItem(k); delete src[k]; n++;
       }
       writeSrc(store, src);
+      // ↩ **ゲスト時代の控えを戻してから持ち主を付け替える。**
+      //    ここは switchOwner の 3) と同じ処理。持ち主だけ 'guest' に書き換えて
+      //    いたので、そのあと updateTopbar が呼ぶ switchOwner('guest') は
+      //    `cur === next` の早期 return に落ちて**誰も控えを戻さなかった**
+      //    ── 登録前に遊んだぶん（ハイスコア・解放・所持品）が
+      //    bba_arch:guest に閉じ込められたまま消えなくなる。
+      let saved = null;
+      try { saved = JSON.parse(store.getItem(ARCH_PREFIX + 'guest') || 'null'); }
+      catch { saved = null; }
+      if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+        for (const [k, v] of Object.entries(saved)) {
+          if (!isOwnedKey(k) || typeof v !== 'string') continue;
+          store.setItem(k, v); n++;
+        }
+        store.removeItem(ARCH_PREFIX + 'guest');
+      }
       store.setItem(OWNER_KEY, 'guest');
     }
     if (store.getItem(ARCH_PREFIX + owner) !== null) { store.removeItem(ARCH_PREFIX + owner); n++; }

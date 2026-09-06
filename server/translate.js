@@ -225,10 +225,16 @@ export function translateLocal(text, to) {
   //    ただし固有名詞（住人の名前・モード名）は原文のまま残るのが正しいので、
   //    「文の半分以上がラテン文字のまま」のときだけ諦める ── 1語だけ英語が
   //    残る訳（例: 「Zero が来た」）まで捨てると、まともな訳まで消える。
+  //    ⚠ **語数ではなく文字数で測る。** 語数で数えていたころは、いちばん多い形で
+  //      一度も発動しなかった ── enToJa の push() は「未訳のラテン語が2つ続くとき
+  //      だけ」空白を入れるので、日本語チャンクと英単語のあいだに区切りが無く、
+  //      「いつdoesウィークリーreset」が **1語** として数えられて
+  //      `words.length >= 2` すら満たさなかった。逆方向（日→英）は
+  //      HAS_JA.test で文字単位に見ているので、片側だけ実装と噛み合っていなかった。
   if (to === 'ja') {
-    const words = out.split(/\s+/).filter(Boolean);
-    const latin = words.filter(w => /^[A-Za-z][A-Za-z'-]*$/.test(w)).length;
-    if (words.length >= 2 && latin * 2 >= words.length) return null;
+    const latin = (out.match(/[A-Za-z]/g) || []).length;
+    const jaChars = (out.match(/[぀-ゟ゠-ヿ一-鿿ｦ-ﾝ々〆ヵヶ]/g) || []).length;
+    if (latin >= 3 && latin >= jaChars) return null;
   }
   return { lang: to, text: out, engine: 'table' };
 }

@@ -1179,7 +1179,19 @@ function applyGameResult(user, { mode, score, lines, maxCombo, maxChain, duratio
     // 最大30分ぶんの持ち時間）。ここでは常にその基準からの経過を使う。
     const elapsed = (now - last) / 1000 + 90;
     if (duration > elapsed) duration = Math.max(1, Math.floor(elapsed));
-    user.stats.lastResultAt = now;
+    // 📴 **基準は「受け付けたぶんだけ」進める（now へ倒さない）。**
+    //
+    //    倒していたので、圏外で2回以上遊んだ人が戻ったときに壊れていた ──
+    //    net.js は控えを2.5秒間隔で送るので、2件目以降の「前回からの経過」は
+    //    2.5秒しかなく、duration が 92秒 に切られる。切られた duration は
+    //    そのまま下のレート上限に入るので、**スコアが 92×2,000 = 184,000点 で
+    //    頭打ちになり、その値が自己ベストとランキングに確定していた**
+    //    （タイムアタックなら 92,000点）。報酬だけでなく記録そのものが削られる。
+    //
+    //    「実際に流れた時間より長くは遊べない」という不正防止の性質は、
+    //    予算式にしても壊れない ── 控えの束が実時間を分け合うだけで、
+    //    合計の申告時間は実時間を1秒も超えられない。
+    user.stats.lastResultAt = Math.min(now, last + Math.ceil(duration) * 1000);
   }
   // Cheat guard: cap plausible score rate. This is only a coarse "no human
   // scores THIS fast" backstop — the real anti-forge is the wall-clock clamp
@@ -2143,7 +2155,9 @@ function postRealFeed(user, notes) {
   //    上限2件はそのままなので、これで荒れることはない。
   const big = notes.filter(n => n.react || n.always);
   const now = Date.now();
-  const allowed = big.length ? big.concat(notes.filter(n => !n.react)).slice(0, 2)
+  // ⚠ 2本目のフィルタから always 行を外す。`always && !react` の行（ガチャURの速報）は
+  //    big にも入り、ここにも入るので**同じ1件が2回 broadcastAll されていた**。
+  const allowed = big.length ? big.concat(notes.filter(n => !n.react && !n.always)).slice(0, 2)
     : now - last < 45000 ? [] : notes.slice(0, 1);
   if (!allowed.length) return;
   feedAt.set(user.id, now);

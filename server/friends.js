@@ -80,6 +80,14 @@ export function blocks(a, b) {
 }
 // どちらか片方でもブロックしていれば、連絡は成立しない。
 // 片方向だけ見ていると、ブロックした側が相手から申請を受けられてしまう。
+// ⏳ 「その人あての申請が、相手の受信箱で**まだ生きている**か」。
+//    送信控え（friendReqOut）は id だけで時刻を持たないので、期限は相手側の
+//    受信箱でしか測れない。sendRequest と friendsView の両方がこれを使う。
+export function liveReqTo(to, fromId) {
+  if (!to || !Array.isArray(to.friendReqIn)) return false;
+  return to.friendReqIn.some(r => r && r.from === fromId && Date.now() - (r.at || 0) < REQ_EXPIRE_MS);
+}
+
 export function eitherBlocks(a, b) {
   return blocks(a, b && b.id) || blocks(b, a && a.id);
 }
@@ -113,7 +121,15 @@ export function sendRequest(db, from, toId) {
   //   ブロックも断りも「相手に気づかれない」ことが前提の機能なので、
   //   このファイルが冒頭で掲げている2つの約束がここで破れていた。
   if (isFriend(from, toId)) return { error: 'すでにフレンドです' };
-  if (from.friendReqOut.includes(toId)) return { error: '申請ずみです' };
+  // ⏳ 送信控え（friendReqOut）は id の配列だけで時刻を持たないので、
+  //    期限（REQ_EXPIRE_MS）は受信側でしか効いていなかった。相手の受信箱では
+  //    とっくに腐っている申請が、送った側では永久に「申請ずみです」で居座り、
+  //    **同じ人へ二度と申請できない**（掃除するのは起動時の healSocial だけ）。
+  //    相手の受信箱に生きた行が無ければ、その控えは無かったことにして先へ進む。
+  if (from.friendReqOut.includes(toId)) {
+    if (liveReqTo(to, from.id)) return { error: '申請ずみです' };
+    from.friendReqOut = from.friendReqOut.filter(id => id !== toId);
+  }
 
   // すれ違い（相手からも申請が来ていた）はその場で成立させる。
   // ここに置けるのは「自分の受信箱に相手からの申請がある」＝自分側の事実で、
@@ -406,7 +422,12 @@ export function friendsView(db, user, levelOf, statusOf) {
       .filter(r => r && Date.now() - (r.at || 0) < REQ_EXPIRE_MS)
       .map(r => { const row = friendRow(db, r.from, levelOf, statusOf); return row ? { ...row, at: r.at } : null; })
       .filter(Boolean),
-    outgoing: user.friendReqOut.map(id => friendRow(db, id, levelOf, statusOf)).filter(Boolean),
+    // ⏳ 相手の受信箱で生きている申請だけを「送った申請」として出す。
+    //    腐った控えを出していたので、画面には「申請ずみ」と並ぶのに相手には
+    //    届いていない、という行が永久に残っていた（sendRequest 側と同じ判定）。
+    outgoing: user.friendReqOut
+      .filter(id => liveReqTo(userOf(db, id), user.id))
+      .map(id => friendRow(db, id, levelOf, statusOf)).filter(Boolean),
     blocked: user.blocked.map(id => {
       const u = userOf(db, id);
       return u ? { id: u.id, username: u.username } : null;

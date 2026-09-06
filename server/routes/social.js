@@ -336,7 +336,13 @@ socialRouter.post('/api/friends/challenge/dismiss', requireAuth, maintenanceGuar
   const r = dismissChallenge(db, req.user, fromId);
   if (r.error) return res.status(409).json({ error: r.error });
   saveDb();
-  res.json({ ok: true });
+  // ⚠ **他の口と同じ形（friendsView）を返す。** ここだけ `{ ok: true }` を返して
+  //    いたので、画面側の act() が受け取った応答をそのままフレンド画面の全データへ
+  //    代入し、**申請一覧が丸ごと消えて「フレンド」タブが例外で止まっていた**
+  //    （accept / decline / cancel / remove / block / unblock / settings / request は
+  //     全部 friendsView を返している）。挑戦状も受信箱と同じタブで捌くので、
+  //    返す形をそろえるのが本筋。
+  res.json(friendsView(db, req.user, levelOf, friendStatus()));
 });
 
 // ---------------------------------------------------------------------------

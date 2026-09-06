@@ -838,10 +838,16 @@ export function initBattle(server, deps) {
   }
 
   // Run a scripted list of [{ resident|name, text, delay }] with its timing.
-  function performScript(script, key = 'chat') {
+  // force: 運営の「テスト」ボタン専用。静かな時間帯（isQuietNow）も迂回する。
+  //   key に null を渡せばトグルは迂回できたが、crowdOn の `!isQuietNow()` は
+  //   迂回できず、「いますぐ1つ流して動作を確かめます」と書いてあるボタンが
+  //   結果欄には成功と出しながらチャットには1行も流さない、という状態だった
+  //   （'line' と 'feed' は postChat / postFeed を直接叩くので動いていて、
+  //    押した3つだけ壊れているように見えた）。
+  function performScript(script, key = 'chat', force = false) {
     for (const s of script) {
       setTimeout(() => {
-        if (!crowdOn(key)) return;
+        if (!force && !crowdOn(key)) return;
         postChat(s.resident ? s.resident.name : s.name, s.text, s.tr ? { tr: s.tr } : {});
       }, s.delay);
     }
@@ -4705,7 +4711,12 @@ export function initBattle(server, deps) {
           // ミュートはリアクションにも効く（モデレーションの抜け穴防止）。
           const ru = ws.user ? db.users[ws.user.id] : null;
           if (isMuted(ws)) return;
-          if (!sockRate(ws, 'reactTimes', 12, 10000)) return;
+          // ⚠ チャットと同じ二段にする。sockRate はカウンタを ws に持つので、
+          //    タブを2つ開くだけで持ち分が倍になる（配られるフレーム数も倍）。
+          //    party_chat / guild_chat には既に userRate を足してあり、
+          //    react だけ取り残されていた。
+          if (!sockRate(ws, 'reactTimes', 12, 10000)
+            || !userRate(`react:${ws.user ? ws.user.id : sockIp(ws)}`, 12, 10_000)) return;
           const who = sockName(ws);
           const entry = chatHistory.find(e2 => e2.id === String(msg.msgId || ''));
           if (!who || !entry) return;
@@ -5008,12 +5019,32 @@ export function initBattle(server, deps) {
     const name = String(username || '');
     if (!name) return 0;
     let n = 0;
+    // 🧹 発言の名前だけでなく、**リアクションの持ち主一覧**も伏せる。
+    //    entry.reacts = { '👍': ['名前', …] } は別の欄なので e.from の書き換えでは
+    //    直らず、退会した人の名前がスタンプの長押しツールチップに残っていた
+    //    （db.meta.chatLog にも入るので再起動後も残り、hello_ok で全員に配られる）。
+    //    ⚠ 他人の発言に押したスタンプが対象なので、e.from の一致とは**独立に**回す。
+    const scrubReacts = e => {
+      if (!e || !e.reacts) return;
+      for (const k of Object.keys(e.reacts)) {
+        if (!Array.isArray(e.reacts[k])) continue;
+        e.reacts[k] = e.reacts[k].map(x => (x === name ? replacement : x));
+      }
+    };
     for (const e of chatHistory) {
       if (e && e.from === name) { e.from = replacement; e.role = 'player'; n++; }
+      scrubReacts(e);
     }
     if (Array.isArray(db.meta.chatLog)) {
       for (const e of db.meta.chatLog) {
         if (e && e.from === name) { e.from = replacement; e.role = 'player'; }
+        scrubReacts(e);
+      }
+    }
+    // メモリ側の所有者表も直す（次の付け外しで名前が戻らないように）。
+    for (const owners of reactOwners.values()) {
+      for (const [k, v] of owners) {
+        if (v && v.name === name) owners.set(k, { ...v, name: replacement });
       }
     }
     return n;
@@ -5360,7 +5391,7 @@ export function initBattle(server, deps) {
         if (what === 'dialogue') {
           const s = composeDialogue(ctx);
           if (!s) return { error: '会話できる住人が足りません（人口を上げるか時間帯を待ってください）' };
-          performScript(s.map((x, i) => ({ ...x, delay: i * 2500 })), null);
+          performScript(s.map((x, i) => ({ ...x, delay: i * 2500 })), null, true);
           return { lines: s.map(x => `${x.resident.name}: ${x.text}`) };
         }
         if (what === 'feed') {
@@ -5371,13 +5402,13 @@ export function initBattle(server, deps) {
         }
         if (what === 'greet') {
           const s = composeReaction('greet_plain', ctx, {}, 1);
-          performScript(s.map(x => ({ ...x, delay: 500 })), null);
+          performScript(s.map(x => ({ ...x, delay: 500 })), null, true);
           return { lines: s.map(x => `${x.resident.name}: ${x.text}`) };
         }
         if (what === 'reaction') {
           const kind = ctx.event ? 'event_start' : ctx.poll ? 'poll_open' : 'greet_plain';
           const s = composeReaction(kind, ctx, {}, 2);
-          performScript(s.map((x, i) => ({ ...x, delay: 500 + i * 2500 })), null);
+          performScript(s.map((x, i) => ({ ...x, delay: 500 + i * 2500 })), null, true);
           return { lines: s.map(x => `${x.resident.name}: ${x.text}`) };
         }
         const line = residentLine();

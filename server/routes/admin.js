@@ -182,6 +182,19 @@ export function purgeUserContent(userId, username) {
       sockets = battle.disconnectUser(id, 'このアカウントは削除されました');
     }
   }
+  // 🏰 ギルドチャットの履歴。全体チャットと同じく「発言は残し、名前だけ伏せる」。
+  //    ここだけ掃除の対象から漏れていたので、退会した人の名前がギルドの
+  //    「チャット」タブに実名のまま残り、開くたびに db から再配信されていた
+  //    （guild.chat は server/guilds.js が直接ディスクへ積む、あとから増えた入れ物）。
+  if (db.guilds) {
+    for (const g of Object.values(db.guilds)) {
+      if (!Array.isArray(g.chat)) continue;
+      for (const c of g.chat) {
+        const mine = c && (c.fromId ? c.fromId === id : (!!name && c.from === name));
+        if (mine && c.from !== TX_ANON_NAME) { c.from = TX_ANON_NAME; c.fromId = null; chat++; }
+      }
+    }
+  }
   return { stages: ws.stages, likes: ws.likes, replays, transactions, reports, errors, chat, sockets, hof, news };
 }
 
@@ -227,6 +240,10 @@ function adminUserView(u) {
     id: u.id, username: u.username, role: u.role,
     banned: !!u.banned, muted: !!u.muted,
     coins: u.coins, gems: u.gems, xp: u.xp, level: levelOf(u.xp),
+    // 👑 王座の欠片。付与の口（grantShards）は前からあるのに、返り値にも画面にも
+    //    無かったので、事故で消えたときに運営が確かめることも戻すこともできなかった
+    //    （db.json を直接開くしかなかった）。
+    shards: Number(u.shards) || 0,
     items: u.items || {}, owned: u.owned || [], equipped: u.equipped || {},
     equippedTitle: u.equippedTitle || null,
     badges: u.badges || [], achievements: u.achievements || [],
@@ -2015,7 +2032,16 @@ adminRouter.post('/api/admin/pop', requireAuth, requireAdmin, (req, res) => {
     // 変わる**この経路だけは、ここで衝突を潰しておく必要がある。
     // removed を空にするのは正しい（idの意味が変わるため）が、空にしたまま
     // だと実プレイヤーと同名の住人がそのまま生まれる。
-    patch.removed = clashingResidentIds(patch.rosterSeed, Object.values(db.users).map(u => u.username));
+    // ⚠ **追加住人（id が `x*`）の引退は残す。** clashingResidentIds が返すのは
+    //    基本名簿（r0..r599）の id だけなので、removed を丸ごと作り直すと、
+    //    運営が手で引退させた追加住人が全員こっそり復活していた
+    //    （確認ダイアログは「追加した住人は残ります」としか言わない）。
+    //    基本名簿の id は名簿の引き直しで意味が変わるので捨ててよいが、
+    //    追加住人の id は名簿と無関係なので持ち越す。
+    const keptCustom = (Array.isArray(cur.removed) ? cur.removed : [])
+      .filter(id => String(id).startsWith('x'));
+    patch.removed = [...keptCustom,
+      ...clashingResidentIds(patch.rosterSeed, Object.values(db.users).map(u => u.username))];
     if (patch.removed.length) {
       console.log(`[residents] 名簿の引き直しで実プレイヤーと同名になった住人${patch.removed.length}人を退役させました`);
     }
@@ -2071,6 +2097,10 @@ adminRouter.post('/api/admin/chat/clear', requireAuth, requireAdmin, (req, res) 
 adminRouter.post('/api/admin/chat/say', requireAuth, requireAdmin, (req, res) => {
   const text = String(req.body.text || '').trim().slice(0, 200);
   const entry = battle.chatOps.say(text || undefined);
+  // 🧾 ここだけ操作ログが無かった。発言は role:'user' の普通のプレイヤー発言として
+  //    全員に届くので、残さないと「いつ誰がこれを流したか」を追う手段が消える
+  //    （broadcast / zero/say / chat/clear / mute はどれも残している）。
+  adminLog(req, 'chat_say', entry.from, { text: String(entry.text || '').slice(0, 80) });
   res.json({ ok: true, from: entry.from, text: entry.text });
 });
 

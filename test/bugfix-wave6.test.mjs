@@ -266,14 +266,22 @@ const partySrv = read('server/party.js');
 {
   check('E-1 デイリーの控えは寿命が短い', /const DAILY_QUEUE_TTL_MS = 2 \* 60 \* 60 \* 1000;/.test(net), '');
   check('E-2 種類ごとに寿命を選ぶ', /const ttlFor = entry =>/.test(net), '');
-  check('E-3 捨てたら必ず知らせる', /function noteResultsDropped\(count, reason\) \{/.test(net), '');
+  // v2.62: 第3引数 mode が増えた（受け口が「デイリーとして記録できませんでした」
+  //   というデイリー専用の文面に固定されていたので、ソロやダンジョンの控えにも
+  //   嘘の説明が出ていた）。増えても「必ず知らせる」ことは変わらない。
+  check('E-3 捨てたら必ず知らせる', /function noteResultsDropped\(count, reason(, mode)?\) \{/.test(net), '');
   // v2.52: 知らせる前に **書き戻す**。控えを絞った結果を保存していなかったので、
   // 期限切れの控えが localStorage に残り続け、api() が1本通るたびに同じ1件について
   // 同じ赤いトーストが出ていた（/api/status は25秒ごと ＝ 画面を開いているだけで鳴る）。
-  check('E-4 寿命切れも知らせる', /noteResultsDropped\(dropped, 'expired'\)/.test(net), '');
-  check('E-4b 知らせる前に控えを書き戻す', /writeResultQueue\(kept\); noteResultsDropped\(dropped, 'expired'\);/.test(net), '');
+  check('E-4 寿命切れも知らせる', /noteResultsDropped\(dropped, 'expired'/.test(net), '');
+  {
+    // 1行に並んでいるかではなく **順序** を見る（書き戻し → 知らせる）。
+    const w = net.indexOf('writeResultQueue(kept)');
+    const n2 = net.indexOf("noteResultsDropped(dropped, 'expired'");
+    check('E-4b 知らせる前に控えを書き戻す', w > 0 && n2 > 0 && w < n2, `write=${w} note=${n2}`);
+  }
   check('E-5 401/400 で捨てたときも知らせる',
-    /noteResultsDropped\(1, err\.status === 401 \|\| err\.status === 403 \? 'auth' : 'rejected'\);/.test(net), '');
+    /noteResultsDropped\(1, err\.status === 401 \|\| err\.status === 403 \? 'auth' : 'rejected'/.test(net), '');
   check('E-6 デイリーとして記録されなかった回も知らせる',
     /if \(d && d\.recorded === false\) noteResultsDropped\(1, d\.reason \|\| 'expired'\);/.test(net), '');
   check('E-7 画面に受け口がある', /'bba:results-dropped'/.test(read('public/js/main.js')), '');

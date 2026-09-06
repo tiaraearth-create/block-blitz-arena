@@ -61,7 +61,13 @@ export function eventPollOptions(count = 4) {
     const j = Math.floor(Math.random() * (i + 1));
     [pool[i], pool[j]] = [pool[j], pool[i]];
   }
-  return pool.slice(0, Math.min(count, MAX_OPTIONS)).map(ty => ({
+  // ⚠ MAX_OPTIONS は「1つの投票に置ける選択肢の上限」であって
+  //    「候補一覧の上限」ではない。ここで切っていたので、
+  //    /api/admin/poll/suggest が EVENT_TYPES.length（8）を渡しても6件しか返らず、
+  //    しかも pool は先頭でシャッフル済みなので**毎回ちがう2種類が欠けていた**
+  //    （運営には「その2つが選択肢に出せない」理由が分からない）。
+  //    投票そのものの6個上限は createPoll 側の .slice(0, MAX_OPTIONS) が担保している。
+  return pool.slice(0, Math.max(1, Math.min(count, pool.length))).map(ty => ({
     text: `${ty.icon} ${ty.name}`,
     eventType: ty.id,
   }));
