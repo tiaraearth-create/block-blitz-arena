@@ -916,6 +916,115 @@ export async function showPlayerDetail(id, from = ps.tab) {
 // モデレーターに出さない仕組みに、そのまま乗る）。
 // 正式な枠が生えたら、あちらから showPlayerStats() を呼ぶだけでよい ──
 // 既に #btnPlayerStats があれば足さないので、二重にはならない。
+// ---------------------------------------------------------------------------
+// 🕵 記録の監査（管理者専用）
+// ---------------------------------------------------------------------------
+// 「天井にぶつけた提出を残す」🧾ログは v2.54 からなので、それ以前に置かれた
+// 記録には証拠が無い。残っている数字だけで「算術的にあり得ない／噛み合わない」
+// 組を洗い出して、消すかどうかは人が決める。
+//
+// ⚠ ここが出すのは**容疑であって有罪の証明ではない**。だから
+//   ・何をどう見て引っかかったのかを必ず並べて出す
+//   ・取り消しは1件ずつ、確認を挟んでから
+//   ・「引退した旧上限ちょうど」は info 扱い（正直な記録も同じ数字に潰れている）
+
+const AUDIT_LEVEL = {
+  high: { icon: 'warn', label: 'あり得ない', color: 'var(--red)' },
+  warn: { icon: 'warn', label: '要確認', color: 'var(--gold, #f0b429)' },
+  info: { icon: 'hint', label: '参考', color: 'var(--muted)' },
+};
+
+export async function showRecordAudit() {
+  if (!psAdmin()) return toast('管理者専用です', 'err');
+  const modal = showModal(`
+    <h2>${ic('search', 20)} 記録の監査</h2>
+    <p class="muted center" style="font-size:12px;margin-bottom:8px">
+      遊んだ形跡に対して記録が高すぎるアカウントを洗い出します。<br>
+      <b>容疑であって証拠ではありません。</b>中身を読んでから決めてください。
+    </p>
+    <div id="auBody"><p class="muted center">読み込み中…</p></div>
+    <div class="modal-buttons"><button class="btn btn-ghost" id="auClose">閉じる</button></div>`);
+  modal.querySelector('#auClose').onclick = closeModal;
+  const body = modal.querySelector('#auBody');
+  try {
+    renderAudit(body, await api('/api/admin/audit'));
+  } catch (err) {
+    body.innerHTML = `<p class="muted center">${ic('warn', 14)} ${esc(err.message)}</p>`;
+  }
+}
+
+function renderAudit(body, d) {
+  const rows = (d && d.rows) || [];
+  if (!rows.length) {
+    body.innerHTML = `<p class="muted center">${ic('check', 14)} 引っかかったアカウントはありません（${d.total}人を検査）</p>`;
+    return;
+  }
+  const c = d.counts || {};
+  body.innerHTML = `
+    <p class="center" style="font-size:12px;margin-bottom:8px">
+      ${d.total}人中 <b>${rows.length}人</b>
+      ・<span style="color:var(--red)">あり得ない ${c.high || 0}</span>
+      ・<span style="color:var(--gold,#f0b429)">要確認 ${c.warn || 0}</span>
+      ・<span class="muted">参考 ${c.info || 0}</span>
+    </p>
+    <div class="au-list">${rows.map(auditRow).join('')}</div>`;
+  body.querySelectorAll('[data-au-clear]').forEach(btn => {
+    btn.onclick = () => clearRecord(btn, body);
+  });
+}
+
+function auditRow(r) {
+  const lv = AUDIT_LEVEL[r.worst] || AUDIT_LEVEL.info;
+  const floors = [['塔', r.dungeonMax], ['地下', r.underMax], ['天国', r.heavenMax], ['深淵', r.abyssMax]]
+    .filter(([, v]) => v > 0).map(([n, v]) => `${n}${v}`).join('・') || '—';
+  return `
+    <div class="au-row" style="border-left:3px solid ${lv.color}">
+      <div class="au-head">
+        <b>${esc(r.username)}</b>
+        <span class="muted">Lv${r.level}${r.banned ? ' ・凍結中' : ''}</span>
+      </div>
+      <div class="au-nums muted">
+        ハイスコア <b>${fmt(r.bestScore)}</b>
+        ・プレイ ${fmt(r.gamesPlayed)}回 / ${fmt(r.playSecs)}秒
+        ・レート ${fmt(r.rating)}
+        ・階層 ${floors}
+      </div>
+      ${r.flags.map(f => `
+        <div class="au-flag">
+          ${ic(AUDIT_LEVEL[f.level].icon, 12)}
+          <span><b>${esc(f.label)}</b><small class="muted">${esc(f.detail)}</small></span>
+        </div>`).join('')}
+      <div class="au-acts">
+        <button class="btn btn-sm btn-ghost" data-au-clear="score" data-id="${esc(r.id)}" data-name="${esc(r.username)}">ハイスコアを取り消す</button>
+        <button class="btn btn-sm btn-ghost" data-au-clear="floors" data-id="${esc(r.id)}" data-name="${esc(r.username)}">階層を取り消す</button>
+      </div>
+    </div>`;
+}
+
+// 取り消しは既存の運営APIに乗せる（この監査は読むだけ）。
+// 消したぶんは🧾操作ログに残る ── あとから「誰が何を消したか」を辿れるように。
+async function clearRecord(btn, body) {
+  const what = btn.dataset.auClear;
+  const id = btn.dataset.id;
+  const name = btn.dataset.name;
+  const setStats = what === 'score'
+    ? { bestScore: 0 }
+    : { dungeonMax: 0, underMax: 0, heavenMax: 0, abyssMax: 0 };
+  const label = what === 'score' ? 'ハイスコア' : 'ダンジョンの到達階層';
+  if (!confirm(`${name} の${label}を 0 に戻します。\n元の数字は戻せません。よろしいですか？`)) return;
+  btn.disabled = true;
+  try {
+    await api(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'POST', body: { setStats } });
+    audio.click();
+    toast(`${name} の${label}を取り消しました`, 'ok');
+    renderAudit(body, await api('/api/admin/audit'));
+  } catch (err) {
+    audio.error();
+    toast(err.message, 'err');
+    btn.disabled = false;
+  }
+}
+
 export function mountPlayerStatsButton() {
   if (document.getElementById('btnPlayerStats')) return;
   const screen = document.getElementById('screen-admin');
@@ -933,14 +1042,27 @@ export function mountPlayerStatsButton() {
   screen.insertBefore(row, before);
 }
 
+// 🕵 記録の監査のボタン。index.html に置いてあるので、ここでは配線するだけ。
+// ⚠ mountPlayerStatsButton に相乗りしない ── あちらは #btnPlayerStats が
+//   既にあると**先頭で return する**ので、相乗りすると永久に配線されない
+//   （実際に一度そうなった。ボタンが出ているのに押しても何も起きない形）。
+export function mountRecordAuditButton() {
+  const b = document.getElementById('btnRecordAudit');
+  if (!b || b.dataset.wired) return;
+  b.dataset.wired = '1';
+  b.innerHTML = `${ic('search')} 記録の監査`;
+  b.onclick = () => { audio.click(); showRecordAudit(); };
+}
+
 // main.js は起動の終盤にこのモジュールを読む（startGodLoop を呼ぶため）ので、
 // この時点で index.html の DOM は出来上がっている。念のため、まだなら
 // DOMContentLoaded を待って1回だけ試す。
 if (typeof document !== 'undefined') {
+  const mountAdminTools = () => { mountPlayerStatsButton(); mountRecordAuditButton(); };
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', mountPlayerStatsButton, { once: true });
+    document.addEventListener('DOMContentLoaded', mountAdminTools, { once: true });
   } else {
-    mountPlayerStatsButton();
+    mountAdminTools();
   }
 }
 

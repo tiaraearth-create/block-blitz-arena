@@ -260,6 +260,164 @@ function adminUserView(u) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 🕵 記録の監査
+// ---------------------------------------------------------------------------
+// 「天井にぶつけた提出を残す」🧾ログ（index.js の noteScoreClamp）は v2.54 から
+// なので、**それ以前に置かれた記録には証拠が1バイトも無い**。
+// そこで、残っている数字だけで「算術的にあり得ない／噛み合わない」組を探す。
+//
+// ここが見つけるのは容疑であって、有罪の証明ではない。だから
+//   ・何をどう見て引っかかったのかを必ず添える（detail）
+//   ・強さ（high / warn / info）を分ける
+//   ・消すかどうかは人が決める（このAPIは読むだけ。取り消しは
+//     既存の POST /api/admin/users/:id + setStats を運営画面から叩く）
+// という形にしてある。
+
+// index.js のレート上限とそろえる。ここを写経したまま向こうを上げると、
+// 監査が嘘の「あり得ない」を出すので、変えるときは必ず両方見ること。
+const AUDIT_RATE_CAP = 2000;
+// v2.54 まで使っていた絶対上限。これ**ちょうど**の記録は、当時それ以上を
+// 申告して潰された跡（正直な人の記録も同じ数字に潰されている）。
+const AUDIT_RETIRED_CEILING = 1_000_000;
+// 踏破・高スコアなのに「この回数しか遊んでいない」と見なす線。
+const AUDIT_FEW_GAMES = 20;
+
+function auditFlags(u) {
+  const s = u.stats || {};
+  const out = [];
+  const num = v => Math.max(0, Number(v) || 0);
+  const best = num(s.bestScore);
+  const secs = num(s.playSecs);
+  const games = num(s.gamesPlayed);
+  const level = levelOf(Number(u.xp) || 0);
+
+  // ① 算術的にあり得ない組（アカウントの年齢から）。
+  //
+  //    壁時計クランプ（index.js）があるので、**申告できる時間の合計は
+  //    アカウントが存在した実時間を超えられない**。1秒あたりの上限は
+  //    AUDIT_RATE_CAP なので、
+  //      bestScore ≤ (その回の長さ) × 上限 ≤ (アカウントの年齢 + 猶予) × 上限
+  //    が正直なアカウントでは必ず成り立つ。
+  //    猶予は初回に配る持ち時間（FIRST_RESULT_GRACE_MS = 30分）＋壁時計の90秒。
+  //
+  //    ⚠ createdAt は**どのアカウントにも必ずある**ので、この検査は
+  //      古い記録にも効く。逆に、古参の正直なアカウントは年齢が大きいので
+  //      絶対に引っかからない（1年もののアカウントなら上限は 63億点）。
+  const ageSecs = Math.max(0, (Date.now() - (Number(u.createdAt) || Date.now())) / 1000);
+  const ceilingByAge = Math.floor((ageSecs + 1800 + 90) * AUDIT_RATE_CAP);
+  if (best > 0 && best > ceilingByAge) {
+    out.push({
+      id: 'score_age', level: 'high',
+      label: 'アカウントの年齢で出せる上限を超えている',
+      detail: `ハイスコア ${best.toLocaleString()} / 作成から ${Math.floor(ageSecs / 60).toLocaleString()}分`
+        + ` → 出せる上限 ${ceilingByAge.toLocaleString()}`,
+    });
+  }
+
+  // ② 同じことを「総プレイ時間」からも見る。
+  //
+  //    playSecs は受け付けた duration の合計なので、こちらのほうが年齢より
+  //    ずっと厳しい。ただし **playSecs が 0 のまま記録だけある場合は、
+  //    この欄が動いていないだけかもしれない**（カウンタを足す前のアカウント）。
+  //    分からないことを「あり得ない」と言うと濡れ衣になるので、
+  //    実際に時間が記録されている人にだけ当てる。
+  const ceilingBySecs = (secs + 90) * AUDIT_RATE_CAP;
+  if (best > 0 && secs > 0 && best > ceilingBySecs) {
+    out.push({
+      id: 'score_time', level: 'high',
+      label: '総プレイ時間で出せる上限を超えている',
+      detail: `ハイスコア ${best.toLocaleString()} / 総プレイ ${secs.toLocaleString()}秒`
+        + ` → 出せる上限 ${ceilingBySecs.toLocaleString()}`,
+    });
+  }
+  // 記録があるのに1回も遊んでいない、はそれだけで矛盾している。
+  if (best > 0 && games === 0) {
+    out.push({
+      id: 'score_no_games', level: 'high',
+      label: 'プレイ回数0なのに記録がある',
+      detail: `ハイスコア ${best.toLocaleString()} / プレイ 0回`,
+    });
+  }
+
+  // ② 踏破しているのに、遊んだ回数が足りない。
+  //    ダンジョンは1走行＝1提出なので、100階の踏破そのものは1回でも起こりうる。
+  //    ただし「4つの塔を踏破しているのに数回しか遊んでいない」は別。
+  const realms = [['dungeonMax', '塔'], ['underMax', '地下'], ['heavenMax', '天国'], ['abyssMax', '深淵']];
+  const cleared = realms.filter(([k]) => num(s[k]) >= 100);
+  if (cleared.length && games < AUDIT_FEW_GAMES) {
+    out.push({
+      id: 'deep_but_new', level: cleared.length >= 2 ? 'high' : 'warn',
+      label: '踏破しているのにプレイ回数が少なすぎる',
+      detail: `${cleared.map(([, n]) => n).join('・')}を100階まで踏破 / プレイ ${games}回・Lv${level}`,
+    });
+  }
+
+  // ③ 記録があるのに、ほとんど遊んでいない。
+  if (best >= 300000 && games <= 3) {
+    out.push({
+      id: 'score_no_play', level: 'high',
+      label: '高いハイスコアなのに、ほとんど遊んでいない',
+      detail: `ハイスコア ${best.toLocaleString()} / プレイ ${games}回・Lv${level}`,
+    });
+  }
+
+  // ④ 引退した旧・絶対上限ちょうど。**これ単体は不正の証拠にならない**
+  //    （正直に100万以上を出した人も、当時は同じ数字に潰されている）。
+  //    上の①〜③と重なったときにだけ意味を持つ印として出す。
+  if (best === AUDIT_RETIRED_CEILING) {
+    out.push({
+      id: 'retired_ceiling', level: 'info',
+      label: '引退した旧上限（100万）ちょうど',
+      detail: 'v2.54 まではこれ以上の申告が全部この数字に潰されて記録されていた。'
+        + '正直な記録も同じ値になるので、単体では判断材料にならない',
+    });
+  }
+  return out;
+}
+
+const AUDIT_ORDER = { high: 0, warn: 1, info: 2 };
+
+adminRouter.get('/api/admin/audit', requireAuth, requireAdmin, (req, res) => {
+  const rows = [];
+  for (const u of Object.values(db.users)) {
+    if (!u || u.role === 'admin') continue;   // 運営自身の数字は監査しない
+    const flags = auditFlags(u);
+    if (!flags.length) continue;
+    const s = u.stats || {};
+    flags.sort((a, b) => AUDIT_ORDER[a.level] - AUDIT_ORDER[b.level]);
+    rows.push({
+      id: u.id,
+      username: u.username,
+      banned: !!u.banned,
+      level: levelOf(Number(u.xp) || 0),
+      createdAt: Number(u.createdAt) || 0,
+      gamesPlayed: Math.max(0, Number(s.gamesPlayed) || 0),
+      playSecs: Math.max(0, Number(s.playSecs) || 0),
+      bestScore: Math.max(0, Number(s.bestScore) || 0),
+      rating: Math.max(0, Number(s.rating) || 0),
+      dungeonMax: Math.max(0, Number(s.dungeonMax) || 0),
+      underMax: Math.max(0, Number(s.underMax) || 0),
+      heavenMax: Math.max(0, Number(s.heavenMax) || 0),
+      abyssMax: Math.max(0, Number(s.abyssMax) || 0),
+      worst: flags[0].level,
+      flags,
+    });
+  }
+  rows.sort((a, b) => (AUDIT_ORDER[a.worst] - AUDIT_ORDER[b.worst]) || (b.bestScore - a.bestScore));
+  res.json({
+    rows,
+    total: Object.keys(db.users).length,
+    counts: {
+      high: rows.filter(r => r.worst === 'high').length,
+      warn: rows.filter(r => r.worst === 'warn').length,
+      info: rows.filter(r => r.worst === 'info').length,
+    },
+    rateCap: AUDIT_RATE_CAP,
+    retiredCeiling: AUDIT_RETIRED_CEILING,
+  });
+});
+
 adminRouter.get('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
   const u = userById(req.params.id);
   if (!u) return res.status(404).json({ error: 'ユーザーが見つかりません' });

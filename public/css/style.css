@@ -611,6 +611,19 @@ body {
   margin: 10px 0 4px; max-height: 46vh; overflow-y: auto; padding-right: 2px;
 }
 /* 🎵 ジュークボックスの棚の見出し。47曲を平坦に並べると探せないので分ける。 */
+/* 🕵 記録の監査の一覧。1件ぶんが「誰・数字・引っかかった理由・取り消し」の4段。 */
+.au-list { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
+.au-row {
+  padding: 8px 10px; border-radius: 10px;
+  background: rgba(0, 0, 0, .22); border: 1px solid var(--line);
+}
+.au-head { display: flex; align-items: baseline; gap: 8px; font-size: 14px; }
+.au-head .muted { font-size: 11px; }
+.au-nums { font-size: 11px; margin: 3px 0 6px; line-height: 1.5; }
+.au-flag { display: flex; gap: 6px; align-items: flex-start; margin: 4px 0; font-size: 12px; }
+.au-flag span { display: flex; flex-direction: column; min-width: 0; }
+.au-flag small { font-size: 11px; line-height: 1.45; }
+.au-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
 .jb-head {
   display: flex; align-items: baseline; gap: 8px;
   margin: 10px 2px 2px; padding-bottom: 4px;
