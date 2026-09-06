@@ -179,6 +179,51 @@ try {
   check('7-2 取り消したら監査から消える', !rowOf(after, '偽装っぽい人'),
     flagIds(rowOf(after, '偽装っぽい人')).join(','));
 
+  // ---- ★ 同じ点の写しも消せること（v2.70） --------------------------------
+  //
+  // ⚠ 取り消しは bestScore しか消していなかった。ところが1回の走りで出た点は
+  //   各モードの自己ベストにも写し取られる。しかもそれらは EDITABLE_STATS に
+  //   無かったので、**運営には消す手段そのものが存在しなかった**。
+  //   実害: soloBest は本人のソロ開始画面に「BEST ◯◯」と出続け、
+  //   meltdown / chimera / chain / rush / blueprint は順位表の部門が実在する
+  //   （index.js の LB_BOARDS）ので、不正記録が板に居座っても手が出せない。
+  {
+    const FAM = ['soloBest', 'meltdownBest', 'chimeraBest', 'chainBest',
+      'chainMax', 'rushDepth', 'blueprintClears', 'ghostBest'];
+    const id = ids['偽装っぽい人'];
+    // まず全部に値を入れてから、監査ボタンと同じ形で 0 を送る。
+    const seed = await j(`/api/admin/users/${encodeURIComponent(id)}`,
+      { method: 'POST', body: { setStats: Object.fromEntries(FAM.map(k => [k, 777])) } }, admin);
+    check('7-3 ★各モードの自己ベストを運営が編集できる', seed.status === 200,
+      JSON.stringify(seed).slice(0, 120));
+    const wiped = await j(`/api/admin/users/${encodeURIComponent(id)}`,
+      { method: 'POST', body: { setStats: Object.fromEntries(FAM.map(k => [k, 0])) } }, admin);
+    const st = (wiped.user && wiped.user.stats) || {};
+    const left = FAM.filter(k => (Number(st[k]) || 0) !== 0);
+    check('7-4 ★写しも 0 に戻せる', wiped.status === 200 && left.length === 0, left.join(','));
+  }
+
+  // ---- ★ 何をいくつから いくつにしたかが操作ログに残ること（v2.70） -------
+  //
+  // ⚠ adminLog は入れ子の object を「N項目」に潰すので、記録されるのは
+  //   {"setStats":"4項目"} だけだった。押し間違えても、どの欄をいくつから
+  //   いくつに変えたのかがどこにも無く、ログを見て戻すことができなかった。
+  //   ハイスコアの取り消しは「不正の疑い」に対する人の判断で、間違えうる操作。
+  {
+    const id = ids['0回なのに記録がある人'];
+    const before = (await j(`/api/admin/users/${encodeURIComponent(id)}`, {}, admin));
+    const was = ((before.user && before.user.stats) || {}).bestScore || 0;
+    await j(`/api/admin/users/${encodeURIComponent(id)}`,
+      { method: 'POST', body: { setStats: { bestScore: 0 } } }, admin);
+    const log = await j('/api/admin/log', {}, admin);
+    const rows = (log.log || log.entries || log.items || []);
+    const hit = rows.find(r => r && r.action === 'user_edit' && r.detail && r.detail.statsDiff);
+    check('7-5 ★取り消しの前後が操作ログに残る',
+      !!hit && String(hit.detail.statsDiff).includes('bestScore')
+        && String(hit.detail.statsDiff).includes(was.toLocaleString('en-US')),
+      hit ? String(hit.detail.statsDiff) : `statsDiff が無い（前の値 ${was}）`);
+  }
+
   // ---- 権限 ---------------------------------------------------------------
   const reg = await j('/api/register', { method: 'POST', body: { username: 'のぞき見', password: 'pw-audit-1234' } });
   const denied = await j('/api/admin/audit', {}, reg.token);

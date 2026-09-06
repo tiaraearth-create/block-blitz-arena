@@ -2,7 +2,7 @@
 // Progress is derived (never stored), so old accounts get credit retroactively;
 // only the *claimed* list lives on the user record.
 
-import { SHOP_ITEMS } from './catalog.js';
+import { SHOP_ITEMS, isCollectibleGear } from './catalog.js';
 
 const a = (id, icon, cat, goal, coins, gems, name, nameEn, desc, descEn, value) =>
   ({ id, icon, cat, goal, coins, gems, name, nameEn, desc, descEn, value });
@@ -13,7 +13,20 @@ const a = (id, icon, cat, goal, coins, gems, name, nameEn, desc, descEn, value) 
 // 進捗バーが 37/45 で永久に止まっていた。しかも理由はゲーム内のどこにも
 // 書かれていないので、コンプリートを目指す人は原因不明のまま詰む。
 // カタログから導出しておけば、今後アイテムが増減しても勝手に追従する。
-const COLLECTIBLE_MAX = SHOP_ITEMS.filter(i => !i.adminOnly).length;
+//
+// ⚠ 導出する式を**ここに手書きしていた**（`!i.adminOnly` だけ）ため、図鑑の
+//   母数（catalog.js の isCollectibleGear）と食い違っていた。実測で
+//   実績は 72種、図鑑は 51種 ── 同じ「集めきる」を数える2つの画面が
+//   21種ずれていた。差は 既定4種・王座専用7種・交換所限定10種。
+//   しかも進捗は owned.length（＝既定も王座も交換所も込みの丸ごとの数）
+//   だったので、母数と分子で数えているものが最初から別だった。
+//   catalog.js:139 が「判定はここにしか書かない」と言っているのは
+//   まさにこの形の事故のこと。述語を輸入して、分子も同じ物差しで数える。
+const COLLECTIBLE = SHOP_ITEMS.filter(isCollectibleGear);
+const COLLECTIBLE_IDS = new Set(COLLECTIBLE.map(i => i.id));
+const COLLECTIBLE_MAX = COLLECTIBLE.length;
+/** 図鑑に数える品だけを、所持品の中から数える。 */
+const collectedCount = u => (u.owned || []).reduce((n, id) => n + (COLLECTIBLE_IDS.has(id) ? 1 : 0), 0);
 
 const S = u => u.stats || {};
 const has = (u, b) => (u.badges || []).includes(b);
@@ -203,7 +216,7 @@ export const ACHIEVEMENTS = [
   a('ach_gacha100', 'gacha', 'collect', 100, 3000, 25, 'ガチャの申し子', 'Gacha Prodigy',   'ガチャを100回引く',     'Pull the gacha 100 times',   u => S(u).gachaPulls || 0),
   a('ach_ssr',      'rainbow', 'collect', 1,   1500, 12, '虹色の奇跡',    'Rainbow Miracle',  'SSR以上を引き当てる',   'Pull an SSR or better',      u => S(u).gachaSSR || 0),
   a('ach_own45',    'collection', 'collect', COLLECTIBLE_MAX, 8000, 70, '伝説の収集家',  'Legendary Collector',
-    `アイテムを全${COLLECTIBLE_MAX}種そろえる`, `Own all ${COLLECTIBLE_MAX} catalog items`, u => (u.owned || []).length),
+    `アイテムを全${COLLECTIBLE_MAX}種そろえる`, `Own all ${COLLECTIBLE_MAX} catalog items`, collectedCount),
   a('ach_lv50',     'level_up', 'collect', 50,  6000, 55, 'レベル50',      'Level 50',         'レベル50に到達',        'Reach level 50',             u => 1 + Math.floor((u.xp || 0) / 1000)),
 
   // ---- 伝説 ----

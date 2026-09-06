@@ -4068,8 +4068,17 @@ function finalizeWeeklyRankings() {
       id: crypto.randomUUID(),
       title: `週間チャレンジ結果発表（${week}）`,
       titleEn: `Weekly Challenge results (${week})`,
-      body: `先週の週間チャレンジの結果です（参加${players.length}人）！\n${top.join('\n')}\n\n参加者全員に順位に応じたコイン＆ジェムをお届けしました。ゲームを開くと受け取れます。今週のチャレンジも開催中！`,
-      bodyEn: `Last week's Weekly Challenge results (${players.length} entrants)!\n${top.join('\n')}\n\nEveryone received coins & gems for their placement — open the game to claim. This week's challenge is already live!`,
+      // 🎭 参加人数は**書かない**。
+      //
+      // ⚠ players は db.users から作るので、これは**住人を外して数えた
+      //   実プレイヤーの人数**そのもの。しかも お知らせ（/api/news）は
+      //   ログインしていなくても読めるうえ、本文は消さずに残る方針なので、
+      //   週ごとの実プレイヤー数の年表が誰にでも読める形で積み上がっていた。
+      //   同じ週のランキング盤は住人込みで100行あるため、引き算がそのまま効く。
+      //   人数は運営の数字（db.json と管理画面）に残っているので、お知らせから
+      //   落としても運営が困ることはない。
+      body: `先週の週間チャレンジの結果です！\n${top.join('\n')}\n\n参加者全員に順位に応じたコイン＆ジェムをお届けしました。ゲームを開くと受け取れます。今週のチャレンジも開催中！`,
+      bodyEn: `Last week's Weekly Challenge results!\n${top.join('\n')}\n\nEveryone received coins & gems for their placement — open the game to claim. This week's challenge is already live!`,
       pinned: false, by: '運営', at: Date.now(),
       // 🪪 本文に焼き込んだ名前と、その持ち主。退会したときに**その名前だけ**を
       //    伏せ字へ置き換えるために要る（お知らせは未ログインでも読めるので、
@@ -4485,7 +4494,15 @@ app.post('/api/rank/claim', requireAuth, maintenanceGuard, (req, res) => {
   }
   req.user.coins += coins;
   req.user.gems += gems;
-  const claimed = pending.slice();
+  // 🎭 of（順位を決めた母集団の人数）を落としてから返す。
+  //
+  // ⚠ publicUser は同じ理由で of を落としている（上の rankRewards 参照）のに、
+  //   **ここだけ生の配列をそのまま返していた**。受け取った瞬間のこの応答に
+  //   「3位 / 13人中」が入る。ところが同じ週のランキング盤は100行あるので、
+  //   引き算で「残り87行は口座を持たない何か」が確定する ── 住人を名指しは
+  //   できなくても、**実プレイヤーが何人なのか**が割れる時点で漏れ。
+  //   受け取りは誰でも通る経路なので、publicUser より広く開いている。
+  const claimed = pending.map(({ of, ...r }) => r);
   req.user.rankRewards = [];
   saveDb();
   res.json({ reward: { coins, gems, badges }, claimed, user: publicUser(req.user) });

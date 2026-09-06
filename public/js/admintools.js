@@ -995,8 +995,11 @@ function auditRow(r) {
           <span><b>${esc(f.label)}</b><small class="muted">${esc(f.detail)}</small></span>
         </div>`).join('')}
       <div class="au-acts">
-        <button class="btn btn-sm btn-ghost" data-au-clear="score" data-id="${esc(r.id)}" data-name="${esc(r.username)}">ハイスコアを取り消す</button>
-        <button class="btn btn-sm btn-ghost" data-au-clear="floors" data-id="${esc(r.id)}" data-name="${esc(r.username)}">階層を取り消す</button>
+        <button class="btn btn-sm btn-ghost" data-au-clear="score" data-id="${esc(r.id)}" data-name="${esc(r.username)}"
+          data-best="${Number(r.bestScore) || 0}">ハイスコアを取り消す</button>
+        <button class="btn btn-sm btn-ghost" data-au-clear="floors" data-id="${esc(r.id)}" data-name="${esc(r.username)}"
+          data-dungeon="${Number(r.dungeonMax) || 0}" data-under="${Number(r.underMax) || 0}"
+          data-heaven="${Number(r.heavenMax) || 0}" data-abyss="${Number(r.abyssMax) || 0}">階層を取り消す</button>
       </div>
     </div>`;
 }
@@ -1007,11 +1010,32 @@ async function clearRecord(btn, body) {
   const what = btn.dataset.auClear;
   const id = btn.dataset.id;
   const name = btn.dataset.name;
+  // 🏅 「ハイスコアを取り消す」は**同じ点の写しを全部**持っていく。
+  //
+  // ⚠ bestScore だけを 0 にしていたが、1回の走りで出た点は各モードの
+  //   自己ベストにも写し取られる。片方だけ消すと
+  //     ・本人のソロ画面には「BEST 1,000,000」が出たまま
+  //     ・メルトダウン／キメラ／連鎖／ラッシュ／設計図の順位表には残ったまま
+  //   という、取り消したのに取り消せていない状態になる。
+  //   ここは「不正の疑いがある記録を無かったことにする」ボタンなので、
+  //   同じ走りから生えた数字は一緒に落とすのが意図に合う。
+  const SCORE_FAMILY = ['bestScore', 'soloBest', 'meltdownBest', 'chimeraBest',
+    'chainBest', 'chainMax', 'rushDepth', 'blueprintClears', 'ghostBest'];
   const setStats = what === 'score'
-    ? { bestScore: 0 }
+    ? Object.fromEntries(SCORE_FAMILY.map(k => [k, 0]))
     : { dungeonMax: 0, underMax: 0, heavenMax: 0, abyssMax: 0 };
   const label = what === 'score' ? 'ハイスコア' : 'ダンジョンの到達階層';
-  if (!confirm(`${name} の${label}を 0 に戻します。\n元の数字は戻せません。よろしいですか？`)) return;
+  // 消す前の数字を確認文に出す。押す直前に「何を消すのか」が目に入る形にする
+  // （一覧の行と確認文がずれていたら、それは押してはいけない合図）。
+  const now = what === 'score'
+    ? fmt(Number(btn.dataset.best) || 0)
+    : [['塔', 'dungeon'], ['地下', 'under'], ['天国', 'heaven'], ['深淵', 'abyss']]
+        .map(([n, k]) => [n, Number(btn.dataset[k]) || 0]).filter(([, v]) => v > 0)
+        .map(([n, v]) => `${n}${v}`).join('・') || '0';
+  // 🧾 前の値はサーバーの操作ログ（🧾ボタン）に「前→後」で残る。v2.70 から。
+  //    「戻せません」と書いていたが、それは残していなかったから戻せなかっただけ。
+  if (!confirm(`${name} の${label}を取り消します。\n\n  今の記録: ${now}\n  取り消し後: 0\n\n`
+    + `前の数字は操作ログ（🧾）に残るので、間違えたら手で戻せます。\nよろしいですか？`)) return;
   btn.disabled = true;
   try {
     await api(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'POST', body: { setStats } });

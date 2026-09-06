@@ -475,6 +475,29 @@ const EDITABLE_STATS = [
   { key: 'loginStreak', label: '連続ログイン（現在）', max: 3650 },
   { key: 'totalWins', label: '総勝利数', max: 1_000_000 },
   { key: 'aiWins', label: 'AI戦勝利', max: 1_000_000 },
+
+  // ---- 🏅 各モードの自己ベスト -------------------------------------------
+  //
+  // ⚠ ここが**まるごと抜けていた**。bestScore を 0 に戻しても、同じ回に
+  //   出した点は各モードの自己ベストに写し取られたまま残り、しかも
+  //   この一覧に無いので**運営には消す手段が存在しなかった**。
+  //   実害は2つ:
+  //     ・soloBest はプレイヤー自身のソロ開始画面に「BEST ◯◯」と出続ける
+  //       （modes.js の best()）。取り消したのに本人には見えたまま。
+  //     ・meltdown / chimera / chain / rush / blueprint は**順位表の部門が
+  //       実在する**（index.js の LB_BOARDS）。つまり不正な記録が板の一位に
+  //       居座っても、運営は指をくわえて見ているしかなかった。
+  //   「表に出す数字は、運営が直せなければならない」── 上の📊統計の欄で
+  //   一度書いた約束が、自己ベストには適用されていなかった。
+  { key: 'soloBest', label: 'ソロ 自己ベスト', max: 100_000_000 },
+  { key: 'meltdownBest', label: 'メルトダウン 自己ベスト', max: 100_000_000 },
+  { key: 'chimeraBest', label: 'キメラ 自己ベスト', max: 100_000_000 },
+  { key: 'chainBest', label: '連鎖 自己ベスト', max: 100_000_000 },
+  { key: 'chainMax', label: '最大連鎖数', max: 9999 },
+  { key: 'rushDepth', label: 'ラッシュ 到達深度', max: 9999 },
+  { key: 'blueprintClears', label: '設計図 クリア数', max: 9999 },
+  // 👻 幽霊屋敷は隠しモードで順位表の部門も無いが、記録は残るので直せる口は要る。
+  { key: 'ghostBest', label: '幽霊屋敷 自己ベスト', max: 100_000_000 },
 ];
 
 // ADMIN_KNOWN_BADGES（サーバーが配りうるバッジの全一覧）は index.js に置いたまま
@@ -748,6 +771,28 @@ adminRouter.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) =
   }
 
   // ---- everything validated: apply ----
+  //
+  // 🧾 上書きする前に「前の値」を控える。
+  //
+  // ⚠ これが無いと、記録の取り消しは**本当に元に戻せない**操作だった。
+  //   操作ログ（db.meta.adminLog）は前から user_edit を残していたが、
+  //   adminLog は入れ子の object を `${Object.keys(v).length}項目` に潰すので、
+  //   setStats:{bestScore:0} は「setStats: 1項目」としか残らない。
+  //   つまり **どの記録をいくつから 0 にしたのかが誰にも分からない**。
+  //   押し間違えても、後から気づいても、戻す手がかりがゼロだった。
+  //
+  //   ハイスコアの取り消しは「不正の疑い」に対して人が下す判断であって、
+  //   間違えることがある前提の操作。前後を残せば、そのまま戻す値にもなる。
+  const before = {};
+  if (patch.stats) {
+    const st = target.stats || {};
+    for (const k of Object.keys(patch.stats)) before[k] = Number(st[k]) || 0;
+  }
+  if (b.resetStats === true) {
+    const st = target.stats || {};
+    for (const k of Object.keys(st)) if (typeof st[k] === 'number') before[k] = st[k];
+  }
+
   // 即時適用系(grant*/権限/パスワード等)を先に流す。set* の絶対値はこの後に
   // 上書き適用されるので、両方が来たときは従来どおり set* が勝つ。
   for (const fn of applies) fn();
@@ -775,7 +820,13 @@ adminRouter.post('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) =
 
   // Leave the record in a shape the rest of the server can read.
   migrateUser(target);
-  adminLog(req, 'user_edit', target.username, b);
+  // 🧾 統計を触ったときだけ、変わった欄を「前→後」の1行に畳んで足す。
+  //    adminLog は object を潰すので、**文字列**にしてから渡すこと。
+  //    （潰される形で渡すと「statsDiff: 3項目」になって元の木阿弥）
+  const diff = Object.keys(before)
+    .filter(k => (Number((target.stats || {})[k]) || 0) !== before[k])
+    .map(k => `${k}: ${before[k].toLocaleString('en-US')} → ${(Number((target.stats || {})[k]) || 0).toLocaleString('en-US')}`);
+  adminLog(req, 'user_edit', target.username, diff.length ? { ...b, statsDiff: diff.join(' / ') } : b);
   saveDb();
   // NOT publicUser(): for an admin target that view fakes the entire shop as
   // owned, and echoing it back would let the editor write that fiction in.

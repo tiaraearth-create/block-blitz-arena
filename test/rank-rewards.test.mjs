@@ -127,6 +127,20 @@ try {
 
   const news = await j('/api/news');
   check('results are announced in the news', (news.news || []).some(n => n.title.includes('結果発表')));
+  // 🎭 ★お知らせの本文に参加人数を書かない。
+  //
+  // ⚠ 本文は `先週の週間チャレンジの結果です（参加${players.length}人）！` だった。
+  //   players は db.users から作るので、これは**住人を外して数えた実プレイヤー
+  //   の人数**そのもの。お知らせは未ログインでも読めるうえ本文は消さずに残す
+  //   方針なので、週ごとの実プレイヤー数の年表が誰にでも読める形で積み上がる。
+  //   同じ週の順位表は住人込みで並ぶので、引き算がそのまま効く。
+  {
+    const wk = (news.news || []).filter(n => n.title.includes('週間チャレンジ結果'));
+    const leaky = wk.filter(n => /参加\s*\d+\s*人|\d+\s*entrants/i.test(`${n.body || ''}\n${n.bodyEn || ''}`));
+    check('★週間チャレンジのお知らせに参加人数が書かれていない（住人の秘匿）',
+      wk.length > 0 && leaky.length === 0,
+      leaky.length ? leaky.map(n => (n.body || '').slice(0, 40)).join(' / ') : `${wk.length}件を検査`);
+  }
 
   const lb = await j('/api/leaderboard?board=weekly');
   check('weekly board ships the prize table', Array.isArray(lb.rewards) && lb.rewards[0].coins === 2000);
@@ -144,6 +158,18 @@ try {
   const claim = await j('/api/rank/claim', { method: 'POST', body: {} }, b.token);
   check('claim pays coins+gems+badge', claim.status === 200 && claim.reward.coins === 2000 && claim.reward.gems === 300 && claim.reward.badges.includes('weekly1'), JSON.stringify(claim.reward));
   check('user balance and badges updated', claim.user.coins === beforeB.coins + 2000 && claim.user.gems === beforeB.gems + 300 && claim.user.badges.includes('weekly1') && claim.user.rankRewards.length === 0);
+  // 🎭 ★受け取りの応答にも母集団の人数を載せない。
+  //
+  // ⚠ 上の /api/me 側は v2.61 から見張っていたのに、**受け取りの応答は
+  //   生の配列をそのまま返していた**（`const claimed = pending.slice();`）。
+  //   publicUser が of を落とす式だけを見ていたので、このテストは
+  //   ずっと緑のまま漏れていた ── 止め金が経路の片側しか見ていない例。
+  //   しかも受け取りは誰でも通る経路なので、publicUser より広く開いていた。
+  check('★受け取りの応答にも母集団の人数が載っていない（住人の秘匿）',
+    Array.isArray(claim.claimed) && claim.claimed.length > 0
+      && claim.claimed.every(r => r.of === undefined),
+    JSON.stringify(claim.claimed));
+
   const again = await j('/api/rank/claim', { method: 'POST', body: {} }, b.token);
   check('second claim is refused', again.status === 409);
 
