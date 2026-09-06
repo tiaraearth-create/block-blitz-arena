@@ -21,8 +21,8 @@ export const CATALOG_EN = {
   // 👑 王座の宝物庫（管理者イベント専用ショップ）
   skin_verdict: { name: 'Verdict Mark', desc: 'Blocks scored by a red judgement line' },
   skin_zero: { name: "Zero's Eye", desc: 'Blocks with an eye that looks back at you' },
-  board_throne: { name: 'The Seven Thrones', desc: 'A stage where one throne lights for each one reclaimed' },
-  board_chronicle: { name: 'Hall of the Chronicle', desc: 'A hall whose walls stream the record of names' },
+  board_throne: { name: 'The Seven Thrones', desc: 'A hall washed in throne-gold, stars glinting overhead' },
+  board_chronicle: { name: 'Hall of the Chronicle', desc: 'A quiet hall steeped in the violet of the seal' },
   fx_seal: { name: 'Sealbreak', desc: 'The violet seal shatters on every clear' },
   fx_crown: { name: 'Crown Returned', desc: 'A broken crown reassembles on every clear' },
   ult_condemn: { name: 'Condemnation', desc: 'Cuts one row and one column clean away, however full they are' },

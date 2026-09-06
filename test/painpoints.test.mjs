@@ -233,7 +233,12 @@ check('K-15 ミッションをまとめて受け取れる', /id="msClaimAll"/.te
 check('K-16 タブの往復で取り直さない', /if \(tab !== 'ach' && missionsCache && session\.user\) \{ renderMissions\(\); return; \}/.test(screens), '');
 check('K-17 遊び方の印がチュートリアルで消えない',
   /dot\.classList\.toggle\('hidden', rulesSeen\(\)\);/.test(mainJs), '');
-check('K-18 エフェクトは実物を撃って見せる', /ps\.burstCell\(84, 84, 84, 6, item\.id\);/.test(screens), '');
+// ⚠ 撃つ大きさは **枠に合わせる**（168px の枠に対して 21）。実ゲームのセル寸法
+//   （84）をそのまま渡していたので、初速も重力も size 比例のぶん 4倍になり、
+//   0.2秒 で全部が枠外へ出ていた ── カードのフェードインが明ける前に終わるので、
+//   「実物を撃って見せる」つもりが**実質一度も見えなかった**。
+check('K-18 エフェクトは実物を撃って見せる', /ps\.burstCell\(84, 100, 21, 6, item\.id\);/.test(screens), '');
+check('K-18b 枠に対して大きすぎる寸法で撃っていない', !/ps\.burstCell\(84, 84, 84,/.test(screens), '');
 // ⚠ K-19/K-20 は実機で踏んだ形。renderPreview は grid.appendChild より**前**に
 //   呼ばれるので、最初のフレームは canvas.isConnected が false のまま ──
 //   そこで止めると**一度も描かれず真っ白**になる（テストでは見えない）。

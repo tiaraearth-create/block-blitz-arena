@@ -122,7 +122,11 @@ adminEventRouter.post('/api/adminevent/result', requireAuth, maintenanceGuard, (
     const last = seedLastResultAt(req.user);
     const elapsed = (now - last) / 1000 + 90;
     if (duration > elapsed) duration = Math.max(1, Math.floor(elapsed));
-    req.user.stats.lastResultAt = now;
+    // 📴 **受け付けたぶんだけ進める（now へ倒さない）**。applyGameResult と
+    //    同じ式にそろえる ── ここだけ now に倒していたので、管理者イベントに
+    //    1回参加すると、そのあと届くオフライン控えの予算が丸ごと消え、
+    //    2件目以降のスコアが 92秒ぶんに切り詰められて記録に残っていた。
+    req.user.stats.lastResultAt = Math.min(now, last + Math.ceil(duration) * 1000);
   }
   let score = Math.max(0, Math.min(1_000_000, Math.floor(Number(body.score) || 0)));
   if (score > duration * 500) score = Math.floor(duration * 500);

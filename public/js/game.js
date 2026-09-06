@@ -151,7 +151,12 @@ export function drawEyeBlock(ctx, x, y, s, alpha = 1, phase = 0) {
   ctx.fillStyle = 'rgba(18,16,28,0.92)';
   ctx.beginPath();
   const r = Math.max(2, bs * 0.18);
-  ctx.roundRect(x + pad, y + pad, bs, bs, r);
+  // roundRect は比較的新しい API。ここだけ素で呼んでいたので、非対応の
+  // ブラウザでは render() の途中で例外になり、**この行から下の描画
+  // （危険表示・手札・粒子）がフレームごと丸ごと飛んでいた**。
+  // 同じファイルの drawIceBlock / drawPieceTag はどちらも分岐してある。
+  if (ctx.roundRect) ctx.roundRect(x + pad, y + pad, bs, bs, r);
+  else ctx.rect(x + pad, y + pad, bs, bs);
   ctx.fill();
   // 眼。開き具合は phase（0=閉じ 1=見開き）。
   const open = Math.max(0.08, Math.min(1, Number(phase) || 0));
@@ -446,6 +451,15 @@ export class GameView {
       s.setProperty('--bba-hand-left', px(handLeft));
       s.setProperty('--bba-board-bottom', px(boardBottom));
       s.setProperty('--bba-hand-piece-top', px(r.top + this.handPieceTop()));
+      // 🎬 録画中の帯（#clipBar）が置ける高さ。CSS の px 直打ち（150px）は
+      //    縦持ちの端末向けの当て推量で、横持ち（手札は右にいる）では
+      //    **盤面の中段に重なっていた**。手札があるときはコマの上端、
+      //    無い／右にいるときは画面の下端すぐ上を返す。
+      const vh = (typeof window !== 'undefined' && window.innerHeight) || (r.top + this.H);
+      const clipBottom = (this.sideTray || !this.showTray)
+        ? 8
+        : Math.max(8, vh - (r.top + this.handPieceTop()) + 6);
+      s.setProperty('--bba-clip-bottom', px(clipBottom));
     } catch { /* 差し替えられた document スタブなど */ }
   }
 
@@ -541,6 +555,13 @@ export class GameView {
       //    掴めなくなる**（固まったように見える）。
       //    e.button は touch/pen でも 0 になるので、指の操作は影響を受けない。
       if (e.button !== 0 || e.isPrimary === false) return;
+      // ⌨ 盤面へ触れたら canvas にフォーカスを移す。
+      //    キー操作（1〜3の手札選択・矢印・Enter・Esc）は canvas 自身の
+      //    keydown に乗っているのに、掴んだときの preventDefault が
+      //    互換 mousedown ごと止めるため、**マウスで遊び始めた瞬間に
+      //    キーボードが盤面に届かなくなっていた**（tabindex は付いているのに
+      //    canvas.focus() を呼ぶ場所がリポジトリに1つも無かった）。
+      try { this.canvas.focus({ preventScroll: true }); } catch { /* 古い実装 */ }
       // Already dragging with another pointer? A second finger / the palm
       // touching the canvas must not hijack or replace the active drag.
       if (this.drag) return;
@@ -1441,6 +1462,11 @@ export class GameView {
     // 残り時間の輪。締切がどこにも出ておらず、落とすと住人が処刑される
     // のに、あと何秒あるのか分からなかった。急所（金マス）の上に描く。
     if (this.dangerUntil && this.dangerTotal) {
+      // ⚠ save/restore で包む。この枝は textAlign / textBaseline / lineCap /
+      //    font を書き換えたまま出ていくので、**以後この画面のすべての
+      //    浮き文字（+1,200 やコンボ）が半行ぶん下へずれていた**
+      //    （drawFloatTexts は textAlign しか指定していない）。
+      ctx.save();
       const left = Math.max(0, this.dangerUntil - Date.now());
       const p = left / this.dangerTotal;
       const k = this.keystoneCell >= 0 ? this.keystoneCell : [...this.dangerCells][0];
@@ -1460,6 +1486,7 @@ export class GameView {
       ctx.font = `900 ${Math.round(cell * 0.4)}px system-ui, sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText((left / 1000).toFixed(1), cx, cy);
+      ctx.restore();
     }
     ctx.globalAlpha = 1;
   }

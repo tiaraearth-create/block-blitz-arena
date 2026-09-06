@@ -259,7 +259,10 @@ export async function flushResultQueue() {
         // 2時間で切れる／日付が変わった）。報酬は入るのに連続クリアだけが
         // 付かない、という一番わかりにくい形なので、そこだけ別に言う。
         const d = res && res.rewards && res.rewards.daily;
-        if (d && d.recorded === false) noteResultsDropped(1, d.reason || 'expired');
+        // mode を渡す。渡していなかったので、画面のトーストが
+        // 「デイリーとしては記録されなかった」ではなく汎用の文面になり、
+        // **報酬は入っているのに「送れませんでした」**と読める形だった。
+        if (d && d.recorded === false) noteResultsDropped(1, d.reason || 'expired', 'daily');
       } catch (err) {
         // まだ圏外(0) / 送りすぎ(429) / メンテ中(503) は、こちらの都合ではなく
         // 時間が解決する ── 控えに戻して次の機会に回す。

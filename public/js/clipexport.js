@@ -73,7 +73,11 @@ let clip = null;          // 録画中の状態。同時に1本だけ。
 // **セットで** 持つ。片方だけだと「録画中の表示なのに何も起きない」で詰む。
 // 逆に Worker と setInterval が両方動くと送出が二重になって映像が倍速に詰まるので、
 // 退避するときは必ず先に terminate する。
-function makeTicker(onTick) {
+// ⏱ 間隔は呼び出し側が決める。33ms 固定だったので、低スペック向けの
+//    プロファイル（fps: 20）が **一度も効かず、常に約30fps 送っていた**
+//    ── 落とすために用意した設定が、落としていなかった。
+function makeTicker(onTick, everyMs = 33) {
+  const step = Math.max(8, Math.round(Number(everyMs) || 33));
   let worker = null, timer = 0, ticked = 0, stopped = false;
   const fallback = () => {
     // stop() のあとに保険が発火すると、timer===0 を「まだ張っていない」と
@@ -81,10 +85,10 @@ function makeTicker(onTick) {
     // （録画を数百ms で取り消すたびに1本ずつ増える）。停止済みなら何もしない。
     if (stopped || timer) return;
     if (worker) { try { worker.terminate(); } catch { /* ignore */ } worker = null; }
-    timer = setInterval(() => { ticked++; onTick(); }, 33);
+    timer = setInterval(() => { ticked++; onTick(); }, step);
   };
   try {
-    const src = 'setInterval(function(){postMessage(0)},33)';
+    const src = `setInterval(function(){postMessage(0)},${step})`;
     const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
     worker = new Worker(url);
     URL.revokeObjectURL(url);       // 読み込みは開始済み。捨てないと録画ごとに1つ残る
@@ -250,6 +254,11 @@ function modeTitle(mode) {
 
 export function startClip(seconds) {
   if (clip) { toast(t('もう録画しています', 'Already recording'), '', 1800); return; }
+  // 🎬 受け取り待ちのクリップは**先に渡す**。pending は1本しか持てず、
+  //    showBar() が同じ id の帯（＝「見る」ボタン）ごと消してしまうので、
+  //    放置したまま次を録ると1本目はどこからも取り出せないまま
+  //    readyBar に黙って上書きされて消えていた。
+  if (pending) flushPending();
   if (!canRecordClip()) {
     toast(t('この端末では録画に対応していません', 'Recording is not supported on this device'), 'err', 3000);
     return;
@@ -370,7 +379,7 @@ export function startClip(seconds) {
     const left = document.getElementById('clipLeft');
     if (left) left.textContent = `●REC ${Math.max(0, Math.ceil(dur - el))}`;
     if (el >= dur) stopClip(state);
-  });
+  }, Math.round(1000 / P.fps));
   toast(t(`${dur}秒 録画中`, `Recording ${dur}s`), 'ok', 1800);
   // 横持ち（PC・タブレット）だと盤面が横長の帯になり、縦型の枠に対して
   // 上下が大きく余る。同じ操作でも縦画面のほうが見栄えが段違いなので、
@@ -413,7 +422,9 @@ function readyBar(blob, mode) {
   bar.id = 'clipBar';
   const label = t('クリップができました', 'Clip ready');
   const view = t('見る', 'View');
-  bar.innerHTML = '<span id="clipLeft">' + label + '</span>'
+  // ⚠ id は #clipLeft（●REC）と分ける。使い回していたので、**録画は
+  //    終わっているのに赤く明滅し続け、まだ録っているように見えた**。
+  bar.innerHTML = '<span id="clipDone">' + label + '</span>'
     + '<button class="btn btn-sm btn-primary" id="clipOpen">' + view + '</button>';
   document.body.appendChild(bar);
   bar.querySelector('#clipOpen').onclick = () => { removeBar(); flushPending(); };

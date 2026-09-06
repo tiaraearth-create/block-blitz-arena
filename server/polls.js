@@ -125,15 +125,15 @@ export function vote(poll, userId, optionId) {
 const EVENT_TASTE = {
   newbie:   { coinfes: 3, xpboost: 3, gemrush: 2, lucky: 1 },
   tryhard:  { ultfes: 3, xpboost: 2, doubletrouble: 2, bossraid: 1 },
-  casual:   { coinfes: 3, chaos: 2, doubletrouble: 2, lucky: 1 },
-  nightowl: { chaos: 2, ultfes: 2, doubletrouble: 2 },
+  casual:   { coinfes: 3, doubletrouble: 3, lucky: 1 },
+  nightowl: { ultfes: 3, doubletrouble: 2 },
   morning:  { xpboost: 2, coinfes: 2 },
   global:   { doubletrouble: 2, coinfes: 2, ultfes: 1 },
   gacha:    { lucky: 5, gemrush: 3, coinfes: 1 },
   explorer: { bossraid: 4, ultfes: 1, gemrush: 1 },
   senpai:   { xpboost: 2, bossraid: 2, coinfes: 1 },
-  kid:      { chaos: 3, doubletrouble: 2, coinfes: 2 },
-  streamer: { chaos: 3, doubletrouble: 3 },
+  kid:      { doubletrouble: 3, coinfes: 2 },
+  streamer: { doubletrouble: 3, ultfes: 2 },
   lurker:   { coinfes: 2, xpboost: 2 },
 };
 

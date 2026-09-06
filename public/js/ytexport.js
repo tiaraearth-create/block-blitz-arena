@@ -7,6 +7,7 @@
 // 音はWebAudioの完全合成なので、録れたものがゲーム内とビット単位で同じ音。
 // おまけ: サムネイルPNGの書き出しと、コピペ用のタイトル/説明文も用意。
 import { audio, TRACK_INFO } from './audio.js';
+import { getSettings, updateSettings } from './settings.js';
 import { showModal, closeModal, toast } from './dom.js';
 import { t } from './i18n.js';
 import { ghostUnlocked } from './modes.js';
@@ -83,6 +84,8 @@ function stopStudio() {
   if (s.stream) { try { s.stream.getTracks().forEach(tr => tr.stop()); } catch { /* ok */ } }
   if (s.onVis) document.removeEventListener('visibilitychange', s.onVis);
   audio.lookahead = 0.35;
+  // 🔇 録画中に見送った自動停止をやり直す（onstop 側と同じ理由）。
+  if (typeof document !== 'undefined' && document.hidden) audio.onVisibilityChange();
   try { if (s.rec && s.rec.state !== 'inactive') s.rec.stop(); } catch { /* already stopped */ }
   try { if (s.analyser) audio.musicGain.disconnect(s.analyser); } catch { /* not connected */ }
   try { if (s.dest) audio.musicGain.disconnect(s.dest); } catch { /* not connected */ }
@@ -208,7 +211,12 @@ function drawFrame(ctx2d, info, an, freqBuf, elapsed, total, recording) {
   }
 }
 
-export function showYouTubeStudio() {
+// onBack: 閉じたときに戻る先（省略＝そのままメニュー）。
+// ジュークボックス → スタジオ と潜ったのに、閉じると**サントラにも設定にも
+// 戻らずメニューまで落ちて**いた（設定→サントラ→スタジオの3階層ぶんが消える）。
+// screens.js 側から showJukeboxModal を渡す ── ここから import すると
+// screens.js → ytexport.js の一方向の依存が輪になる。
+export function showYouTubeStudio(onBack = null) {
   // 前のスタジオが生き残っていたら必ず畳んでから開く。
   // 畳まないと、前回の描画ループとアナライザーが繋がったまま残り、
   // 開くたびに増えていく。
@@ -331,7 +339,19 @@ export function showYouTubeStudio() {
   };
 
   const status = msg => { m.querySelector('#ytStatus').textContent = msg; };
-  const preview = () => { audio.preview(sel); };
+  // 🔈 BGM を OFF にしている人は syncTrack が即返るので、プレビューも
+  //    EQ も**まったく動かない**（録画だけは beginRec が musicOn を押し通すので
+  //    音の出る動画ができる ── 聴けないのにファイルには入る、が起きていた）。
+  //    ジュークボックスと同じ扱いにする：曲を選んだ＝聴きたい、なので黙って
+  //    ON にして知らせる。**順番が要点** ── 先に preview() で曲を決めてから
+  //    ON にしないと、メニュー曲が一瞬鳴ってしまう。
+  const preview = () => {
+    audio.preview(sel);
+    if (!getSettings().musicOn) {
+      updateSettings({ musicOn: true });
+      toast(t('BGMをONにしました', 'Music turned on'), 'ok', 1800);
+    }
+  };
   preview();   // 開いた瞬間から選択曲が流れる
 
   const trackSel = m.querySelector('#ytTrack');
@@ -503,6 +523,11 @@ export function showYouTubeStudio() {
         if (studioState.onVis) { document.removeEventListener('visibilitychange', studioState.onVis); studioState.onVis = null; }
       }
       audio.lookahead = 0.35;
+      // 🔇 録画中は lookahead が大きいので「隠れたら止める」が見送られる
+      //    （keepSoundWhileHidden）。見送られたぶんは再挑戦が予約されないので、
+      //    タブを離したまま録り終えると **裏でBGMが鳴り続ける**（しかも
+      //    先読みが戻ったぶん途切れ途切れになる）。ここで1回やり直させる。
+      if (typeof document !== 'undefined' && document.hidden) audio.onVisibilityChange();
       const blob = new Blob(chunks, { type: OUT_TYPE });
       if (blob.size > 0) {
         download(blob, `bba-ost-${sel}-${FMT === FORMATS.short ? 'short-' : ''}${dur}s.${EXT}`);
@@ -536,14 +561,35 @@ export function showYouTubeStudio() {
     };
     studioState.stream = stream;   // 終わったときにトラックを止めるため
     studioState.rec = currentRec = rec;
-    rec.start(1000);
+    // ⚠ start() も try の中に入れる（clipexport と同じ形）。ここで投げると
+    //    「準備中…」のまま固まり、音楽（musicGain）とキャンバスのトラックを
+    //    握ったまま抜け出せなくなる ── 閉じるボタンも disabled のまま。
+    try {
+      rec.start(1000);
+    } catch {
+      try { audio.musicGain.disconnect(dest); } catch { /* ok */ }
+      try { stream.getTracks().forEach(tr => tr.stop()); } catch { /* ok */ }
+      if (studioState) { studioState.dest = null; studioState.stream = null; studioState.rec = null; }
+      if (!wasMusicOn) audio.setMusicEnabled(false);
+      recording = false;
+      currentRec = null;
+      starting = false;
+      btnRec.textContent = t('録画開始', 'Record');
+      m.querySelector('#ytClose').disabled = false;
+      status('');
+      toast(t('録画を開始できませんでした', 'Could not start recording'), 'err', 3000);
+      return;
+    }
     recording = true;
     fadeArmed = false;
     recStart = performance.now();
     // 🎯 頭出し: レコーダー始動の直後に曲を1小節目から流し直す。
     // これで「音楽が途中から始まっている」動画にならない。
+    // ⚠ ここで audio.restart() を続けて呼んではいけない。直前の startRec() が
+    //    hush()（playing=null）を通しているので preview(sel) だけで必ず
+    //    1小節目から始まり、restart() は **同じ小節をもう一度予約する**
+    //    ── 書き出した動画の頭 0.35秒 が二重に鳴っていた。
     audio.preview(sel);
-    audio.restart();
     // 📵 画面スリープ防止（モバイルで画面が消えると録画ごと止まるため）。
     // 取るのは常に1つだけ。以前は「開始時に1つ」と「直後の onVis でもう1つ」で
     // 2つ取れていて、片方は参照ごと上書きされて解放されなかった。
@@ -642,6 +688,7 @@ export function showYouTubeStudio() {
 
   m.querySelector('#ytClose').onclick = () => {
     stopStudio();
+    if (typeof onBack === 'function') { onBack(); return; }   // showModal が前のぶんを畳む
     closeModal();
   };
 

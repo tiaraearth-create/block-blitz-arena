@@ -262,8 +262,8 @@ TRACKS.kami.bars[3].chord = [N.E4, 415.3, N.B4];
 // → 描画は public/js/screens.js の .jb-icon （innerHTML）。
 export const TRACK_INFO = [
   { id: 'menu',   iconName: 'mode_room', name: 'やすらぎのロビー', nameEn: 'Cozy Lobby',      where: 'メニュー',                 whereEn: 'Menu' },
-  { id: 'solo',   iconName: 'mode_solo', name: 'ブロックさんぽ',   nameEn: 'Block Stroll',    where: 'ソロ・ウィークリー',       whereEn: 'Solo / Weekly' },
-  { id: 'battle', iconName: 'mode_online', name: 'アリーナの熱気',   nameEn: 'Arena Heat',      where: 'オンライン対戦・連鎖・リプレイ', whereEn: 'Online battles / Chain / Replay' },
+  { id: 'solo',   iconName: 'mode_solo', name: 'ブロックさんぽ',   nameEn: 'Block Stroll',    where: 'ソロ・キメラ',             whereEn: 'Solo / Chimera' },
+  { id: 'battle', iconName: 'mode_online', name: 'アリーナの熱気',   nameEn: 'Arena Heat',      where: 'オンライン対戦・連鎖・リプレイ・ウィークリー・デイリー', whereEn: 'Online / Chain / Replay / Weekly / Daily' },
   { id: 'hard',   iconName: 'fire', name: '限界突破',         nameEn: 'Limit Break',     where: '達人・タイムアタック',     whereEn: 'Expert / Time Attack' },
   { id: 'boss',   iconName: 'mode_boss', name: '巨影せまる',       nameEn: 'Looming Giant',   where: 'ボス戦',                   whereEn: 'Boss fights' },
   { id: 'oni',    iconName: 'foe_oni', name: '鬼の巣窟',         nameEn: "Oni's Den",       where: '鬼・深淵',                 whereEn: 'Oni / Abyss' },

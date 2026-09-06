@@ -1186,11 +1186,11 @@ function updateEventBanner() {
         `Limited event "${ev.nameEn || ev.name}" is live! — ${fmtRemain(ev.endsAt - Date.now())} left`));
     banner.classList.remove('hidden');
     // 🌀 カオスのボタンは常時出す（上の #btnChaos の注記を参照）。
-    //    カオスイベント中だけ「いまは実入りが良い」ことを見た目で伝える。
-    if (btn) {
-      btn.classList.remove('hidden', 'staff-only');
-      btn.classList.toggle('event-live', ev.type === 'chaos');
-    }
+    //    ⚠ かつてはカオスイベント中に `event-live`（「1.5x」の札）を付けていたが、
+    //      倍率はユーザー指示で v2.54 にやめ、カオスイベント自体も v2.63 で
+    //      引退させたので、この枝は二度と真にならない**死んだ札**だった
+    //      （残しておくと、いつか誰かが 1.5x を復活させたと勘違いする）。
+    if (btn) btn.classList.remove('hidden', 'staff-only', 'event-live');
   } else {
     if (ev) window.__bbaEvent = null;   // expired locally — hide until next poll
     banner.classList.add('hidden');

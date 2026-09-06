@@ -11,7 +11,7 @@ import { getSkin, BOARDS, PALETTE } from './themes.js';
 import { icon, itemIconName, badgeIconName, hasIcon } from './icons.js';
 import { rankLadder } from './ranks.js';
 import { audio, TRACK_INFO } from './audio.js';
-import { getSettings, updateSettings } from './settings.js';
+import { getSettings, updateSettings, particleFactor, prefersReducedMotion } from './settings.js';
 import { reconnectChat, markNewsSeen, sendWs, registerHandler } from './chat.js';
 import { t as tr, setLang, LANG, catName, catDesc, trServer } from './i18n.js';
 import { equippedUlt, setGuestUlt, ghostUnlocked, resetTutorial } from './modes.js';
@@ -847,10 +847,15 @@ export function showSettingsModal() {
     setStaffUi(e.target.checked);
     toast(e.target.checked ? '管理者専用ボタンを表示します' : 'プレイヤーと同じ表示にしました', 'ok');
   };
+  // 🔊 試聴音は間引く。なぞるあいだ oninput は数十回飛ぶので、1音40msの
+  //    クリックが重なって「ビーッ」という1本の音になっていた（音量を確かめる
+  //    ための音が、いちばん音量を確かめにくい音になっていた）。
+  let lastSfxTick = 0;
   m.querySelector('#setSfxVol').oninput = e => {
     updateSettings({ sfxVol: e.target.value / 100 });
     m.querySelector('#setSfxPct').textContent = `${e.target.value}%`;
-    audio.click();
+    const now = performance.now();
+    if (now - lastSfxTick > 120) { lastSfxTick = now; audio.click(); }
   };
   m.querySelector('#setMusicVol').oninput = e => {
     updateSettings({ musicVol: e.target.value / 100 });
@@ -1041,11 +1046,17 @@ export function showJukeboxModal() {
         } else {
           sel = id;
           // 曲をタップした＝聴きたいということ。BGMがOFFでも鳴らす。
+          // ⚠ **順番が要点**。先に musicOn を立てると、その場の syncTrack が
+          //    previewTrack がまだ null のまま `lockedTrack || trackName`
+          //    ＝メニュー曲を step0 から予約してしまう。予約済みの音は
+          //    あとから曲を差し替えても止められないので、**選んでいない曲が
+          //    3秒ほど重なって鳴っていた**。preview() は musicOn が false の
+          //    うちは何も鳴らさずに曲だけ決めるので、こちらを先に呼ぶ。
+          audio.preview(id);
           if (!getSettings().musicOn) {
             updateSettings({ musicOn: true });
             toast(tr('BGMをONにしました', 'Music turned on'), 'ok', 1800);
           }
-          audio.preview(id);
           if (lock) updateSettings({ bgmTrack: id });
         }
         render();
@@ -1063,8 +1074,10 @@ export function showJukeboxModal() {
     if (lock) {
       // タップ時と同じく、聴く気があるのにBGMがOFFなら黙ってONにする —
       // 「ループ再生します」と言いながら無音、は嘘になる。
-      if (!getSettings().musicOn) updateSettings({ musicOn: true });
+      // ここも順番はタップ側と同じ（先に曲を決めてから鳴らす）。
       sel = TRACK_INFO.some(t => t.id === sel) ? sel : (audio.playing || 'menu');
+      audio.preview(sel);
+      if (!getSettings().musicOn) updateSettings({ musicOn: true });
     }
     updateSettings({ bgmTrack: lock ? sel : null });
     toast(lock
@@ -1075,7 +1088,8 @@ export function showJukeboxModal() {
   m.querySelector('#jbYt').onclick = () => {
     audio.stopPreview();
     closeModal();
-    showYouTubeStudio();
+    // 閉じたらサントラへ戻る（潜ったぶんだけ戻れるようにする）。
+    showYouTubeStudio(() => showJukeboxModal());
   };
   m.querySelector('#jbClose').onclick = () => {
     audio.stopPreview();   // 固定中はその曲が流れ続け、未固定なら元のBGMに戻る
@@ -1707,16 +1721,33 @@ function appendDealBanner(grid) {
     <div style="display:flex;flex-direction:column;gap:3px;margin-top:4px">
       ${rows.map(r => {
     const owned = u ? (u.owned || []).includes(r.id) : false;
-    return `<button class="btn btn-sm btn-ghost" data-dealgo="${escapeHtml(r.cat)}" style="justify-content:space-between;width:100%">
+    return `<button class="btn btn-sm btn-ghost" data-dealgo="${escapeHtml(r.cat)}" data-dealid="${escapeHtml(r.id)}" style="justify-content:space-between;width:100%">
           <span>${escapeHtml(r.name)}${owned ? ` <small class="muted">${tr('（所持ずみ）', '(owned)')}</small>` : ''}</span>
           <span>${r.d.off ? `<b style="color:var(--green)">-${r.d.off}%</b> ` : ''}${
-      r.d.was ? `<s class="muted">${fmt(r.d.was)}</s> ` : ''}<b>${fmt(r.d.price)}</b></span>
+      r.d.was ? `<s class="muted">${fmt(r.d.was)}</s> ` : ''}${
+      /* 通貨の絵。棚の札には付いているのに帯だけ数字が裸で、コインなのか
+         ジェムなのか読めなかった（品側の currency を優先する）。 */
+      ((r.item && r.item.currency) === 'gems' || r.d.currency === 'gems') ? ic('gems', 13) : ic('coins', 13)
+    } <b>${fmt(r.d.price)}</b></span>
         </button>`;
   }).join('')}
     </div>`;
   grid.appendChild(el);
   el.querySelectorAll('[data-dealgo]').forEach(b => {
-    b.onclick = () => { audio.click(); shopTab = b.dataset.dealgo; renderShop(); };
+    b.onclick = async () => {
+      audio.click();
+      // 🏷 タブの active を塗るのは openShop だけ。renderShop() を直接呼ぶと
+      //    グリッドしか描き直されないので、**押しても見た目が何も変わらない**
+      //    （同じカテゴリの品なら完全に無反応に見えた）。keepScreen なら
+      //    画面も履歴も動かさず、控えが生きていれば通信も増えない。
+      await openShop(b.dataset.dealgo, { keepScreen: true });
+      // どの品のことか分かるように、その札まで送って一瞬光らせる。
+      const card = document.querySelector(`#shopGrid [data-shop-id="${b.dataset.dealid}"]`);
+      if (!card) return;
+      try { card.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { card.scrollIntoView(); }
+      card.classList.add('deal-jump');
+      setTimeout(() => card.classList.remove('deal-jump'), 1500);
+    };
   });
 }
 
@@ -1745,6 +1776,8 @@ function normalizeDeals(raw) {
       //    サーバーは最初から cat と name を返しているのに、ここで捨てていた。
       cat: d.cat || null,
       name: d.name || null,
+      // 通貨も控える（帯がコイン/ジェムの絵を出し分けるのに使う）。
+      currency: d.currency || null,
     });
   }
   return map;
@@ -1953,6 +1986,7 @@ function renderShop() {
     const deal = (!owned && !item.adminOnly && !item.throneOnly && !item.gachaOnly) ? dealFor(item) : null;
     const el = document.createElement('div');
     el.className = `shop-item ${equipped ? 'equipped' : ''}`;
+    el.dataset.shopId = item.id;   // 「本日のピックアップ」から目当ての札へ送るための目印
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
     el.innerHTML = `
       <div class="shop-preview" data-pv="${item.id}"></div>
@@ -2573,6 +2607,19 @@ function drawBoardPreview(ctx, b, size) {
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
 
+  // 🌌 オーロラの帯。実物（game.js の drawBackground）は上辺に3本の帯を
+  //    引くのに、プレビューは粒の色を別扱いするだけで**帯そのものを描いて
+  //    いなかった**ので、棚で見た絵と買ったあとの盤面が違って見えた。
+  if (b.aurora) {
+    for (const [i, hue] of [160, 200, 285].entries()) {
+      const gg = ctx.createLinearGradient(0, 0, 0, size * 0.5);
+      gg.addColorStop(0, `hsla(${hue}, 80%, 62%, 0.30)`);
+      gg.addColorStop(1, `hsla(${hue}, 80%, 62%, 0)`);
+      ctx.fillStyle = gg;
+      ctx.fillRect(0, size * 0.03 * i, size, size * (0.30 - 0.05 * i));
+    }
+  }
+
   // 4×4 のマス目。実際の盤面は8×8だが、84pxの枠に8本引くと線が潰れる。
   const pad = size * 0.11, inner = size - pad * 2, n = 4, cell = inner / n;
   ctx.fillStyle = b.cell;
@@ -2594,8 +2641,7 @@ function drawBoardPreview(ctx, b, size) {
     : b.holy ? '#ffe9a8'
     : b.snow ? '#eaf4ff'
     : b.digital ? '#5ee86e'
-    : b.aurora ? '#7cf5c8'
-    : b.stars || b.bubbles ? '#cfe0ff'
+    : b.aurora || b.stars || b.bubbles ? '#cfe0ff'
     : null;
   if (decoColor) {
     // 位置は id から決まる擬似乱数。毎回同じ絵にしたい（棚を開くたびに
@@ -2679,6 +2725,10 @@ function renderPreview(el, item) {
     el.appendChild(canvas);
     const ctx = canvas.getContext('2d');
     const ps = new ParticleSystem();
+    // 🎚 盤面と同じ物差しにする。盤面側は必ず particleFactor() を通している
+    //    のに、ここだけ既定の 1 のままだった（「粒を減らす」設定にしている人に
+    //    多い粒を見せ、「増やす」人には少なく見せる）。
+    ps.intensity = particleFactor();
     let raf = 0;
     let last = 0;
     let until = 0;
@@ -2701,13 +2751,26 @@ function renderPreview(el, item) {
       raf = requestAnimationFrame(frame);
     };
     const play = () => {
-      ps.burstCell(84, 84, 84, 6, item.id);
+      // ⚠ セル寸法は **枠に合わせる**。粒の初速も重力も size 比例なので、
+      //    実ゲームのセル（84相当）をそのまま 168×168 の枠へ撃つと、
+      //    0.2秒 で全部が枠外へ出てしまう ── カードのフェードイン
+      //    （最大 400ms）が明ける前に終わるので、**実質一度も見えなかった**。
+      //    24 なら枠内に 0.3〜0.5秒 残り、実ゲームの見え方に近くなる。
+      ps.burstCell(84, 100, 21, 6, item.id);
       seen = false;
       until = 0;
       last = 0;
       if (!raf) raf = requestAnimationFrame(frame);
     };
     // 開いた直後に1回、そのあとは触れたときに撃つ（勝手に鳴り続けない）。
+    // 「視差効果を減らす」設定の人には動かさない（盤面と同じ約束）。
+    if (prefersReducedMotion()) {
+      ps.burstCell(84, 100, 21, 6, item.id);
+      ps.update(0.18);
+      ctx.clearRect(0, 0, 168, 168);
+      ps.draw(ctx);
+      return;
+    }
     play();
     el.addEventListener('pointerenter', play);
     el.addEventListener('click', play);
@@ -2755,8 +2818,10 @@ function renderBoosterShop() {
     //    並び（押すと必ず 403）、所持数も ×0 と出ていた ── インベントリの
     //    同じ持ち物は invIsStaff() で ∞ と出るので、そこでも食い違う。
     const staffItem = !!item.adminOnly;
+    const unitPrice = Math.max(0, Number(deal ? deal.price : item.price) || 0);
     const el = document.createElement('div');
     el.className = 'shop-item';
+    el.dataset.shopId = item.id;   // 同上
     el.style.animationDelay = `${Math.min(idx * 50, 400)}ms`;
     el.innerHTML = `
       <div class="shop-preview booster-preview">${icon(itemIconName(item), { size: 48, label: catName(item) })}</div>
@@ -2776,7 +2841,12 @@ function renderBoosterShop() {
         ? `<button class="btn btn-sm btn-ghost" disabled>${tr('運営専用', 'Staff only')}</button>`
         : `<div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap">
             <button class="btn btn-sm btn-gold" data-act="buy" data-n="1">${priceLabel(ic('coins', 14), item, deal)}</button>
-            <button class="btn btn-sm btn-ghost" data-act="buy" data-n="10" title="${tr('10個まとめて', 'Buy 10')}">×10</button>
+            ${/* 💰 ×10 にも合計額を出す。ラベルが「×10」だけだったので、
+                   1個ぶんの値段しか見えないまま10倍を払っていた（1,000🪙の品なら
+                   10,000🪙）。足りないときはサーバーの400を待たずにここで止める。 */''}
+            <button class="btn btn-sm btn-ghost" data-act="buy" data-n="10"${
+  session.user && (session.user.coins || 0) < unitPrice * 10 ? ' disabled' : ''
+} title="${tr(`10個まとめて（${fmt(unitPrice * 10)}コイン）`, `Buy 10 (${fmt(unitPrice * 10)} coins)`)}">×10 ${ic('coins', 13)} ${fmt(unitPrice * 10)}</button>
           </div>`}
     `;
     grid.appendChild(el);
@@ -2791,6 +2861,13 @@ function renderBoosterShop() {
         if (bbtn.disabled) return;
         for (const b of bbtns) b.disabled = true;
         const n = Math.max(1, Math.min(10, Number(bbtn.dataset.n) || 1));
+        // 金額が一桁変わるので、まとめ買いだけ1段確認する。
+        if (n > 1 && !confirm(tr(
+          `${item.name} を${n}個 まとめて買います。コイン${fmt(unitPrice * n)}を消費します。よろしいですか？`,
+          `Buy ${n}× ${catName(item)} for ${fmt(unitPrice * n)} coins?`))) {
+          for (const b of bbtns) b.disabled = false;
+          return;
+        }
         try {
           const res = await api('/api/items/buy', { method: 'POST', body: { itemId: item.id, count: n } });
           // 応答に user が載っているので、余計な1往復（refreshMe）は要らない。
@@ -3371,7 +3448,10 @@ export function showRankRewardsModal(force = false) {
   const total = pending.reduce((a, r) => ({ coins: a.coins + (r.coins || 0), gems: a.gems + (r.gems || 0) }), { coins: 0, gems: 0 });
   const medal = r => (r.rank <= 3 ? lbMedal(r.rank) : '');
   // 🏛 「いつの順位か」。週間は週番号、殿堂はシーズン名（どちらも無ければ空）。
-  const rrWhen = r => r.week || r.seasonName || r.boardName || '';
+  const rrWhen = r => r.week
+    || (LANG === 'en' ? (r.seasonNameEn || r.seasonName) : r.seasonName)
+    || (LANG === 'en' ? (r.boardNameEn || r.boardName) : r.boardName)
+    || '';
   // 🏛 「何の値か」。週間チャレンジだけが点数で、殿堂はボードによって
   //    レート・ハイスコア・優勝回数と単位が違うので、点は付けない。
   const rrBest = r => (r.best == null ? ''
@@ -4520,7 +4600,7 @@ async function showZeroDeskModal() {
   //    逆に open / solo は表にあるのに選択肢が無く、動作確認ができなかった。
   const KINDS = ['open', 'solo', 'verdict', 'cut', 'missed', 'danBroken', 'revive', 'deal', 'dealYes', 'dealNo', 'wrap'];
   const m = showModal(`
-    <h2>${ic('mode_zero', 20)} ゼロの卓</h2>
+    <h2>${ic('eye_zero', 20)} ゼロの卓</h2>
     <p class="muted center" style="font-size:12px;margin-bottom:10px">
       断罪の運営操作。喋らせた言葉は全体チャットにゼロとして流れます。</p>
 

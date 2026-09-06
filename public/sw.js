@@ -383,11 +383,25 @@ async function navigateFirst(req, onHtml) {
     if (cacheable(res)) {
       put('/', res.clone());
       if (onHtml) { try { onHtml(res.clone()); } catch { /* 確認は諦める */ } }
+      return res;
     }
+    // 🛑 5xx は「通信が落ちた」と同じ扱いにする。
+    //    fetch 自体は成功しているので catch へ落ちず、控えが完全にそろって
+    //    いても **502/503 の素のエラーページ**が出ていた（デプロイの入れ替え
+    //    中や再起動中がまさにこれ）。404 はそのまま返す ── 本物の404を
+    //    隠すと、消えたページが「圏外」に見えて原因を探せなくなる。
+    if (res.status >= 500) throw new Error('server error');
     return res;
   } catch {
-    const hit = await caches.match('/', { ignoreSearch: true });
-    return hit || offlineCard();
+    // ⚠ 控えの index を返す前に「一式そろっている」印を見る。
+    //    warmShell は '/' を先に控えてから js を26本取りに行くので、途中で
+    //    落ちた端末には **index だけがある**。それを返すと、読み込めない
+    //    モジュールを待ってロゴのまま止まり、案内カードにも辿り着けない。
+    if (await shellReadyFor()) {
+      const hit = await caches.match('/', { ignoreSearch: true });
+      if (hit) return hit;
+    }
+    return offlineCard();
   }
 }
 

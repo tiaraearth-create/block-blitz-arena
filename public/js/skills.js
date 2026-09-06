@@ -217,7 +217,13 @@ const EFFECTS = {
     view.screenFlash = 0.4;
     audio.coin();
     emit(ctx, { ...res, gained: res.gained + bonus, rows });
-    return { msg: t(`浄化の波動！お邪魔${garbage.length}個を消し飛ばした！`, `Purifying Wave — ${garbage.length} garbage cells erased!`) };
+    // 消した実体を言う。お邪魔が0個でも下の行を洗い流したときは通るので、
+    // 一律「お邪魔0個を消し飛ばした！」だと嘘になっていた。
+    return {
+      msg: garbage.length
+        ? t(`浄化の波動！お邪魔${garbage.length}個を消し飛ばした！`, `Purifying Wave — ${garbage.length} garbage cells erased!`)
+        : t(`浄化の波動！下${res.lineCount}行を洗い流した！`, `Purifying Wave — ${res.lineCount} bottom row(s) washed away!`),
+    };
   },
 
   // 🔥 Triple score for 15 seconds.
@@ -315,7 +321,10 @@ const EFFECTS = {
   // 🛡️ 30 seconds of combo shield + garbage immunity.
   ult_fortress(ctx) {
     const { engine, view } = ctx;
-    engine.fortressUntil = Date.now() + 30000;
+    // より長く残っている守りを**切り詰めない**（feverUntil と同じ形）。
+    // 素の代入だったので、30秒以上残っているときに撃つと守りが短くなり、
+    // 「重ねがけしたのに弱くなる」が起きていた。
+    engine.fortressUntil = Math.max(engine.fortressUntil || 0, Date.now() + 30000);
     view.screenFlash = 0.35;
     view.reviveFlash();
     audio.combo(5);
@@ -383,10 +392,13 @@ const EFFECTS = {
     const row = rows.filter(r => r.n > 0).sort((a, b) => b.n - a.n)[0];
     const col = cols.filter(c => c.n > 0).sort((a, b) => b.n - a.n)[0];
     if (!row && !col) return { error: t('盤面が空です！', 'The board is empty!') };
+    // 断罪は通れば必ず刺さる。コンボを1つぶん繋ぐのがその表現だが、
+    // その +1 は **clearLines の中ですでに済んでいる**（comboStep 既定=1）。
+    // ここでもう一度足していたので合計 +2 になり、加点（gained は
+    // clearLines の中の streak で計算）と画面のコンボ数が食い違っていた。
+    // 同じ clearLines を使う ult_blast / ult_purify には追加の加算が無い。
+    // 本当に2段繋げたいなら comboStep: 2 を渡すこと（表示と揃う）。
     const res = clearLines(engine, row ? [row.i] : [], col ? [col.i] : []);
-    // 断罪は通れば必ず刺さる。コンボを1つぶん確実に繋ぐのがその表現。
-    engine.streak += 1;
-    if (engine.streak > engine.maxCombo) engine.maxCombo = engine.streak;
     view.shake = 20;
     view.screenFlash = 0.6;
     audio.bossAttack();

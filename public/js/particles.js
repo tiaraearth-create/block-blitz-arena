@@ -375,6 +375,18 @@ export class ParticleSystem {
           ctx.shadowColor = p.color;
           ctx.shadowBlur = p.size * 4;
           ctx.fillStyle = p.color;
+          // ☄ 尾。trail は comet / rainbow が立てているのに **draw が一度も
+          //   読んでいなかった**ので、「尾を引く彗星」に尾が無かった。
+          //   速度の逆向きに1本引くだけ（新しい kind は増やさない）。
+          if (p.trail) {
+            ctx.strokeStyle = p.color;
+            ctx.lineWidth = Math.max(1, p.size * 0.9);
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p.x - p.vx * 0.035, p.y - p.vy * 0.035);
+            ctx.stroke();
+          }
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
           ctx.fill();

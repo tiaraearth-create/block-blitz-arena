@@ -30,7 +30,11 @@
   --land-p2: #ff6bd4;
 }
 
-html, body { height: 100%; overflow: hidden; }
+/* 🎨 暗色1枚のアプリだと宣言する。これが無いと、スクロールバー・チェック
+   ボックス・スライダー・select のポップアップだけがブラウザ既定の**明るい
+   見た目**で出て、暗い画面に白い部品が浮いていた。個別の ::-webkit-scrollbar
+   指定は今までどおり上書きとして残る。 */
+html, body { height: 100%; overflow: hidden; color-scheme: dark; }
 body {
   font-family: 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', system-ui, sans-serif;
   background: radial-gradient(120% 100% at 50% 0%, var(--bg1), var(--bg0) 70%);
@@ -249,9 +253,14 @@ body {
    画面の下にだけ出す。iPhone のホームバーを避けて safe-area を足す。 */
 #clipBar {
   position: fixed; left: 50%; transform: translateX(-50%);
-  /* 手札の帯（canvas 下端、最大 130px）と物理的に重ならない高さへ逃がす。
-     下端 14px に置いていたときは、REC ピルが手札の中央スロットに被っていた。 */
-  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+  /* 手札の帯と物理的に重ならない高さへ逃がす。
+     ⚠ px 直打ちはやめた。150px は縦持ちの端末を見て決めた値で、
+       横持ち（幅844px。max-width:520px のクエリが当たらない）では
+       **盤面の中段**に、背の高い縦持ちでは手札の上端に重なっていた。
+       game.js の publishMetrics が「コマの上端」から実測値を出すので、
+       手札の位置が変わればここも自動で追随する。
+       変数が無い状態（ゲーム画面に入る前）だけ従来の値に落ちる。 */
+  bottom: calc(var(--bba-clip-bottom, 150px) + env(safe-area-inset-bottom, 0px));
   /* モーダル（.modal-backdrop は z-index:50）より下、HUD より上。
      60 にしていたときは、録画中に開いたモーダルのボタンにピルが重なっていた。 */
   z-index: 45; display: flex; align-items: center; gap: 10px;
@@ -270,8 +279,11 @@ body {
 #clipBar button, #clipBar a { pointer-events: auto; }
 /* 狭い画面では手札の帯がさらに高くなるので、もう一段持ち上げる。 */
 @media (max-width: 520px) {
-  #clipBar { bottom: calc(168px + env(safe-area-inset-bottom, 0px)); }
+  #clipBar { bottom: calc(var(--bba-clip-bottom, 168px) + env(safe-area-inset-bottom, 0px)); }
 }
+/* 🎬 完成の知らせ。●REC の明滅を使い回していたので、**録画は終わっている
+   のに録画中に見えた**（赤く点滅し続ける）。落ち着いた色で置く。 */
+#clipBar #clipDone { color: var(--text); font-weight: 800; }
 #clipBar #clipLeft {
   color: #ff6b6b; font-weight: 700; font-size: 13px;
   font-variant-numeric: tabular-nums; letter-spacing: 0.5px;
@@ -405,11 +417,16 @@ body {
 #oppCards.strip .opp-combo { font-size: 10px; height: auto; min-height: 0; }
 #oppCards.strip .opp-card.topped { opacity: 0.45; }
 
+/* 指で押す的は 44×44 を下回らせない。13px の文字＋4px の余白で
+   25×21px しかなく、走行中に何度も押し外していた。パネルの行の高さは
+   変えたくないので、当たり判定だけ負のオフセットで広げる。 */
 .opp-density {
-  position: absolute; top: 2px; right: 6px;
+  position: absolute; top: -6px; right: 0;
   background: none; border: none; color: var(--muted);
-  font-size: 13px; line-height: 1; padding: 4px 6px; cursor: pointer;
+  font-size: 13px; line-height: 1; cursor: pointer;
   font-family: inherit;
+  min-width: 44px; min-height: 44px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
 }
 .opp-density:hover { color: var(--text); }
 .team-totals { font-size: 13px; font-weight: 800; }
@@ -434,7 +451,15 @@ body {
 @keyframes mmJump { 0%,100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-18px) rotate(90deg); } }
 
 /* ============ Sub screens ============ */
-.sub-screen { padding: 0 14px 14px; overflow-y: auto; }
+/* 画面の底に接する器なので、ホームバー（と横向きのノッチ）を避ける。
+   ここだけ固定の 14px で、一覧の最下段がホームバーの下に潜っていた
+   （.menu-content / .modal-backdrop / .chat-drawer は全部避けてある）。 */
+.sub-screen {
+  padding: 0 calc(14px + env(safe-area-inset-right, 0px))
+             calc(14px + env(safe-area-inset-bottom, 0px))
+             calc(14px + env(safe-area-inset-left, 0px));
+  overflow-y: auto;
+}
 /* padding-top にセーフエリアを足す（top をずらすのではなく）── sticky で
    貼り付いたときもヘッダー自身の背景がステータスバーの裏まで伸び、
    スクロールしたコンテンツが時計の下に透けて見えない。 */
@@ -619,6 +644,16 @@ body {
   animation: rowIn .3s ease backwards; transition: transform .15s, border-color .15s;
 }
 .shop-item:hover { transform: translateY(-3px); }
+/* 🏷 「本日のピックアップ」から送られてきた札。同じタブの品でも
+   「どれのことか」が分かるように、1.4秒だけ縁を光らせる。 */
+.shop-item.deal-jump { animation: dealJump 1.4s ease-out 1; }
+@keyframes dealJump {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(94,232,110,0); }
+  15%, 60% { box-shadow: 0 0 0 3px rgba(94,232,110,0.75), 0 0 18px rgba(94,232,110,0.45); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shop-item.deal-jump { animation: none; box-shadow: 0 0 0 3px rgba(94,232,110,0.75); }
+}
 .shop-item.equipped { border-color: var(--green); box-shadow: 0 0 14px rgba(94,232,110,0.25); }
 .shop-preview { width: 84px; height: 84px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 44px; overflow: hidden; }
 .shop-preview canvas { width: 84px; height: 84px; }
@@ -1372,6 +1407,10 @@ body:not([data-screen="menu"]) .chat-drawer { display: none; }
 }
 
 /* Dungeon perk picker */
+/* 🧬 キメラの「いま置ける場所が無い」候補。JS が off を付けているのに
+   対応する規則が1行も無く、見た目がまったく同じだった（押せること自体は
+   設計どおりなので pointer-events は触らない）。 */
+.perk-btn.off { opacity: .45; border-style: dashed; }
 .perk-btn {
   display: flex; align-items: center; gap: 12px;
   text-align: left; width: 100%;
@@ -1514,7 +1553,13 @@ body.ghost-flicker { animation: ghostFlicker 1.1s steps(2) 3; }
 
 /* ============ Battle emotes ============ */
 .emote-picker {
-  position: absolute; top: 56px; left: 8px; z-index: 20;
+  /* ⚠ 基準は #screen-game の **パディングボックス**。#screen-game 側の
+     `padding-top: env(safe-area-inset-top)` は絶対配置には効かないので、
+     top:56px 固定だと HUD（同じ safe-area のぶん下がっている）に丸かぶりし、
+     ✕ や ⚙ を押したつもりでエモートが飛んでいた。HUD の下端に合わせる。
+     幅も画面に収める ── 収まらないと右端の何個かが押せない。 */
+  position: absolute; top: calc(56px + env(safe-area-inset-top, 0px)); left: 8px; z-index: 20;
+  max-width: calc(100vw - 16px); flex-wrap: wrap;
   display: flex; gap: 6px; background: rgba(13,17,38,0.95);
   border: 1px solid var(--line); border-radius: 999px; padding: 8px 10px;
   animation: modalIn .2s cubic-bezier(.2,1.3,.4,1);
@@ -1712,8 +1757,10 @@ body[data-screen="game"] #topbar { display: none; }
   #screen-game:has(.opp-panel:not(.hidden)) .game-canvas-wrap { padding-left: min(24vw, 190px); }
   #screen-game:has(.boss-panel:not(.hidden)) .game-canvas-wrap { padding-right: min(24vw, 190px); }
   .opp-panel, .boss-panel { width: min(24vw, 190px); }
-  .opp-panel { left: 6px; top: 46px; }
-  .boss-panel { right: 6px; top: 46px; }
+  /* ⚠ position:absolute なので #screen-game のパディング（safe-area）は
+     効かない。6px 固定だとノッチ／パンチホールの下にパネルが潜っていた。 */
+  .opp-panel { left: calc(6px + env(safe-area-inset-left, 0px)); top: 46px; }
+  .boss-panel { right: calc(6px + env(safe-area-inset-right, 0px)); top: 46px; }
   #oppCards.strip { flex-direction: column; align-items: stretch; }
   #oppCards.strip .opp-card { justify-content: space-between; }
   .opp-card canvas, #oppCards.compact .opp-card canvas { width: 44px; height: 44px; }
@@ -1902,18 +1949,11 @@ body[data-screen="game"] #topbar { display: none; }
   box-shadow: 0 0 0 1px rgba(255, 90, 90, .25) inset;
 }
 
-/* 🌀 開催中の目印。カオスは常時遊べるようになったので、イベントで変わるのは
-   実入り（コイン1.5倍）だけ ── その差だけをボタンの上で伝える。
-   .staff-only と同じ作りだが色と字が違い、両方が付くことはない。 */
-.btn.event-live { position: relative; }
-.btn.event-live::after {
-  content: '1.5x';
-  position: absolute; top: -8px; right: 8px;
-  background: var(--accent, #43d9e8); color: #06121a;
-  font-size: 9px; font-weight: 900; letter-spacing: .06em;
-  padding: 2px 7px; border-radius: 999px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-}
+/* 🌀 「1.5x」の目印（.btn.event-live）は **消した**。
+   コインの倍率はユーザー指示で v2.54 にやめ、それを出していたカオスイベント
+   自体も v2.63 で引退させたので、付ける経路が1つも残っていない。
+   数字の書かれた札を宙に浮かせておくと、いつか誰かが「まだ 1.5倍 がある」と
+   読んで復活させてしまう。復活させるなら、まず倍率を決めてから書き直すこと。 */
 
 /* Staff-only menu entries: badged so they never read as a live event. */
 .btn.staff-only { position: relative; }
@@ -1945,9 +1985,16 @@ body[data-screen="game"] #topbar { display: none; }
 .ev-type small { font-size: 10px; color: var(--muted); line-height: 1.35; }
 
 /* ⚡奥義祭: the gauge button gets a boosted tint */
-.ult-btn.ult-boosted .ult-icon { filter: none drop-shadow(0 0 6px var(--ult-color)); }
+/* ⚠ `filter: none drop-shadow(...)` は **無効な値**で、宣言ごと捨てられる
+   （filter は関数の並びか単独の none のどちらかで、混ぜられない）。
+   そのせいで奥義祭の強調は一度も出ていなかった。filter は加算ではなく
+   置換なので、drop-shadow だけ書けば基底の grayscale/opacity も外れる。 */
+.ult-btn.ult-boosted .ult-icon { filter: drop-shadow(0 0 6px var(--ult-color)); }
 .ult-btn.ult-boosted::before {
-  content: '×2'; position: absolute; top: -7px; left: -6px;
+  /* 倍率は JS が data-ultrate に入れる（modes.js の updateUltHud）。
+     ここに '×2' と書いていたので、雷の遺物だけの ×1.5 でも「×2」と
+     出ていた（奥義祭と重なると ×3 なのに、やはり「×2」）。 */
+  content: attr(data-ultrate); position: absolute; top: -7px; left: -6px;
   background: var(--cyan); color: #04222a; font-size: 9px; font-weight: 900;
   padding: 1px 5px; border-radius: 999px; pointer-events: none;
 }
@@ -2752,7 +2799,17 @@ body[data-screen="game"] #topbar { display: none; }
 }
 .fr-party > span { flex: 1 1 100%; }
 .fr-find { display: flex; gap: 8px; margin: 10px 0; }
-.fr-find input { flex: 1 1 auto; min-width: 0; }
+/* 🔍 塗りを1つも当てていなかったので、暗い画面に **白い素の入力箱** が
+   出ていた（しかも font-size 未指定＝ブラウザ既定の13px前後で、iOS では
+   触れるとページごと拡大する）。.modal input と同じ見た目にそろえる。
+   #adminUserSearch も同じ理由でここに入れる（index.html のインライン
+   指定は幅だけで、見た目は素のまま）。 */
+.fr-find input, #adminUserSearch {
+  flex: 1 1 auto; min-width: 0;
+  padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: rgba(0, 0, 0, .3);
+  color: var(--text); font-family: inherit; font-size: 16px;
+}
 .fr-opt { display: flex; align-items: center; gap: 8px; padding: 9px 4px; font-size: 13px; cursor: pointer; }
 
 /* ============ 👥 パーティー ============ */
@@ -2812,10 +2869,13 @@ body[data-screen="game"] #topbar { display: none; }
 .gd-msg.mine b { color: var(--gold); }
 .gd-msg .gd-tr { display: block; font-size: 11px; color: var(--muted); font-style: normal; }
 .gd-input { display: flex; gap: 6px; margin-top: 8px; }
+/* ⌨ font-size は 16px を下回らせない。下回ると iOS Safari が触れた瞬間に
+   ページごと拡大し、指を離しても戻らない（.modal input / .chat-input-row は
+   同じ理由で 16px にしてある）。小さく見せたいときは padding で詰める。 */
 .gd-input input {
-  flex: 1 1 auto; min-width: 0; padding: 9px 11px; border-radius: 10px;
+  flex: 1 1 auto; min-width: 0; padding: 8px 11px; border-radius: 10px;
   border: 1px solid var(--line); background: rgba(0, 0, 0, .3);
-  color: inherit; font-family: inherit; font-size: 13px;
+  color: inherit; font-family: inherit; font-size: 16px;
 }
 
 .pt-msgs { max-height: 30vh; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
@@ -2823,8 +2883,9 @@ body[data-screen="game"] #topbar { display: none; }
 .pt-msg b { color: #9fd8ff; margin-right: 5px; }
 .pt-msg .pt-tr { display: block; font-size: 10.5px; color: var(--muted); font-style: normal; }
 .pt-input { display: flex; gap: 5px; margin-top: 7px; }
-.pt-input input { flex: 1 1 auto; min-width: 0; padding: 7px 9px; border-radius: 8px;
-  border: 1px solid var(--line); background: rgba(0,0,0,.3); color: inherit; font-family: inherit; font-size: 12px; }
+/* 同上（16px を下回らせない）。 */
+.pt-input input { flex: 1 1 auto; min-width: 0; padding: 6px 9px; border-radius: 8px;
+  border: 1px solid var(--line); background: rgba(0,0,0,.3); color: inherit; font-family: inherit; font-size: 16px; }
 .pt-input button { flex: 0 0 auto; padding: 7px 11px; border-radius: 8px; border: none;
   background: var(--blue, #5b8bff); color: #fff; font-family: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
 /* 書く前に見える場所に出す。「通報されたら読まれる」を後出しにしない。 */

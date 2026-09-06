@@ -1118,6 +1118,9 @@ function updateUltHud() {
   const ev = window.__bbaEvent;
   e.ultRate = (((ev && ev.bonus && ev.bonus.ultRate) || 1) * ((currentMode && currentMode.ultRateBonus) || 1));
   btn.classList.toggle('ult-boosted', e.ultRate > 1);
+  // 倍率は実数で出す（CSS の content: attr(data-ultrate)）。'×2' 固定だったので、
+  // 雷の遺物だけの ×1.5 も、奥義祭と重なった ×3 も、どちらも「×2」と出ていた。
+  btn.dataset.ultrate = e.ultRate > 1 ? `×${Math.round(e.ultRate * 100) / 100}` : '';
   // Admins run a permanently charged gauge.
   if (session.user && session.user.role === 'admin' && staffExtras()) e.ult = 100;
   // ⚡ **表示と発動で同じ物差しを使う。**
@@ -1941,7 +1944,7 @@ class SoloMode {
         <div class="rs-row"><span>${t('消したライン', 'Lines cleared')}</span><b>${fmt(e.linesCleared)}</b></div>
         <div class="rs-row"><span>${t('最大コンボ', 'Max combo')}</span><b>${fmt(e.maxCombo)}</b></div>
         ${this.eye && (this.eye.caught || this.eye.missed)
-          ? `<div class="rs-row"><span>${ic('mode_zero', 14)} ${t('観測', 'Observed')}</span><b>${this.eye.caught}／${this.eye.caught + this.eye.missed}</b></div>` : ''}
+          ? `<div class="rs-row"><span>${ic('eye_zero', 14)} ${t('観測', 'Observed')}</span><b>${this.eye.caught}／${this.eye.caught + this.eye.missed}</b></div>` : ''}
         ${rewardsRows(rewards)}
       </div>
       ${this.eye && this.eye.caught
@@ -2911,7 +2914,11 @@ class GhostMode {
     // 🔖 隔しおりの復元待ちの霧（bookmarkRestore が先に入れる）。
     if (this._fogPending) {
       const v0 = getView();
-      for (const k of this._fogPending) this.ghostFx.hideAt.set(k, v0.time + 1.2);
+      // ⚠ `+1.2` は「これから隠れる」値。描画は alpha=(h - time)/0.35 なので、
+      //    復元から 0.85秒 のあいだ **隠れているはずのブロックが丸見え**になる
+      //    （記憶モードなのに、しおりを挟むと答えが見える）。
+      //    写したいのは「もう隠れ終わっている」状態だけ。
+      for (const k of this._fogPending) this.ghostFx.hideAt.set(k, v0.time - 0.01);
       this._fogPending = null;
     }
     const v = getView();
@@ -2944,7 +2951,9 @@ class GhostMode {
     // start() より後に呼ばれるので、その場で貼れる（届く前なら _fogPending が拾う）。
     if (this.ghostFx) {
       const v = getView();
-      for (const k of x.fog) if (Number.isInteger(k)) this.ghostFx.hideAt.set(k, v.time + 1.2);
+      // 復元は「もう隠れ終わった」値で入れる（start() の _fogPending と同じ理由 ──
+      //   `+1.2` だと 0.85秒 のあいだ盤面が丸見えになる）。
+      for (const k of x.fog) if (Number.isInteger(k)) this.ghostFx.hideAt.set(k, v.time - 0.01);
       this.updateHud();
     } else {
       this._fogPending = x.fog.filter(Number.isInteger);
@@ -4815,7 +4824,12 @@ async function reserveDailyAttempt(info) {
   const kept = keptDailyAttempt(info.day);
   // 練習だと分かっている回はサーバーに聞かない — 連打で開始のレート制限に
   // 当たると、練習すらできなくなる。
-  if (info.played && !kept) return { practice: true, attemptId: null };
+  // ⚠ 控えの鍵を見るのは「**まだ結果を確定していない回**」だけ。鍵は今日の
+  //    ぶんを遊び終えたあとも残るので、`!kept` だけを条件にすると
+  //    「もう一度（練習）」を押すたびに毎回サーバーへ予約を叩きに行き、
+  //    何度か続けると開始のレート制限に当たって**練習すら始められなく**なる。
+  //    inProgress は /api/daily が返している（予約済みで未確定のときだけ真）。
+  if (info.played && !(kept && info.inProgress)) return { practice: true, attemptId: null };
   const attemptId = kept || newAttemptId();
   // ⚠ 送る前に控える。送信中に落ちても、次の1タップで同じ鍵を出せる。
   keepDailyAttempt(info.day, attemptId);
@@ -8974,6 +8988,11 @@ class AdminEventMode extends VersusBase {
     this.treasure = false;
     this.lucky7 = false;
     if (view) view.ghostFx = null;
+    // 🙈 目隠し（assistOff）も戻す。ここだけ抜けていたので、一度でも
+    //    'blind' を引くと **残り時間ずっとゴーストが消えたまま**だった
+    //    （設定がもとから「なし」の人向けの代替 .ae-blind は時間切れで
+    //    消えるので、設定次第で不利が続く人と続かない人に割れていた）。
+    if (view) view.assistOverride = null;
     const wrap = document.querySelector('.game-canvas-wrap');
     if (wrap) wrap.classList.remove('ae-blind');
   }

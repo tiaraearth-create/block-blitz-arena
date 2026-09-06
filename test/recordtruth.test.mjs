@@ -182,8 +182,12 @@ check('G-2 送る前に控える（送信中に落ちても次で出せる）',
     < modes.indexOf("api('/api/daily/start', { method: 'POST', body: { day: info.day, attemptId } })"), '');
 check('G-3 予約を添えて送る',
   /body: \{ day: info\.day, attemptId \}/.test(modes), '');
-check('G-4 控えがあれば played でも聞き直す',
-  /if \(info\.played && !kept\) return \{ practice: true, attemptId: null \};/.test(modes), '');
+// ⚠ 聞き直すのは「**まだ結果を確定していない回**」だけ。鍵は遊び終わったあとも
+//   残るので、`!kept` だけを条件にすると「もう一度（練習）」を押すたびに
+//   サーバーへ予約を叩きに行き、続けて押すと開始のレート制限に当たって
+//   練習すら始められなくなる（inProgress は /api/daily が返している）。
+check('G-4 控えがあれば played でも聞き直す（ただし未確定の回だけ）',
+  /if \(info\.played && !\(kept && info\.inProgress\)\) return \{ practice: true, attemptId: null \};/.test(modes), '');
 check('G-5 サーバー側の復帰路は前からある（形が合っているか）',
   /resumeId && s\.dailyc\.pending && s\.dailyc\.pending === resumeId/.test(dailyRoute), '');
 check('G-6 端末の持ち主が変わったら一緒に仕舞う',
@@ -233,8 +237,9 @@ check('K-1 ミッションの「達成」は done を数える',
 check('K-2 受取数は別に出す',
   /const claimedCount = rows\.filter\(r => r\.claimed\)\.length;/.test(screens)
   && /受取 \$\{claimedCount\}/.test(screens), '');
+// 英語表示のときは英語名を先に見る（日本語のシーズン名が混ざっていた）。
 check('L-1 殿堂の行は week が無ければシーズン名を出す',
-  /const rrWhen = r => r\.week \|\| r\.seasonName \|\| r\.boardName \|\| '';/.test(screens), '');
+  /const rrWhen = r => r\.week\s*\n\s*\|\| \(LANG === 'en' \? \(r\.seasonNameEn \|\| r\.seasonName\) : r\.seasonName\)/.test(screens), '');
 check('L-2 「点」は週間チャレンジの行だけ',
   /r\.week \? `\$\{fmt\(r\.best\)\}\$\{tr\('点', ' pts'\)\}`/.test(screens), '');
 check('L-3 表彰したかをボードごとに残す', /const awarded = realEntrants >= HOF_MIN_ENTRANTS;/.test(index), '');

@@ -84,11 +84,11 @@ export const SHOP_ITEMS = [
   // dan は「世界が第何段まで割ったら棚に並ぶか」。買えるかどうかが
   // 個人の財布ではなく世界の進捗で決まるのがこの棚の面白いところ。
   { id: 'skin_verdict',    cat: 'skin',  name: '断罪の刻印',   desc: '赤い判決線が走るブロック',       price: 0, currency: 'coins', throneOnly: true, dan: 1, shards: 120 },
-  { id: 'board_throne',    cat: 'board', name: '七つの王座',   desc: '奪還した数だけ玉座が灯るステージ', price: 0, currency: 'coins', throneOnly: true, dan: 2, shards: 180 },
+  { id: 'board_throne',    cat: 'board', name: '七つの王座',   desc: '玉座の金に染まり、星がまたたく間', price: 0, currency: 'coins', throneOnly: true, dan: 2, shards: 180 },
   { id: 'fx_seal',         cat: 'fx',    name: '封印砕き',     desc: '紫の封印が砕け散る消去エフェクト', price: 0, currency: 'coins', throneOnly: true, dan: 3, shards: 220 },
   { id: 'skin_zero',       cat: 'skin',  name: 'ゼロの眼',     desc: '見返してくる眼が埋まったブロック', price: 0, currency: 'coins', throneOnly: true, dan: 4, shards: 300 },
   { id: 'ult_condemn',     cat: 'ult',   name: '断罪の一撃', desc: '縦横1列ずつを問答無用で消し飛ばす', price: 0, currency: 'coins', throneOnly: true, dan: 5, shards: 400 },
-  { id: 'board_chronicle', cat: 'board', name: '断罪録の間',   desc: '壁に名前が流れ続ける記録の間',     price: 0, currency: 'coins', throneOnly: true, dan: 6, shards: 500 },
+  { id: 'board_chronicle', cat: 'board', name: '断罪録の間',   desc: '紫の封印色に沈んだ、静かな記録の間',     price: 0, currency: 'coins', throneOnly: true, dan: 6, shards: 500 },
   { id: 'fx_crown',        cat: 'fx',    name: '王冠還る',     desc: '砕けた王冠が組み上がる消去エフェクト', price: 0, currency: 'coins', throneOnly: true, dan: 7, shards: 700 },
   // ---- Admin-exclusive gear (adminOnly: hidden from everyone else, unbuyable) ----
   { id: 'skin_admin',    cat: 'skin',  name: 'レインボー【管理者】', desc: '虹色に輝く運営専用ブロック', price: 0, currency: 'coins', adminOnly: true },

@@ -297,8 +297,11 @@ const partySrv = read('server/party.js');
   }
   check('E-5 401/400 で捨てたときも知らせる',
     /noteResultsDropped\(1, err\.status === 401 \|\| err\.status === 403 \? 'auth' : 'rejected'/.test(net), '');
+  // mode まで渡す。渡していなかったので、画面のトーストが汎用の
+  // 「送れませんでした」になり、**報酬は入っているのに送信が失敗したように**
+  // 読めていた（この分岐は res.rewards.daily を見ているので常に 'daily'）。
   check('E-6 デイリーとして記録されなかった回も知らせる',
-    /if \(d && d\.recorded === false\) noteResultsDropped\(1, d\.reason \|\| 'expired'\);/.test(net), '');
+    /if \(d && d\.recorded === false\) noteResultsDropped\(1, d\.reason \|\| 'expired', 'daily'\);/.test(net), '');
   check('E-7 画面に受け口がある', /'bba:results-dropped'/.test(read('public/js/main.js')), '');
 }
 

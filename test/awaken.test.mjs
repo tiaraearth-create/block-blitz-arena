@@ -41,10 +41,19 @@ const crowd = read('server/crowd.js');
     !/カオスモードはイベント開催中のみ遊べます/.test(main), '');
   check('①-3 イベントの有無でボタンを隠さない',
     !/btn\.classList\.toggle\('hidden', !chaosLive/.test(main), '');
-  check('①-4 イベント中だけ「実入りが良い」印を付ける',
-    /btn\.classList\.toggle\('event-live', ev\.type === 'chaos'\);/.test(main), '');
-  check('①-5 印の見た目がある', /\.btn\.event-live::after \{/.test(css), '');
-  check('①-6 イベントが終わったら印を外す',
+  // ①-4/①-5 は「イベント中だけ実入りが良い（コイン1.5倍）」という印を
+  //   見張っていたが、**倍率も、それを配っていたカオスイベント自体も引退した**
+  //   （倍率はユーザー指示で v2.54、イベントは v2.63）。いま守るべきなのは
+  //   逆向きの性質 ── 「どこにも 1.5倍 の約束が残っていない」こと。
+  //   カオスが常時遊べること（①-1〜①-3）は今までどおり上で見ている。
+  // ⚠ 「1.5倍」という語そのものは禁じない ── メルトダウンの臨界ボーナスは
+  //   いまも 1.5倍 で、遊び方の説明に正しく書いてある。見るのは **報酬の札**
+  //   （ボタンに貼る `content: '1.5x'`）が残っていないこと。
+  check('①-4 「1.5x」の札がどこにも残っていない',
+    !/content: '1\.5x'/.test(css) && !/\.btn\.event-live::after \{/.test(css), '');
+  check('①-5 モード名を条件にした印を付けていない',
+    !/classList\.toggle\('event-live'/.test(main), '');
+  check('①-6 印は必ず外す側だけが残っている',
     /btn\.classList\.remove\('hidden', 'staff-only', 'event-live'\);/.test(main), '');
 }
 

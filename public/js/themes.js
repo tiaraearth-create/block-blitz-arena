@@ -704,6 +704,10 @@ export const FX_IDS = ['fx_default', 'fx_fireworks', 'fx_thunder', 'fx_sakura'];
 
 // PALETTE と同じ添字（0 は未使用 / 9 は妨害ブロック）。
 const COLOR_MARKS = [null, '▲', '●', '■', '◆', '✚', '★', '▼', '◐', '✕'];
+// 記号の色。白一色だと **明るい面（2橙・3黄・4緑・5シアン）でほとんど
+// 見えず**、色覚サポートを入れた人にだけ「印が出ない色がある」状態だった。
+// 添字は COLOR_MARKS / PALETTE と同じ。
+const MARK_INK = [null, '#fff', '#000', '#000', '#000', '#000', '#fff', '#fff', '#fff', '#fff'];
 
 // フォント文字列の組み立ては毎セル走るのでサイズ単位でキャッシュする。
 let _markPx = -1, _markFont = '';
@@ -722,7 +726,7 @@ function drawColorMark(ctx, x, y, s, ci, alpha) {
   ctx.save();
   ctx.shadowBlur = 0;                       // ライン消し前のグロー描画に巻き込まれないように
   ctx.globalAlpha = a * 0.5;                // 「薄く重ねる」: 元の絵柄を潰さない濃さ
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fillStyle = MARK_INK[ci] === '#000' ? 'rgba(0,0,0,0.92)' : 'rgba(255,255,255,0.92)';
   ctx.font = markFont(s);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';

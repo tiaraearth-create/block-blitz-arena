@@ -156,6 +156,7 @@ export function createSession(deps, humanSocks, run = null) {
   if (run) {
     run.targetCol = s.targetCol;
     if (Number.isInteger(run.stakes2)) s.stakes2 = run.stakes2;
+    if (Number.isFinite(run.warnBonus)) s.warnBonus = run.warnBonus;
   }
   // 部屋ができた＝枠が開いた。ここが open / solo の唯一の発火点。
   sayOpening(s, run, deps, now());
@@ -489,7 +490,7 @@ function fireVerdicts(s, run, danIndex, deps) {
     if (!cells.length) continue;
     // 杭が効いていれば予告が伸びる。取引で縮むこともある。
     const warnMs = Math.max(1200, dan.warnMs + (s.warnBonus || 0) - (run.dealWarnCut || 0));
-    if (s.warnBonus) s.warnBonus = 0;      // 1回ぶんだけ
+    if (s.warnBonus) { s.warnBonus = 0; if (run) run.warnBonus = 0; }   // 1回ぶんだけ（枠の控えも一緒に）
     const v = {
       id: `${t}-${i}`, target: e.name, at: t, warnMs,
       cells, keystone, resolved: false,
@@ -543,8 +544,11 @@ export function submitStake(s, run, name, cols, deps) {
   const need = run.dealStakeCost || 3;
   s.stakes2 = (s.stakes2 || 0) + 1;
   const ready = s.stakes2 >= need;
-  if (ready) { s.stakes2 = 0; s.warnBonus = 1500; }
+  if (ready) { s.stakes2 = 0; s.warnBonus = 1500; run.warnBonus = 1500; }
   // 🎯 杭の本数も枠へ預ける（的と同じ理由。部屋は1人で抜けると消える）。
+  //    ⚠ 本数だけ預けて **買った警告延長（warnBonus）を預けていなかった**ので、
+  //      3本目を刺した直後に部屋が消えると、次に入り直したときには
+  //      「杭は0本に戻り、延長も無い」＝支払いだけが消えていた。
   run.stakes2 = s.stakes2;
   if (emit) {
     for (const x of seatedHumans(s)) {
@@ -775,6 +779,7 @@ function breakDan(s, run, danIndex, deps) {
   delete run.dealDoneFor;
   s.stakes2 = 0; s.warnBonus = 0;
   run.stakes2 = 0;   // 🎯 枠へ預けてある本数も一緒に戻す（submitStake と対）
+  run.warnBonus = 0;
   run.broken = run.broken || [];
   const top = aliveHumans(s).sort((a, b) => (b.cuts || 0) - (a.cuts || 0))[0];
   const rec = { dan: danIndex + 1, at: now(), by: top ? top.name : null };
