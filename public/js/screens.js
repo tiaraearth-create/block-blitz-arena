@@ -772,6 +772,10 @@ export function showSettingsModal() {
         <label>${tr('画面フラッシュ', 'Screen flash')}<br><small class="muted" style="font-weight:600">${tr('連鎖やボスで画面が白く光る演出を切ります', 'Turns off the full-screen white flash on chains and boss hits')}</small></label>
         <input type="checkbox" id="setFlash" ${s.flash !== false ? 'checked' : ''}>
       </div>
+      <div class="settings-row">
+        <label>${tr('相手の見た目で描く', "Use opponents' block skins")}<br><small class="muted" style="font-weight:600">${tr('相手の盤面を、相手が装備しているブロックで描きます。切ると自分の見慣れた見た目で揃うので、埋まり具合が読みやすくなります', "Draws each opponent's board with the skin they equipped. Turn it off to render every board in the familiar default, which is easier to read at a glance")}</small></label>
+        <input type="checkbox" id="setOppSkins" ${s.oppSkins !== false ? 'checked' : ''}>
+      </div>
       ${session.user ? `
       <div class="settings-row">
         <label>${tr('名前を変更', 'Change name')}</label>
@@ -831,6 +835,14 @@ export function showSettingsModal() {
   m.querySelector('#setMusicOn').onchange = e => updateSettings({ musicOn: e.target.checked });
   m.querySelector('#setShake').onchange = e => updateSettings({ shake: e.target.checked });
   m.querySelector('#setFlash').onchange = e => updateSettings({ flash: e.target.checked });
+  m.querySelector('#setOppSkins').onchange = e => {
+    updateSettings({ oppSkins: e.target.checked });
+    audio.click();
+    // MiniBoard は constructor でしか skinId を決めないので、いま出ている
+    // 小窓は次の試合まで変わらない。次の試合から効くことを言葉で伝える
+    // （黙っていると「切ったのに変わらない＝壊れている」に見える）。
+    toast(tr('次の対戦から反映されます', 'Applies from your next match'), '', 1800);
+  };
   m.querySelector('#setColorMarks').onchange = e => {
     updateSettings({ colorMarks: e.target.checked });
     audio.click();

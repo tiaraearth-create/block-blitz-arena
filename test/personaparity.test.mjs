@@ -136,10 +136,17 @@ const residentsInBand = level => {
 const personaProfiles = level => personaNames.map(n => seatProfile({ name: n, level, now: NOON_JST, guildTagOf }));
 
 // ---------------------------------------------------------------------------
-// A-1. 欄は必ず3つ揃って返る（値が null でもキーは消さない）
+// A-1. 欄は必ず4つ揃って返る（値が null でもキーは消さない）
+//
+// v2.72 で skin が加わった（相手の盤面を相手のスキンで描くため）。
+// ⚠ skin だけは null にしない ── 他の3つは「持っていない」を null で表せるが、
+//   スキンは全員が必ず何かを着ている（既定も装備の1つ）。null にすると
+//   「skin が null の席＝住人」という、値の差そのものが目印になる。
+//   欄が増えるたびにここを1つずつ増やすこと。**増やし忘れると赤くなる**のが
+//   このテストの役目で、v2.72 でも実際にここが最初に赤くなった。
 // ---------------------------------------------------------------------------
 {
-  const KEYS = 'guild,record,title';
+  const KEYS = 'guild,record,skin,title';
   const keysOf = o => Object.keys(o).sort().join(',');
   const samples = [
     ['住人', seatProfile({ resident: liveRoster[3], name: liveRoster[3].name, registered: liveRoster[3].registered, now: NOON_JST, guildTagOf })],
@@ -148,7 +155,11 @@ const personaProfiles = level => personaNames.map(n => seatProfile({ name: n, le
     ['名前なし', seatProfile()],
   ];
   const bad = samples.filter(([, p]) => keysOf(p) !== KEYS).map(([k]) => k);
-  check('A-1 どの席でも欄は title/guild/record の3つで揃う', bad.length === 0, bad.join(' / '));
+  check('A-1 どの席でも欄は title/guild/record/skin の4つで揃う', bad.length === 0, bad.join(' / '));
+  // skin は「必ず文字列」。null を許すと、上のキー検査を通ったまま
+  // 「住人だけ null」という抜け道ができる。
+  const nullSkin = samples.filter(([, x]) => typeof x.skin !== 'string' || !x.skin).map(([k]) => k);
+  check('A-1b skin はどの席でも文字列（null にしない）', nullSkin.length === 0, nullSkin.join(' / '));
   // ゲストは3つとも null（本物のゲストと同じ）。ここを埋めると
   // 「ゲスト名なのに称号がある＝人間ではない」という逆向きの穴になる。
   const guest = samples[2][1];

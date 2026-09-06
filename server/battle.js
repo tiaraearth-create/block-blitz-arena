@@ -8,7 +8,7 @@ import { Engine } from '../public/js/engine.js';
 import { chooseMove, AI_LEVELS } from '../public/js/ai.js';
 // TITLES は実プレイヤーの称号を match_found に載せるために要る（index.js の
 // titleOf と同じ引き方 ── 表を写経せず、同じ定義から引く）。
-import { RAID_BOSSES, TITLES } from './catalog.js';
+import { RAID_BOSSES, TITLES, SHOP_ITEMS, DEFAULT_EQUIPPED } from './catalog.js';
 // 段位（帯・24段）の唯一の正解。手書きの表をここに持たない ── サーバーと画面で
 // しきい値がズレると「画面ではゴールドなのにサーバーはシルバー扱い」が起きる。
 import { rankOf, bandOf, RANK_BANDS } from '../public/js/ranks.js';
@@ -1160,6 +1160,22 @@ export function initBattle(server, deps) {
     if (!u || !u.stats) return null;
     return { w: u.stats.pvpWins || 0, l: u.stats.pvpLosses || 0 };
   }
+  // 🎨 その席が装備しているブロック。**必ず文字列を返す**（null にしない）。
+  //    送信は JSON.stringify なので undefined のキーは消える ── 欄の有無が
+  //    そのまま「実プレイヤー／住人」の選り分けになる。値が既定でもキーは残す。
+  //    住人側は seatProfile が名前から決め打ちしたものを sock.skin に持っている。
+  function sockSkin(s) {
+    if (s.isBot) return s.skin || DEFAULT_EQUIPPED.skin;
+    const u = sockUser(s);
+    const id = u && u.equipped && u.equipped.skin;
+    // 実プレイヤー側も、持っていない物を装備したままの記録が来たら既定に落とす
+    // （復元や手編集で入りうる。受け取る側の themes.js でも弾いているが、
+    //  そもそも配らないほうが早い）。
+    const item = SHOP_ITEMS.find(i => i.id === id && i.cat === 'skin');
+    if (!item) return DEFAULT_EQUIPPED.skin;
+    if (!u.owned || !u.owned.includes(id)) return DEFAULT_EQUIPPED.skin;
+    return id;
+  }
 
   // -------------------------------------------------------------------------
   // Bots — disguised as normal players: human-like persona names, a fake
@@ -1262,6 +1278,7 @@ export function initBattle(server, deps) {
       this.title = prof.title;
       this.guild = prof.guild;
       this.record = prof.record;
+      this.skin = prof.skin;
       this.timer = null;
       this.emoteTimer = null;
     }
@@ -1403,6 +1420,7 @@ export function initBattle(server, deps) {
           slot: q.slot, team: q.team, name: sockName(q.sock),
           level: sockLevel(q.sock), rating: sockRating(q.sock),
           title: sockTitle(q.sock), guild: sockGuild(q.sock), record: sockRecord(q.sock),
+          skin: sockSkin(q.sock),
           isYou: q === p,
           ...(sockAdmin(p.sock) ? { isBot: !!q.sock.isBot } : {}),
         })),
@@ -3882,6 +3900,9 @@ export function initBattle(server, deps) {
       players: match.players.map(q => ({
         slot: q.slot, team: q.team, name: sockName(q.sock),
         level: sockLevel(q.sock), rating: sockRating(q.sock),
+        // 🎨 再接続でも同じ欄を返す。ここを抜くと、再接続した人にだけ
+        //    全員が既定スキンで描かれる（本人にしか分からない食い違い）。
+        skin: sockSkin(q.sock),
         score: q.score, isYou: q === p,
       })),
     });

@@ -36,7 +36,7 @@ import { fireUlt, ultColor, ultExists, DEFAULT_ULT } from './skills.js';
 // chat.js は modes.js を import していないので循環しない（party.js と同じ）。
 import { registerHandler, showProfileCard } from './chat.js';
 // 👻 「なし」の人にはお題の目隠しが空振りになるので、そこだけ従来の暗転へ落とす。
-import { showPlaceGhost } from './settings.js';
+import { showPlaceGhost, getSettings } from './settings.js';
 
 const MATCH_SECONDS = 120;
 
@@ -1305,6 +1305,27 @@ export function updateItemBar() {
     b.querySelector('b').textContent = n === Infinity ? '∞' : n;
     b.classList.toggle('off', n <= 0);
   });
+}
+
+/**
+ * 🎨 相手の盤面を描くスキン。
+ *
+ * 設定「相手の見た目を使う」が切られていたら自分の既定に戻す。
+ * 読みづらいスキンを相手が装備していると、観戦で本当に読みたい
+ * 「相手がどこまで埋まっているか」が読みにくくなる ── 実測で
+ * 埋まり／空きの明るさ比は 既定 4.83 に対し 溶岩 1.87 / 断罪 2.46 /
+ * ドット 2.58 / ゼロの眼 2.65 / 木目 2.76 / 狐火 2.96（22枚中6枚が
+ * 図形の判別に要る 3:1 を下回る）。見る側が自分で戻せる逃げ道を残す。
+ *
+ * ⚠ 知らないidが来ても themes.js の getSkin が既定に落とす（表が
+ *   自分で持っている名前だけを引く）。ここでの既定への差し替えは
+ *   「設定で切ったとき」だけの意味しかない。
+ */
+function oppSkinId(o) {
+  let on = true;
+  try { on = getSettings().oppSkins !== false; } catch { /* 設定が読めなければ使う */ }
+  if (!on) return 'skin_default';
+  return (o && typeof o.skin === 'string' && o.skin) || 'skin_default';
 }
 
 export function useGameItem(id) {
@@ -3354,7 +3375,7 @@ class VersusBase {
       if (density === 'strip') {
         delete this.miniBoards[o.slot];
       } else if (!this.miniBoards[o.slot]) {
-        this.miniBoards[o.slot] = new MiniBoard(canvas);
+        this.miniBoards[o.slot] = new MiniBoard(canvas, { skinId: oppSkinId(o) });
         this.miniBoards[o.slot].setGrid(this.lastGrids && this.lastGrids[o.slot] ? this.lastGrids[o.slot] : new Array(64).fill(0));
       }
     }
@@ -7795,6 +7816,10 @@ class OnlineMode extends VersusBase {
       // ここは buildPanels 側で escapeHtml を通る「ただの文字」なので、
       // アイコン（SVG）を混ぜてはいけない。段位は名前で書く。
       name: `${p.name}${p.rating != null ? ` (${rankLabel(p.rating)} R${p.rating})` : ''}`,
+      // 🎨 相手が装備しているブロック。サーバーは**全席に必ず**この欄を載せる
+      //    （値が既定でもキーは消さない）。欄の有無が席ごとに違うと、その差が
+      //    そのまま「実プレイヤー／住人」の選り分けになる。
+      skin: p.skin,
       isAlly: (this.isTeam && p.team === msg.you.team) || this.isRaid,
     }));
     this.setupHud(msg.duration || MATCH_SECONDS);

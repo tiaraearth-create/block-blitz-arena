@@ -1697,10 +1697,25 @@ function withColorMarks(draw) {
   return wrapped;
 }
 
+// 🔒 表から引くのは「その表が**自分で持っている**名前」だけ。
+//
+// ⚠ SKINS / BOARDS は素のオブジェクトなので Object.prototype を継承している。
+//   `SKINS[id] || SKINS.skin_default` と書くと、id に 'constructor' や
+//   'toString' が来たときに **Object.prototype の関数が返る**（真値なので
+//   フォールバックをすり抜ける）。'__proto__' なら関数ですらない object が
+//   返り、呼んだ瞬間に TypeError。盤面の描画は毎フレーム走るので、
+//   1つの細工した値で画面が延々と落ち続ける。
+//   いままでスキンidは自分の装備からしか来なかったので届かなかったが、
+//   **相手のスキンを通信で受け取るようになった時点で外から届く**。
+//   受け取る側を直しておく（送る側の検査に頼らない）。
+const ownGet = (table, id, fallback) =>
+  (typeof id === 'string' && Object.prototype.hasOwnProperty.call(table, id))
+    ? table[id] : fallback;
+
 export function getSkin(id) {
-  const draw = SKINS[id] || SKINS.skin_default;
+  const draw = ownGet(SKINS, id, SKINS.skin_default);
   let on = false;
   try { on = getSettings().colorMarks === true; } catch { /* 設定が読めなければ素のスキン */ }
   return on ? withColorMarks(draw) : draw;
 }
-export function getBoard(id) { return BOARDS[id] || BOARDS.board_default; }
+export function getBoard(id) { return ownGet(BOARDS, id, BOARDS.board_default); }

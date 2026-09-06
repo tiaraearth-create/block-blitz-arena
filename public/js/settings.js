@@ -13,6 +13,14 @@ const DEFAULTS = {
   chatTranslate: true,   // show foreign-language chat in your language
   bgmTrack: null,        // jukebox pin: track id to loop everywhere (null = auto per screen)
   colorMarks: false,     // colorblind aid: overlay a shape mark per block color
+  // 🎨 相手の盤面を「相手が装備しているブロック」で描くか。
+  //   既定は on（買った見た目が人の目に触れるのがこの機能の値打ち）。
+  //   切れるようにしてあるのは読みやすさのため ── 埋まったマスと空きマスの
+  //   明るさの比は 既定 4.83 に対し 溶岩 1.87 / 断罪 2.46 / ドット 2.58 /
+  //   ゼロの眼 2.65 / 木目 2.76 / 狐火 2.96 で、22枚中6枚が図形の判別に要る
+  //   3:1 を下回る（実測）。観戦で読みたいのは「相手がどこまで埋まっているか」
+  //   なので、相手の選んだ見た目のせいで読めなくなる人に逃げ道を残す。
+  oppSkins: true,
   haptics: true,         // 📳 短い振動で「置いた／消えた／置けなかった」を返す
   // 👻 配置プレビューの段。'full' | 'light' | 'off'
   //   'full'  … いまと同じ。落ちる位置のゴースト／消える線の白帯／氷の水色帯／置けない赤

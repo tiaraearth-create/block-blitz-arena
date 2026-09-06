@@ -17,6 +17,7 @@ import {
   // （residentsForLevel が住人を絞るのと同じ帯・同じ軽量レート式）。
   residentRating, BOT_RATING_BANDS,
 } from './residents.js';
+import { SHOP_ITEMS, isBuyableGear, DEFAULT_EQUIPPED } from './catalog.js';
 import { dailyGhostFactor } from './daily.js';
 import { composeLine, chooseReplies as crowdReplies, buildCtx } from './crowd.js';
 import { speakerDamp } from './chatgen.js';
@@ -479,14 +480,20 @@ function personaGuildDonor(name) {
  * @param {boolean} registered    アカウント持ちか
  * @param {number} now
  * @param {function|null} guildTagOf  住人名 → ギルドタグ（battle.js が渡す）
- * @returns {{title: object|null, guild: string|null, record: {w:number,l:number}|null}}
- *   欄は必ず3つとも返る（値が null でも**キーは消さない**）。
+ * @returns {{title: object|null, guild: string|null, record: {w:number,l:number}|null, skin: string}}
+ *   欄は必ず4つとも返る（値が null でも**キーは消さない**）。
+ *
+ * ⚠ skin だけは null にしない。**必ず文字列**を入れること。
+ *   送信は JSON.stringify なので undefined のキーは出力から消える ──
+ *   「skin 欄がある席／無い席」の差が、そのまま名簿になる。
  */
 export function seatProfile({ resident = null, name = '', level = 'normal', registered = true, now = Date.now(), guildTagOf = null } = {}) {
-  const none = { title: null, guild: null, record: null };
+  const none = { title: null, guild: null, record: null, skin: DEFAULT_EQUIPPED.skin };
   // ゲスト（アカウント無し）は本物のゲストと同じく3つとも持たない。ここを
   // 埋めると「ゲスト名なのに称号がある＝人間ではない」という逆向きの穴になる。
   // 未登録の住人（registered:false）も同じ扱い ── 席の見え方はゲストなので。
+  // 🎨 ただし skin は既定を入れて返す。本物のゲストも既定スキンで遊ぶので、
+  //    ここだけ欄が無いと「ゲスト表示の席は skin を持たない」が目印になる。
   if (!registered) return none;
   const r = resident || personaResident(name, level, now);
   if (!r) return none;
@@ -509,7 +516,54 @@ export function seatProfile({ resident = null, name = '', level = 'normal', regi
     guild: typeof tag === 'string' && tag ? tag : null,
     // 実プレイヤー側（index.js の stats.pvpWins / pvpLosses）と同じ形。
     record: { w: st.pvpWins, l: st.pvpLosses },
+    skin: residentSkin(r),
   };
+}
+
+// ---------------------------------------------------------------------------
+// 🎨 住人の装備しているブロック
+// ---------------------------------------------------------------------------
+//
+// ■ なぜ要るのか
+// 相手の盤面を「相手のスキン」で描くようになると、住人にスキンが無いことが
+// そのまま正体になる。実プレイヤーは色々着るのに住人だけ全員が既定 ──
+// これは確率ではなく**一方向に100%確実な判定**で、遊ぶほど
+// 「既定しか着ない名前」の一覧が積み上がっていく。
+//
+// ■ 3つの決まりごと
+//  1. **名前から決め打ちする。** makeResident の乱数列に足してはいけない。
+//     あそこで1回引くと、以降の住人の名前・強さ・参加日が**全部ずれる**
+//     （residents.js が「乱数の消費順は変えていない」と何度も書いているのは
+//      このため）。名前から引けば、名簿を1ビットも動かさずに済む。
+//  2. **時間で変わる値を混ぜない。** レートや調子を条件に使うと、調子の悪い日に
+//     スキンが既定へ戻る＝**装備を失う**という、実プレイヤーには絶対に
+//     起きないことが起きる。参加日と名前だけを見る（どちらも作成時に確定）。
+//  3. **実プレイヤーが買える範囲だけ。** 運営専用・王座専用・ガチャ限定・
+//     交換所限定を着せると、逆向きに「手に入らないはずの物を着ている人」で
+//     一発で割れる。isBuyableGear の輪の中からしか選ばない。
+const RESIDENT_SKINS = SHOP_ITEMS
+  .filter(i => i.cat === 'skin' && isBuyableGear(i))
+  .map(i => i.id)
+  .sort();
+
+// 既定のままの人の割合。実プレイヤーにも「買ったが着替えない人」は普通に
+// 居るので、住人を全員着替えさせると逆に浮く。
+const RESIDENT_DEFAULT_RATE = 0.28;
+
+/**
+ * その住人が装備しているブロック。名前だけで決まるので、何度呼んでも同じ。
+ * @returns {string} 必ずスキンidの文字列（既定を含む）
+ */
+export function residentSkin(r) {
+  if (!r || !r.name) return DEFAULT_EQUIPPED.skin;
+  if (!RESIDENT_SKINS.length) return DEFAULT_EQUIPPED.skin;
+  // 未登録（ゲスト表示）の席は既定。本物のゲストは買い物ができない。
+  if (r.registered === false) return DEFAULT_EQUIPPED.skin;
+  const pick = unit(`resident-skin:${r.name}`, 'a');
+  if (pick < RESIDENT_DEFAULT_RATE) return DEFAULT_EQUIPPED.skin;
+  const k = unit(`resident-skin-which:${r.name}`, 'b');
+  return RESIDENT_SKINS[Math.min(RESIDENT_SKINS.length - 1,
+    Math.floor(k * RESIDENT_SKINS.length))];
 }
 
 // A lobby voice: an active resident weighted by chattiness.
