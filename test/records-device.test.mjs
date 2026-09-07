@@ -127,19 +127,90 @@ const allDone = () => ({
     `${r.coins}🪙 ${r.gems}💎（上限 ${ACH_CLAIM_COIN_DAY}/${ACH_CLAIM_GEM_DAY}）`);
 }
 {
-  // ★本題。上限より高い実績が1件だけ残ったとき、**永久に受け取れない**を作らない。
+  // ★★ 1回だけ呼んで満足しない。**リクエストを分けても**上限が効くこと。
+  //
+  // ⚠ ここが v2.79 の抜けだった。詰み防止の保険が『1リクエストにつき必ず1件』
+  //   だったので、"*" を43回押すだけで 287,150🪙 / 2,396💎（上限の9.6倍/8.0倍）が
+  //   取れていた。B-1 は1回しか呼んでいなかったので**緑のまま通っていた**。
+  //   「1回呼んで正しい」は「上限が効いている」の証明にならない。
   const u = allDone();
+  let c = 0, g = 0, calls = 0;
+  for (let i = 0; i < 200; i++) {
+    const r = claimAchievement(u, '*');
+    if (r.error) break;
+    c += r.coins; g += r.gems; calls++;
+  }
+  check('B-1c ★同じ日に何度呼んでも上限を超えない',
+    c <= ACH_CLAIM_COIN_DAY && g <= ACH_CLAIM_GEM_DAY,
+    `${calls}回で ${c.toLocaleString()}🪙 ${g}💎（上限 ${ACH_CLAIM_COIN_DAY}/${ACH_CLAIM_GEM_DAY}）`);
+}
+{
+  // ★ 実績カードの個別「受取」も同じ上限を通ること。
+  //   こちらは ready が常に1件なので、『1リクエストにつき1件』の保険だと
+  //   **上限が一度も適用されない**（画面から普通に押せる経路）。
+  const u = allDone();
+  let c = 0, g = 0, n = 0;
+  for (const a of ACHIEVEMENTS) {
+    const r = claimAchievement(u, a.id);
+    if (r.error) continue;
+    c += r.coins; g += r.gems; n++;
+  }
+  check('B-1d ★1件ずつ受け取っても上限を超えない',
+    c <= ACH_CLAIM_COIN_DAY && g <= ACH_CLAIM_GEM_DAY,
+    `${n}件で ${c.toLocaleString()}🪙 ${g}💎`);
+}
+{
+  // 📖 収集実績の分子も図鑑と同じ物差しで数える（v2.70 で ach_own45 だけ直して
+  //    ach_own5/15/30 が取り残されていた）。既定装備4点だけを持つ新規が、
+  //    交換所で1点引き換えただけで『5種所持』にならないこと。
+  const fresh = {
+    owned: ['skin_default', 'board_default', 'fx_default', 'ult_blast', 'board_glass'],
+    achievements: [], badges: [], collections: [], coins: 0, gems: 0, stats: {},
+  };
+  const own5 = ACHIEVEMENTS.find(a => a.id === 'ach_own5');
+  check('B-1e ★収集実績が図鑑に数えない品で埋まらない',
+    !!own5 && Number(own5.value(fresh)) < own5.goal,
+    own5 ? `${own5.value(fresh)}/${own5.goal}（既定4点＋交換所限定1点）` : 'ach_own5 が無い');
+}
+{
+  // ★本題は2つ。**枠は守る**が、**永久に詰ませない**。
+  //
+  // ⚠ ここは以前「枠が尽きていても必ず1件は通る」を確かめていた。それは
+  //   まさに上限を無効にしていた穴（1リクエスト1件）の追認で、テストが
+  //   バグを守っていた。詰み防止が要るのは「**単品で1日の枠に収まらない**」
+  //   実績だけ ── 収まるものは今日ダメでも明日取れるので、詰んでいない。
+  const day = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
   const big = ACHIEVEMENTS.slice().sort((a, b) => b.coins - a.coins)[0];
-  u.achievements = ACHIEVEMENTS.filter(a => a.id !== big.id).map(a => a.id);
-  // ⚠ きょうの枠を**使い切った状態**にしてから引く。ここを空のままにすると、
-  //   大物が枠に収まってしまい「必ず1件は通す」保険を通らない
-  //   （＝保険を外しても赤くならない）。実際に一度そうなっていた。
-  const day = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
-  u.stats.achClaimDay = { day, coins: ACH_CLAIM_COIN_DAY, gems: ACH_CLAIM_GEM_DAY };
-  const r = claimAchievement(u, '*');
-  check('B-2 ★枠が尽きていても大物が1件は通る（詰まない）',
-    r.ids && r.ids.length === 1 && r.ids[0] === big.id,
-    `${big.id} ${big.coins}🪙 → ${JSON.stringify(r.ids)}`);
+
+  // ① 枠に収まる実績は、枠を使い切っていれば今日は通さない。
+  const u1 = allDone();
+  u1.achievements = ACHIEVEMENTS.filter(a => a.id !== big.id).map(a => a.id);
+  u1.stats.achClaimDay = { day: day(), coins: ACH_CLAIM_COIN_DAY, gems: ACH_CLAIM_GEM_DAY };
+  const spent = claimAchievement(u1, '*');
+  check('B-2 ★枠を使い切ったら、その日はもう払わない',
+    !!spent.error || (spent.ids && spent.ids.length === 0),
+    `${big.id} ${big.coins}🪙${big.gems}💎 → ${JSON.stringify(spent.ids || spent.error)}`);
+
+  // ② 翌日になれば取れる（権利は消えていない）。
+  const u2 = allDone();
+  u2.achievements = ACHIEVEMENTS.filter(a => a.id !== big.id).map(a => a.id);
+  const fresh = claimAchievement(u2, '*');
+  check('B-2b ★枠が空いていれば取れる（権利は消えない）',
+    fresh.ids && fresh.ids.includes(big.id), JSON.stringify(fresh.ids));
+
+  // ③ 単品で1日の枠に収まらない実績があれば、まっさらな日に必ず通す。
+  //    （いまの表には無いので、あるときだけ確かめる）
+  const huge = ACHIEVEMENTS.find(a => a.coins > ACH_CLAIM_COIN_DAY || a.gems > ACH_CLAIM_GEM_DAY);
+  if (huge) {
+    const u3 = allDone();
+    u3.achievements = ACHIEVEMENTS.filter(a => a.id !== huge.id).map(a => a.id);
+    const r3 = claimAchievement(u3, '*');
+    check('B-2c ★枠に収まらない実績は、まっさらな日に必ず通す（詰まない）',
+      r3.ids && r3.ids.includes(huge.id), JSON.stringify(r3.ids));
+  } else {
+    check('B-2c 前提: いまの表に枠を超える実績は無い', true,
+      `最大 ${big.id} ${big.coins}🪙${big.gems}💎 / 枠 ${ACH_CLAIM_COIN_DAY}🪙${ACH_CLAIM_GEM_DAY}💎`);
+  }
 }
 {
   // 権利は消えない（明日また受け取れる）。数日に均すだけ。

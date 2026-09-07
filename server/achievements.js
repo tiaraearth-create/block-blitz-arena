@@ -113,9 +113,13 @@ export const ACHIEVEMENTS = [
   a('ach_souzou',   'badge_souzou', 'explore', 1,   10000, 90, '創造を超えし者', 'Beyond Creation', '難易度「創造神」に勝利', 'Beat "Creator God"',     u => has(u, 'souzou') ? 1 : 0),
 
   // ---- 収集 ----
-  a('ach_own5',     'gift', 'collect', 5,   500,  4,  'コレクター見習い', 'Novice Collector', 'アイテムを5種所持',  'Own 5 catalog items',    u => (u.owned || []).length),
-  a('ach_own15',    'gift', 'collect', 15,  1800, 14, 'コレクター',   'Collector',        'アイテムを15種所持',   'Own 15 catalog items',    u => (u.owned || []).length),
-  a('ach_own30',    'collection', 'collect', 30,  5000, 45, '大コレクター', 'Grand Collector',  'アイテムを30種所持',   'Own 30 catalog items',    u => (u.owned || []).length),
+  // ⚠ 分子は collectedCount（図鑑に数える品だけ）。`owned.length` だと
+  //   既定装備4点・王座専用7点・交換所限定10点まで数えるので、新規アカウントが
+  //   交換所で1点引き換えるだけで「5種所持」が達成になる（図鑑側は 1/51 のまま）。
+  //   v2.70 で ach_own45 だけ直して、この3つが取り残されていた。
+  a('ach_own5',     'gift', 'collect', 5,   500,  4,  'コレクター見習い', 'Novice Collector', 'アイテムを5種所持',  'Own 5 catalog items',    collectedCount),
+  a('ach_own15',    'gift', 'collect', 15,  1800, 14, 'コレクター',   'Collector',        'アイテムを15種所持',   'Own 15 catalog items',    collectedCount),
+  a('ach_own30',    'collection', 'collect', 30,  5000, 45, '大コレクター', 'Grand Collector',  'アイテムを30種所持',   'Own 30 catalog items',    collectedCount),
   a('ach_coins10k', 'coins', 'collect', 10000, 1000, 8, '大富豪',      'Tycoon',           'コインを10,000所持',   'Hold 10,000 coins',       u => bestCoins(u)),
   a('ach_lv10',     'level_up', 'collect', 10,  800,  6,  'レベル10',     'Level 10',         'レベル10に到達',      'Reach level 10',          u => 1 + Math.floor((u.xp || 0) / 1000)),
   a('ach_lv30',     'level_up', 'collect', 30,  3000, 25, 'レベル30',     'Level 30',         'レベル30に到達',      'Reach level 30',          u => 1 + Math.floor((u.xp || 0) / 1000)),
@@ -312,10 +316,24 @@ export function claimAchievement(user, id) {
   let coins = 0, gems = 0;
   const taken = [];
   for (const ac of order) {
-    // ★ 1件も取れないときは**必ず1件は通す**。そうしないと、上限より高い
-    //   実績（ach_own45 は 8,000🪙+70💎）が永久に受け取れなくなる。
-    const first = taken.length === 0;
-    if (!first && (coins + ac.coins > roomC || gems + ac.gems > roomG)) continue;
+    // ★ 詰み防止の保険は「**単品で1日の枠に収まらない実績**」だけに効かせる。
+    //
+    // ⚠ もとは `taken.length === 0`（＝1リクエストにつき必ず1件）だった。
+    //   これだと**リクエストを分けるだけで上限がまるごと消える**:
+    //     ・"*" を43回押す → 287,150🪙 / 2,396💎（上限の9.6倍 / 8.0倍）
+    //     ・実績カードの個別「受取」は ready が常に1件なので、上限が一度も効かない
+    //   💎は user.gems に直接足すので、GEMDROP_DAILY_CAP(120💎/日) も通らない。
+    //   実績を追加した日に、条件を満たしている古参が一斉に満額を受け取れてしまう
+    //   ── 絞りを入れた当の目的がそのまま抜けていた。
+    //
+    //   本来の意図は「1日の枠より高い実績が**永久に**受け取れなくなるのを防ぐ」。
+    //   それは『単品で枠に収まらない』ものにだけ効かせれば足りる。
+    //   さらに『その日まだ1円も受け取っていない』ことも条件にする ── そうしないと、
+    //   小さいものを取ったあとに大物を足して枠を越えられる。
+    //   （いまの表には枠を超える実績は1つも無いので、この枝は将来の保険）
+    const cannotEverFit = ac.coins > ACH_CLAIM_COIN_DAY || ac.gems > ACH_CLAIM_GEM_DAY;
+    const forced = cannotEverFit && taken.length === 0 && q.coins === 0 && q.gems === 0;
+    if (!forced && (coins + ac.coins > roomC || gems + ac.gems > roomG)) continue;
     user.achievements.push(ac.id);
     coins += ac.coins;
     gems += ac.gems;
